@@ -20,8 +20,11 @@ export function escapeHtml(s: string): string {
 // carries, plus an optional per-context deep link (e.g. a specific
 // network's or client's learn URL) alongside it.
 export function footer(contextLabel?: string, contextUrl?: string): string {
+  // Only render the context link when it points somewhere other than the
+  // base learn link — otherwise it's a pointless duplicate (every network's
+  // LearnURL currently equals LEARN_ROOT).
   const context =
-    contextLabel && contextUrl
+    contextLabel && contextUrl && contextUrl !== LEARN_ROOT
       ? ` <span class="footer-sep">·</span> <a href="${escapeHtml(contextUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(contextLabel)}</a>`
       : "";
   return `
