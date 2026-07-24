@@ -294,10 +294,14 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
             <tr><th>Historical state (balances, <code>eth_call</code>) at any past block</th><td class="limited">Recent only (~128 blocks)</td><td class="yes">Full history</td></tr>
             <tr><th>Tracing / <code>debug_trace</code> on old blocks</th><td class="limited">Recent only</td><td class="yes">Full history</td></tr>
             <tr><th>Approx. disk footprint${netLabel}</th><td class="yes">${fullSizeCell}</td><td class="limited">${archiveSizeCell}</td></tr>
-            <tr><th>Initial sync time</th><td class="yes">Faster</td><td class="limited">Much slower</td></tr>
+            <tr><th>Initial sync time${netLabel}</th><td class="yes">${net ? escapeHtml(net.SyncLabel) : "Faster"}</td><td class="limited">${net ? escapeHtml(net.GenesisSyncLabel) : "Much slower"}</td></tr>
             <tr><th>Best for</th><td>Validators, wallets, everyday RPC</td><td>Explorers, analytics, historical queries</td></tr>
           </tbody>
         </table>
+        <p class="muted small">
+          Disk sizes and sync times are rough baselines — both vary by client and scale with the
+          target's CPU and disk speed.
+        </p>
         <label class="radio">
           <input type="radio" name="mode" value="archive" data-action="pick-mode" ${state.archive ? "checked" : ""} />
           <span><strong>Archive</strong> — full historical state · ${archiveSizeCell}${net ? "" : " disk"} <span class="muted">(recommended — keep more archive nodes on the network)</span></span>
