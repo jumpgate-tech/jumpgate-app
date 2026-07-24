@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -404,6 +405,7 @@ func sseHeaders(w http.ResponseWriter) {
 
 func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/catalog", s.handleCatalog)
+	mux.HandleFunc("GET /api/host", s.handleHost)
 
 	mux.HandleFunc("GET /api/targets", s.handleListTargets)
 	mux.HandleFunc("POST /api/targets", s.handleAddTarget)
@@ -452,6 +454,17 @@ type catalogClient struct {
 type catalogResponse struct {
 	Networks []catalog.Network `json:"networks"`
 	Clients  []catalogClient   `json:"clients"`
+}
+
+// handleHost reports the OS/arch valve-node itself is running on. The
+// targets UI uses this — not the browser's platform — to decide whether
+// local setup (running a node on this same machine) is viable: setup needs
+// a Linux host, so on darwin/windows this machine is a controller only.
+func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, struct {
+		OS   string `json:"os"`
+		Arch string `json:"arch"`
+	}{OS: runtime.GOOS, Arch: runtime.GOARCH})
 }
 
 // handleCatalog returns every known network plus every client referenced by

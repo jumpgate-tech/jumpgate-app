@@ -11,6 +11,7 @@ export function renderTargets(root: HTMLElement): () => void {
   // rather than always shown, so the empty state stays a clean set of
   // guiding actions. Held across re-renders.
   let showSSHForm = false;
+  let hostOS = "";
   let lastData: { targets: api.Target[]; catalog: api.Catalog } | null = null;
 
   root.innerHTML = `
@@ -28,8 +29,9 @@ export function renderTargets(root: HTMLElement): () => void {
 
   async function load(): Promise<void> {
     try {
-      const [targets, catalog] = await Promise.all([api.listTargets(), api.getCatalog()]);
+      const [targets, catalog, host] = await Promise.all([api.listTargets(), api.getCatalog(), api.getHost()]);
       if (disposed) return;
+      hostOS = host.os;
       renderBody(targets, catalog);
     } catch (err) {
       if (disposed) return;
@@ -43,7 +45,11 @@ export function renderTargets(root: HTMLElement): () => void {
 
   function renderBody(targets: api.Target[], catalog: api.Catalog): void {
     lastData = { targets, catalog };
-    const canHostLocal = !looksNonLinux();
+    // Local node setup needs a Linux host — gated on the SERVER's OS (what
+    // valve-node runs on), not the browser's. On a non-Linux host local
+    // setup can't complete, but the option is still offered (secondary,
+    // with a caveat) rather than hidden, so it's never a dead end.
+    const localViable = hostOS === "linux";
 
     // One unified list, local target(s) first, then SSH servers.
     const ordered = [...targets].sort((a, b) => (a.mode === "local" ? -1 : 0) - (b.mode === "local" ? -1 : 0));
@@ -54,18 +60,24 @@ export function renderTargets(root: HTMLElement): () => void {
           <p>No machines yet.</p>
           <p class="muted small">
             ${
-              canHostLocal
+              localViable
                 ? "Add this machine to run a node here, or add a remote Linux server over SSH."
-                : "valve-node is running here as your <strong>controller</strong> — it drives nodes but doesn't host them. Add a Linux server over SSH to run one."
+                : "valve-node is running here as your <strong>controller</strong> — add a Linux server over SSH to run a node, or add this machine to walk the setup (it will need a Linux host to finish)."
             }
           </p>
         </div>
       `;
 
+    // "Add this machine" is always offered; primary on a Linux host,
+    // secondary (ghost) with a caveat on a controller.
+    const localBtn = localViable
+      ? `<button class="btn" data-action="add-local">Add this machine</button>`
+      : `<button class="btn btn-ghost" data-action="add-local" title="Setup needs a Linux host — this machine can drive remote nodes; local setup won't complete here">Add this machine</button>`;
+
     const addActions = `
       <div class="add-actions">
-        ${canHostLocal ? `<button class="btn" data-action="add-local">Add this machine</button>` : ""}
-        <button class="btn${canHostLocal ? " btn-ghost" : ""}" data-action="toggle-ssh">
+        ${localBtn}
+        <button class="btn${localViable ? " btn-ghost" : ""}" data-action="toggle-ssh">
           ${showSSHForm ? "Cancel" : "Add a server (SSH)"}
         </button>
       </div>
@@ -77,6 +89,7 @@ export function renderTargets(root: HTMLElement): () => void {
           <h2>Your machines</h2>
           ${addActions}
         </div>
+        ${!localViable && hostOS ? `<p class="muted small">This machine (${escapeHtml(hostOS)}) runs valve-node as a <strong>controller</strong>. Node hosts must be Linux — "Add this machine" is available to walk the flow, but setup only completes on a Linux host.</p>` : ""}
         ${showSSHForm ? sshFormMarkup() : ""}
         ${list}
       </section>
@@ -261,17 +274,6 @@ function sshFormMarkup(): string {
       <button class="btn" type="button" id="ssh-submit" data-action="add-ssh">Add server</button>
     </form>
   `;
-}
-
-// looksNonLinux is a best-effort guess at whether the browser is running on
-// the same non-Linux machine as the valve-node binary — the API exposes no
-// way to ask the server's own OS directly, so this reads the browser's
-// platform as a proxy (accurate in the common case: binary and browser on
-// the same desktop). See the Task 8 report for the caveat.
-function looksNonLinux(): boolean {
-  const uaData = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData;
-  const platform = uaData?.platform || navigator.platform || navigator.userAgent;
-  return /mac|win/i.test(platform) && !/linux|android/i.test(platform);
 }
 
 function slugify(s: string): string {
