@@ -835,3 +835,48 @@ func TestRenderUnits_RPCBindAddr(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderUnits_CheckpointOverrideAndToggle(t *testing.T) {
+	base := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369"}
+
+	// Default: network checkpoint URL, checkpoint sync on.
+	_, beaconUnit, err := RenderUnits(base)
+	if err != nil {
+		t.Fatalf("RenderUnits(default): %v", err)
+	}
+	if !strings.Contains(beaconUnit, "--checkpoint-sync-url https://checkpoint.pulsechain.com") {
+		t.Errorf("default should use the network checkpoint URL:\n%s", beaconUnit)
+	}
+
+	// Override URL: both checkpoint-sync-url and genesis-beacon-api-url use it.
+	ov := base
+	ov.CheckpointURL = "https://cp.valve.city/369"
+	_, beaconUnit, err = RenderUnits(ov)
+	if err != nil {
+		t.Fatalf("RenderUnits(override): %v", err)
+	}
+	if !strings.Contains(beaconUnit, "--checkpoint-sync-url https://cp.valve.city/369") {
+		t.Errorf("override checkpoint URL not applied:\n%s", beaconUnit)
+	}
+	if !strings.Contains(beaconUnit, "--genesis-beacon-api-url https://cp.valve.city/369") {
+		t.Errorf("override should also drive genesis-beacon-api-url:\n%s", beaconUnit)
+	}
+	if strings.Contains(beaconUnit, "checkpoint.pulsechain.com") {
+		t.Errorf("override must replace the network default entirely:\n%s", beaconUnit)
+	}
+
+	// NoCheckpoint: --checkpoint-sync-url omitted (sync from genesis), but
+	// --genesis-beacon-api-url stays.
+	nc := base
+	nc.NoCheckpoint = true
+	_, beaconUnit, err = RenderUnits(nc)
+	if err != nil {
+		t.Fatalf("RenderUnits(no-checkpoint): %v", err)
+	}
+	if strings.Contains(beaconUnit, "--checkpoint-sync-url") {
+		t.Errorf("NoCheckpoint should omit --checkpoint-sync-url:\n%s", beaconUnit)
+	}
+	if !strings.Contains(beaconUnit, "--genesis-beacon-api-url https://checkpoint.pulsechain.com") {
+		t.Errorf("NoCheckpoint should keep --genesis-beacon-api-url:\n%s", beaconUnit)
+	}
+}
