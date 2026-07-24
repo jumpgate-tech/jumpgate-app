@@ -44,8 +44,9 @@ var clients = map[string]Client{
 			`cargo build --release --bin reth && ` +
 			`install -m 0755 target/release/reth /usr/local/bin/reth && ` +
 			`/usr/local/bin/reth --version`,
-		LearnURL:    learnBaseURL,
-		DataSubdirs: []string{"db", "static_files"},
+		LearnURL:          learnBaseURL,
+		DataSubdirs:       []string{"db", "static_files"},
+		SnapshotSupported: true,
 	},
 	"go-pulse": {
 		ID:         "go-pulse",

@@ -40,6 +40,10 @@ export interface CatalogClient {
   pinVersion: string;
   toolchain: string;
   learnUrl: string;
+  // snapshotSupported reports whether this execution client can be
+  // fast-synced from Valve's execution snapshot (an alternative to
+  // consensus checkpoint sync, which only speeds up the beacon side).
+  snapshotSupported: boolean;
 }
 
 export interface Catalog {
@@ -150,6 +154,11 @@ export interface StartSetupRequest {
   // NoCheckpoint disables checkpoint sync (sync from genesis).
   CheckpointURL?: string;
   NoCheckpoint?: boolean;
+  // Execution-client snapshot restore: only sent when the selected exec
+  // client supports it (catalog client's snapshotSupported) and the
+  // operator opted in. SnapshotKey is the free key issued at valve.city.
+  ExecSnapshot?: boolean;
+  SnapshotKey?: string;
 }
 
 export interface DiskFree {

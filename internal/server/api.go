@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -443,12 +444,13 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 // ---------------------------------------------------------------------
 
 type catalogClient struct {
-	ID         string `json:"id"`
-	Kind       string `json:"kind"`
-	Repo       string `json:"repo"`
-	PinVersion string `json:"pinVersion"`
-	Toolchain  string `json:"toolchain"`
-	LearnURL   string `json:"learnUrl"`
+	ID                string `json:"id"`
+	Kind              string `json:"kind"`
+	Repo              string `json:"repo"`
+	PinVersion        string `json:"pinVersion"`
+	Toolchain         string `json:"toolchain"`
+	LearnURL          string `json:"learnUrl"`
+	SnapshotSupported bool   `json:"snapshotSupported"`
 }
 
 type catalogResponse struct {
@@ -496,12 +498,13 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		clients = append(clients, catalogClient{
-			ID:         c.ID,
-			Kind:       c.Kind,
-			Repo:       c.Repo,
-			PinVersion: c.PinVersion,
-			Toolchain:  c.Toolchain,
-			LearnURL:   c.LearnURL,
+			ID:                c.ID,
+			Kind:              c.Kind,
+			Repo:              c.Repo,
+			PinVersion:        c.PinVersion,
+			Toolchain:         c.Toolchain,
+			LearnURL:          c.LearnURL,
+			SnapshotSupported: c.SnapshotSupported,
 		})
 	}
 
@@ -655,8 +658,29 @@ func validateWirePorts(wire catalog.WireConfig) error {
 			return fmt.Errorf("CheckpointURL: %q must be an http(s) URL (leave empty for the network default)", cp)
 		}
 	}
+	if wire.ExecSnapshot {
+		client, ok := catalog.ClientByID(wire.ExecID)
+		if !ok || !client.SnapshotSupported {
+			return fmt.Errorf("ExecSnapshot: execution client %q does not support snapshot restore (reth only)", wire.ExecID)
+		}
+		if strings.TrimSpace(wire.SnapshotKey) == "" {
+			return fmt.Errorf("ExecSnapshot: a free snapshot key (get one at valve.city) is required to restore from Valve's snapshot")
+		}
+		// The key is interpolated into the reth-download command (and the
+		// manifest URL) run on the target, so constrain it to a safe shape
+		// (vk_ prefix + url-safe chars) at the boundary — no shell
+		// metacharacters can reach command construction.
+		if !snapshotKeyPattern.MatchString(wire.SnapshotKey) {
+			return fmt.Errorf("SnapshotKey: %q is not a valid key (expected vk_ followed by letters, digits, - or _)", wire.SnapshotKey)
+		}
+	}
 	return nil
 }
+
+// snapshotKeyPattern is the accepted shape for a Valve snapshot key: a "vk_"
+// prefix followed by url-safe characters only (no whitespace or shell
+// metacharacters).
+var snapshotKeyPattern = regexp.MustCompile(`^vk_[A-Za-z0-9_-]{8,128}$`)
 
 func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

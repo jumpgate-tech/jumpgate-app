@@ -51,6 +51,13 @@ type WireConfig struct {
 	ERPCPort      int
 	ERPCBindAddr  string
 	ERPCUpstreams []string
+
+	// Execution snapshot (reth only): restore the execution client's data
+	// from Valve's free snapshot for a fast sync (~hours) instead of
+	// syncing from genesis (~days). SnapshotKey is the free vk_ key from
+	// valve.city, embedded in the manifest URL.
+	ExecSnapshot bool
+	SnapshotKey  string
 }
 
 // checkpointURL resolves the effective beacon checkpoint/genesis endpoint:

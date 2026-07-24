@@ -124,6 +124,14 @@ export function renderTargets(root: HTMLElement): () => void {
 
   async function addLocal(): Promise<void> {
     clearFormError();
+    if (hostOS !== "linux") {
+      const proceed = confirm(
+        "This machine (" +
+          hostOS +
+          ") isn't a Linux host, so node setup can't complete here — it's only useful for previewing the setup wizard. Add it anyway?",
+      );
+      if (!proceed) return;
+    }
     try {
       await api.addTarget({ id: LOCAL_TARGET_ID, mode: "local" });
       await load();
