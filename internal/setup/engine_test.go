@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valve-tech/valve-node/internal/executor"
+	"github.com/valve-tech/valve-node-app/internal/executor"
 )
 
 // TestRunAll_RunsRunThenVerifyInOrderPerStep locks in RunAll's idempotent

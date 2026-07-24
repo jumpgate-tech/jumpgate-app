@@ -14,9 +14,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/valve-tech/valve-node/internal/ai"
-	"github.com/valve-tech/valve-node/internal/config"
-	"github.com/valve-tech/valve-node/internal/executor"
+	"github.com/valve-tech/valve-node-app/internal/ai"
+	"github.com/valve-tech/valve-node-app/internal/config"
+	"github.com/valve-tech/valve-node-app/internal/executor"
 )
 
 // cookieName is the name of the cookie that carries the session token once

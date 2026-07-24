@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/valve-tech/valve-node/internal/catalog"
-	"github.com/valve-tech/valve-node/internal/executor"
+	"github.com/valve-tech/valve-node-app/internal/catalog"
+	"github.com/valve-tech/valve-node-app/internal/executor"
 )
 
 func mustClient(t *testing.T, id string) catalog.Client {

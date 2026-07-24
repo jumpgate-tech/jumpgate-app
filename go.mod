@@ -1,4 +1,4 @@
-module github.com/valve-tech/valve-node
+module github.com/valve-tech/valve-node-app
 
 go 1.25.0
 

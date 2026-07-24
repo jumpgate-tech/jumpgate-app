@@ -24,8 +24,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/valve-tech/valve-node/internal/catalog"
-	"github.com/valve-tech/valve-node/internal/executor"
+	"github.com/valve-tech/valve-node-app/internal/catalog"
+	"github.com/valve-tech/valve-node-app/internal/executor"
 )
 
 // defaultInterval is used when Config.Interval is zero.
