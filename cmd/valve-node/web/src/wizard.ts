@@ -12,7 +12,7 @@
 // (preflight, toolchain, install-exec, install-beacon, wire, start,
 // handshake; see internal/setup/steps.go), not something the API returns.
 import * as api from "./api";
-import { badge, escapeHtml, footer, onAction } from "./ui";
+import { badge, dropdown, DropdownOption, escapeHtml, footer, onAction, wireDropdowns } from "./ui";
 
 type WizardStep = "network" | "clients" | "mode" | "review" | "run";
 
@@ -101,6 +101,12 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
 
   onAction(root, (action, el) => {
     handleAction(action, el);
+  });
+
+  wireDropdowns(root, (id, value) => {
+    if (id === "exec-select") state.execId = value;
+    else if (id === "beacon-select") state.beaconId = value;
+    render();
   });
 
   load();
@@ -203,8 +209,8 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
       state.beaconId = net.BeaconClients[0] ?? null;
     }
 
-    const execOptions = net.ExecClients.map((id) => clientOption(id, catalog, state.execId)).join("");
-    const beaconOptions = net.BeaconClients.map((id) => clientOption(id, catalog, state.beaconId)).join("");
+    const execOptions = net.ExecClients.map((id) => clientOption(id, catalog));
+    const beaconOptions = net.BeaconClients.map((id) => clientOption(id, catalog));
 
     return `
       <section>
@@ -212,11 +218,11 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
         <p class="muted">Only combinations known to work on ${escapeHtml(net.Name)} are offered.</p>
         <label>
           Execution client
-          <select id="exec-select" data-action="pick-exec">${execOptions}</select>
+          ${dropdown("exec-select", execOptions, state.execId)}
         </label>
         <label>
           Beacon client
-          <select id="beacon-select" data-action="pick-beacon">${beaconOptions}</select>
+          ${dropdown("beacon-select", beaconOptions, state.beaconId)}
         </label>
         <div class="wizard-actions">
           <button class="btn btn-ghost" data-action="goto-network">Back</button>
@@ -226,10 +232,9 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     `;
   }
 
-  function clientOption(id: string, catalog: api.Catalog, selectedId: string | null): string {
+  function clientOption(id: string, catalog: api.Catalog): DropdownOption {
     const client = catalog.clients.find((c) => c.id === id);
-    const label = client ? `${client.id} (${client.toolchain})` : id;
-    return `<option value="${escapeHtml(id)}" ${id === selectedId ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    return { value: id, label: client ? `${client.id} (${client.toolchain})` : id };
   }
 
   function renderModeStep(): string {
@@ -237,13 +242,31 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     return `
       <section>
         <h2>3. Choose sync mode</h2>
+        <p class="muted">
+          Both modes run a fully-validating node — same security, same current-state RPC.
+          The difference is how much <strong>historical</strong> state is kept.
+        </p>
+        <table class="compare-table">
+          <thead>
+            <tr><th>What you get</th><th>Full</th><th>Archive</th></tr>
+          </thead>
+          <tbody>
+            <tr><th>Current state &amp; recent blocks</th><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+            <tr><th>Send transactions, normal RPC</th><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+            <tr><th>Historical state (balances, <code>eth_call</code>) at any past block</th><td class="limited">Recent only (~128 blocks)</td><td class="yes">Full history</td></tr>
+            <tr><th>Tracing / <code>debug_trace</code> on old blocks</th><td class="limited">Recent only</td><td class="yes">Full history</td></tr>
+            <tr><th>Disk footprint</th><td class="yes">Smaller</td><td class="limited">Much larger</td></tr>
+            <tr><th>Initial sync time</th><td class="yes">Faster</td><td class="limited">Much slower</td></tr>
+            <tr><th>Best for</th><td>Validators, wallets, everyday RPC</td><td>Explorers, analytics, historical queries</td></tr>
+          </tbody>
+        </table>
         <label class="radio">
           <input type="radio" name="mode" value="full" data-action="pick-mode" ${!state.archive ? "checked" : ""} />
-          Full — prune old state, smaller disk footprint
+          <span><strong>Full</strong> — recommended for most nodes</span>
         </label>
         <label class="radio">
           <input type="radio" name="mode" value="archive" data-action="pick-mode" ${state.archive ? "checked" : ""} />
-          Archive — keep full history, needs much more disk
+          <span><strong>Archive</strong> — only if you need full historical state</span>
         </label>
         <details class="advanced">
           <summary>Advanced</summary>
@@ -426,7 +449,6 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
         render();
         break;
       case "goto-mode":
-        readClientSelects();
         state.step = "mode";
         render();
         break;
@@ -443,13 +465,6 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
         void startSetup();
         break;
     }
-  }
-
-  function readClientSelects(): void {
-    const execSel = root.querySelector<HTMLSelectElement>("#exec-select");
-    const beaconSel = root.querySelector<HTMLSelectElement>("#beacon-select");
-    if (execSel) state.execId = execSel.value;
-    if (beaconSel) state.beaconId = beaconSel.value;
   }
 
   function readModeInputs(): void {
