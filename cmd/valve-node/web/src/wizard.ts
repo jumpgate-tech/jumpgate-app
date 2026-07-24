@@ -176,7 +176,6 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
         <button class="card card-selectable ${selected ? "selected" : ""}" data-action="pick-network" data-chain-id="${chainId}" type="button">
           <h3>${escapeHtml(net.Name)} <span class="muted">(chain ${chainId})</span></h3>
           ${tag}
-          <p class="muted small">Checkpoint sync from ${escapeHtml(net.CheckpointURL)}</p>
         </button>
       `;
     }).join("");
@@ -333,6 +332,7 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
             <tr><th>Mode</th><td>${state.archive ? "Archive" : "Full"}</td></tr>
             <tr><th>Data directory</th><td><code>${escapeHtml(dataDir)}</code></td></tr>
             <tr><th>JWT secret path</th><td><code>${escapeHtml(jwtPath)}</code></td></tr>
+            ${net ? `<tr><th>Checkpoint sync</th><td><code>${escapeHtml(net.CheckpointURL)}</code></td></tr>` : ""}
             ${portsRow}
             ${rpcBindRow}
           </tbody>

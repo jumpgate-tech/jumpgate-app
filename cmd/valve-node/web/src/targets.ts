@@ -38,10 +38,20 @@ export function renderTargets(root: HTMLElement): () => void {
 
     const localSection = local
       ? targetCard(local, catalog)
-      : `
+      : looksNonLinux()
+        ? `
         <div class="card">
           <h2>This machine</h2>
-          ${localNudge()}
+          <p class="muted">
+            valve-node is running here as your <strong>controller</strong> — it drives your nodes but
+            doesn't host them. Node hosts must be Linux, so add a server over SSH below.
+          </p>
+        </div>
+      `
+        : `
+        <div class="card">
+          <h2>This machine</h2>
+          <p class="muted">The machine running valve-node. Setup only works on a Linux target.</p>
           <button class="btn" data-action="add-local">Add this machine as a target</button>
         </div>
       `;
@@ -241,23 +251,6 @@ function looksNonLinux(): boolean {
   const uaData = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData;
   const platform = uaData?.platform || navigator.platform || navigator.userAgent;
   return /mac|win/i.test(platform) && !/linux|android/i.test(platform);
-}
-
-// localNudge renders the local card's guidance. On a machine that doesn't
-// look like Linux this is a real warning banner (spec v0.2 §1's exact
-// wording), not just a muted note — macOS/Windows setup fails preflight's
-// Linux check anyway, so this makes that a first-class message instead of a
-// surprise partway through the wizard.
-function localNudge(): string {
-  if (looksNonLinux()) {
-    return `
-      <p class="banner banner-warn">
-        macOS and Windows are not supported node hosts — use this machine as a controller and add a
-        Linux server over SSH.
-      </p>
-    `;
-  }
-  return `<p class="muted">The machine running valve-node. Setup only works on a Linux target.</p>`;
 }
 
 function slugify(s: string): string {
