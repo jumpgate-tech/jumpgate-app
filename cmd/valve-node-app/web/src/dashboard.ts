@@ -137,17 +137,27 @@ export function renderDashboard(root: HTMLElement, targetId: string): () => void
     if (!latestSnapshot) return;
     const snap = latestSnapshot;
     body.innerHTML = `
+      <p class="dash-status">${topStatusBadge(snap)}</p>
       <div class="card-grid">
+        ${servicesCard(snap)}
         ${execSyncCard(snap)}
         ${beaconSyncCard(snap)}
         ${peersCard(snap)}
-        ${diskCard(snap)}
         ${storageCard(snap)}
         ${endpointsCard()}
-        ${servicesCard(snap)}
       </div>
       <p class="muted small">Last updated ${escapeHtml(new Date(snap.at).toLocaleTimeString())}</p>
     `;
+  }
+
+  // topStatusBadge summarizes the whole node in one glance, ahead of the
+  // card grid: both services down reads as not-running (regardless of
+  // per-service sync state); otherwise either side still syncing wins over
+  // "synced" so the headline never claims synced while catching up.
+  function topStatusBadge(snap: api.Snapshot): string {
+    if (!snap.execActive && !snap.beaconActive) return badge("Node not running", "bad");
+    if (snap.execSyncing || snap.beaconDistance > 0) return badge("Syncing", "warn");
+    return badge("Running · synced", "ok");
   }
 
   // syncETA computes the execution head's lag behind the reference head and
@@ -173,7 +183,15 @@ export function renderDashboard(root: HTMLElement, targetId: string): () => void
     return `
       <div class="card">
         <h3>Execution sync</h3>
-        <p>${snap.execSyncing ? badge("syncing", "warn") : badge("synced", "ok")}</p>
+        <p>${
+          !snap.execActive
+            ? badge("stopped", "bad")
+            : snap.execSyncing
+              ? badge("syncing", "warn")
+              : snap.execHead === 0
+                ? badge("no data", "neutral")
+                : badge("synced", "ok")
+        }</p>
         <dl class="stat-list">
           <div><dt>Local head</dt><dd>${fmtInt(snap.execHead)}</dd></div>
           <div><dt>Reference head</dt><dd>${lag !== null ? fmtInt(snap.refHead) : "unavailable"}</dd></div>
@@ -188,7 +206,15 @@ export function renderDashboard(root: HTMLElement, targetId: string): () => void
     return `
       <div class="card">
         <h3>Beacon sync</h3>
-        <p>${snap.beaconDistance === 0 ? badge("synced", "ok") : badge("syncing", "warn")}</p>
+        <p>${
+          !snap.beaconActive
+            ? badge("stopped", "bad")
+            : snap.beaconSlot === 0
+              ? badge("no data", "neutral")
+              : snap.beaconDistance === 0
+                ? badge("synced", "ok")
+                : badge("syncing", "warn")
+        }</p>
         <dl class="stat-list">
           <div><dt>Slot</dt><dd>${fmtInt(snap.beaconSlot)}</dd></div>
           <div><dt>Distance</dt><dd>${fmtInt(snap.beaconDistance)}</dd></div>
@@ -209,46 +235,55 @@ export function renderDashboard(root: HTMLElement, targetId: string): () => void
     `;
   }
 
-  function diskCard(snap: api.Snapshot): string {
-    const warn = snap.diskUsedPct >= highDiskUsagePct;
-    return `
-      <div class="card ${warn ? "card-warn" : ""}">
-        <h3>Disk</h3>
-        <div class="meter"><div class="meter-fill ${warn ? "meter-warn" : ""}" style="width:${Math.min(snap.diskUsedPct, 100)}%"></div></div>
-        <p>${fmtPct(snap.diskUsedPct)} used</p>
-      </div>
-    `;
-  }
-
-  // storageCard shows per-service current-vs-expected disk usage. These are
-  // estimates ported from learn.valve.city's snapshot table, not live
-  // measurements of the eventual synced size — labeled as such per the spec.
-  // Per spec §3, it also surfaces the same rate-based ETA the
-  // Execution-sync card computes (execBlocksPerSec) alongside the
-  // current-vs-expected bar — only while the exec head is actually
-  // advancing; it's omitted (not shown as "—" or "caught up") once there's
-  // no meaningful rate to estimate from, since a stalled or already-synced
-  // node has no "time remaining" to speak of here.
+  // storageCard is the consolidated Disk + Storage card: overall disk used%
+  // (was the standalone Disk card) plus per-service current-vs-expected disk
+  // usage. The expected sizes are estimates ported from learn.valve.city's
+  // snapshot table, not live measurements of the eventual synced size —
+  // labeled as such per the spec. Per spec §3, it also surfaces the same
+  // rate-based ETA the Execution-sync card computes (execBlocksPerSec)
+  // alongside the current-vs-expected bar — only while the exec head is
+  // actually advancing; it's omitted (not shown as "—" or "caught up") once
+  // there's no meaningful rate to estimate from, since a stalled or
+  // already-synced node has no "time remaining" to speak of here.
+  //
+  // The disk-used% meter comes from the monitor snapshot (always available
+  // once the SSE stream is up) while the rest depends on the separate /du
+  // fetch, so the disk section renders unconditionally and the du-dependent
+  // sections handle their own loading/error states below it.
   function storageCard(snap: api.Snapshot): string {
+    const diskWarn = snap.diskUsedPct >= highDiskUsagePct;
+    const diskSection = `
+      <div class="meter"><div class="meter-fill ${diskWarn ? "meter-warn" : ""}" style="width:${Math.min(snap.diskUsedPct, 100)}%"></div></div>
+      <p>${fmtPct(snap.diskUsedPct)} used</p>
+    `;
+
     if (duErr) {
       return `
-        <div class="card card-warn">
+        <div class="card ${diskWarn ? "card-warn" : ""}">
           <h3>Storage</h3>
+          ${diskSection}
           <p class="error small">${escapeHtml(duErr)}</p>
           <button class="btn btn-ghost" data-action="retry-du">Retry</button>
         </div>
       `;
     }
     if (!du) {
-      return `<div class="card"><h3>Storage</h3><p class="muted">Loading…</p></div>`;
+      return `
+        <div class="card ${diskWarn ? "card-warn" : ""}">
+          <h3>Storage</h3>
+          ${diskSection}
+          <p class="muted">Loading…</p>
+        </div>
+      `;
     }
     const execPct = du.ExpectedExecBytes > 0 ? Math.min((du.ExecBytes / du.ExpectedExecBytes) * 100, 100) : 0;
     const beaconPct = du.ExpectedBeaconBytes > 0 ? Math.min((du.BeaconBytes / du.ExpectedBeaconBytes) * 100, 100) : 0;
     const { lag, eta } = syncETA(snap);
     const advancing = lag !== null && lag > 0 && execBlocksPerSec !== null && execBlocksPerSec > 0;
     return `
-      <div class="card">
+      <div class="card ${diskWarn ? "card-warn" : ""}">
         <h3>Storage</h3>
+        ${diskSection}
         <p class="muted small">Estimate — varies by client and pruning.</p>
         <p class="muted small">Execution — ${fmtBytes(du.ExecBytes)} of ~${fmtBytes(du.ExpectedExecBytes)}</p>
         <div class="meter"><div class="meter-fill" style="width:${execPct}%"></div></div>

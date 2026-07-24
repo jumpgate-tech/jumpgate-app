@@ -134,6 +134,28 @@ func TestPollParsesSnapshotFields(t *testing.T) {
 	}
 }
 
+// TestDiskCmdWalksToNearestExistingAncestor locks in that the disk-percent
+// probe walks up to the nearest existing ancestor directory before running
+// `df`, exactly like internal/ops's diskFreeBytes and internal/setup's
+// preflight check do for the free-bytes probe. Without this, `df` against a
+// data dir that doesn't exist yet (e.g. before setup has run) errors/returns
+// nothing, and the parsed percentage is misread as 0% used even though the
+// underlying filesystem is far from empty — this is a regression guard for
+// that bug.
+func TestDiskCmdWalksToNearestExistingAncestor(t *testing.T) {
+	cmd := diskCmd("/var/lib/valve-node-app/369")
+
+	if !strings.Contains(cmd, `while [ ! -d "$d" ]`) {
+		t.Errorf("diskCmd = %q, want it to contain the ancestor-walk `while [ ! -d \"$d\" ]`", cmd)
+	}
+	if !strings.Contains(cmd, "df --output=pcent") {
+		t.Errorf("diskCmd = %q, want it to still run `df --output=pcent`", cmd)
+	}
+	if !strings.Contains(cmd, `'/var/lib/valve-node-app/369'`) {
+		t.Errorf("diskCmd = %q, want the shell-quoted dir to appear as the walk's starting point", cmd)
+	}
+}
+
 // TestPollUsesWireConfigCustomPorts locks in that every exec/beacon probe
 // resolves its target address via WireConfig.ExecHTTP()/BeaconHTTP()
 // (default 8545/5052 on the zero value) rather than a hardcoded constant —
