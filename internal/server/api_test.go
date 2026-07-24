@@ -1496,3 +1496,52 @@ func TestSetupRejectsInvalidRPCBindAddr(t *testing.T) {
 	}
 	res.Body.Close()
 }
+
+// ---------------------------------------------------------------------
+// disk free probe
+// ---------------------------------------------------------------------
+
+func TestDiskFreeHappyPath(t *testing.T) {
+	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) {
+		e := &scriptedExecutor{}
+		e.script("df -B1 --output=avail", executor.Result{Stdout: "Avail\n5000000000000\n", ExitCode: 0})
+		return e, nil
+	})
+	// A plain local target (no wire needed — the probe runs pre-setup).
+	res := a.do(t, "POST", "/api/targets", config.Target{ID: "local", Mode: "local"})
+	res.Body.Close()
+
+	res = a.do(t, "GET", "/api/targets/local/disk?path=/mnt/reth", nil)
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("status = %d, want 200, body=%s", res.StatusCode, body)
+	}
+	got := decodeJSON[struct {
+		Path      string
+		FreeBytes uint64
+	}](t, res)
+	if got.Path != "/mnt/reth" {
+		t.Errorf("Path = %q, want /mnt/reth", got.Path)
+	}
+	if got.FreeBytes != 5000000000000 {
+		t.Errorf("FreeBytes = %d, want 5000000000000", got.FreeBytes)
+	}
+}
+
+func TestDiskFreeMissingPathIs400(t *testing.T) {
+	a := newAPITestServer(t)
+	res := a.do(t, "POST", "/api/targets", config.Target{ID: "local", Mode: "local"})
+	res.Body.Close()
+	res = a.do(t, "GET", "/api/targets/local/disk", nil)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 when path is missing", res.StatusCode)
+	}
+}
+
+func TestDiskFreeUnknownTargetIs404(t *testing.T) {
+	a := newAPITestServer(t)
+	res := a.do(t, "GET", "/api/targets/nope/disk?path=/mnt/reth", nil)
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", res.StatusCode)
+	}
+}

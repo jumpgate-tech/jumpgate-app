@@ -314,6 +314,14 @@ func duBytes(ctx context.Context, e executor.Executor, dataDir string, subdirs [
 	return total, nil
 }
 
+// FreeBytesAt reports the free bytes on the filesystem that holds path,
+// walking up to the nearest existing ancestor first (path may not exist yet
+// — e.g. a data location the operator is considering in the setup wizard,
+// before anything is created). Exposes diskFreeBytes for the /disk probe.
+func FreeBytesAt(ctx context.Context, e executor.Executor, path string) (uint64, error) {
+	return diskFreeBytes(ctx, e, path)
+}
+
 // diskFreeBytes reports free bytes on the filesystem holding dataDir, via
 // the same nearest-existing-ancestor `df` walk internal/setup's preflight
 // check uses (a target's DataDir always exists by the time DiskUsage is a

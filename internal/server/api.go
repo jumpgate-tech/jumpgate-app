@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -424,6 +425,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/targets/{id}/services/{svc}/clear", s.handleServiceClear)
 	mux.HandleFunc("POST /api/targets/{id}/services/{svc}/{action}", s.handleServiceAction)
 	mux.HandleFunc("GET /api/targets/{id}/du", s.handleDiskUsage)
+	mux.HandleFunc("GET /api/targets/{id}/disk", s.handleDiskFree)
 	mux.HandleFunc("GET /api/targets/{id}/endpoints", s.handleEndpoints)
 	mux.HandleFunc("GET /api/targets/{id}/firewall", s.handleFirewall)
 	mux.HandleFunc("GET /api/targets/{id}/diagnostics", s.handleDiagnostics)
@@ -1224,6 +1226,44 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	entry.endDiag(report)
 
 	writeJSON(w, http.StatusOK, report)
+}
+
+// handleDiskFree probes the free bytes at a candidate data location on the
+// target. Unlike the other ops routes it does NOT require completed setup —
+// the setup wizard calls it to size up a location before anything is
+// created — so it only needs the target to exist and an executor.
+func (s *Server) handleDiskFree(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "path query parameter is required")
+		return
+	}
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	target, ok := findTarget(cfg, id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "target not found")
+		return
+	}
+	ex, err := s.getExecutor(target)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	free, err := ops.FreeBytesAt(r.Context(), ex, path)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Path      string `json:"path"`
+		FreeBytes uint64 `json:"freeBytes"`
+	}{Path: path, FreeBytes: free})
 }
 
 // handleDiagnosticsLatest returns the target's most recent diagnostics
