@@ -880,3 +880,88 @@ func TestRenderUnits_CheckpointOverrideAndToggle(t *testing.T) {
 		t.Errorf("NoCheckpoint should keep --genesis-beacon-api-url:\n%s", beaconUnit)
 	}
 }
+
+func TestRenderERPCConfig_FullNode(t *testing.T) {
+	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369",
+		ERPCEnabled: true, ERPCUpstreams: []string{"https://rpc.pulsechain.com"}}
+	cfg, err := RenderERPCConfig(w)
+	if err != nil {
+		t.Fatalf("RenderERPCConfig: %v", err)
+	}
+	for _, want := range []string{
+		`httpHostV4: "127.0.0.1"`,
+		"httpPortV4: 4000",
+		"id: local-node",
+		"endpoint: http://127.0.0.1:8545",
+		"chainId: 369",
+		"latestBlockMinus: 128",
+		"endpoint: https://rpc.pulsechain.com",
+		"tier:fallback",
+		"overall: 0.2",
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("config missing %q:\n%s", want, cfg)
+		}
+	}
+	if strings.Contains(cfg, "lower: null") {
+		t.Errorf("full node must not declare unbounded history:\n%s", cfg)
+	}
+}
+
+func TestRenderERPCConfig_ArchiveUnbounded(t *testing.T) {
+	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369",
+		ERPCEnabled: true, Archive: true}
+	cfg, err := RenderERPCConfig(w)
+	if err != nil {
+		t.Fatalf("RenderERPCConfig: %v", err)
+	}
+	if !strings.Contains(cfg, "lower: null") {
+		t.Errorf("archive node should declare unbounded history (lower: null):\n%s", cfg)
+	}
+	if strings.Contains(cfg, "latestBlockMinus") {
+		t.Errorf("archive node must not cap block availability:\n%s", cfg)
+	}
+}
+
+func TestRenderERPCConfig_BindPortAndRPCBind(t *testing.T) {
+	const ip = "100.101.102.103"
+	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369",
+		ERPCEnabled: true, ERPCBindAddr: ip, ERPCPort: 8080, RPCBindAddr: ip}
+	cfg, err := RenderERPCConfig(w)
+	if err != nil {
+		t.Fatalf("RenderERPCConfig: %v", err)
+	}
+	if !strings.Contains(cfg, `httpHostV4: "`+ip+`"`) || !strings.Contains(cfg, "httpPortV4: 8080") {
+		t.Errorf("server host/port not applied:\n%s", cfg)
+	}
+	if !strings.Contains(cfg, "endpoint: http://"+ip+":8545") {
+		t.Errorf("local upstream should follow the node's RPC bind:\n%s", cfg)
+	}
+}
+
+func TestRenderERPCUnit_Hardened(t *testing.T) {
+	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369", ERPCEnabled: true}
+	unit, err := RenderERPCUnit(w)
+	if err != nil {
+		t.Fatalf("RenderERPCUnit: %v", err)
+	}
+	for _, want := range []string{
+		"erpc --config /var/lib/valve-node/369/erpc.yaml",
+		"User=" + ServiceUser,
+		"ProtectSystem=strict",
+		"ReadWritePaths=/var/lib/valve-node/369",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("eRPC unit missing %q:\n%s", want, unit)
+		}
+	}
+}
+
+func TestDefaultUpstreams(t *testing.T) {
+	if got := DefaultUpstreams(369); len(got) == 0 || !strings.Contains(got[0], "rpc.pulsechain.com") {
+		t.Errorf("DefaultUpstreams(369) = %v, want a pulsechain endpoint", got)
+	}
+	if got := DefaultUpstreams(999999); got != nil {
+		t.Errorf("DefaultUpstreams(unknown) = %v, want nil", got)
+	}
+}
