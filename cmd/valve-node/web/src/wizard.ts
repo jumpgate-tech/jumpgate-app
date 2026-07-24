@@ -216,14 +216,21 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
       <section>
         <h2>2. Choose your client pair</h2>
         <p class="muted">Only combinations known to work on ${escapeHtml(net.Name)} are offered.</p>
+        <p class="muted small">
+          The <strong>provider</strong> shown for each client is the org that publishes it —
+          some are the original upstream team, others are forks. Check the source if you only
+          want to run a client from a particular team.
+        </p>
         <label>
           Execution client
           ${dropdown("exec-select", execOptions, state.execId)}
         </label>
+        ${clientSourceLine(state.execId, catalog)}
         <label>
           Beacon client
           ${dropdown("beacon-select", beaconOptions, state.beaconId)}
         </label>
+        ${clientSourceLine(state.beaconId, catalog)}
         <div class="wizard-actions">
           <button class="btn btn-ghost" data-action="goto-network">Back</button>
           <button class="btn" data-action="goto-mode">Next: mode</button>
@@ -243,7 +250,24 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
 
   function clientOption(id: string, catalog: api.Catalog): DropdownOption {
     const client = catalog.clients.find((c) => c.id === id);
-    return { value: id, label: client ? `${client.id} (${client.toolchain})` : id };
+    return { value: id, label: client ? `${client.id} — ${clientProvider(client.repo)}` : id };
+  }
+
+  // clientProvider extracts the publishing org from a client's source repo
+  // (e.g. https://github.com/valve-tech/reth → "valve-tech"), so the picker
+  // shows who actually provides each client — upstream team vs a fork.
+  function clientProvider(repo: string): string {
+    const parts = repo.split("/");
+    return parts.length >= 4 ? parts[3] : repo;
+  }
+
+  // clientSourceLine renders the selected client's source repository as a
+  // link, so the provenance is verifiable, not just a label.
+  function clientSourceLine(id: string | null, catalog: api.Catalog): string {
+    const client = id ? catalog.clients.find((c) => c.id === id) : undefined;
+    if (!client) return "";
+    const shown = client.repo.replace(/^https?:\/\//, "");
+    return `<p class="muted small">Source: <a href="${escapeHtml(client.repo)}" target="_blank" rel="noopener noreferrer">${escapeHtml(shown)}</a></p>`;
   }
 
   function renderModeStep(): string {
