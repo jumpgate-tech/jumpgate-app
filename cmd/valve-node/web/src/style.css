@@ -656,6 +656,22 @@ details.advanced summary {
   margin-bottom: 0.75rem;
 }
 
+.add-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 1.5rem;
+}
+
+.empty-state p:first-child {
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
 .check-list {
   list-style: none;
   margin: 0;

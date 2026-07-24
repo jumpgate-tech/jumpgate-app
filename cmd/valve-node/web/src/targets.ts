@@ -7,9 +7,14 @@ const LOCAL_TARGET_ID = "local";
 
 export function renderTargets(root: HTMLElement): () => void {
   let disposed = false;
+  // The SSH add form is revealed on demand (the "Add a server" button)
+  // rather than always shown, so the empty state stays a clean set of
+  // guiding actions. Held across re-renders.
+  let showSSHForm = false;
+  let lastData: { targets: api.Target[]; catalog: api.Catalog } | null = null;
 
   root.innerHTML = `
-    <h1>Targets</h1>
+    <h1>Machines</h1>
     <div id="targets-body"><p class="muted">Loading…</p></div>
     ${footer()}
   `;
@@ -28,44 +33,52 @@ export function renderTargets(root: HTMLElement): () => void {
       renderBody(targets, catalog);
     } catch (err) {
       if (disposed) return;
-      body.innerHTML = `<p class="error">Failed to load targets: ${escapeHtml(String(err))}</p>`;
+      body.innerHTML = `<p class="error">Failed to load machines: ${escapeHtml(String(err))}</p>`;
     }
   }
 
-  function renderBody(targets: api.Target[], catalog: api.Catalog): void {
-    const local = targets.find((t) => t.mode === "local");
-    const remote = targets.filter((t) => t.mode === "ssh");
+  function rerender(): void {
+    if (lastData) renderBody(lastData.targets, lastData.catalog);
+  }
 
-    const localSection = local
-      ? targetCard(local, catalog)
-      : looksNonLinux()
-        ? `
-        <div class="card">
-          <h2>This machine</h2>
-          <p class="muted">
-            valve-node is running here as your <strong>controller</strong> — it drives your nodes but
-            doesn't host them. Node hosts must be Linux, so add a server over SSH below.
+  function renderBody(targets: api.Target[], catalog: api.Catalog): void {
+    lastData = { targets, catalog };
+    const canHostLocal = !looksNonLinux();
+
+    // One unified list, local target(s) first, then SSH servers.
+    const ordered = [...targets].sort((a, b) => (a.mode === "local" ? -1 : 0) - (b.mode === "local" ? -1 : 0));
+    const list = ordered.length
+      ? `<div class="card-grid">${ordered.map((t) => targetCard(t, catalog)).join("")}</div>`
+      : `
+        <div class="card empty-state">
+          <p>No machines yet.</p>
+          <p class="muted small">
+            ${
+              canHostLocal
+                ? "Add this machine to run a node here, or add a remote Linux server over SSH."
+                : "valve-node is running here as your <strong>controller</strong> — it drives nodes but doesn't host them. Add a Linux server over SSH to run one."
+            }
           </p>
-        </div>
-      `
-        : `
-        <div class="card">
-          <h2>This machine</h2>
-          <p class="muted">The machine running valve-node. Setup only works on a Linux target.</p>
-          <button class="btn" data-action="add-local">Add this machine as a target</button>
         </div>
       `;
 
-    const remoteCards = remote.length
-      ? remote.map((t) => targetCard(t, catalog)).join("")
-      : `<p class="muted">No SSH targets yet.</p>`;
+    const addActions = `
+      <div class="add-actions">
+        ${canHostLocal ? `<button class="btn" data-action="add-local">Add this machine</button>` : ""}
+        <button class="btn${canHostLocal ? " btn-ghost" : ""}" data-action="toggle-ssh">
+          ${showSSHForm ? "Cancel" : "Add a server (SSH)"}
+        </button>
+      </div>
+    `;
 
     body.innerHTML = `
-      <section class="section">${localSection}</section>
       <section class="section">
-        <h2>Servers over SSH</h2>
-        <div class="card-grid">${remoteCards}</div>
-        ${sshFormMarkup()}
+        <div class="section-head">
+          <h2>Your machines</h2>
+          ${addActions}
+        </div>
+        ${showSSHForm ? sshFormMarkup() : ""}
+        ${list}
       </section>
     `;
   }
@@ -82,6 +95,13 @@ export function renderTargets(root: HTMLElement): () => void {
         return;
       }
       await deleteTarget(id);
+      return;
+    }
+    if (action === "toggle-ssh") {
+      showSSHForm = !showSSHForm;
+      clearFormError();
+      rerender();
+      if (showSSHForm) root.querySelector<HTMLInputElement>("#ssh-host")?.focus();
       return;
     }
     if (action === "add-ssh") {
@@ -146,6 +166,7 @@ export function renderTargets(root: HTMLElement): () => void {
     }
     try {
       await api.addTarget({ id, mode: "ssh", ssh });
+      showSSHForm = false;
       await load();
     } catch (err) {
       showFormError(err);
