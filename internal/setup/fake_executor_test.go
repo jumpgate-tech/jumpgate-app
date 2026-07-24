@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/valve-tech/valve-node/internal/executor"
+	"github.com/valve-tech/valve-node-app/internal/executor"
 )
 
 // fakeExecutor is the shared test double for this package: a scripted

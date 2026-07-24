@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/valve-tech/valve-node/internal/catalog"
-	"github.com/valve-tech/valve-node/internal/executor"
+	"github.com/valve-tech/valve-node-app/internal/catalog"
+	"github.com/valve-tech/valve-node-app/internal/executor"
 )
 
 // Ports contract, matching internal/catalog/units.go: exec RPC defaults to

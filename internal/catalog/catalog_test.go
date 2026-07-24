@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/valve-tech/valve-node/internal/executor"
+	"github.com/valve-tech/valve-node-app/internal/executor"
 )
 
 // allExecIDs / allBeaconIDs enumerate every client id in the catalog by

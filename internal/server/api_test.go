@@ -16,13 +16,13 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/valve-tech/valve-node/internal/ai"
-	"github.com/valve-tech/valve-node/internal/catalog"
-	"github.com/valve-tech/valve-node/internal/config"
-	"github.com/valve-tech/valve-node/internal/executor"
-	"github.com/valve-tech/valve-node/internal/logwatch"
-	"github.com/valve-tech/valve-node/internal/monitor"
-	"github.com/valve-tech/valve-node/internal/ops"
+	"github.com/valve-tech/valve-node-app/internal/ai"
+	"github.com/valve-tech/valve-node-app/internal/catalog"
+	"github.com/valve-tech/valve-node-app/internal/config"
+	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/valve-node-app/internal/logwatch"
+	"github.com/valve-tech/valve-node-app/internal/monitor"
+	"github.com/valve-tech/valve-node-app/internal/ops"
 )
 
 // ---------------------------------------------------------------------

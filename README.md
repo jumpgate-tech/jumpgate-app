@@ -82,12 +82,12 @@ a trusted, private network.
 ### Download a release
 
 Grab the archive for your platform from the
-[latest release](https://github.com/valve-tech/valve-node/releases/latest),
+[latest release](https://github.com/valve-tech/valve-node-app/releases/latest),
 extract it, and run the binary:
 
 ```bash
-tar xzf valve-node_<os>_<arch>.tar.gz   # the Windows archive is a .zip
-./valve-node
+tar xzf valve-node-app_<os>_<arch>.tar.gz   # the Windows archive is a .zip
+./valve-node-app
 ```
 
 This prints a local URL with a one-time session token and opens it in your
@@ -105,11 +105,11 @@ browser automatically.
 Requires Go 1.25+ and Node 22+.
 
 ```bash
-git clone https://github.com/valve-tech/valve-node.git
+git clone https://github.com/valve-tech/valve-node-app.git
 cd valve-node
-cd cmd/valve-node/web && npm ci && npm run build && cd ../../..
-go build -o valve-node ./cmd/valve-node
-./valve-node
+cd cmd/valve-node-app/web && npm ci && npm run build && cd ../../..
+go build -o valve-node-app ./cmd/valve-node-app
+./valve-node-app
 ```
 
 ## How it's built
@@ -134,17 +134,17 @@ Requirements above); the node services it installs run unprivileged.
 
 ## Contributing
 
-The web UI (`cmd/valve-node/web/`) has no end-to-end (Playwright) test suite
+The web UI (`cmd/valve-node-app/web/`) has no end-to-end (Playwright) test suite
 by design for v1 — the API layer it talks to (`internal/server`) is fully
 covered by Go tests, and the UI itself is a thin, framework-free render
 layer over that API. Verify UI changes with:
 
 ```bash
-cd cmd/valve-node/web && npm run build   # tsc --noEmit (strict) + vite build
+cd cmd/valve-node-app/web && npm run build   # tsc --noEmit (strict) + vite build
 go build ./...                            # confirms the rebuilt dist/ still embeds
 ```
 
-then a manual smoke test: run `./valve-node --no-open` against a scratch
+then a manual smoke test: run `./valve-node-app --no-open` against a scratch
 `$HOME` and curl the printed token URL.
 
 ## Learn more
