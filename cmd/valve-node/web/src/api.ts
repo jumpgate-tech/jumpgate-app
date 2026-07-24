@@ -47,6 +47,17 @@ export interface Catalog {
   clients: CatalogClient[];
 }
 
+export interface Host {
+  os: string;
+  arch: string;
+}
+
+// getHost reports the OS/arch valve-node itself runs on — used to decide
+// whether local node setup is viable (needs a Linux host).
+export function getHost(): Promise<Host> {
+  return request<Host>("/api/host");
+}
+
 export function getCatalog(): Promise<Catalog> {
   return request<Catalog>("/api/catalog");
 }
