@@ -12,7 +12,7 @@
 // (preflight, toolchain, install-exec, install-beacon, wire, start,
 // handshake; see internal/setup/steps.go), not something the API returns.
 import * as api from "./api";
-import { badge, dropdown, DropdownOption, escapeHtml, footer, onAction, wireDropdowns } from "./ui";
+import { badge, dropdown, DropdownOption, escapeHtml, fmtBytes, footer, onAction, wireDropdowns } from "./ui";
 
 type WizardStep = "network" | "clients" | "mode" | "review" | "run";
 
@@ -62,6 +62,16 @@ interface State {
   execP2PPortError: string | null;
   rpcBindAddr: string;
   rpcBindAddrError: string | null;
+  // Free-disk probe at the chosen data location.
+  freeBytes: number | null;
+  probedPath: string | null;
+  diskProbing: boolean;
+  diskError: string | null;
+  downgradeNote: string | null;
+  // Consensus checkpoint sync.
+  checkpoint: boolean;
+  checkpointUrl: string;
+  checkpointUrlError: string | null;
   starting: boolean;
   startError: string | null;
   events: api.SetupEvent[];
@@ -89,6 +99,14 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     execP2PPortError: null,
     rpcBindAddr: "",
     rpcBindAddrError: null,
+    freeBytes: null,
+    probedPath: null,
+    diskProbing: false,
+    diskError: null,
+    downgradeNote: null,
+    checkpoint: true,
+    checkpointUrl: "",
+    checkpointUrlError: null,
     starting: false,
     startError: null,
     events: [],
@@ -107,6 +125,22 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     if (id === "exec-select") state.execId = value;
     else if (id === "beacon-select") state.beaconId = value;
     render();
+  });
+
+  // Delegated change handler for the mode-step inputs that need to react
+  // immediately (rather than only on navigation): a new data location
+  // re-probes free disk and re-evaluates the archive/full fit; toggling
+  // checkpoint sync re-renders to show/hide the URL field.
+  root.addEventListener("change", (ev) => {
+    const t = ev.target;
+    if (!(t instanceof HTMLInputElement)) return;
+    if (t.id === "data-dir-input") {
+      readModeInputs();
+      void probeDisk();
+    } else if (t.id === "checkpoint-toggle") {
+      state.checkpoint = t.checked;
+      render();
+    }
   });
 
   load();
@@ -248,6 +282,88 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     return `~${Math.round(sizeTB * 1000)} GB`;
   }
 
+  // FIT_MARGIN matches the server preflight's 10% headroom over the raw
+  // dataset estimate.
+  const FIT_MARGIN = 1.1;
+
+  function tierNeeds(net: api.Network): { archive: number; full: number } {
+    const archive = net.ArchiveSizeTB * 1e12 * FIT_MARGIN;
+    return { archive, full: archive / 2 };
+  }
+
+  // storageStatusHtml renders the free-disk readout for the chosen data
+  // location: how much is free and whether each tier fits, plus any
+  // auto-downgrade note or a hard "neither fits" warning.
+  function storageStatusHtml(net: api.Network | undefined, path: string): string {
+    if (!net) return "";
+    if (state.diskProbing) {
+      return `<p class="muted small">Checking free space at <code>${escapeHtml(path)}</code>…</p>`;
+    }
+    if (state.diskError) {
+      return `<p class="error small">Couldn't read free space at <code>${escapeHtml(path)}</code>: ${escapeHtml(state.diskError)}</p>`;
+    }
+    if (state.freeBytes === null || state.probedPath !== path) return "";
+    const needs = tierNeeds(net);
+    const archiveFits = state.freeBytes >= needs.archive;
+    const fullFits = state.freeBytes >= needs.full;
+    const line = `<p class="muted small">Free at <code>${escapeHtml(path)}</code>: <strong>${fmtBytes(state.freeBytes)}</strong> — archive ${archiveFits ? "fits" : "won't fit"} (~${approxSize(net.ArchiveSizeTB)}), full ${fullFits ? "fits" : "won't fit"} (~${approxSize(net.ArchiveSizeTB / 2)}).</p>`;
+    let note = "";
+    if (state.downgradeNote) {
+      note = `<p class="banner banner-warn">${escapeHtml(state.downgradeNote)}</p>`;
+    } else if (!fullFits) {
+      note = `<p class="banner banner-warn">Neither mode fits at this location (full needs ~${approxSize(net.ArchiveSizeTB / 2)}). Choose a location with more space.</p>`;
+    }
+    return line + note;
+  }
+
+  // evaluateFit runs after a disk probe: if archive is selected but the
+  // location can't hold it (while full would fit), downgrade to full and
+  // record a note. Only ever triggered by a probe (location change / step
+  // entry), never by a manual mode pick — so it never fights the operator
+  // who deliberately re-selects archive.
+  function evaluateFit(net: api.Network | undefined, path: string): void {
+    state.downgradeNote = null;
+    if (!net || state.freeBytes === null) return;
+    const needs = tierNeeds(net);
+    if (state.archive && state.freeBytes < needs.archive && state.freeBytes >= needs.full) {
+      state.archive = false;
+      state.downgradeNote = `Not enough space at ${path} for archive (~${approxSize(net.ArchiveSizeTB)}) — switched to Full (~${approxSize(net.ArchiveSizeTB / 2)}). Pick a location with more room to run archive.`;
+    }
+  }
+
+  async function probeDisk(): Promise<void> {
+    if (state.chainId === null) return;
+    const net = state.catalog?.networks.find((n) => n.ChainID === state.chainId);
+    const path = (state.dataDir || `/var/lib/valve-node/${state.chainId}`).trim();
+    state.diskProbing = true;
+    state.diskError = null;
+    render();
+    try {
+      const { freeBytes } = await api.getDiskFree(state.targetId, path);
+      if (disposed) return;
+      state.freeBytes = freeBytes;
+      state.probedPath = path;
+      evaluateFit(net, path);
+    } catch (err) {
+      if (disposed) return;
+      state.freeBytes = null;
+      state.probedPath = path;
+      state.diskError = String(err instanceof Error ? err.message : err);
+    }
+    state.diskProbing = false;
+    render();
+  }
+
+  // validateCheckpointUrl mirrors the server's check: empty is fine (network
+  // default), otherwise it must be an http(s) URL.
+  function validateCheckpointUrl(raw: string): string | null {
+    if (!raw) return null;
+    if (!/^https?:\/\/.+/i.test(raw)) {
+      return "Enter an http(s) URL, or leave blank for the network default.";
+    }
+    return null;
+  }
+
   function clientOption(id: string, catalog: api.Catalog): DropdownOption {
     const client = catalog.clients.find((c) => c.id === id);
     return { value: id, label: client ? `${client.id} — ${clientProvider(client.repo)}` : id };
@@ -310,12 +426,34 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
           <input type="radio" name="mode" value="full" data-action="pick-mode" ${!state.archive ? "checked" : ""} />
           <span><strong>Full</strong> — pruned, everyday RPC · ${fullSizeCell}${net ? "" : " disk"}</span>
         </label>
-        <details class="advanced">
-          <summary>Advanced</summary>
+
+        <div class="config-block">
           <label>
-            Data directory <span class="muted">(default: ${escapeHtml(defaultDataDir)})</span>
+            Data location <span class="muted">(default: ${escapeHtml(defaultDataDir)})</span>
             <input id="data-dir-input" type="text" placeholder="${escapeHtml(defaultDataDir)}" value="${escapeHtml(state.dataDir)}" />
           </label>
+          ${storageStatusHtml(net, state.dataDir || defaultDataDir)}
+        </div>
+
+        <div class="config-block">
+          <label class="radio">
+            <input type="checkbox" id="checkpoint-toggle" ${state.checkpoint ? "checked" : ""} />
+            <span><strong>Checkpoint sync</strong> — start near the chain head in minutes (recommended). Uncheck to sync the beacon chain from genesis: fully trustless, but much slower.</span>
+          </label>
+          ${
+            state.checkpoint
+              ? `<label>
+                   Checkpoint URL <span class="muted">(default: ${escapeHtml(net?.CheckpointURL ?? "")})</span>
+                   <input id="checkpoint-url-input" type="text" placeholder="${escapeHtml(net?.CheckpointURL ?? "")}" value="${escapeHtml(state.checkpointUrl)}" />
+                 </label>
+                 ${state.checkpointUrlError ? `<p class="error small">${escapeHtml(state.checkpointUrlError)}</p>` : ""}
+                 <p class="muted small">The beacon client trusts this endpoint for its starting checkpoint. Leave blank for the network default.</p>`
+              : `<p class="muted small">The beacon client will validate every block from genesis — no trusted checkpoint, but this can take days.</p>`
+          }
+        </div>
+
+        <details class="advanced">
+          <summary>Advanced</summary>
           <label>
             JWT secret path <span class="muted">(default: &lt;data dir&gt;/jwt.hex)</span>
             <input id="jwt-path-input" type="text" placeholder="${escapeHtml(defaultDataDir)}/jwt.hex" value="${escapeHtml(state.jwtPath)}" />
@@ -397,7 +535,11 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
             <tr><th>Mode</th><td>${state.archive ? "Archive" : "Full"}</td></tr>
             <tr><th>Data directory</th><td><code>${escapeHtml(dataDir)}</code></td></tr>
             <tr><th>JWT secret path</th><td><code>${escapeHtml(jwtPath)}</code></td></tr>
-            ${net ? `<tr><th>Checkpoint sync</th><td><code>${escapeHtml(net.CheckpointURL)}</code></td></tr>` : ""}
+            <tr><th>Checkpoint sync</th><td>${
+              state.checkpoint
+                ? `<code>${escapeHtml(state.checkpointUrl || net?.CheckpointURL || "")}</code>`
+                : "off — syncing from genesis"
+            }</td></tr>
             ${portsRow}
             ${rpcBindRow}
           </tbody>
@@ -493,10 +635,17 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
       case "goto-mode":
         state.step = "mode";
         render();
+        void probeDisk();
         break;
       case "goto-review":
         readModeInputs();
-        if (state.execHTTPPortError || state.beaconHTTPPortError || state.execP2PPortError || state.rpcBindAddrError) {
+        if (
+          state.execHTTPPortError ||
+          state.beaconHTTPPortError ||
+          state.execP2PPortError ||
+          state.rpcBindAddrError ||
+          state.checkpointUrlError
+        ) {
           render();
           break;
         }
@@ -529,10 +678,14 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     const rpcBindAddrInput = root.querySelector<HTMLInputElement>("#rpc-bind-addr-input");
     if (rpcBindAddrInput) state.rpcBindAddr = rpcBindAddrInput.value.trim();
 
+    const checkpointUrlInput = root.querySelector<HTMLInputElement>("#checkpoint-url-input");
+    if (checkpointUrlInput) state.checkpointUrl = checkpointUrlInput.value.trim();
+
     state.execHTTPPortError = parsePort(state.execHTTPPort).error ?? null;
     state.beaconHTTPPortError = parsePort(state.beaconHTTPPort).error ?? null;
     state.execP2PPortError = parsePort(state.execP2PPort).error ?? null;
     state.rpcBindAddrError = parseBindAddr(state.rpcBindAddr).error ?? null;
+    state.checkpointUrlError = state.checkpoint ? validateCheckpointUrl(state.checkpointUrl) : null;
   }
 
   // parseBindAddr validates an optional RPC bind address: empty means the
@@ -613,6 +766,9 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
 
     const { addr: rpcBindAddr } = parseBindAddr(state.rpcBindAddr);
     if (rpcBindAddr !== undefined) wire.RPCBindAddr = rpcBindAddr;
+
+    if (!state.checkpoint) wire.NoCheckpoint = true;
+    else if (state.checkpointUrl) wire.CheckpointURL = state.checkpointUrl;
 
     try {
       await api.startSetup(state.targetId, wire);

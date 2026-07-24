@@ -359,6 +359,13 @@ select:focus {
   color: var(--accent);
 }
 
+.config-block {
+  margin: 0.75rem 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.6rem 0.8rem;
+}
+
 details.advanced {
   margin: 0.75rem 0;
   border: 1px dashed var(--border);

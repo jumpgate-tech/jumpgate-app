@@ -135,6 +135,21 @@ export interface StartSetupRequest {
   ExecP2PPort?: number;
   // Only send when the operator set a non-loopback RPC bind address.
   RPCBindAddr?: string;
+  // Consensus checkpoint sync: CheckpointURL overrides the network default;
+  // NoCheckpoint disables checkpoint sync (sync from genesis).
+  CheckpointURL?: string;
+  NoCheckpoint?: boolean;
+}
+
+export interface DiskFree {
+  path: string;
+  freeBytes: number;
+}
+
+export function getDiskFree(id: string, path: string): Promise<DiskFree> {
+  return request<DiskFree>(
+    `/api/targets/${encodeURIComponent(id)}/disk?path=${encodeURIComponent(path)}`,
+  );
 }
 
 export function startSetup(id: string, wire: StartSetupRequest): Promise<{ status: string }> {
