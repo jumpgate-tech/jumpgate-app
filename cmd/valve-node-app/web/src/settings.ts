@@ -75,7 +75,7 @@ export function renderSettings(root: HTMLElement): () => void {
           <input id="ai-key" type="password" placeholder="${settings.aiKeySet ? "•••••••• (leave blank to keep)" : "no key set"}" autocomplete="off" />
         </label>
         ${settings.aiKeySet ? `<button class="btn btn-ghost" type="button" data-action="clear-key">Clear saved key</button>` : ""}
-        <p class="muted small">Keys stay on this machine — they're written to ~/.valve-node/config.json (mode 0600) and only sent to the provider you pick, never anywhere else.</p>
+        <p class="muted small">Keys stay on this machine — they're written to ~/.valve-node-app/config.json (mode 0600) and only sent to the provider you pick, never anywhere else.</p>
         <details class="advanced">
           <summary>Advanced</summary>
           <label>

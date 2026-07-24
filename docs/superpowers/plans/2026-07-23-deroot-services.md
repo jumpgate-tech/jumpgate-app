@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Run the execution and beacon clients as a dedicated unprivileged system user (`valve-node`) with hardened systemd units, instead of root, with migration handled automatically by re-running setup.
+**Goal:** Run the execution and beacon clients as a dedicated unprivileged system user (`valve-node-app`) with hardened systemd units, instead of root, with migration handled automatically by re-running setup.
 
 **Architecture:** The systemd unit template in `internal/catalog/units.go` gains `User=`/`Group=` plus a conservative hardening block (`NoNewPrivileges`, `ProtectSystem=strict` + `ReadWritePaths=<DataDir>`, `PrivateTmp`, etc., and `AmbientCapabilities=CAP_NET_BIND_SERVICE` only when a configured port is <1024). A new idempotent `account` setup step creates the system user; the existing `wire` step chowns the data tree to it after the JWT write and verifies ownership. Migration of an existing root install falls out of the existing wire-step machinery: re-running setup detects changed unit content, rewrites + restarts, and the chown re-owns the data. Setup itself still requires root (it writes units, creates users, chowns); only the long-running services drop privileges.
 
@@ -10,10 +10,10 @@
 
 ## Global Constraints
 
-- Service user and group are both named `valve-node`, exported as `catalog.ServiceUser` / `catalog.ServiceGroup`.
+- Service user and group are both named `valve-node-app`, exported as `catalog.ServiceUser` / `catalog.ServiceGroup`.
 - Setup still requires root on the target — the preflight `id -u` gate and its exact error message are unchanged.
 - All target mutations go through the `executor.Executor` interface (works identically local and SSH). Shell args quoted with the package-local `shQuote`.
-- Unit names/paths unchanged: `valve-node-exec.service` / `valve-node-beacon.service` under `/etc/systemd/system`.
+- Unit names/paths unchanged: `valve-node-app-exec.service` / `valve-node-app-beacon.service` under `/etc/systemd/system`.
 - Binaries stay root-owned in `/usr/local/bin` (read+exec is all the service user needs).
 - No new `WireConfig` or API fields (the service user is a constant, not configuration).
 - Verify with `go build ./... && go test ./...`. No web UI change is needed (UI has no root-related copy).
@@ -27,7 +27,7 @@
 - Test: `internal/catalog/catalog_test.go`
 
 **Interfaces:**
-- Produces: `catalog.ServiceUser = "valve-node"`, `catalog.ServiceGroup = "valve-node"` (exported consts, used by Tasks 2–3). Rendered units now contain `User=valve-node`, hardening directives, `ReadWritePaths=<DataDir>`, and — only when that unit's ports include one <1024 — `AmbientCapabilities=CAP_NET_BIND_SERVICE`.
+- Produces: `catalog.ServiceUser = "valve-node-app"`, `catalog.ServiceGroup = "valve-node-app"` (exported consts, used by Tasks 2–3). Rendered units now contain `User=valve-node-app`, hardening directives, `ReadWritePaths=<DataDir>`, and — only when that unit's ports include one <1024 — `AmbientCapabilities=CAP_NET_BIND_SERVICE`.
 - Consumes: existing `WireConfig` port resolvers `ExecHTTP()`, `BeaconHTTP()`, `ExecP2P()` (zero value = default; defaults 8545/5052/30303; engine port fixed 8551).
 
 - [ ] **Step 1: Write the failing tests**
@@ -36,7 +36,7 @@ Append to `internal/catalog/catalog_test.go`:
 
 ```go
 func TestRenderUnits_RunAsServiceUser(t *testing.T) {
-	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369"}
+	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369"}
 	execUnit, beaconUnit, err := RenderUnits(w)
 	if err != nil {
 		t.Fatalf("RenderUnits: %v", err)
@@ -50,7 +50,7 @@ func TestRenderUnits_RunAsServiceUser(t *testing.T) {
 			"PrivateDevices=true",
 			"ProtectSystem=strict",
 			"ProtectHome=true",
-			"ReadWritePaths=/var/lib/valve-node/369",
+			"ReadWritePaths=/var/lib/valve-node-app/369",
 			"ProtectKernelTunables=true",
 			"ProtectControlGroups=true",
 			"RestrictSUIDSGID=true",
@@ -67,7 +67,7 @@ func TestRenderUnits_RunAsServiceUser(t *testing.T) {
 
 func TestRenderUnits_PrivilegedPortGrantsNetBindCap(t *testing.T) {
 	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse",
-		DataDir: "/var/lib/valve-node/369", ExecHTTPPort: 443}
+		DataDir: "/var/lib/valve-node-app/369", ExecHTTPPort: 443}
 	execUnit, beaconUnit, err := RenderUnits(w)
 	if err != nil {
 		t.Fatalf("RenderUnits: %v", err)
@@ -80,7 +80,7 @@ func TestRenderUnits_PrivilegedPortGrantsNetBindCap(t *testing.T) {
 	}
 
 	w = WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse",
-		DataDir: "/var/lib/valve-node/369", BeaconHTTPPort: 1023}
+		DataDir: "/var/lib/valve-node-app/369", BeaconHTTPPort: 1023}
 	execUnit, beaconUnit, err = RenderUnits(w)
 	if err != nil {
 		t.Fatalf("RenderUnits: %v", err)
@@ -111,8 +111,8 @@ In `internal/catalog/units.go`, add above `unitTemplate`:
 // rendered units). Setup's account step creates the account; the wire step
 // chowns the data dir to it.
 const (
-	ServiceUser  = "valve-node"
-	ServiceGroup = "valve-node"
+	ServiceUser  = "valve-node-app"
+	ServiceGroup = "valve-node-app"
 )
 ```
 
@@ -120,7 +120,7 @@ Replace `unitTemplate`, `unitVars`, and `renderUnit` (currently lines 69–90 an
 
 ```go
 const unitTemplate = `[Unit]
-Description=valve-node {{.Description}}
+Description=valve-node-app {{.Description}}
 After=network-online.target
 Wants=network-online.target
 
@@ -215,7 +215,7 @@ git commit -m "feat(catalog): render units with dedicated service user and syste
 
 **Interfaces:**
 - Consumes: `catalog.ServiceUser`, `catalog.ServiceGroup` (Task 1); existing `Step`/`State` structs (`engine.go:27–48`), `streamOpts(ctx, st, stepID)` helper, `fakeExecutor` double.
-- Produces: step ID `"account"`, title `Create service account (valve-node)`, ordered between `preflight` and `toolchain`. Idempotent: Run is a no-op when the user already exists; Verify passes iff `id -u valve-node` exits 0.
+- Produces: step ID `"account"`, title `Create service account (valve-node-app)`, ordered between `preflight` and `toolchain`. Idempotent: Run is a no-op when the user already exists; Verify passes iff `id -u valve-node-app` exits 0.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -318,7 +318,7 @@ Add after `ownActiveUnitPorts` (i.e. after the preflight section):
 // accountStep creates the dedicated unprivileged system account the node
 // services run as (catalog.ServiceUser). The services drop to this user
 // via the User=/Group= lines in the rendered units; setup itself still
-// runs as root (it is what performs the useradd). Home is the valve-node
+// runs as root (it is what performs the useradd). Home is the valve-node-app
 // data root purely as a bookkeeping convention — nothing reads it, so it
 // is not created here (--no-create-home) and not chain-specific.
 func accountStep() Step {
@@ -327,7 +327,7 @@ func accountStep() Step {
 		Title: "Create service account (" + catalog.ServiceUser + ")",
 		Run: func(ctx context.Context, e executor.Executor, st *State) error {
 			cmd := fmt.Sprintf(
-				"id -u %[1]s >/dev/null 2>&1 || useradd --system --user-group --home-dir /var/lib/valve-node --no-create-home --shell /usr/sbin/nologin %[1]s",
+				"id -u %[1]s >/dev/null 2>&1 || useradd --system --user-group --home-dir /var/lib/valve-node-app --no-create-home --shell /usr/sbin/nologin %[1]s",
 				catalog.ServiceUser,
 			)
 			res, err := e.Run(ctx, cmd, streamOpts(ctx, st, "account"))
@@ -354,7 +354,7 @@ func accountStep() Step {
 }
 ```
 
-Note: `catalog.ServiceUser` is a bare identifier in a shell command — it is a compile-time constant `valve-node` with no shell metacharacters, so `shQuote` is unnecessary (matches how unit names are interpolated today).
+Note: `catalog.ServiceUser` is a bare identifier in a shell command — it is a compile-time constant `valve-node-app` with no shell metacharacters, so `shQuote` is unnecessary (matches how unit names are interpolated today).
 
 - [ ] **Step 4: Run the package tests**
 
@@ -365,7 +365,7 @@ Expected: all PASS. Watch specifically for engine/steps tests that count or enum
 
 ```bash
 git add internal/setup/steps.go internal/setup/steps_test.go
-git commit -m "feat(setup): account step creates the valve-node service user"
+git commit -m "feat(setup): account step creates the valve-node-app service user"
 ```
 
 ---
@@ -378,7 +378,7 @@ git commit -m "feat(setup): account step creates the valve-node service user"
 
 **Interfaces:**
 - Consumes: `catalog.ServiceUser`/`ServiceGroup`; `jwtPathFor(w)` (steps.go:430–435); `shQuote`.
-- Produces: wire Run always executes `mkdir -p <DataDir> && chown -R valve-node:valve-node <DataDir> <jwtPath>` after the JWT block and **before** writing/restarting units (services must never start against data they cannot write). Wire Verify additionally requires `stat -c %U <DataDir>` to report `valve-node`. Together with the existing content-diff restart, this makes "re-run setup" the complete migration path for root-era installs: units are rewritten with `User=`, data is re-owned, services restarted.
+- Produces: wire Run always executes `mkdir -p <DataDir> && chown -R valve-node-app:valve-node-app <DataDir> <jwtPath>` after the JWT block and **before** writing/restarting units (services must never start against data they cannot write). Wire Verify additionally requires `stat -c %U <DataDir>` to report `valve-node-app`. Together with the existing content-diff restart, this makes "re-run setup" the complete migration path for root-era installs: units are rewritten with `User=`, data is re-owned, services restarted.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -399,7 +399,7 @@ func TestWire_RunChownsDataDirToServiceUser(t *testing.T) {
 		if c == wantChown {
 			found, chownIdx = true, i
 		}
-		if strings.HasPrefix(c, "WriteFile /etc/systemd/system/valve-node-exec.service") {
+		if strings.HasPrefix(c, "WriteFile /etc/systemd/system/valve-node-app-exec.service") {
 			writeIdx = i
 		}
 	}
@@ -434,8 +434,8 @@ func TestWire_VerifyFailsWhenDataDirNotOwnedByServiceUser(t *testing.T) {
 		script("test -f", executor.Result{ExitCode: 0}).
 		script("systemctl is-enabled", executor.Result{Stdout: "enabled\nenabled\n", ExitCode: 0}).
 		script("stat -c %U", executor.Result{Stdout: "root\n", ExitCode: 0})
-	e.files["/etc/systemd/system/valve-node-exec.service"] = []byte(execUnit)
-	e.files["/etc/systemd/system/valve-node-beacon.service"] = []byte(beaconUnit)
+	e.files["/etc/systemd/system/valve-node-app-exec.service"] = []byte(execUnit)
+	e.files["/etc/systemd/system/valve-node-app-beacon.service"] = []byte(beaconUnit)
 	step := wireStep()
 	err = step.Verify(context.Background(), e, &State{Wire: w})
 	if err == nil {
@@ -541,7 +541,7 @@ Insert a `## v0.3 (unreleased)` section after the `## v0.2` paragraph (before `#
 ## v0.3 (unreleased)
 
 v0.3 de-roots the node services: the execution and beacon clients now run
-as a dedicated unprivileged system user (`valve-node`) under hardened
+as a dedicated unprivileged system user (`valve-node-app`) under hardened
 systemd units (`NoNewPrivileges`, `ProtectSystem=strict` with the data
 directory carved out, private `/tmp` and devices). Setup itself still
 requires root — it creates the user, writes units, and owns the data
@@ -554,7 +554,7 @@ Replace the last Requirements bullet (line 43):
 
 ```markdown
 - Node services (the execution and beacon clients) run as the dedicated
-  unprivileged `valve-node` system user, which setup creates. (In v0.1–v0.2
+  unprivileged `valve-node-app` system user, which setup creates. (In v0.1–v0.2
   they ran as root; re-running setup migrates an existing install.)
 ```
 
@@ -564,7 +564,7 @@ In "How it's built" (line 96), leave "Both modes need root on the target (see Re
 
 ```bash
 git add README.md
-git commit -m "docs: v0.3 de-root — services run as unprivileged valve-node user"
+git commit -m "docs: v0.3 de-root — services run as unprivileged valve-node-app user"
 ```
 
 ---

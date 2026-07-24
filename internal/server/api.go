@@ -32,7 +32,7 @@ import (
 
 // logUnits is the fixed set of journald units every target's logwatch
 // Watcher tails, matching internal/monitor's unit-name constants.
-var logUnits = []string{"valve-node-exec.service", "valve-node-beacon.service"}
+var logUnits = []string{"valve-node-app-exec.service", "valve-node-app-beacon.service"}
 
 // defaultRecentLogs is used when GET .../logs is called without ?n=.
 const defaultRecentLogs = 200
@@ -456,7 +456,7 @@ type catalogResponse struct {
 	Clients  []catalogClient   `json:"clients"`
 }
 
-// handleHost reports the OS/arch valve-node itself is running on. The
+// handleHost reports the OS/arch valve-node-app itself is running on. The
 // targets UI uses this — not the browser's platform — to decide whether
 // local setup (running a node on this same machine) is viable: setup needs
 // a Linux host, so on darwin/windows this machine is a controller only.
@@ -671,7 +671,7 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wire.DataDir == "" {
-		wire.DataDir = fmt.Sprintf("/var/lib/valve-node/%d", wire.ChainID)
+		wire.DataDir = fmt.Sprintf("/var/lib/valve-node-app/%d", wire.ChainID)
 	}
 	if wire.JWTPath == "" {
 		wire.JWTPath = filepath.Join(wire.DataDir, "jwt.hex")

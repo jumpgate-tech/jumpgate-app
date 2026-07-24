@@ -12,7 +12,7 @@ import (
 type WireConfig struct {
 	ChainID          int
 	ExecID, BeaconID string
-	DataDir          string // e.g. /var/lib/valve-node/369
+	DataDir          string // e.g. /var/lib/valve-node-app/369
 	JWTPath          string // <DataDir>/jwt.hex
 	Archive          bool
 
@@ -99,7 +99,7 @@ func (w WireConfig) ExecP2P() int {
 
 // RPCBind returns the host address the exec/beacon HTTP RPC binds to,
 // resolving the empty value to the loopback default (127.0.0.1). This is
-// also the address valve-node's own on-box probes (monitor, diagnostics,
+// also the address valve-node-app's own on-box probes (monitor, diagnostics,
 // setup handshake) must target — a client bound to a single non-loopback
 // address no longer answers on 127.0.0.1.
 func (w WireConfig) RPCBind() string {
@@ -119,12 +119,12 @@ const engineEndpoint = "http://127.0.0.1:8551"
 // rendered units). Setup's account step creates the account; the wire step
 // chowns the data dir to it.
 const (
-	ServiceUser  = "valve-node"
-	ServiceGroup = "valve-node"
+	ServiceUser  = "valve-node-app"
+	ServiceGroup = "valve-node-app"
 )
 
 const unitTemplate = `[Unit]
-Description=valve-node {{.Description}}
+Description=valve-node-app {{.Description}}
 After=network-online.target
 Wants=network-online.target
 
@@ -169,7 +169,7 @@ var unitTmpl = template.Must(template.New("unit").Parse(unitTemplate))
 // execution+beacon client pair wired up on a given network. Pure string
 // rendering: no file is written and no executor.Executor is touched — that
 // is Task 4's job. Naming/writing the units as
-// valve-node-exec.service / valve-node-beacon.service is also Task 4's job.
+// valve-node-app-exec.service / valve-node-app-beacon.service is also Task 4's job.
 func RenderUnits(w WireConfig) (execUnit, beaconUnit string, err error) {
 	net, ok := NetworkByChainID(w.ChainID)
 	if !ok {

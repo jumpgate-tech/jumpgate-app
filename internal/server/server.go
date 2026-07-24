@@ -1,5 +1,5 @@
 // Package server implements the token-gated local HTTP server that serves
-// the embedded web UI and the JSON API for valve-node.
+// the embedded web UI and the JSON API for valve-node-app.
 package server
 
 import (
@@ -40,7 +40,7 @@ type Config struct {
 	NewAIProvider func(id, apiKey, baseURL string) (ai.Provider, error)
 }
 
-// Server is the valve-node local HTTP server.
+// Server is the valve-node-app local HTTP server.
 type Server struct {
 	cfg Config
 

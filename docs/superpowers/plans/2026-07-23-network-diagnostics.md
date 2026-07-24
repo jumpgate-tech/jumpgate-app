@@ -14,7 +14,7 @@
 - All target commands go through `executor.Executor`; curl probes use the established `-s -m 5` shapes from `ops.Endpoints`/`internal/monitor`.
 - Findings reuse `ops.CheckItem` verbatim (PascalCase JSON, Status ∈ pass|fail|warn|unknown) so the security-screen card renderer pattern carries over.
 - No import cycles: ops → logwatch is new but safe (logwatch imports only executor).
-- Verify: `go build ./... && go test ./...`; UI via `cd cmd/valve-node/web && npm run build` then `go build ./...` re-embed check.
+- Verify: `go build ./... && go test ./...`; UI via `cd cmd/valve-node-app/web && npm run build` then `go build ./...` re-embed check.
 
 ---
 
@@ -46,7 +46,7 @@ func NetworkDiagnostics(ctx context.Context, e executor.Executor, w catalog.Wire
 
 Probe order and classification (each one CheckItem; IDs stable for the UI):
 
-1. `diag-services` — `systemctl is-active valve-node-exec.service valve-node-beacon.service` (line-per-unit, exit code ignored, like `ownActiveUnitPorts`). Both active → pass; else fail, Fix `systemctl start <unit>` + `journalctl -u <unit> -n 50 --no-pager`. Later probes that depend on a running service report `unknown` (not fail) when it isn't active.
+1. `diag-services` — `systemctl is-active valve-node-app-exec.service valve-node-app-beacon.service` (line-per-unit, exit code ignored, like `ownActiveUnitPorts`). Both active → pass; else fail, Fix `systemctl start <unit>` + `journalctl -u <unit> -n 50 --no-pager`. Later probes that depend on a running service report `unknown` (not fail) when it isn't active.
 2. `diag-exec-rpc` — the Endpoints eth_chainId curl. Reachable + chain matches → pass; reachable + mismatch → fail ("wrong network"); unreachable → fail if exec active ("running but not answering RPC — likely still starting; check journal"), else unknown.
 3. `diag-beacon-api` — `/eth/v1/node/version` curl, `200` → pass; else fail/unknown by beacon-active.
 4. `exec-p2p-open` / `beacon-p2p-open` — reuse `p2pOpenItem` on fresh `ss -ltn`/`ss -lun` output (same IDs as the firewall checklist — same probes, one coherent report).
@@ -55,7 +55,7 @@ Probe order and classification (each one CheckItem; IDs stable for the UI):
 7. `diag-exec-peers` — `net_peerCount`: 0 → fail; 1–4 → warn; ≥5 → pass; unreadable → unknown. Detail includes the count; Fix (fail/warn) points at p2p port/firewall items and notes peer discovery takes a few minutes after start.
 8. `diag-beacon-peers` — `/eth/v1/node/peer_count` `data.connected` (string per beacon API): 0 → fail; 1–9 → warn; ≥10 → pass; unreadable → unknown.
 9. `diag-sync` — `eth_syncing` (result false = synced) + `/eth/v1/node/syncing` (`is_syncing`, `sync_distance`): both synced → pass; either syncing → warn with head/distance detail and "normal during initial sync" copy; unreadable → unknown.
-10. `diag-journal` — `journalctl -u valve-node-exec.service -u valve-node-beacon.service -n 200 --no-pager -o cat`, classify each line with `logwatch.Classify`, count named signatures. None → pass; any error/critical signature → fail; warn-only → warn. Detail = distinct signatures with counts + the worst signature's canned Explain (+ LearnURL); Fix directs to the Logs screen for AI explanations.
+10. `diag-journal` — `journalctl -u valve-node-app-exec.service -u valve-node-app-beacon.service -n 200 --no-pager -o cat`, classify each line with `logwatch.Classify`, count named signatures. None → pass; any error/critical signature → fail; warn-only → warn. Detail = distinct signatures with counts + the worst signature's canned Explain (+ LearnURL); Fix directs to the Logs screen for AI explanations.
 
 Parsers `parseEthSyncingResult`, `parseBeaconSyncing`, `parseBeaconPeerCount` are package-local (duplication precedent: `parseHexResult` comment, ops.go:407-412).
 
@@ -73,11 +73,11 @@ Commit: `feat(server): GET /api/targets/{id}/diagnostics route`.
 
 ### Task 4: UI screen
 
-**Files:** Create `cmd/valve-node/web/src/diag.ts` (clone of `security.ts` shape). Modify: `api.ts` (add `getNetworkDiagnostics(id)` reusing the firewall `CheckItem` type), `main.ts` (hash whitelist + route case `diag`), `dashboard.ts` (add `Diagnostics →` card-link next to `Security →`). Rebuild `web/dist` + go re-embed.
+**Files:** Create `cmd/valve-node-app/web/src/diag.ts` (clone of `security.ts` shape). Modify: `api.ts` (add `getNetworkDiagnostics(id)` reusing the firewall `CheckItem` type), `main.ts` (hash whitelist + route case `diag`), `dashboard.ts` (add `Diagnostics →` card-link next to `Security →`). Rebuild `web/dist` + go re-embed.
 
 Copy tone matches security.ts: "Live, read-only probes run against the target — nothing is changed automatically. Run them when peers are low, sync is stuck, or you suspect a network problem." Re-run button re-fetches.
 
-Verify: `cd cmd/valve-node/web && npm run build` (tsc strict + vite) then `go build ./... && go test ./...`.
+Verify: `cd cmd/valve-node-app/web && npm run build` (tsc strict + vite) then `go build ./... && go test ./...`.
 
 Commit: `feat(ui): network diagnostics screen`.
 

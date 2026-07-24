@@ -40,15 +40,15 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 					Host:        "1.2.3.4",
 					User:        "root",
 					KeyPath:     "/home/me/.ssh/id_ed25519",
-					HostKeyFile: "/home/me/.valve-node/known_hosts",
+					HostKeyFile: "/home/me/.valve-node-app/known_hosts",
 					Port:        2222,
 				},
 				Wire: &catalog.WireConfig{
 					ChainID:  369,
 					ExecID:   "reth",
 					BeaconID: "lighthouse-pulse",
-					DataDir:  "/var/lib/valve-node/369",
-					JWTPath:  "/var/lib/valve-node/369/jwt.hex",
+					DataDir:  "/var/lib/valve-node-app/369",
+					JWTPath:  "/var/lib/valve-node-app/369/jwt.hex",
 					Archive:  true,
 				},
 			},
@@ -95,7 +95,7 @@ func TestSaveWritesMode0600(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	info, err := os.Stat(filepath.Join(home, ".valve-node", "config.json"))
+	info, err := os.Stat(filepath.Join(home, ".valve-node-app", "config.json"))
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestSaveIsAtomicNoLeftoverTempFile(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	entries, err := os.ReadDir(filepath.Join(home, ".valve-node"))
+	entries, err := os.ReadDir(filepath.Join(home, ".valve-node-app"))
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestDirIsHomeDotValveNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dir: %v", err)
 	}
-	if d != filepath.Join(home, ".valve-node") {
-		t.Errorf("Dir() = %q, want %q", d, filepath.Join(home, ".valve-node"))
+	if d != filepath.Join(home, ".valve-node-app") {
+		t.Errorf("Dir() = %q, want %q", d, filepath.Join(home, ".valve-node-app"))
 	}
 }

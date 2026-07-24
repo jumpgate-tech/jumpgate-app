@@ -1,4 +1,4 @@
-// Package catalog is the pure-data knowledge base for valve-node: the
+// Package catalog is the pure-data knowledge base for valve-node-app: the
 // networks it knows how to configure (Ethereum, PulseChain, PulseChain
 // Testnet v4), the execution/beacon clients it knows how to run on each,
 // and the systemd unit templates that pair an execution client with a
@@ -13,7 +13,7 @@ package catalog
 
 import "fmt"
 
-// Network describes one of the chains valve-node can configure an
+// Network describes one of the chains valve-node-app can configure an
 // execution+beacon client pair for.
 type Network struct {
 	ChainID       int    // 1 | 369 | 943
@@ -53,7 +53,7 @@ func ExpectedBytes(chainID int, archive bool) (uint64, error) {
 	return uint64(sizeTB * 1e12), nil
 }
 
-// Client describes one execution or beacon client valve-node knows how to
+// Client describes one execution or beacon client valve-node-app knows how to
 // obtain and wire up.
 type Client struct {
 	ID   string // "reth" "go-pulse" "erigon-pulse" "geth" "lighthouse-pulse" "prysm-pulse" "lighthouse"

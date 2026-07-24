@@ -8,7 +8,7 @@
 
 ## Global constraints
 - eRPC is OFF unless `ERPCEnabled`. Default port 4000, default bind loopback (reuse the RPC-bind loopback-default model; its listen host is what gets exposed — the recommended thing to bind to Tailscale, not the raw node). Local-node upstream endpoint uses `w.RPCBind()` (so it works whether the node is loopback- or Tailscale-bound, on-box).
-- De-rooted hardened unit like exec/beacon (`valve-node-erpc.service`, `User=valve-node`, ReadWritePaths=<DataDir>, NetBindCap when port <1024).
+- De-rooted hardened unit like exec/beacon (`valve-node-app-erpc.service`, `User=valve-node-app`, ReadWritePaths=<DataDir>, NetBindCap when port <1024).
 - Config at `<DataDir>/erpc.yaml`, chowned to the service user by the wire step's existing `chown -R`.
 - Hand-render YAML via `text/template` (no new dep). `go build ./... && go test ./...`; UI via `npm run build`.
 
@@ -17,11 +17,11 @@
 - `networks.go`: `Network.DefaultUpstreams []string` — {1: publicnode, 369: rpc.pulsechain.com, 943: rpc.v4.testnet}. New helper `DefaultUpstreams(chainID) []string`.
 - `RenderERPCConfig(w) (string, error)`: server host/port from bind/port; project `main`; upstream[0] = local node (`http://<RPCBind>:<ExecHTTP>`, `evm.chainId`, blockAvailability `latestBlockMinus:128` if `!w.Archive` else `lower: null`); then one upstream per `ERPCUpstreams` URL (chainId, `tier:fallback`, scoreMultipliers overall 0.2).
 - `RenderERPCUnit(w) (string, error)`: hardened unit, ExecStart `erpc --config <DataDir>/erpc.yaml`, NetBindCap when `ERPCHTTP()<1024`.
-- Tests: full-node config has latestBlockMinus:128 + fallback tags; archive config has lower:null; host/port reflect bind/port; unit has User=valve-node; disabled → callers skip (render still pure, gated by ERPCEnabled at the setup layer).
+- Tests: full-node config has latestBlockMinus:128 + fallback tags; archive config has lower:null; host/port reflect bind/port; unit has User=valve-node-app; disabled → callers skip (render still pure, gated by ERPCEnabled at the setup layer).
 
 ### Task 2: setup — install + wire eRPC (conditional)
 - New `erpcInstallStep` (only when `ERPCEnabled`): download `erpc_linux_x86_64|arm64` from the pinned release to `/usr/local/bin/erpc`, chmod +x, verify `erpc --version`.
-- Extend `wireStep`: when enabled, write `<DataDir>/erpc.yaml` + `valve-node-erpc.service`, `daemon-reload && enable --now`; content-diff restart like the others; the existing `chown -R` already covers the config. When disabled, stop+disable the unit if present (clean toggle-off).
+- Extend `wireStep`: when enabled, write `<DataDir>/erpc.yaml` + `valve-node-app-erpc.service`, `daemon-reload && enable --now`; content-diff restart like the others; the existing `chown -R` already covers the config. When disabled, stop+disable the unit if present (clean toggle-off).
 - Handshake: when enabled, curl eRPC `http://<ERPCBind>:<port>` eth_chainId.
 - Tests: install downloads the right asset; wire writes config+unit and enables; disabled path removes the unit.
 

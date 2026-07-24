@@ -25,20 +25,21 @@ func testWire() catalog.WireConfig {
 
 // rootUIDScript is the `id -u` result common to every preflight test that
 // isn't itself exercising the root check: uid 0, as if SSH'd in as root (or
-// running valve-node as root in local mode).
+// running valve-node-app as root in local mode).
 func rootUIDScript(e *fakeExecutor) *fakeExecutor {
 	return e.script("id -u", executor.Result{Stdout: "0\n", ExitCode: 0})
 }
 
 func TestPreflight_FailsWhenNotRoot(t *testing.T) {
 	e := newFakeExecutor().
+		script("uname", executor.Result{Stdout: "Linux\n", ExitCode: 0}).
 		script("id -u", executor.Result{Stdout: "1000\n", ExitCode: 0})
 	step := preflightStep()
 	err := step.Verify(context.Background(), e, &State{Wire: testWire()})
 	if err == nil {
 		t.Fatal("want error when the target's id -u is non-zero, got nil")
 	}
-	want := "setup requires root on the target (SSH as root, or run valve-node as root in local mode)"
+	want := "needs root"
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("error %q does not contain %q", err, want)
 	}
@@ -106,11 +107,11 @@ func TestPreflight_FailsOnBusyPort(t *testing.T) {
 // must pass, proving the new command shape (not the old one) is what ran.
 func TestPreflight_ProbesNearestExistingAncestorOnFreshDataDir(t *testing.T) {
 	w := testWire()
-	w.DataDir = "/var/lib/valve-node/369"
+	w.DataDir = "/var/lib/valve-node-app/369"
 	e := rootUIDScript(newFakeExecutor()).
 		script("uname", executor.Result{Stdout: "Linux\n", ExitCode: 0}).
 		// The OLD code's exact command shape — must NOT be what's called.
-		script("df -B1 --output=avail '/var/lib/valve-node/369'", executor.Result{ExitCode: 1, Stderr: "df: cannot access '/var/lib/valve-node/369': No such file or directory"}).
+		script("df -B1 --output=avail '/var/lib/valve-node-app/369'", executor.Result{ExitCode: 1, Stderr: "df: cannot access '/var/lib/valve-node-app/369': No such file or directory"}).
 		// The NEW ancestor-walk command shape.
 		script("while [ ! -d", executor.Result{Stdout: "9999999999999\n", ExitCode: 0}).
 		script("ss -ltn", executor.Result{Stdout: "State  Recv-Q Send-Q Local Address:Port\n", ExitCode: 0})
@@ -126,7 +127,7 @@ func TestPreflight_ProbesNearestExistingAncestorOnFreshDataDir(t *testing.T) {
 // "could not parse df output").
 func TestPreflight_DFAncestorWalkNonZeroExitProducesClearError(t *testing.T) {
 	w := testWire()
-	w.DataDir = "/var/lib/valve-node/369"
+	w.DataDir = "/var/lib/valve-node-app/369"
 	e := rootUIDScript(newFakeExecutor()).
 		script("uname", executor.Result{Stdout: "Linux\n", ExitCode: 0}).
 		script("while [ ! -d", executor.Result{ExitCode: 1, Stderr: "df: boom"})
@@ -141,7 +142,7 @@ func TestPreflight_DFAncestorWalkNonZeroExitProducesClearError(t *testing.T) {
 }
 
 // TestPreflight_ExemptsPortsHeldByOwnActiveUnits locks in the E2E-discovered
-// idempotence defect: re-running setup against a box where valve-node's own
+// idempotence defect: re-running setup against a box where valve-node-app's own
 // units are already active must not fail preflight just because those
 // units' own listeners show up in `ss -ltn`. With both units active and ALL
 // THREE ports (8545/8551/5052) showing as listening, preflight must pass.
@@ -149,7 +150,7 @@ func TestPreflight_ExemptsPortsHeldByOwnActiveUnits(t *testing.T) {
 	e := rootUIDScript(newFakeExecutor()).
 		script("uname", executor.Result{Stdout: "Linux\n", ExitCode: 0}).
 		script("df -B1 --output=avail", executor.Result{Stdout: "Avail\n9999999999999\n", ExitCode: 0}).
-		script("systemctl is-active valve-node-exec.service valve-node-beacon.service", executor.Result{
+		script("systemctl is-active valve-node-app-exec.service valve-node-app-beacon.service", executor.Result{
 			Stdout: "active\nactive\n", ExitCode: 0,
 		}).
 		script("ss -ltn", executor.Result{
@@ -161,18 +162,18 @@ func TestPreflight_ExemptsPortsHeldByOwnActiveUnits(t *testing.T) {
 		})
 	step := preflightStep()
 	if err := step.Verify(context.Background(), e, &State{Wire: testWire()}); err != nil {
-		t.Fatalf("preflight should exempt ports held by valve-node's own active units, got %v", err)
+		t.Fatalf("preflight should exempt ports held by valve-node-app's own active units, got %v", err)
 	}
 }
 
 // TestPreflight_StillFailsOnBusyPortWhenUnitsInactive locks in existing
-// behavior: when valve-node's own units are NOT active, a busy port must
+// behavior: when valve-node-app's own units are NOT active, a busy port must
 // still fail preflight with the same clear error as before.
 func TestPreflight_StillFailsOnBusyPortWhenUnitsInactive(t *testing.T) {
 	e := rootUIDScript(newFakeExecutor()).
 		script("uname", executor.Result{Stdout: "Linux\n", ExitCode: 0}).
 		script("df -B1 --output=avail", executor.Result{Stdout: "Avail\n9999999999999\n", ExitCode: 0}).
-		script("systemctl is-active valve-node-exec.service valve-node-beacon.service", executor.Result{
+		script("systemctl is-active valve-node-app-exec.service valve-node-app-beacon.service", executor.Result{
 			Stdout: "inactive\ninactive\n", ExitCode: 3,
 		}).
 		script("ss -ltn", executor.Result{
@@ -197,7 +198,7 @@ func TestPreflight_ExecActiveDoesNotExemptBeaconPort(t *testing.T) {
 	e := rootUIDScript(newFakeExecutor()).
 		script("uname", executor.Result{Stdout: "Linux\n", ExitCode: 0}).
 		script("df -B1 --output=avail", executor.Result{Stdout: "Avail\n9999999999999\n", ExitCode: 0}).
-		script("systemctl is-active valve-node-exec.service valve-node-beacon.service", executor.Result{
+		script("systemctl is-active valve-node-app-exec.service valve-node-app-beacon.service", executor.Result{
 			Stdout: "active\ninactive\n", ExitCode: 3,
 		}).
 		script("ss -ltn", executor.Result{
@@ -452,10 +453,10 @@ func TestWire_WritesJwtOnlyIfAbsent(t *testing.T) {
 	if !wroteJwt {
 		t.Fatalf("jwt was not written; calls = %v", e.callLog())
 	}
-	if _, ok := e.files["/etc/systemd/system/valve-node-exec.service"]; !ok {
+	if _, ok := e.files["/etc/systemd/system/valve-node-app-exec.service"]; !ok {
 		t.Fatal("exec unit was not written")
 	}
-	if _, ok := e.files["/etc/systemd/system/valve-node-beacon.service"]; !ok {
+	if _, ok := e.files["/etc/systemd/system/valve-node-app-beacon.service"]; !ok {
 		t.Fatal("beacon unit was not written")
 	}
 }
@@ -622,7 +623,7 @@ func TestHandshake_PassesWhenAllChecksGood(t *testing.T) {
 	e := newFakeExecutor().
 		script("eth/v1/node/syncing", executor.Result{Stdout: "200"}).
 		script("eth_syncing", executor.Result{Stdout: `{"jsonrpc":"2.0","id":1,"result":false}`}).
-		script("journalctl -u valve-node-beacon.service", executor.Result{Stdout: "beacon: synced ok\n"})
+		script("journalctl -u valve-node-app-beacon.service", executor.Result{Stdout: "beacon: synced ok\n"})
 
 	step := handshakeStep()
 	st := &State{Wire: testWire(), Events: make(chan Event, 100)}
@@ -635,7 +636,7 @@ func TestHandshake_FailureIncludesOffendingLogLines(t *testing.T) {
 	e := newFakeExecutor().
 		script("eth/v1/node/syncing", executor.Result{Stdout: "200"}).
 		script("eth_syncing", executor.Result{Stdout: `{"jsonrpc":"2.0","id":1,"result":false}`}).
-		script("journalctl -u valve-node-beacon.service", executor.Result{
+		script("journalctl -u valve-node-app-beacon.service", executor.Result{
 			Stdout: "beacon: ok line\ntime=\"...\" level=error msg=\"Could not connect to execution endpoint\" error=\"401 Unauthorized: bad jwt\"\nbeacon: another ok line\n",
 		})
 
@@ -663,7 +664,7 @@ func TestAuthErrorLines_RequiresErrorLevelIndicator(t *testing.T) {
 	}{
 		{
 			name:    "benign prysm INFO line reading the jwt secret",
-			line:    `time="2026-07-23 03:32:09" level=info msg="Finished reading JWT secret from /var/lib/valve-node/943/jwt.hex" prefix=execution`,
+			line:    `time="2026-07-23 03:32:09" level=info msg="Finished reading JWT secret from /var/lib/valve-node-app/943/jwt.hex" prefix=execution`,
 			wantHit: false,
 		},
 		{
@@ -705,7 +706,7 @@ func TestHandshake_BeaconProbeNonZeroExitTreatedAsNotUpYet(t *testing.T) {
 	e := newFakeExecutor().
 		script("eth/v1/node/syncing", executor.Result{Stdout: "200", ExitCode: 7, Stderr: "curl: (7) Failed to connect"}).
 		script("eth_syncing", executor.Result{Stdout: `{"jsonrpc":"2.0","id":1,"result":false}`}).
-		script("journalctl -u valve-node-beacon.service", executor.Result{Stdout: "ok\n"})
+		script("journalctl -u valve-node-app-beacon.service", executor.Result{Stdout: "ok\n"})
 
 	err := handshakeCheck(context.Background(), e, testWire(), nil)
 	if err == nil {
@@ -722,7 +723,7 @@ func TestHandshake_ExecProbeNonZeroExitTreatedAsNotUpYet(t *testing.T) {
 	e := newFakeExecutor().
 		script("eth/v1/node/syncing", executor.Result{Stdout: "200"}).
 		script("eth_syncing", executor.Result{Stdout: `{"jsonrpc":"2.0","id":1,"result":false}`, ExitCode: 7, Stderr: "curl: (7) Failed to connect"}).
-		script("journalctl -u valve-node-beacon.service", executor.Result{Stdout: "ok\n"})
+		script("journalctl -u valve-node-app-beacon.service", executor.Result{Stdout: "ok\n"})
 
 	err := handshakeCheck(context.Background(), e, testWire(), nil)
 	if err == nil {
@@ -741,7 +742,7 @@ func TestHandshake_JournalctlNonZeroExitDoesNotFailHandshake(t *testing.T) {
 	e := newFakeExecutor().
 		script("eth/v1/node/syncing", executor.Result{Stdout: "200"}).
 		script("eth_syncing", executor.Result{Stdout: `{"jsonrpc":"2.0","id":1,"result":false}`}).
-		script("journalctl -u valve-node-beacon.service", executor.Result{Stdout: "", ExitCode: 1})
+		script("journalctl -u valve-node-app-beacon.service", executor.Result{Stdout: "", ExitCode: 1})
 
 	if err := handshakeCheck(context.Background(), e, testWire(), nil); err != nil {
 		t.Fatalf("journalctl exiting non-zero with no matched lines should not fail handshake: %v", err)
@@ -756,7 +757,7 @@ func TestHandshake_RunPollsUntilSuccessThenReturns(t *testing.T) {
 	e := newFakeExecutor().
 		script("eth/v1/node/syncing", executor.Result{Stdout: "200"}).
 		script("eth_syncing", executor.Result{Stdout: `{"jsonrpc":"2.0","id":1,"result":false}`}).
-		script("journalctl -u valve-node-beacon.service", executor.Result{Stdout: "ok\n"})
+		script("journalctl -u valve-node-app-beacon.service", executor.Result{Stdout: "ok\n"})
 
 	step := handshakeStep()
 	st := &State{Wire: testWire(), Events: make(chan Event, 100)}
@@ -778,7 +779,7 @@ func TestHandshake_RunTimesOutWithOffendingLines(t *testing.T) {
 	e := newFakeExecutor().
 		script("eth/v1/node/syncing", executor.Result{Stdout: "200"}).
 		script("eth_syncing", executor.Result{Stdout: `{"jsonrpc":"2.0","id":1,"result":false}`}).
-		script("journalctl -u valve-node-beacon.service", executor.Result{
+		script("journalctl -u valve-node-app-beacon.service", executor.Result{
 			Stdout: "level=error msg=\"401 unauthorized: jwt mismatch\"\n",
 		})
 
@@ -894,7 +895,7 @@ func TestWire_RunChownsDataDirToServiceUser(t *testing.T) {
 		if c == wantChown {
 			found, chownIdx = true, i
 		}
-		if strings.HasPrefix(c, "WriteFile /etc/systemd/system/valve-node-exec.service") {
+		if strings.HasPrefix(c, "WriteFile /etc/systemd/system/valve-node-app-exec.service") {
 			writeIdx = i
 		}
 	}
@@ -929,8 +930,8 @@ func TestWire_VerifyFailsWhenDataDirNotOwnedByServiceUser(t *testing.T) {
 		script("test -f", executor.Result{ExitCode: 0}).
 		script("systemctl is-enabled", executor.Result{Stdout: "enabled\nenabled\n", ExitCode: 0}).
 		script("stat -c %U", executor.Result{Stdout: "root\n", ExitCode: 0})
-	e.files["/etc/systemd/system/valve-node-exec.service"] = []byte(execUnit)
-	e.files["/etc/systemd/system/valve-node-beacon.service"] = []byte(beaconUnit)
+	e.files["/etc/systemd/system/valve-node-app-exec.service"] = []byte(execUnit)
+	e.files["/etc/systemd/system/valve-node-app-beacon.service"] = []byte(beaconUnit)
 	step := wireStep()
 	err = step.Verify(context.Background(), e, &State{Wire: w})
 	if err == nil {

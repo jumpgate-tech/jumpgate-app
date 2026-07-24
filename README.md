@@ -1,6 +1,6 @@
-# valve-node
+# valve-node-app
 
-**valve-node** sets up and monitors an Ethereum, PulseChain, or PulseChain-v4
+**valve-node-app** sets up and monitors an Ethereum, PulseChain, or PulseChain-v4
 node — one binary, guided setup, sync monitoring, and AI-generated log
 explanations, all behind a token-gated local web UI.
 
@@ -34,7 +34,7 @@ P2P ports are configurable per client instead of fixed at their defaults.
 ## v0.3 (unreleased)
 
 v0.3 de-roots the node services: the execution and beacon clients now run
-as a dedicated unprivileged system user (`valve-node`) under hardened
+as a dedicated unprivileged system user (`valve-node-app`) under hardened
 systemd units (`NoNewPrivileges`, `ProtectSystem=strict` with the data
 directory carved out, private `/tmp` and devices). Setup itself still
 requires root — it creates the user, writes units, and owns the data
@@ -71,10 +71,10 @@ a trusted, private network.
 - The **SSH user must be root** — setup writes systemd units under
   `/etc/systemd/system`, manages services via `systemctl`, and installs
   binaries to `/usr/local/bin`. In **local mode** (setting up the same
-  machine valve-node itself is running on), run valve-node as root. Preflight
+  machine valve-node-app itself is running on), run valve-node-app as root. Preflight
   checks this (`id -u`) and fails fast with a clear message if it isn't met.
 - Node services (the execution and beacon clients) run as the dedicated
-  unprivileged `valve-node` system user, which setup creates. (In v0.1–v0.2
+  unprivileged `valve-node-app` system user, which setup creates. (In v0.1–v0.2
   they ran as root; re-running setup migrates an existing install.)
 
 ## Quickstart
@@ -106,7 +106,7 @@ Requires Go 1.25+ and Node 22+.
 
 ```bash
 git clone https://github.com/valve-tech/valve-node-app.git
-cd valve-node
+cd valve-node-app
 cd cmd/valve-node-app/web && npm ci && npm run build && cd ../../..
 go build -o valve-node-app ./cmd/valve-node-app
 ./valve-node-app
@@ -114,7 +114,7 @@ go build -o valve-node-app ./cmd/valve-node-app
 
 ## How it's built
 
-valve-node is a single Go binary with the web UI (Vite + TypeScript)
+valve-node-app is a single Go binary with the web UI (Vite + TypeScript)
 compiled to static assets and embedded directly into the binary via
 `go:embed`. There's no separate frontend server and no external dependency
 to run — just the binary.
@@ -124,11 +124,11 @@ token for every request (via `Authorization: Bearer`, a cookie set from the
 initial `?token=` link, or the query parameter itself), so nothing on your
 machine can drive it without that token.
 
-valve-node itself always runs locally — the UI and API bind to your own
+valve-node-app itself always runs locally — the UI and API bind to your own
 machine. What it sets up can be **local** (the same machine) or **remote
 over SSH**: point a target at a `host:port` + root SSH credentials and
-valve-node drives the whole install/wire/start/handshake flow on that box
-instead, so you can run valve-node on a laptop while it provisions a
+valve-node-app drives the whole install/wire/start/handshake flow on that box
+instead, so you can run valve-node-app on a laptop while it provisions a
 dedicated server. Both modes need root on the target for setup itself (see
 Requirements above); the node services it installs run unprivileged.
 

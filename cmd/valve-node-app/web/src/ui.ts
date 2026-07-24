@@ -45,7 +45,7 @@ export function renderShell(root: HTMLElement): Shell {
   root.innerHTML = `
     <div class="shell">
       <header class="topbar">
-        <a class="brand" href="#/targets">valve-node</a>
+        <a class="brand" href="#/targets">valve-node-app</a>
         <nav class="nav">
           <a href="#/targets" data-nav="targets">Targets</a>
           <a href="#/settings" data-nav="settings">Settings</a>

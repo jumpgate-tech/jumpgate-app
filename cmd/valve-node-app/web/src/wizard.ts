@@ -306,12 +306,12 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     const needs = tierNeeds(net);
     const archiveFits = state.freeBytes >= needs.archive;
     const fullFits = state.freeBytes >= needs.full;
-    const line = `<p class="muted small">Free at <code>${escapeHtml(path)}</code>: <strong>${fmtBytes(state.freeBytes)}</strong> — archive ${archiveFits ? "fits" : "won't fit"} (~${approxSize(net.ArchiveSizeTB)}), full ${fullFits ? "fits" : "won't fit"} (~${approxSize(net.ArchiveSizeTB / 2)}).</p>`;
+    const line = `<p class="muted small">Free at <code>${escapeHtml(path)}</code>: <strong>${fmtBytes(state.freeBytes)}</strong> — archive ${archiveFits ? "fits" : "won't fit"} (${approxSize(net.ArchiveSizeTB)}), full ${fullFits ? "fits" : "won't fit"} (${approxSize(net.ArchiveSizeTB / 2)}).</p>`;
     let note = "";
     if (state.downgradeNote) {
       note = `<p class="banner banner-warn">${escapeHtml(state.downgradeNote)}</p>`;
     } else if (!fullFits) {
-      note = `<p class="banner banner-warn">Neither mode fits at this location (full needs ~${approxSize(net.ArchiveSizeTB / 2)}). Choose a location with more space.</p>`;
+      note = `<p class="banner banner-warn">Neither full (${approxSize(net.ArchiveSizeTB / 2)}) nor archive (${approxSize(net.ArchiveSizeTB)}) fits the free space here — choose a location with more room.</p>`;
     }
     return line + note;
   }
@@ -327,14 +327,14 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     const needs = tierNeeds(net);
     if (state.archive && state.freeBytes < needs.archive && state.freeBytes >= needs.full) {
       state.archive = false;
-      state.downgradeNote = `Not enough space at ${path} for archive (~${approxSize(net.ArchiveSizeTB)}) — switched to Full (~${approxSize(net.ArchiveSizeTB / 2)}). Pick a location with more room to run archive.`;
+      state.downgradeNote = `Not enough space at ${path} for archive (${approxSize(net.ArchiveSizeTB)}) — switched to Full (${approxSize(net.ArchiveSizeTB / 2)}). Pick a location with more room to run archive.`;
     }
   }
 
   async function probeDisk(): Promise<void> {
     if (state.chainId === null) return;
     const net = state.catalog?.networks.find((n) => n.ChainID === state.chainId);
-    const path = (state.dataDir || `/var/lib/valve-node/${state.chainId}`).trim();
+    const path = (state.dataDir || `/var/lib/valve-node-app/${state.chainId}`).trim();
     state.diskProbing = true;
     state.diskError = null;
     render();
@@ -387,7 +387,7 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
   }
 
   function renderModeStep(): string {
-    const defaultDataDir = state.chainId !== null ? `/var/lib/valve-node/${state.chainId}` : "";
+    const defaultDataDir = state.chainId !== null ? `/var/lib/valve-node-app/${state.chainId}` : "";
     const net = state.catalog?.networks.find((n) => n.ChainID === state.chainId);
     const archiveTB = net?.ArchiveSizeTB ?? 0;
     const fullSizeCell = net ? approxSize(archiveTB / 2) : "Smaller";
@@ -423,20 +423,23 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
           }
         </div>
 
-        <table class="compare-table">
-          <thead>
-            <tr><th>What you get</th><th>Full</th><th>Archive</th></tr>
-          </thead>
-          <tbody>
-            <tr><th>Current state &amp; recent blocks</th><td class="yes">Yes</td><td class="yes">Yes</td></tr>
-            <tr><th>Send transactions, normal RPC</th><td class="yes">Yes</td><td class="yes">Yes</td></tr>
-            <tr><th>Historical state (balances, <code>eth_call</code>) at any past block</th><td class="limited">Recent only (~128 blocks)</td><td class="yes">Full history</td></tr>
-            <tr><th>Tracing / <code>debug_trace</code> on old blocks</th><td class="limited">Recent only</td><td class="yes">Full history</td></tr>
-            <tr><th>Approx. disk footprint${netLabel}</th><td class="yes">${fullSizeCell}</td><td class="limited">${archiveSizeCell}</td></tr>
-            <tr><th>Best for</th><td>Validators, wallets, everyday RPC</td><td>Explorers, analytics, historical queries</td></tr>
-          </tbody>
-        </table>
-        <p class="muted small">Disk sizes are rough baselines — they vary by client and setup.</p>
+        <details class="advanced">
+          <summary>Full — current-state lookups (recent blocks) · Archive — full historical state &amp; indexing</summary>
+          <table class="compare-table">
+            <thead>
+              <tr><th>What you get</th><th>Full</th><th>Archive</th></tr>
+            </thead>
+            <tbody>
+              <tr><th>Current state &amp; recent blocks</th><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+              <tr><th>Send transactions, normal RPC</th><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+              <tr><th>Historical state (balances, <code>eth_call</code>) at any past block</th><td class="limited">Recent only (~128 blocks)</td><td class="yes">Full history</td></tr>
+              <tr><th>Tracing / <code>debug_trace</code> on old blocks</th><td class="limited">Recent only</td><td class="yes">Full history</td></tr>
+              <tr><th>Approx. disk footprint${netLabel}</th><td class="yes">${fullSizeCell}</td><td class="limited">${archiveSizeCell}</td></tr>
+              <tr><th>Best for</th><td>Validators, wallets, everyday RPC</td><td>Explorers, analytics, historical queries</td></tr>
+            </tbody>
+          </table>
+          <p class="muted small">Disk sizes are rough baselines — they vary by client and setup.</p>
+        </details>
         <label class="radio">
           <input type="radio" name="mode" value="archive" data-action="pick-mode" ${state.archive ? "checked" : ""} />
           <span><strong>Archive</strong> — full historical state · ${archiveSizeCell}${net ? "" : " disk"} <span class="muted">(recommended — keep more archive nodes on the network)</span></span>
@@ -500,7 +503,7 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
   function renderReviewStep(): string {
     const catalog = state.catalog!;
     const net = catalog.networks.find((n) => n.ChainID === state.chainId);
-    const dataDir = state.dataDir || `/var/lib/valve-node/${state.chainId}`;
+    const dataDir = state.dataDir || `/var/lib/valve-node-app/${state.chainId}`;
     const jwtPath = state.jwtPath || `${dataDir}/jwt.hex`;
 
     const stepRows = STEP_PLAN.map((s) => `<li>${escapeHtml(s.title)}</li>`).join("");
