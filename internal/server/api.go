@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -634,6 +635,12 @@ func validateWirePorts(wire catalog.WireConfig) error {
 	}
 	if addr := wire.RPCBindAddr; addr != "" && net.ParseIP(addr) == nil {
 		return fmt.Errorf("RPCBindAddr: %q is not a valid IP address (leave empty for loopback, or set a host IP such as your Tailscale address)", addr)
+	}
+	if cp := wire.CheckpointURL; cp != "" {
+		u, err := url.Parse(cp)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("CheckpointURL: %q must be an http(s) URL (leave empty for the network default)", cp)
+		}
 	}
 	return nil
 }

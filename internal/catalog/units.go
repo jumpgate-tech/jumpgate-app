@@ -33,6 +33,23 @@ type WireConfig struct {
 	// The engine API (authrpc, 8551) and prysm's native rpc-host always
 	// stay loopback regardless — they are never exposed.
 	RPCBindAddr string
+
+	// CheckpointURL overrides the beacon checkpoint-sync / genesis-beacon-api
+	// endpoint. Empty means the network default (Network.CheckpointURL).
+	CheckpointURL string
+	// NoCheckpoint disables checkpoint sync — the beacon client syncs from
+	// genesis instead (--checkpoint-sync-url is omitted). The genesis
+	// beacon-api URL is still passed so genesis state can be fetched.
+	NoCheckpoint bool
+}
+
+// checkpointURL resolves the effective beacon checkpoint/genesis endpoint:
+// the per-wire override if set, else the network default.
+func (w WireConfig) checkpointURL(net Network) string {
+	if w.CheckpointURL != "" {
+		return w.CheckpointURL
+	}
+	return net.CheckpointURL
 }
 
 // Default ports, applied whenever the corresponding WireConfig field is
@@ -309,9 +326,14 @@ func beaconCommand(w WireConfig, net Network) (string, error) {
 			return "", fmt.Errorf("catalog: no lighthouse --network mapping for chain id %d", w.ChainID)
 		}
 		datadir := path.Join(w.DataDir, "beacon")
+		cpURL := w.checkpointURL(net)
+		checkpointFlag := ""
+		if !w.NoCheckpoint {
+			checkpointFlag = fmt.Sprintf(" --checkpoint-sync-url %s", cpURL)
+		}
 		cmd := fmt.Sprintf(
-			"%s bn --network %s --datadir %s --execution-endpoint %s --execution-jwt %s --checkpoint-sync-url %s --genesis-beacon-api-url %s --http --http-address %s --http-port %d",
-			w.BeaconID, network, datadir, engineEndpoint, w.JWTPath, net.CheckpointURL, net.CheckpointURL, w.RPCBind(), w.BeaconHTTP(),
+			"%s bn --network %s --datadir %s --execution-endpoint %s --execution-jwt %s%s --genesis-beacon-api-url %s --http --http-address %s --http-port %d",
+			w.BeaconID, network, datadir, engineEndpoint, w.JWTPath, checkpointFlag, cpURL, w.RPCBind(), w.BeaconHTTP(),
 		)
 		return cmd, nil
 
@@ -319,9 +341,14 @@ func beaconCommand(w WireConfig, net Network) (string, error) {
 		// prysm-pulse installs to /usr/local/bin/prysm-pulse (task-4b
 		// BuildCmd), not the upstream beacon-chain binary name.
 		datadir := path.Join(w.DataDir, "beacondata")
+		cpURL := w.checkpointURL(net)
+		checkpointFlag := ""
+		if !w.NoCheckpoint {
+			checkpointFlag = fmt.Sprintf(" --checkpoint-sync-url=%s", cpURL)
+		}
 		cmd := fmt.Sprintf(
-			"prysm-pulse --datadir=%s --execution-endpoint=%s --jwt-secret=%s --checkpoint-sync-url=%s --genesis-beacon-api-url=%s --rpc-host=127.0.0.1 --grpc-gateway-host=%s --grpc-gateway-port=%d",
-			datadir, engineEndpoint, w.JWTPath, net.CheckpointURL, net.CheckpointURL, w.RPCBind(), w.BeaconHTTP(),
+			"prysm-pulse --datadir=%s --execution-endpoint=%s --jwt-secret=%s%s --genesis-beacon-api-url=%s --rpc-host=127.0.0.1 --grpc-gateway-host=%s --grpc-gateway-port=%d",
+			datadir, engineEndpoint, w.JWTPath, checkpointFlag, cpURL, w.RPCBind(), w.BeaconHTTP(),
 		)
 		switch w.ChainID {
 		case 369:
