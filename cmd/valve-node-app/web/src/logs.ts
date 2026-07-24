@@ -14,7 +14,7 @@ const maxRenderedLines = 500;
 // way.
 const maxExplainLines = 40;
 
-const CONSENT_KEY = "valve-node.explain-consent";
+const CONSENT_KEY = "valve-node-app.explain-consent";
 
 type Severity = "info" | "warn" | "error" | "critical";
 

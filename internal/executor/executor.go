@@ -1,7 +1,7 @@
 // Package executor abstracts running shell commands and reading/writing
 // files either on the local machine or on a remote host over SSH. It is the
 // architectural seam that every later setup step, monitor, and log tailer in
-// valve-node runs through.
+// valve-node-app runs through.
 package executor
 
 import (

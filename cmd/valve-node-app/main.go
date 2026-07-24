@@ -1,4 +1,4 @@
-// Command valve-node sets up and monitors an Ethereum / PulseChain /
+// Command valve-node-app sets up and monitors an Ethereum / PulseChain /
 // PulseChain-v4 node: one binary, guided setup, sync monitoring, and AI log
 // explanations, fronted by a local token-gated web UI.
 package main
@@ -39,18 +39,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, warning)
 	}
 
-	// Load (or lazily create on first Save) valve-node's local state —
-	// known targets, AI provider settings — from ~/.valve-node/config.json.
+	// Load (or lazily create on first Save) valve-node-app's local state —
+	// known targets, AI provider settings — from ~/.valve-node-app/config.json.
 	// The server re-reads it per-request rather than holding this value, so
 	// it's only loaded here to fail fast on a corrupt file before the
 	// server starts serving.
 	if _, err := config.Load(); err != nil {
-		log.Fatalf("valve-node: load config: %v", err)
+		log.Fatalf("valve-node-app: load config: %v", err)
 	}
 
 	uiFS, err := fs.Sub(embeddedUI, "web/dist")
 	if err != nil {
-		log.Fatalf("valve-node: embedded UI: %v", err)
+		log.Fatalf("valve-node-app: embedded UI: %v", err)
 	}
 
 	token := server.NewSessionToken()
@@ -71,13 +71,13 @@ func main() {
 	defer stop()
 
 	if err := s.ListenAndServe(ctx); err != nil {
-		log.Fatalf("valve-node: server: %v", err)
+		log.Fatalf("valve-node-app: server: %v", err)
 	}
 }
 
 // bindWarningLine returns a loud warning line when bind's host is not
 // loopback (127.0.0.1 or localhost — the server's safe default), or "" if
-// it is. valve-node's local server is token-gated but plain HTTP: binding
+// it is. valve-node-app's local server is token-gated but plain HTTP: binding
 // it beyond loopback puts full control of every configured target (setup,
 // shell-equivalent install/build commands, log access) on the network
 // reachable at that address, over an unencrypted channel a network

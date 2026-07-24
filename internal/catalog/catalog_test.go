@@ -67,8 +67,8 @@ func TestRenderUnits_ValidCombos(t *testing.T) {
 						ChainID:  net.ChainID,
 						ExecID:   execID,
 						BeaconID: beaconID,
-						DataDir:  "/var/lib/valve-node/dir",
-						JWTPath:  "/var/lib/valve-node/dir/jwt.hex",
+						DataDir:  "/var/lib/valve-node-app/dir",
+						JWTPath:  "/var/lib/valve-node-app/dir/jwt.hex",
 					}
 					execUnit, beaconUnit, err := RenderUnits(w)
 					if err != nil {
@@ -138,8 +138,8 @@ func TestRenderUnits_InvalidCombosError(t *testing.T) {
 						ChainID:  net.ChainID,
 						ExecID:   execID,
 						BeaconID: beaconID,
-						DataDir:  "/var/lib/valve-node/dir",
-						JWTPath:  "/var/lib/valve-node/dir/jwt.hex",
+						DataDir:  "/var/lib/valve-node-app/dir",
+						JWTPath:  "/var/lib/valve-node-app/dir/jwt.hex",
 					}
 					_, _, err := RenderUnits(w)
 					if err == nil {
@@ -465,8 +465,8 @@ func TestRenderUnits_PortsDefaultAndCustom(t *testing.T) {
 						ChainID:  net.ChainID,
 						ExecID:   execID,
 						BeaconID: beaconID,
-						DataDir:  "/var/lib/valve-node/dir",
-						JWTPath:  "/var/lib/valve-node/dir/jwt.hex",
+						DataDir:  "/var/lib/valve-node-app/dir",
+						JWTPath:  "/var/lib/valve-node-app/dir/jwt.hex",
 					}
 
 					execUnit, beaconUnit, err := RenderUnits(base)
@@ -677,7 +677,7 @@ func TestRenderUnits_PulseNetworkSelectorFlags(t *testing.T) {
 			name: "943 go-pulse + prysm-pulse",
 			w: WireConfig{
 				ChainID: 943, ExecID: "go-pulse", BeaconID: "prysm-pulse",
-				DataDir: "/var/lib/valve-node/943",
+				DataDir: "/var/lib/valve-node-app/943",
 			},
 			wantExec:   []string{"--pulsechain-testnet-v4"},
 			wantBeacon: []string{"--pulsechain-testnet-v4"},
@@ -686,7 +686,7 @@ func TestRenderUnits_PulseNetworkSelectorFlags(t *testing.T) {
 			name: "369 go-pulse + prysm-pulse",
 			w: WireConfig{
 				ChainID: 369, ExecID: "go-pulse", BeaconID: "prysm-pulse",
-				DataDir: "/var/lib/valve-node/369",
+				DataDir: "/var/lib/valve-node-app/369",
 			},
 			wantExec:   []string{"--pulsechain"},
 			wantBeacon: []string{"--pulsechain"},
@@ -724,7 +724,7 @@ func TestRenderUnits_PulseNetworkSelectorFlags(t *testing.T) {
 }
 
 func TestRenderUnits_RunAsServiceUser(t *testing.T) {
-	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369"}
+	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369"}
 	execUnit, beaconUnit, err := RenderUnits(w)
 	if err != nil {
 		t.Fatalf("RenderUnits: %v", err)
@@ -738,7 +738,7 @@ func TestRenderUnits_RunAsServiceUser(t *testing.T) {
 			"PrivateDevices=true",
 			"ProtectSystem=strict",
 			"ProtectHome=true",
-			"ReadWritePaths=/var/lib/valve-node/369",
+			"ReadWritePaths=/var/lib/valve-node-app/369",
 			"ProtectKernelTunables=true",
 			"ProtectControlGroups=true",
 			"RestrictSUIDSGID=true",
@@ -755,7 +755,7 @@ func TestRenderUnits_RunAsServiceUser(t *testing.T) {
 
 func TestRenderUnits_PrivilegedPortGrantsNetBindCap(t *testing.T) {
 	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse",
-		DataDir: "/var/lib/valve-node/369", ExecHTTPPort: 443}
+		DataDir: "/var/lib/valve-node-app/369", ExecHTTPPort: 443}
 	execUnit, beaconUnit, err := RenderUnits(w)
 	if err != nil {
 		t.Fatalf("RenderUnits: %v", err)
@@ -768,7 +768,7 @@ func TestRenderUnits_PrivilegedPortGrantsNetBindCap(t *testing.T) {
 	}
 
 	w = WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse",
-		DataDir: "/var/lib/valve-node/369", BeaconHTTPPort: 1023}
+		DataDir: "/var/lib/valve-node-app/369", BeaconHTTPPort: 1023}
 	execUnit, beaconUnit, err = RenderUnits(w)
 	if err != nil {
 		t.Fatalf("RenderUnits: %v", err)
@@ -783,7 +783,7 @@ func TestRenderUnits_PrivilegedPortGrantsNetBindCap(t *testing.T) {
 
 func TestRenderUnits_RPCBindAddr(t *testing.T) {
 	// Default (empty) → everything loopback, as before.
-	def := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369"}
+	def := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369"}
 	execUnit, beaconUnit, err := RenderUnits(def)
 	if err != nil {
 		t.Fatalf("RenderUnits(default): %v", err)
@@ -806,7 +806,7 @@ func TestRenderUnits_RPCBindAddr(t *testing.T) {
 		{"erigon-pulse", "lighthouse-pulse"},
 	} {
 		w := WireConfig{ChainID: 369, ExecID: tc.exec, BeaconID: tc.beacon,
-			DataDir: "/var/lib/valve-node/369", RPCBindAddr: addr}
+			DataDir: "/var/lib/valve-node-app/369", RPCBindAddr: addr}
 		eu, bu, err := RenderUnits(w)
 		if err != nil {
 			t.Fatalf("RenderUnits(%s/%s): %v", tc.exec, tc.beacon, err)
@@ -837,7 +837,7 @@ func TestRenderUnits_RPCBindAddr(t *testing.T) {
 }
 
 func TestRenderUnits_CheckpointOverrideAndToggle(t *testing.T) {
-	base := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369"}
+	base := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369"}
 
 	// Default: network checkpoint URL, checkpoint sync on.
 	_, beaconUnit, err := RenderUnits(base)
@@ -882,7 +882,7 @@ func TestRenderUnits_CheckpointOverrideAndToggle(t *testing.T) {
 }
 
 func TestRenderERPCConfig_FullNode(t *testing.T) {
-	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369",
+	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369",
 		ERPCEnabled: true, ERPCUpstreams: []string{"https://rpc.pulsechain.com"}}
 	cfg, err := RenderERPCConfig(w)
 	if err != nil {
@@ -909,7 +909,7 @@ func TestRenderERPCConfig_FullNode(t *testing.T) {
 }
 
 func TestRenderERPCConfig_ArchiveUnbounded(t *testing.T) {
-	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369",
+	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369",
 		ERPCEnabled: true, Archive: true}
 	cfg, err := RenderERPCConfig(w)
 	if err != nil {
@@ -925,7 +925,7 @@ func TestRenderERPCConfig_ArchiveUnbounded(t *testing.T) {
 
 func TestRenderERPCConfig_BindPortAndRPCBind(t *testing.T) {
 	const ip = "100.101.102.103"
-	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369",
+	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369",
 		ERPCEnabled: true, ERPCBindAddr: ip, ERPCPort: 8080, RPCBindAddr: ip}
 	cfg, err := RenderERPCConfig(w)
 	if err != nil {
@@ -940,16 +940,16 @@ func TestRenderERPCConfig_BindPortAndRPCBind(t *testing.T) {
 }
 
 func TestRenderERPCUnit_Hardened(t *testing.T) {
-	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369", ERPCEnabled: true}
+	w := WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369", ERPCEnabled: true}
 	unit, err := RenderERPCUnit(w)
 	if err != nil {
 		t.Fatalf("RenderERPCUnit: %v", err)
 	}
 	for _, want := range []string{
-		"erpc --config /var/lib/valve-node/369/erpc.yaml",
+		"erpc --config /var/lib/valve-node-app/369/erpc.yaml",
 		"User=" + ServiceUser,
 		"ProtectSystem=strict",
-		"ReadWritePaths=/var/lib/valve-node/369",
+		"ReadWritePaths=/var/lib/valve-node-app/369",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("eRPC unit missing %q:\n%s", want, unit)

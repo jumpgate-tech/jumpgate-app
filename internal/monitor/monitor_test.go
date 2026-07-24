@@ -102,7 +102,7 @@ func TestPollParsesSnapshotFields(t *testing.T) {
 		script("df --output=pcent", executor.Result{Stdout: "Use%\n 42%\n"}).
 		script("systemctl is-active", executor.Result{Stdout: "active\nactive\n"})
 
-	m := New(Config{Exec: fe, Wire: catalog.WireConfig{ChainID: 369, DataDir: "/var/lib/valve-node/369"}})
+	m := New(Config{Exec: fe, Wire: catalog.WireConfig{ChainID: 369, DataDir: "/var/lib/valve-node-app/369"}})
 	snap := m.poll(context.Background())
 
 	if snap.ExecSyncing {

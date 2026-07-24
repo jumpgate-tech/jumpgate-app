@@ -174,7 +174,7 @@ func (f *fakeAIProvider) Explain(_ context.Context, req ai.ExplainRequest) (stri
 // apiTestServer bundles a running httptest.Server with the token that
 // authorizes it and the underlying *Server, wired with fake executor/AI
 // factories and an isolated HOME (so internal/config reads/writes a temp
-// dir, never the real user's ~/.valve-node).
+// dir, never the real user's ~/.valve-node-app).
 type apiTestServer struct {
 	ts     *httptest.Server
 	token  string
@@ -516,7 +516,7 @@ func TestSetupKickoffReturns202AndStreamReplaysEvents(t *testing.T) {
 		ChainID:  369,
 		ExecID:   "reth",
 		BeaconID: "lighthouse-pulse",
-		DataDir:  "/var/lib/valve-node/369",
+		DataDir:  "/var/lib/valve-node-app/369",
 	}
 	res = a.do(t, "POST", "/api/targets/local/setup", wire)
 	if res.StatusCode != http.StatusAccepted {
@@ -640,7 +640,7 @@ func TestDeleteTargetCancelsInFlightSetupBeforeClosingExecutor(t *testing.T) {
 	res.Body.Close()
 
 	res = doReq("POST", "/api/targets/local/setup", catalog.WireConfig{
-		ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369",
+		ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369",
 	})
 	if res.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(res.Body)
@@ -768,7 +768,7 @@ func TestTargetMonitorStreamDeliversSnapshotAfterSetup(t *testing.T) {
 	res.Body.Close()
 
 	res = a.do(t, "POST", "/api/targets/local/setup", catalog.WireConfig{
-		ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369",
+		ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369",
 	})
 	res.Body.Close()
 
@@ -811,7 +811,7 @@ func TestLogsAfterSetupReturnsJSONArray(t *testing.T) {
 	res := a.do(t, "POST", "/api/targets", config.Target{ID: "local", Mode: "local"})
 	res.Body.Close()
 	res = a.do(t, "POST", "/api/targets/local/setup", catalog.WireConfig{
-		ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369",
+		ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369",
 	})
 	res.Body.Close()
 
@@ -838,7 +838,7 @@ func addAndWireLocalTarget(t *testing.T, a *apiTestServer) {
 	res.Body.Close()
 
 	res = a.do(t, "POST", "/api/targets/local/setup", catalog.WireConfig{
-		ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369",
+		ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369",
 	})
 	if res.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(res.Body)
@@ -850,7 +850,7 @@ func addAndWireLocalTarget(t *testing.T, a *apiTestServer) {
 func TestServiceActionHappyPath(t *testing.T) {
 	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) {
 		e := &scriptedExecutor{}
-		e.script("systemctl is-active valve-node-exec.service", executor.Result{Stdout: "active\n", ExitCode: 0})
+		e.script("systemctl is-active valve-node-app-exec.service", executor.Result{Stdout: "active\n", ExitCode: 0})
 		return e, nil
 	})
 	addAndWireLocalTarget(t, a)
@@ -1002,7 +1002,7 @@ func TestEndpointsSSHTargetGetsTunnelHint(t *testing.T) {
 	res.Body.Close()
 
 	res = a.do(t, "POST", "/api/targets/box1/setup", catalog.WireConfig{
-		ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node/369",
+		ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369",
 	})
 	if res.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(res.Body)
@@ -1478,7 +1478,7 @@ func TestSetupRejectsInvalidRPCBindAddr(t *testing.T) {
 		ChainID:     369,
 		ExecID:      "reth",
 		BeaconID:    "lighthouse-pulse",
-		DataDir:     "/var/lib/valve-node/369",
+		DataDir:     "/var/lib/valve-node-app/369",
 		RPCBindAddr: "not-an-ip",
 	}
 	res = a.do(t, "POST", "/api/targets/local/setup", wire)

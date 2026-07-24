@@ -1,4 +1,4 @@
-// Thin typed wrapper around valve-node's JSON/SSE API (internal/server/api.go).
+// Thin typed wrapper around valve-node-app's JSON/SSE API (internal/server/api.go).
 // Every type here mirrors the *actual wire shape* of the corresponding Go
 // struct, not a guessed camelCase version of it: several response structs
 // (catalog.Network, executor.SSHConfig, catalog.WireConfig) carry no `json`
@@ -52,7 +52,7 @@ export interface Host {
   arch: string;
 }
 
-// getHost reports the OS/arch valve-node itself runs on — used to decide
+// getHost reports the OS/arch valve-node-app itself runs on — used to decide
 // whether local node setup is viable (needs a Linux host).
 export function getHost(): Promise<Host> {
   return request<Host>("/api/host");
@@ -130,7 +130,7 @@ export function deleteTarget(id: string): Promise<void> {
 // ---------------------------------------------------------------------
 
 // StartSetupRequest is catalog.WireConfig's request shape. DataDir/JWTPath
-// are optional — the server fills in `/var/lib/valve-node/<chainId>` and
+// are optional — the server fills in `/var/lib/valve-node-app/<chainId>` and
 // `<dataDir>/jwt.hex` when omitted (see handleStartSetup).
 export interface StartSetupRequest {
   ChainID: number;

@@ -199,7 +199,7 @@ func TestClassify(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			hit, ok := classify("valve-node-exec.service", tc.line, time.Now())
+			hit, ok := classify("valve-node-app-exec.service", tc.line, time.Now())
 			if ok != tc.wantHit {
 				t.Fatalf("classify(%q) ok = %v, want %v", tc.line, ok, tc.wantHit)
 			}
@@ -221,8 +221,8 @@ func TestClassify(t *testing.T) {
 			if hit.Line != tc.line {
 				t.Errorf("Line = %q, want %q", hit.Line, tc.line)
 			}
-			if hit.Unit != "valve-node-exec.service" {
-				t.Errorf("Unit = %q, want valve-node-exec.service", hit.Unit)
+			if hit.Unit != "valve-node-app-exec.service" {
+				t.Errorf("Unit = %q, want valve-node-app-exec.service", hit.Unit)
 			}
 			if hit.At.IsZero() {
 				t.Errorf("At is zero, want set")
@@ -260,7 +260,7 @@ func TestClassifyLearnURLOnlyWhenSignatureHasOne(t *testing.T) {
 
 func TestStartRunsJournalctlFollowPerUnit(t *testing.T) {
 	fe := newFakeExecutor()
-	w := New(fe, []string{"valve-node-exec.service", "valve-node-beacon.service"})
+	w := New(fe, []string{"valve-node-app-exec.service", "valve-node-app-beacon.service"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -272,10 +272,10 @@ func TestStartRunsJournalctlFollowPerUnit(t *testing.T) {
 		if len(calls) >= 2 {
 			foundExec, foundBeacon := false, false
 			for _, c := range calls {
-				if strings.Contains(c, "journalctl") && strings.Contains(c, "-f") && strings.Contains(c, "valve-node-exec.service") {
+				if strings.Contains(c, "journalctl") && strings.Contains(c, "-f") && strings.Contains(c, "valve-node-app-exec.service") {
 					foundExec = true
 				}
-				if strings.Contains(c, "journalctl") && strings.Contains(c, "-f") && strings.Contains(c, "valve-node-beacon.service") {
+				if strings.Contains(c, "journalctl") && strings.Contains(c, "-f") && strings.Contains(c, "valve-node-app-beacon.service") {
 					foundBeacon = true
 				}
 			}
@@ -296,12 +296,12 @@ func TestStartRunsJournalctlFollowPerUnit(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestWatcherClassifiesStreamedLinesIntoRingBuffer(t *testing.T) {
-	fe := newFakeExecutor().script("valve-node-exec.service", executor.Result{
+	fe := newFakeExecutor().script("valve-node-app-exec.service", executor.Result{
 		Stdout: "INFO Imported new chain segment number=1\n" +
 			"WARN Low peer count peers=1\n" +
 			"ERROR panic: something broke\n",
 	})
-	w := New(fe, []string{"valve-node-exec.service"})
+	w := New(fe, []string{"valve-node-app-exec.service"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -322,10 +322,10 @@ func TestWatcherClassifiesStreamedLinesIntoRingBuffer(t *testing.T) {
 }
 
 func TestRecentReturnsNewestLast(t *testing.T) {
-	fe := newFakeExecutor().script("valve-node-exec.service", executor.Result{
+	fe := newFakeExecutor().script("valve-node-app-exec.service", executor.Result{
 		Stdout: "ERROR one\nERROR two\nERROR three\n",
 	})
-	w := New(fe, []string{"valve-node-exec.service"})
+	w := New(fe, []string{"valve-node-app-exec.service"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -347,8 +347,8 @@ func TestRecentCapsAtRingSize(t *testing.T) {
 	for i := 0; i < ringSize+50; i++ {
 		fmt.Fprintf(&b, "ERROR line %d\n", i)
 	}
-	fe := newFakeExecutor().script("valve-node-exec.service", executor.Result{Stdout: b.String()})
-	w := New(fe, []string{"valve-node-exec.service"})
+	fe := newFakeExecutor().script("valve-node-app-exec.service", executor.Result{Stdout: b.String()})
+	w := New(fe, []string{"valve-node-app-exec.service"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -387,10 +387,10 @@ func TestRecentCapsAtRingSize(t *testing.T) {
 }
 
 func TestSubscribeDeliversHits(t *testing.T) {
-	fe := newFakeExecutor().script("valve-node-exec.service", executor.Result{
+	fe := newFakeExecutor().script("valve-node-app-exec.service", executor.Result{
 		Stdout: "ERROR boom\n",
 	})
-	w := New(fe, []string{"valve-node-exec.service"})
+	w := New(fe, []string{"valve-node-app-exec.service"})
 
 	ch, unsub := w.Subscribe()
 	defer unsub()
@@ -410,7 +410,7 @@ func TestSubscribeDeliversHits(t *testing.T) {
 }
 
 func TestUnsubscribeStopsDelivery(t *testing.T) {
-	w := New(newFakeExecutor(), []string{"valve-node-exec.service"})
+	w := New(newFakeExecutor(), []string{"valve-node-app-exec.service"})
 	ch, unsub := w.Subscribe()
 	unsub()
 
@@ -467,7 +467,7 @@ func (r *retryExec) callCount() int {
 
 func TestTailRetriesRunAfterNonCancelReturn(t *testing.T) {
 	re := &retryExec{immediate: 3}
-	w := New(re, []string{"valve-node-exec.service"})
+	w := New(re, []string{"valve-node-app-exec.service"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -517,7 +517,7 @@ func waitForRecent(t *testing.T, w *Watcher, want int) {
 
 func TestClassify_Exported(t *testing.T) {
 	now := time.Now()
-	hit, ok := Classify("valve-node-exec.service", "WARN low peer count: 0 peers", now)
+	hit, ok := Classify("valve-node-app-exec.service", "WARN low peer count: 0 peers", now)
 	if !ok {
 		t.Fatal("want a Hit for a low-peer-count line, got ok=false")
 	}
@@ -527,11 +527,11 @@ func TestClassify_Exported(t *testing.T) {
 	if hit.Explain == "" {
 		t.Fatal("want a non-empty canned Explain for a named signature")
 	}
-	if hit.Unit != "valve-node-exec.service" || !hit.At.Equal(now) {
+	if hit.Unit != "valve-node-app-exec.service" || !hit.At.Equal(now) {
 		t.Fatalf("Unit/At not carried through: %+v", hit)
 	}
 
-	if _, ok := Classify("valve-node-exec.service", "INFO imported new chain segment", now); ok {
+	if _, ok := Classify("valve-node-app-exec.service", "INFO imported new chain segment", now); ok {
 		t.Fatal("want ok=false for a benign info line")
 	}
 }

@@ -24,8 +24,8 @@ func testWire() catalog.WireConfig {
 
 func TestServiceAction_StartRunsSystemctlAndReadsBack(t *testing.T) {
 	e := newFakeExecutor().
-		script("systemctl start valve-node-exec.service", executor.Result{ExitCode: 0}).
-		script("systemctl is-active valve-node-exec.service", executor.Result{Stdout: "active\n", ExitCode: 0})
+		script("systemctl start valve-node-app-exec.service", executor.Result{ExitCode: 0}).
+		script("systemctl is-active valve-node-app-exec.service", executor.Result{Stdout: "active\n", ExitCode: 0})
 
 	active, err := ServiceAction(context.Background(), e, "exec", "start")
 	if err != nil {
@@ -38,8 +38,8 @@ func TestServiceAction_StartRunsSystemctlAndReadsBack(t *testing.T) {
 
 func TestServiceAction_StopReadsBackInactive(t *testing.T) {
 	e := newFakeExecutor().
-		script("systemctl stop valve-node-beacon.service", executor.Result{ExitCode: 0}).
-		script("systemctl is-active valve-node-beacon.service", executor.Result{Stdout: "inactive\n", ExitCode: 3})
+		script("systemctl stop valve-node-app-beacon.service", executor.Result{ExitCode: 0}).
+		script("systemctl is-active valve-node-app-beacon.service", executor.Result{Stdout: "inactive\n", ExitCode: 3})
 
 	active, err := ServiceAction(context.Background(), e, "beacon", "stop")
 	if err != nil {
@@ -52,15 +52,15 @@ func TestServiceAction_StopReadsBackInactive(t *testing.T) {
 
 func TestServiceAction_RestartRunsCorrectUnit(t *testing.T) {
 	e := newFakeExecutor().
-		script("systemctl restart valve-node-exec.service", executor.Result{ExitCode: 0}).
-		script("systemctl is-active valve-node-exec.service", executor.Result{Stdout: "active\n"})
+		script("systemctl restart valve-node-app-exec.service", executor.Result{ExitCode: 0}).
+		script("systemctl is-active valve-node-app-exec.service", executor.Result{Stdout: "active\n"})
 
 	if _, err := ServiceAction(context.Background(), e, "exec", "restart"); err != nil {
 		t.Fatalf("ServiceAction: %v", err)
 	}
 	found := false
 	for _, c := range e.callLog() {
-		if c == "systemctl restart valve-node-exec.service" {
+		if c == "systemctl restart valve-node-app-exec.service" {
 			found = true
 		}
 	}
@@ -91,7 +91,7 @@ func TestServiceAction_InvalidActionErrors(t *testing.T) {
 
 func TestServiceAction_NonZeroExitOnCommandIsError(t *testing.T) {
 	e := newFakeExecutor().
-		script("systemctl start valve-node-exec.service", executor.Result{ExitCode: 1, Stderr: "Unit not found."})
+		script("systemctl start valve-node-app-exec.service", executor.Result{ExitCode: 1, Stderr: "Unit not found."})
 	if _, err := ServiceAction(context.Background(), e, "exec", "start"); err == nil {
 		t.Fatal("want error when systemctl start exits non-zero")
 	}
@@ -101,9 +101,9 @@ func TestServiceAction_NonZeroExitOnCommandIsError(t *testing.T) {
 
 func TestClearService_StopRmStartOrder(t *testing.T) {
 	e := newFakeExecutor().
-		script("systemctl stop valve-node-exec.service", executor.Result{ExitCode: 0}).
+		script("systemctl stop valve-node-app-exec.service", executor.Result{ExitCode: 0}).
 		script("rm -rf", executor.Result{ExitCode: 0}).
-		script("systemctl start valve-node-exec.service", executor.Result{ExitCode: 0})
+		script("systemctl start valve-node-app-exec.service", executor.Result{ExitCode: 0})
 
 	if err := ClearService(context.Background(), e, testWire(), "exec"); err != nil {
 		t.Fatalf("ClearService: %v", err)

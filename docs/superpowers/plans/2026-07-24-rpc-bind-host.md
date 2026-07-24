@@ -14,7 +14,7 @@
 - Engine API bind (`--authrpc.addr 127.0.0.1 --authrpc.port 8551`) and prysm `--rpc-host=127.0.0.1` are NEVER made configurable.
 - Security tiers for a bind address: loopback (`127.0.0.1`/`::1`) → pass; Tailscale CGNAT `100.64.0.0/10` → pass-with-note; other RFC1918 (`10/8`,`172.16/12`,`192.168/16`) → warn (LAN exposure); anything else incl. `0.0.0.0` → fail (public/unauthenticated exposure).
 - exec JSON-RPC is unauthenticated — the UI must state that binding it to a tailnet trusts everyone on the tailnet.
-- Verify: `go build ./... && go test ./...`; UI via `cd cmd/valve-node/web && npm run build` then `go build ./...`.
+- Verify: `go build ./... && go test ./...`; UI via `cd cmd/valve-node-app/web && npm run build` then `go build ./...`.
 
 ## Security decision baked in (Option A, flag if you want it changed)
 
@@ -63,7 +63,7 @@ Bind to a **specific** host IP (the node's Tailscale address), not `0.0.0.0`-plu
 
 ### Task 5: UI — wizard field, endpoints reachable URL, caveat copy
 
-**Files:** `cmd/valve-node/web/src/wizard.ts` (bind field), `dashboard.ts` (endpoints card shows the routable URL + drops the tunnel hint when bound routable), `api.ts` (WireConfig type). Rebuild dist + re-embed.
+**Files:** `cmd/valve-node-app/web/src/wizard.ts` (bind field), `dashboard.ts` (endpoints card shows the routable URL + drops the tunnel hint when bound routable), `api.ts` (WireConfig type). Rebuild dist + re-embed.
 
 - [ ] Add an optional "RPC bind address" field (placeholder `127.0.0.1`, help text: use your Tailscale IP to reach the node from another machine; warns that exec RPC is unauthenticated so only bind to a trusted overlay). Endpoints card: when `RPCBind()` is routable, show `http://<addr>:<port>` as the reachable URL and hide the SSH tunnel hint.
 - [ ] `npm run build` + `go build`; commit `feat(ui): RPC bind address in the wizard; endpoints show the reachable URL`.

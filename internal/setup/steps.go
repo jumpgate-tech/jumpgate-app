@@ -25,8 +25,8 @@ const enginePort = "8551"
 
 // Unit names/paths on the target, per task-4-brief.md.
 const (
-	execUnitName   = "valve-node-exec.service"
-	beaconUnitName = "valve-node-beacon.service"
+	execUnitName   = "valve-node-app-exec.service"
+	beaconUnitName = "valve-node-app-beacon.service"
 	execUnitPath   = "/etc/systemd/system/" + execUnitName
 	beaconUnitPath = "/etc/systemd/system/" + beaconUnitName
 )
@@ -81,21 +81,21 @@ func preflightStep() Step {
 }
 
 func preflightCheck(ctx context.Context, e executor.Executor, w catalog.WireConfig) error {
-	res, err := e.Run(ctx, "id -u", nil)
-	if err != nil {
-		return fmt.Errorf("preflight: id -u: %w", err)
-	}
-	if uid := strings.TrimSpace(res.Stdout); uid != "0" {
-		return fmt.Errorf("preflight: setup requires root on the target (SSH as root, or run valve-node as root in local mode); id -u reported %q", uid)
-	}
-
-	res, err = e.Run(ctx, "uname", nil)
+	res, err := e.Run(ctx, "uname", nil)
 	if err != nil {
 		return fmt.Errorf("preflight: uname: %w", err)
 	}
 	osName := strings.TrimSpace(res.Stdout)
 	if osName != "Linux" {
-		return fmt.Errorf("preflight: valve-node setup requires Linux, found %q", osName)
+		return fmt.Errorf("preflight: setup targets a Linux host, but this one reports %q — run valve-node-app against a Linux server; from a macOS/Windows machine, add a Linux target over SSH instead.", osName)
+	}
+
+	res, err = e.Run(ctx, "id -u", nil)
+	if err != nil {
+		return fmt.Errorf("preflight: id -u: %w", err)
+	}
+	if uid := strings.TrimSpace(res.Stdout); uid != "0" {
+		return fmt.Errorf("preflight: setup needs root on the target to install systemd units, manage services with systemctl, and write binaries to /usr/local/bin (SSH as root, or run valve-node-app as root in local mode); id -u reported %q.", uid)
 	}
 
 	minBytes, err := minDiskBytesFor(w)
@@ -144,10 +144,10 @@ func preflightCheck(ctx context.Context, e executor.Executor, w catalog.WireConf
 	return nil
 }
 
-// ownActiveUnitPorts checks whether valve-node's own systemd units are
+// ownActiveUnitPorts checks whether valve-node-app's own systemd units are
 // already active and, if so, returns the set of ports the busy-port check
 // should exempt for them. This is what makes preflight idempotent when
-// re-running setup (resume/upgrade) against a box where valve-node is
+// re-running setup (resume/upgrade) against a box where valve-node-app is
 // already up: without it, the port scan can't tell our own units'
 // listeners from a stranger's and fails every re-run.
 //
@@ -179,7 +179,7 @@ func ownActiveUnitPorts(ctx context.Context, e executor.Executor, w catalog.Wire
 // accountStep creates the dedicated unprivileged system account the node
 // services run as (catalog.ServiceUser). The services drop to this user
 // via the User=/Group= lines in the rendered units; setup itself still
-// runs as root (it is what performs the useradd). Home is the valve-node
+// runs as root (it is what performs the useradd). Home is the valve-node-app
 // data root purely as a bookkeeping convention — nothing reads it, so it
 // is not created here (--no-create-home) and not chain-specific.
 func accountStep() Step {
@@ -188,7 +188,7 @@ func accountStep() Step {
 		Title: "Create service account (" + catalog.ServiceUser + ")",
 		Run: func(ctx context.Context, e executor.Executor, st *State) error {
 			cmd := fmt.Sprintf(
-				"id -u %[1]s >/dev/null 2>&1 || useradd --system --user-group --home-dir /var/lib/valve-node --no-create-home --shell /usr/sbin/nologin %[1]s",
+				"id -u %[1]s >/dev/null 2>&1 || useradd --system --user-group --home-dir /var/lib/valve-node-app --no-create-home --shell /usr/sbin/nologin %[1]s",
 				catalog.ServiceUser,
 			)
 			res, err := e.Run(ctx, cmd, streamOpts(ctx, st, "account"))

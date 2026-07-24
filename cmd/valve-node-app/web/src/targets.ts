@@ -46,7 +46,7 @@ export function renderTargets(root: HTMLElement): () => void {
   function renderBody(targets: api.Target[], catalog: api.Catalog): void {
     lastData = { targets, catalog };
     // Local node setup needs a Linux host — gated on the SERVER's OS (what
-    // valve-node runs on), not the browser's. On a non-Linux host local
+    // valve-node-app runs on), not the browser's. On a non-Linux host local
     // setup can't complete, but the option is still offered (secondary,
     // with a caveat) rather than hidden, so it's never a dead end.
     const localViable = hostOS === "linux";
@@ -62,7 +62,7 @@ export function renderTargets(root: HTMLElement): () => void {
             ${
               localViable
                 ? "Add this machine to run a node here, or add a remote Linux server over SSH."
-                : "valve-node is running here as your <strong>controller</strong> — add a Linux server over SSH to run a node, or add this machine to walk the setup (it will need a Linux host to finish)."
+                : "valve-node-app is running here as your <strong>controller</strong> — add a Linux server over SSH to run a node, or add this machine to walk the setup (it will need a Linux host to finish)."
             }
           </p>
         </div>
@@ -89,7 +89,7 @@ export function renderTargets(root: HTMLElement): () => void {
           <h2>Your machines</h2>
           ${addActions}
         </div>
-        ${!localViable && hostOS ? `<p class="muted small">This machine (${escapeHtml(hostOS)}) runs valve-node as a <strong>controller</strong>. Node hosts must be Linux — "Add this machine" is available to walk the flow, but setup only completes on a Linux host.</p>` : ""}
+        ${!localViable && hostOS ? `<p class="muted small">This machine (${escapeHtml(hostOS)}) runs valve-node-app as a <strong>controller</strong>. Node hosts must be Linux — "Add this machine" is available to walk the flow, but setup only completes on a Linux host.</p>` : ""}
         ${showSSHForm ? sshFormMarkup() : ""}
         ${list}
       </section>

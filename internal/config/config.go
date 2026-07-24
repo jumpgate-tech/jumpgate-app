@@ -1,4 +1,4 @@
-// Package config persists valve-node's own local state — the targets it
+// Package config persists valve-node-app's own local state — the targets it
 // knows how to manage, and the AI provider it's configured to use for log
 // explanations — to a single JSON file under the user's home directory. It
 // performs no validation of the domain data it stores (that's the caller's
@@ -21,7 +21,7 @@ import (
 // to get the per-chain reference endpoint.
 const defaultRefRPCBase = "https://rpc.valve.city/v1/vk_Et-4emAlBIym1PjiCogh5p7IuGtS-Rpj"
 
-// Target is one machine valve-node can set up and monitor a node on.
+// Target is one machine valve-node-app can set up and monitor a node on.
 type Target struct {
 	ID   string              `json:"id"`   // "local" or a slug of the host
 	Mode string              `json:"mode"` // "local" | "ssh"
@@ -29,7 +29,7 @@ type Target struct {
 	Wire *catalog.WireConfig `json:"wire,omitempty"` // set once the wizard has run
 }
 
-// Config is valve-node's persisted local state.
+// Config is valve-node-app's persisted local state.
 type Config struct {
 	Targets    []Target `json:"targets"`
 	AIProvider string   `json:"aiProvider"` // ""|gemini|groq|ollama
@@ -40,14 +40,14 @@ type Config struct {
 // configFileName is the file Load/Save read and write inside Dir().
 const configFileName = "config.json"
 
-// Dir returns the directory valve-node's local state lives in
-// (~/.valve-node), without creating it.
+// Dir returns the directory valve-node-app's local state lives in
+// (~/.valve-node-app), without creating it.
 func Dir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("config: resolve home directory: %w", err)
 	}
-	return filepath.Join(home, ".valve-node"), nil
+	return filepath.Join(home, ".valve-node-app"), nil
 }
 
 func filePath() (string, error) {
@@ -58,7 +58,7 @@ func filePath() (string, error) {
 	return filepath.Join(dir, configFileName), nil
 }
 
-// Load reads Config from ~/.valve-node/config.json. A missing file is not an
+// Load reads Config from ~/.valve-node-app/config.json. A missing file is not an
 // error: it returns the zero Config (with RefRPCBase defaulted). RefRPCBase
 // is defaulted whenever it's empty, whether that's because the file doesn't
 // exist yet or because a stored config happens to have it blank.
@@ -86,7 +86,7 @@ func Load() (Config, error) {
 	return c, nil
 }
 
-// Save writes c to ~/.valve-node/config.json, creating the directory if
+// Save writes c to ~/.valve-node-app/config.json, creating the directory if
 // needed. The write is atomic (write to a temp file in the same directory,
 // then rename over the target) and the file is mode 0600, since it may
 // contain an AI provider API key.

@@ -16,7 +16,7 @@ func diagWire() catalog.WireConfig {
 		ChainID:  369,
 		ExecID:   "reth",
 		BeaconID: "lighthouse-pulse",
-		DataDir:  "/var/lib/valve-node/369",
+		DataDir:  "/var/lib/valve-node-app/369",
 	}
 }
 
