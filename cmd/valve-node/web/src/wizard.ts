@@ -393,6 +393,9 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     const fullSizeCell = net ? approxSize(archiveTB / 2) : "Smaller";
     const archiveSizeCell = net ? approxSize(archiveTB) : "Much larger";
     const netLabel = net ? ` on ${escapeHtml(net.Name)}` : "";
+    // Sync time is driven by checkpoint sync (snapshot-assisted vs from
+    // genesis), not by full/archive — so it reacts to the checkpoint toggle.
+    const syncEstimate = net ? (state.checkpoint ? net.SyncLabel : net.GenesisSyncLabel) : "";
     return `
       <section>
         <h2>3. Choose sync mode</h2>
@@ -400,6 +403,25 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
           Both modes run a fully-validating node — same security, same current-state RPC.
           The difference is how much <strong>historical</strong> state is kept.
         </p>
+
+        <div class="config-block">
+          <label class="radio">
+            <input type="checkbox" id="checkpoint-toggle" ${state.checkpoint ? "checked" : ""} />
+            <span><strong>Checkpoint sync</strong> — start near the chain head in minutes (recommended). Uncheck to sync the beacon chain from genesis: fully trustless, but much slower.</span>
+          </label>
+          ${net ? `<p class="muted small">Estimated initial sync${netLabel}: <strong>${escapeHtml(syncEstimate)}</strong> — scales with the target's CPU and disk speed.</p>` : ""}
+          ${
+            state.checkpoint
+              ? `<label>
+                   Checkpoint URL <span class="muted">(default: ${escapeHtml(net?.CheckpointURL ?? "")})</span>
+                   <input id="checkpoint-url-input" type="text" placeholder="${escapeHtml(net?.CheckpointURL ?? "")}" value="${escapeHtml(state.checkpointUrl)}" />
+                 </label>
+                 ${state.checkpointUrlError ? `<p class="error small">${escapeHtml(state.checkpointUrlError)}</p>` : ""}
+                 <p class="muted small">The beacon client trusts this endpoint for its starting checkpoint. Leave blank for the network default.</p>`
+              : `<p class="muted small">The beacon client will validate every block from genesis — no trusted checkpoint, but this can take days.</p>`
+          }
+        </div>
+
         <table class="compare-table">
           <thead>
             <tr><th>What you get</th><th>Full</th><th>Archive</th></tr>
@@ -410,14 +432,10 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
             <tr><th>Historical state (balances, <code>eth_call</code>) at any past block</th><td class="limited">Recent only (~128 blocks)</td><td class="yes">Full history</td></tr>
             <tr><th>Tracing / <code>debug_trace</code> on old blocks</th><td class="limited">Recent only</td><td class="yes">Full history</td></tr>
             <tr><th>Approx. disk footprint${netLabel}</th><td class="yes">${fullSizeCell}</td><td class="limited">${archiveSizeCell}</td></tr>
-            <tr><th>Initial sync time${netLabel}</th><td class="yes">${net ? escapeHtml(net.SyncLabel) : "Faster"}</td><td class="limited">${net ? escapeHtml(net.GenesisSyncLabel) : "Much slower"}</td></tr>
             <tr><th>Best for</th><td>Validators, wallets, everyday RPC</td><td>Explorers, analytics, historical queries</td></tr>
           </tbody>
         </table>
-        <p class="muted small">
-          Disk sizes and sync times are rough baselines — both vary by client and scale with the
-          target's CPU and disk speed.
-        </p>
+        <p class="muted small">Disk sizes are rough baselines — they vary by client and setup.</p>
         <label class="radio">
           <input type="radio" name="mode" value="archive" data-action="pick-mode" ${state.archive ? "checked" : ""} />
           <span><strong>Archive</strong> — full historical state · ${archiveSizeCell}${net ? "" : " disk"} <span class="muted">(recommended — keep more archive nodes on the network)</span></span>
@@ -433,23 +451,6 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
             <input id="data-dir-input" type="text" placeholder="${escapeHtml(defaultDataDir)}" value="${escapeHtml(state.dataDir)}" />
           </label>
           ${storageStatusHtml(net, state.dataDir || defaultDataDir)}
-        </div>
-
-        <div class="config-block">
-          <label class="radio">
-            <input type="checkbox" id="checkpoint-toggle" ${state.checkpoint ? "checked" : ""} />
-            <span><strong>Checkpoint sync</strong> — start near the chain head in minutes (recommended). Uncheck to sync the beacon chain from genesis: fully trustless, but much slower.</span>
-          </label>
-          ${
-            state.checkpoint
-              ? `<label>
-                   Checkpoint URL <span class="muted">(default: ${escapeHtml(net?.CheckpointURL ?? "")})</span>
-                   <input id="checkpoint-url-input" type="text" placeholder="${escapeHtml(net?.CheckpointURL ?? "")}" value="${escapeHtml(state.checkpointUrl)}" />
-                 </label>
-                 ${state.checkpointUrlError ? `<p class="error small">${escapeHtml(state.checkpointUrlError)}</p>` : ""}
-                 <p class="muted small">The beacon client trusts this endpoint for its starting checkpoint. Leave blank for the network default.</p>`
-              : `<p class="muted small">The beacon client will validate every block from genesis — no trusted checkpoint, but this can take days.</p>`
-          }
         </div>
 
         <details class="advanced">
