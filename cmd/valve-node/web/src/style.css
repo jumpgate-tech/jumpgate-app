@@ -366,6 +366,16 @@ select:focus {
   padding: 0.6rem 0.8rem;
 }
 
+.sync-estimate {
+  margin: 0.5rem 0 0.15rem;
+  font-size: 1rem;
+  color: var(--fg);
+}
+
+.sync-estimate strong {
+  color: var(--accent);
+}
+
 details.advanced {
   margin: 0.75rem 0;
   border: 1px dashed var(--border);

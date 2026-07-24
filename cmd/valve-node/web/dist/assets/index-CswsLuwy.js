@@ -430,7 +430,8 @@ var Le=Object.defineProperty;var Ie=(t,r,n)=>r in t?Le(t,r,{enumerable:!0,config
             <input type="checkbox" id="checkpoint-toggle" ${e.checkpoint?"checked":""} />
             <span><strong>Checkpoint sync</strong> — start near the chain head in minutes (recommended). Uncheck to sync the beacon chain from genesis: fully trustless, but much slower.</span>
           </label>
-          ${o?`<p class="muted small">Estimated initial sync${g}: <strong>${s(f)}</strong> — scales with the target's CPU and disk speed.</p>`:""}
+          ${o?`<p class="sync-estimate">⏱ Estimated initial sync${g}: <strong>${s(f)}</strong></p>
+                   <p class="muted small">Scales with the target's CPU and disk speed.</p>`:""}
           ${e.checkpoint?`<label>
                    Checkpoint URL <span class="muted">(default: ${s((o==null?void 0:o.CheckpointURL)??"")})</span>
                    <input id="checkpoint-url-input" type="text" placeholder="${s((o==null?void 0:o.CheckpointURL)??"")}" value="${s(e.checkpointUrl)}" />

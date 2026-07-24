@@ -409,7 +409,8 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
             <input type="checkbox" id="checkpoint-toggle" ${state.checkpoint ? "checked" : ""} />
             <span><strong>Checkpoint sync</strong> — start near the chain head in minutes (recommended). Uncheck to sync the beacon chain from genesis: fully trustless, but much slower.</span>
           </label>
-          ${net ? `<p class="muted small">Estimated initial sync${netLabel}: <strong>${escapeHtml(syncEstimate)}</strong> — scales with the target's CPU and disk speed.</p>` : ""}
+          ${net ? `<p class="sync-estimate">⏱ Estimated initial sync${netLabel}: <strong>${escapeHtml(syncEstimate)}</strong></p>
+                   <p class="muted small">Scales with the target's CPU and disk speed.</p>` : ""}
           ${
             state.checkpoint
               ? `<label>
