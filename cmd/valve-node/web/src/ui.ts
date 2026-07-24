@@ -140,3 +140,95 @@ export function onAction(
     handler(action, target, ev);
   });
 }
+
+// --- hand-rolled dropdown menu (replaces native <select>) ------------------
+
+export interface DropdownOption {
+  value: string;
+  label: string;
+}
+
+// dropdown renders a self-contained menu control keyed by `id`. It's a pure
+// string render; wireDropdowns(root, onSelect) attaches the open/close and
+// selection behavior once per screen. Open state lives in the DOM (the
+// `.open` class), not in screen state, so opening the menu needs no
+// re-render; picking an option calls onSelect(id, value), which the screen
+// turns into a state change + re-render (closing the menu).
+export function dropdown(id: string, options: DropdownOption[], selectedValue: string | null): string {
+  const selected = options.find((o) => o.value === selectedValue);
+  const items = options
+    .map(
+      (o) => `
+      <li class="dropdown-option${o.value === selectedValue ? " selected" : ""}" role="option"
+          aria-selected="${o.value === selectedValue}" data-value="${escapeHtml(o.value)}">
+        ${escapeHtml(o.label)}
+      </li>`,
+    )
+    .join("");
+  return `
+    <div class="dropdown" data-dropdown="${escapeHtml(id)}">
+      <button type="button" class="dropdown-trigger" aria-haspopup="listbox" aria-expanded="false">
+        <span class="dropdown-value">${escapeHtml(selected ? selected.label : "Select…")}</span>
+        <span class="dropdown-caret" aria-hidden="true">▾</span>
+      </button>
+      <ul class="dropdown-menu" role="listbox">${items}</ul>
+    </div>
+  `;
+}
+
+function closeAllDropdowns(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>(".dropdown.open").forEach((dd) => {
+    dd.classList.remove("open");
+    dd.querySelector<HTMLElement>(".dropdown-trigger")?.setAttribute("aria-expanded", "false");
+  });
+}
+
+// wireDropdowns attaches the delegated open/close + selection behavior for
+// every dropdown() inside root. Call once per screen (alongside onAction).
+// The outside-click and Escape listeners live on document but self-remove
+// once root detaches (the screen navigated away), so no explicit cleanup is
+// needed from the caller.
+export function wireDropdowns(root: HTMLElement, onSelect: (id: string, value: string) => void): void {
+  root.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    const trigger = t.closest<HTMLElement>(".dropdown-trigger");
+    if (trigger && root.contains(trigger)) {
+      const dd = trigger.closest<HTMLElement>(".dropdown");
+      const willOpen = !!dd && !dd.classList.contains("open");
+      closeAllDropdowns(root);
+      if (dd && willOpen) {
+        dd.classList.add("open");
+        trigger.setAttribute("aria-expanded", "true");
+      }
+      return;
+    }
+    const opt = t.closest<HTMLElement>(".dropdown-option");
+    if (opt && root.contains(opt)) {
+      const dd = opt.closest<HTMLElement>(".dropdown");
+      closeAllDropdowns(root);
+      onSelect(dd?.dataset.dropdown ?? "", opt.dataset.value ?? "");
+      return;
+    }
+    closeAllDropdowns(root);
+  });
+
+  const onDocClick = (ev: MouseEvent): void => {
+    if (!root.isConnected) {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onDocKey);
+      return;
+    }
+    const t = ev.target as HTMLElement;
+    if (!t.closest(".dropdown") || !root.contains(t)) closeAllDropdowns(root);
+  };
+  const onDocKey = (ev: KeyboardEvent): void => {
+    if (!root.isConnected) {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onDocKey);
+      return;
+    }
+    if (ev.key === "Escape") closeAllDropdowns(root);
+  };
+  document.addEventListener("click", onDocClick);
+  document.addEventListener("keydown", onDocKey);
+}

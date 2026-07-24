@@ -1,7 +1,7 @@
 // #/settings — AI provider selection + key, plus the reference RPC base
 // (advanced, rarely touched).
 import * as api from "./api";
-import { escapeHtml, footer, onAction } from "./ui";
+import { dropdown, escapeHtml, footer, onAction, wireDropdowns } from "./ui";
 
 const PROVIDERS: { value: api.AIProvider; label: string }[] = [
   { value: "", label: "None" },
@@ -17,6 +17,10 @@ export function renderSettings(root: HTMLElement): () => void {
   let error: string | null = null;
   let saved = false;
   let current: api.Settings | null = null;
+  // The provider the user has picked this session (null = untouched, use the
+  // saved value). Held separately from `current` so a change before Save
+  // doesn't look persisted.
+  let providerChoice: api.AIProvider | null = null;
 
   root.innerHTML = `<h1>Settings</h1><div id="settings-body"><p class="muted">Loading…</p></div>${footer()}`;
   const body = root.querySelector<HTMLElement>("#settings-body")!;
@@ -30,6 +34,13 @@ export function renderSettings(root: HTMLElement): () => void {
       if (keyInput) keyInput.value = "";
       render(current);
     }
+  });
+
+  wireDropdowns(root, (id, value) => {
+    if (id !== "ai-provider" || !current) return;
+    providerChoice = value as api.AIProvider;
+    saved = false;
+    render(current);
   });
 
   load();
@@ -47,15 +58,17 @@ export function renderSettings(root: HTMLElement): () => void {
   }
 
   function render(settings: api.Settings): void {
-    const options = PROVIDERS.map(
-      (p) => `<option value="${p.value}" ${settings.aiProvider === p.value ? "selected" : ""}>${escapeHtml(p.label)}</option>`,
-    ).join("");
+    const provider = providerChoice ?? settings.aiProvider;
 
     body.innerHTML = `
       <form class="card" id="settings-form" onsubmit="return false">
         <label>
           AI provider
-          <select id="ai-provider">${options}</select>
+          ${dropdown(
+            "ai-provider",
+            PROVIDERS.map((p) => ({ value: p.value, label: p.label })),
+            provider,
+          )}
         </label>
         <label>
           API key
@@ -82,22 +95,18 @@ export function renderSettings(root: HTMLElement): () => void {
       keyTouched = true;
       saved = false;
     });
-    root.querySelector<HTMLSelectElement>("#ai-provider")?.addEventListener("change", () => {
-      saved = false;
-    });
     root.querySelector<HTMLInputElement>("#ref-rpc-base")?.addEventListener("input", () => {
       saved = false;
     });
   }
 
   async function save(): Promise<void> {
-    const providerSel = root.querySelector<HTMLSelectElement>("#ai-provider");
     const keyInput = root.querySelector<HTMLInputElement>("#ai-key");
     const refRpcInput = root.querySelector<HTMLInputElement>("#ref-rpc-base");
-    if (!providerSel || !keyInput || !refRpcInput || !current) return;
+    if (!keyInput || !refRpcInput || !current) return;
 
     const body: api.PutSettingsRequest = {
-      aiProvider: providerSel.value as api.AIProvider,
+      aiProvider: providerChoice ?? current.aiProvider,
       refRpcBase: refRpcInput.value.trim(),
     };
     // Only send aiKey if the user actually touched the field this session —
