@@ -22,6 +22,9 @@ export interface Network {
   ExecClients: string[];
   BeaconClients: string[];
   LearnURL: string;
+  // ArchiveSizeTB is the archive-tier dataset size in decimal TB; the
+  // full(pruned) tier is estimated as half this (mirrors Go ExpectedBytes).
+  ArchiveSizeTB: number;
 }
 
 export interface CatalogClient {

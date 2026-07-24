@@ -78,7 +78,7 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     chainId: 369,
     execId: null,
     beaconId: null,
-    archive: false,
+    archive: true,
     dataDir: "",
     jwtPath: "",
     execHTTPPort: "",
@@ -232,6 +232,15 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     `;
   }
 
+  // approxSize formats a decimal-TB dataset estimate for display, dropping to
+  // GB below a terabyte. Kept in decimal (not binary) so the figures match
+  // learn.valve.city's snapshot sizes and the Go catalog's ExpectedBytes.
+  function approxSize(sizeTB: number): string {
+    if (sizeTB <= 0) return "—";
+    if (sizeTB >= 1) return `~${sizeTB.toFixed(1)} TB`;
+    return `~${Math.round(sizeTB * 1000)} GB`;
+  }
+
   function clientOption(id: string, catalog: api.Catalog): DropdownOption {
     const client = catalog.clients.find((c) => c.id === id);
     return { value: id, label: client ? `${client.id} (${client.toolchain})` : id };
@@ -239,6 +248,11 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
 
   function renderModeStep(): string {
     const defaultDataDir = state.chainId !== null ? `/var/lib/valve-node/${state.chainId}` : "";
+    const net = state.catalog?.networks.find((n) => n.ChainID === state.chainId);
+    const archiveTB = net?.ArchiveSizeTB ?? 0;
+    const fullSizeCell = net ? approxSize(archiveTB / 2) : "Smaller";
+    const archiveSizeCell = net ? approxSize(archiveTB) : "Much larger";
+    const netLabel = net ? ` on ${escapeHtml(net.Name)}` : "";
     return `
       <section>
         <h2>3. Choose sync mode</h2>
@@ -255,18 +269,18 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
             <tr><th>Send transactions, normal RPC</th><td class="yes">Yes</td><td class="yes">Yes</td></tr>
             <tr><th>Historical state (balances, <code>eth_call</code>) at any past block</th><td class="limited">Recent only (~128 blocks)</td><td class="yes">Full history</td></tr>
             <tr><th>Tracing / <code>debug_trace</code> on old blocks</th><td class="limited">Recent only</td><td class="yes">Full history</td></tr>
-            <tr><th>Disk footprint</th><td class="yes">Smaller</td><td class="limited">Much larger</td></tr>
+            <tr><th>Approx. disk footprint${netLabel}</th><td class="yes">${fullSizeCell}</td><td class="limited">${archiveSizeCell}</td></tr>
             <tr><th>Initial sync time</th><td class="yes">Faster</td><td class="limited">Much slower</td></tr>
             <tr><th>Best for</th><td>Validators, wallets, everyday RPC</td><td>Explorers, analytics, historical queries</td></tr>
           </tbody>
         </table>
         <label class="radio">
-          <input type="radio" name="mode" value="full" data-action="pick-mode" ${!state.archive ? "checked" : ""} />
-          <span><strong>Full</strong> — recommended for most nodes</span>
+          <input type="radio" name="mode" value="archive" data-action="pick-mode" ${state.archive ? "checked" : ""} />
+          <span><strong>Archive</strong> — full historical state · ${archiveSizeCell}${net ? "" : " disk"} <span class="muted">(recommended — keep more archive nodes on the network)</span></span>
         </label>
         <label class="radio">
-          <input type="radio" name="mode" value="archive" data-action="pick-mode" ${state.archive ? "checked" : ""} />
-          <span><strong>Archive</strong> — only if you need full historical state</span>
+          <input type="radio" name="mode" value="full" data-action="pick-mode" ${!state.archive ? "checked" : ""} />
+          <span><strong>Full</strong> — pruned, everyday RPC · ${fullSizeCell}${net ? "" : " disk"}</span>
         </label>
         <details class="advanced">
           <summary>Advanced</summary>
