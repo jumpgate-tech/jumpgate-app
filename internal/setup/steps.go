@@ -31,8 +31,8 @@ const (
 	beaconUnitPath = "/etc/systemd/system/" + beaconUnitName
 )
 
-// Plan returns the ordered steps for the config: preflight, toolchain,
-// install-exec, install-beacon, wire, start, handshake.
+// Plan returns the ordered steps for the config: preflight, account,
+// toolchain, install-exec, install-beacon, snapshot, wire, start, handshake.
 func Plan(w catalog.WireConfig) ([]Step, error) {
 	execClient, ok := catalog.ClientByID(w.ExecID)
 	if !ok || execClient.Kind != "exec" {
@@ -56,6 +56,7 @@ func Plan(w catalog.WireConfig) ([]Step, error) {
 		toolchainStep(neededToolchains(execClient, beaconClient)),
 		installStep("install-exec", "Install execution client ("+w.ExecID+")", execClient),
 		installStep("install-beacon", "Install beacon client ("+w.BeaconID+")", beaconClient),
+		snapshotStep(),
 		wireStep(),
 		startStep(),
 		handshakeStep(),
@@ -327,6 +328,75 @@ func installStep(stepID, title string, client catalog.Client) Step {
 			}
 			if res.ExitCode != 0 {
 				return fmt.Errorf("install: %s not installed/runnable at %s yet", client.ID, dest)
+			}
+			return nil
+		},
+	}
+}
+
+// ---------------------------------------------------------------------
+// snapshot
+// ---------------------------------------------------------------------
+
+// snapshotStep restores the execution client's datadir from Valve's
+// snapshot (`reth download`) for a fast sync. It runs AFTER the installs
+// (the reth binary must exist) and BEFORE wire, so the populated datadir is
+// covered by wire's recursive chown and is already in place when the
+// service first starts. A no-op unless the config opted in via
+// Wire.ExecSnapshot.
+func snapshotStep() Step {
+	return Step{
+		ID:    "snapshot",
+		Title: "Restore execution snapshot",
+		Run: func(ctx context.Context, e executor.Executor, st *State) error {
+			w := st.Wire
+			if !w.ExecSnapshot {
+				return nil
+			}
+			// Defensive: the UI should never offer snapshot for a client
+			// without support, but fail clearly rather than running a reth
+			// command against some other client's datadir.
+			client, ok := catalog.ClientByID(w.ExecID)
+			if !ok || !client.SnapshotSupported {
+				return fmt.Errorf("snapshot: execution client %q does not support snapshot restore", w.ExecID)
+			}
+			opts := streamOpts(ctx, st, "snapshot")
+
+			mkdirCmd := "mkdir -p " + shQuote(w.DataDir)
+			res, err := e.Run(ctx, mkdirCmd, opts)
+			if err != nil {
+				return fmt.Errorf("snapshot: mkdir data dir: %w", err)
+			}
+			if res.ExitCode != 0 {
+				return fmt.Errorf("snapshot: mkdir %s failed (exit %d): %s", w.DataDir, res.ExitCode, strings.TrimSpace(res.Stderr))
+			}
+
+			cmd, err := catalog.RethDownloadCommand(w)
+			if err != nil {
+				return fmt.Errorf("snapshot: %w", err)
+			}
+			res, err = e.Run(ctx, cmd, opts)
+			if err != nil {
+				return fmt.Errorf("snapshot: reth download: %w", err)
+			}
+			if res.ExitCode != 0 {
+				return fmt.Errorf("snapshot: reth download failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+			}
+			return nil
+		},
+		Verify: func(ctx context.Context, e executor.Executor, st *State) error {
+			w := st.Wire
+			if !w.ExecSnapshot {
+				return nil
+			}
+			// Lenient marker: reth's datadir grows a db/ subdir once the
+			// snapshot has been unpacked into it.
+			res, err := e.Run(ctx, fmt.Sprintf("test -d %s", shQuote(path.Join(w.DataDir, "db"))), nil)
+			if err != nil {
+				return fmt.Errorf("snapshot: verify data dir: %w", err)
+			}
+			if res.ExitCode != 0 {
+				return fmt.Errorf("snapshot: restore hasn't populated %s yet (no db/ subdir)", w.DataDir)
 			}
 			return nil
 		},

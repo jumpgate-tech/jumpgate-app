@@ -81,6 +81,11 @@ type Client struct {
 	// RenderUnits' datadir flags must agree with it (see the golden
 	// agreement tests in catalog_test.go).
 	DataSubdirs []string
+
+	// SnapshotSupported is true for execution clients that can restore from
+	// Valve's free snapshot via `reth download` (reth only today), letting
+	// the operator fast-sync instead of syncing from genesis.
+	SnapshotSupported bool
 }
 
 // Networks returns the full catalog of supported chains.

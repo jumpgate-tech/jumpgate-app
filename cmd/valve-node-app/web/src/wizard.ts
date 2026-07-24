@@ -72,6 +72,11 @@ interface State {
   checkpoint: boolean;
   checkpointUrl: string;
   checkpointUrlError: string | null;
+  // Execution-client snapshot restore (only offered when the selected exec
+  // client's catalog entry has snapshotSupported).
+  execSnapshot: boolean;
+  snapshotKey: string;
+  snapshotKeyError: string | null;
   starting: boolean;
   startError: string | null;
   events: api.SetupEvent[];
@@ -107,6 +112,9 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     checkpoint: true,
     checkpointUrl: "",
     checkpointUrlError: null,
+    execSnapshot: false,
+    snapshotKey: "",
+    snapshotKeyError: null,
     starting: false,
     startError: null,
     events: [],
@@ -139,6 +147,9 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
       void probeDisk();
     } else if (t.id === "checkpoint-toggle") {
       state.checkpoint = t.checked;
+      render();
+    } else if (t.id === "exec-snapshot-toggle") {
+      state.execSnapshot = t.checked;
       render();
     }
   });
@@ -389,6 +400,7 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
   function renderModeStep(): string {
     const defaultDataDir = state.chainId !== null ? `/var/lib/valve-node-app/${state.chainId}` : "";
     const net = state.catalog?.networks.find((n) => n.ChainID === state.chainId);
+    const execSnapshotSupported = state.catalog?.clients.find((c) => c.id === state.execId)?.snapshotSupported ?? false;
     const archiveTB = net?.ArchiveSizeTB ?? 0;
     const fullSizeCell = net ? approxSize(archiveTB / 2) : "Smaller";
     const archiveSizeCell = net ? approxSize(archiveTB) : "Much larger";
@@ -407,8 +419,9 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
         <div class="config-block">
           <label class="radio">
             <input type="checkbox" id="checkpoint-toggle" ${state.checkpoint ? "checked" : ""} />
-            <span><strong>Checkpoint sync</strong> — start near the chain head in minutes (recommended). Uncheck to sync the beacon chain from genesis: fully trustless, but much slower.</span>
+            <span><strong>Consensus checkpoint sync (beacon client)</strong> — start near the chain head in minutes (recommended). Uncheck to sync the beacon chain from genesis: fully trustless, but much slower.</span>
           </label>
+          <p class="muted small">This applies to the beacon/consensus client (e.g. lighthouse-pulse) — not the execution client, which uses a snapshot below.</p>
           ${net ? `<p class="sync-estimate">⏱ Estimated initial sync${netLabel}: <strong>${escapeHtml(syncEstimate)}</strong></p>
                    <p class="muted small">Scales with the target's CPU and disk speed.</p>` : ""}
           ${
@@ -422,6 +435,24 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
               : `<p class="muted small">The beacon client will validate every block from genesis — no trusted checkpoint, but this can take days.</p>`
           }
         </div>
+
+        ${execSnapshotSupported ? `
+        <div class="config-block">
+          <label class="radio">
+            <input type="checkbox" id="exec-snapshot-toggle" ${state.execSnapshot ? "checked" : ""} />
+            <span><strong>Restore from Valve's execution snapshot</strong> — fast sync (~hours) instead of syncing from genesis (~days).</span>
+          </label>
+          ${
+            state.execSnapshot
+              ? `<label>
+                   Snapshot key
+                   <input id="snapshot-key-input" type="text" placeholder="vk_…" value="${escapeHtml(state.snapshotKey)}" />
+                 </label>
+                 ${state.snapshotKeyError ? `<p class="error small">${escapeHtml(state.snapshotKeyError)}</p>` : ""}
+                 <p class="muted small">Get a free key at <a href="https://valve.city" target="_blank" rel="noopener noreferrer">valve.city</a>.</p>`
+              : ""
+          }
+        </div>` : ""}
 
         <details class="advanced">
           <summary>Full — current-state lookups (recent blocks) · Archive — full historical state &amp; indexing</summary>
@@ -615,6 +646,7 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
             ? `<p class="ok">Setup complete. <a href="#/dash/${encodeURIComponent(state.targetId)}">Open the dashboard →</a></p>`
             : ""
         }
+        ${state.startError ? `<p class="error">${escapeHtml(state.startError)}</p>` : ""}
         ${anyError ? `<button class="btn" data-action="start-setup">Retry setup</button>` : ""}
       </section>
     `;
@@ -649,7 +681,8 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
           state.beaconHTTPPortError ||
           state.execP2PPortError ||
           state.rpcBindAddrError ||
-          state.checkpointUrlError
+          state.checkpointUrlError ||
+          state.snapshotKeyError
         ) {
           render();
           break;
@@ -686,11 +719,17 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     const checkpointUrlInput = root.querySelector<HTMLInputElement>("#checkpoint-url-input");
     if (checkpointUrlInput) state.checkpointUrl = checkpointUrlInput.value.trim();
 
+    const snapshotKeyInput = root.querySelector<HTMLInputElement>("#snapshot-key-input");
+    if (snapshotKeyInput) state.snapshotKey = snapshotKeyInput.value.trim();
+
     state.execHTTPPortError = parsePort(state.execHTTPPort).error ?? null;
     state.beaconHTTPPortError = parsePort(state.beaconHTTPPort).error ?? null;
     state.execP2PPortError = parsePort(state.execP2PPort).error ?? null;
     state.rpcBindAddrError = parseBindAddr(state.rpcBindAddr).error ?? null;
     state.checkpointUrlError = state.checkpoint ? validateCheckpointUrl(state.checkpointUrl) : null;
+    state.snapshotKeyError = state.execSnapshot && !state.snapshotKey.trim()
+      ? "A free snapshot key is required (get one at valve.city)."
+      : null;
   }
 
   // parseBindAddr validates an optional RPC bind address: empty means the
@@ -749,8 +788,16 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
 
   async function startSetup(): Promise<void> {
     if (state.chainId === null || !state.execId || !state.beaconId) return;
+    // Reset run-step state up front — this is what makes "Retry setup"
+    // actually retry: without clearing events/startError and stopping any
+    // stale stream here, a second click could leave the previous run's
+    // failed events on screen (making the UI look unchanged) even once a
+    // fresh POST + stream are issued below.
     state.starting = true;
     state.startError = null;
+    state.events = [];
+    state.streamStop?.();
+    state.streamStop = null;
     render();
 
     const wire: api.StartSetupRequest = {
@@ -775,6 +822,11 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     if (!state.checkpoint) wire.NoCheckpoint = true;
     else if (state.checkpointUrl) wire.CheckpointURL = state.checkpointUrl;
 
+    if (state.execSnapshot) {
+      wire.ExecSnapshot = true;
+      wire.SnapshotKey = state.snapshotKey;
+    }
+
     try {
       await api.startSetup(state.targetId, wire);
     } catch (err) {
@@ -791,9 +843,7 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
 
     state.starting = false;
     state.step = "run";
-    state.events = [];
     render();
-    state.streamStop?.();
     state.streamStop = api.streamSetup(state.targetId, (ev) => {
       if (disposed) return;
       state.events.push(ev);
