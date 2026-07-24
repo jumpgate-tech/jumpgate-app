@@ -41,6 +41,16 @@ type WireConfig struct {
 	// genesis instead (--checkpoint-sync-url is omitted). The genesis
 	// beacon-api URL is still passed so genesis state can be fetched.
 	NoCheckpoint bool
+
+	// eRPC (optional RPC gateway in front of the node). When ERPCEnabled,
+	// setup installs and runs eRPC as a managed service with the local node
+	// as the primary upstream and ERPCUpstreams as archive/backup
+	// fallbacks. ERPCPort (0=4000) and ERPCBindAddr (""=127.0.0.1) resolve
+	// via ERPCHTTP()/ERPCBind().
+	ERPCEnabled   bool
+	ERPCPort      int
+	ERPCBindAddr  string
+	ERPCUpstreams []string
 }
 
 // checkpointURL resolves the effective beacon checkpoint/genesis endpoint:
