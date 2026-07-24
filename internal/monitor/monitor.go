@@ -278,8 +278,17 @@ func beaconPeerCountCmd(addr string) string {
 	return fmt.Sprintf("curl -s -m 5 %s/eth/v1/node/peer_count", addr)
 }
 
+// diskCmd probes disk-used-percent for dir, walking up to the nearest
+// existing ancestor directory first — dir (the node's data dir) may not
+// exist yet (e.g. before setup has run), and `df` against a missing path
+// errors/returns nothing, which would otherwise be misread as 0% used.
+// Mirrors the ancestor-walk internal/ops's diskFreeBytes and internal/setup's
+// preflight check use for the free-bytes probe.
 func diskCmd(dir string) string {
-	return fmt.Sprintf("df --output=pcent %s | tail -1", shQuote(dir))
+	return fmt.Sprintf(
+		`d=%s; while [ ! -d "$d" ]; do d=$(dirname "$d"); done; df --output=pcent "$d" | tail -1`,
+		shQuote(dir),
+	)
 }
 
 func activeCmd() string {
