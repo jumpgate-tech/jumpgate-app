@@ -25,6 +25,12 @@ export interface Network {
   // ArchiveSizeTB is the archive-tier dataset size in decimal TB; the
   // full(pruned) tier is estimated as half this (mirrors Go ExpectedBytes).
   ArchiveSizeTB: number;
+  // Human sync-time estimates: SyncLabel for a snapshot-assisted sync
+  // (a full/pruned node), GenesisSyncLabel for a from-genesis sync (what an
+  // archive node generally needs). Baseline figures — real time scales with
+  // CPU and disk speed.
+  SyncLabel: string;
+  GenesisSyncLabel: string;
 }
 
 export interface CatalogClient {
