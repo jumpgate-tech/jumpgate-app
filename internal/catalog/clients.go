@@ -77,6 +77,25 @@ var clients = map[string]Client{
 			`/usr/local/bin/erigon-pulse --version`,
 		LearnURL:    learnBaseURL,
 		DataSubdirs: []string{"chaindata", "snapshots"},
+		// Gotcha ported from clients.ts' erigon-pulse diversityNote:
+		//
+		//	"on erigon-pulse **older than v2.3.0** add `--externalcl` to
+		//	 disable the experimental internal consensus layer; from
+		//	 v2.3.0 it is off by default."
+		//
+		// Deliberately NOT applied automatically to the rendered unit.
+		// BuildCmd above clones the repo's default branch at depth 1, which
+		// is far past v2.3.0, so on anything this app actually builds the
+		// internal CL is already off and --externalcl is at best redundant
+		// — and at worst fatal, since a flag a newer erigon has dropped
+		// makes the binary exit at startup rather than degrade. Adding it
+		// blindly would break the common case to fix a case we never
+		// produce. It matters only to an operator who pins an old tag or
+		// brings their own pre-v2.3.0 binary, so it is recorded as
+		// metadata for them rather than baked into the command line.
+		Gotchas: []string{
+			"Only on erigon-pulse older than v2.3.0: add --externalcl to disable the experimental internal consensus layer. From v2.3.0 it is off by default, and valve-node-app builds from the default branch, so the units it renders do not pass it.",
+		},
 	},
 	"geth": {
 		ID:         "geth",
@@ -100,11 +119,32 @@ var clients = map[string]Client{
 		ReleaseURL: noReleaseURL,
 		PinVersion: "main",
 		Toolchain:  "rust",
+		// The RUSTUP_TOOLCHAIN=1.81.0 pin is not decoration: it is ported
+		// verbatim from clients.ts' lighthouse-pulse build recipe
+		//
+		//	RUSTUP_TOOLCHAIN=1.81.0 cargo build --release --bin lighthouse
+		//
+		// and it was missing here, so the build used whatever rustc the
+		// toolchain step's `rustup ... --profile minimal` happened to
+		// install (i.e. current stable, which drifts). lighthouse-pulse is
+		// a fork tracking an older upstream; new stable toolchains reject
+		// it. Without the pin this build fails on a fresh box for reasons
+		// that look nothing like "wrong Rust version".
+		//
+		// The `rustup toolchain install` in front is needed because
+		// RUSTUP_TOOLCHAIN only *selects* a toolchain — a rustup proxy
+		// errors out if that toolchain was never installed, and the
+		// toolchain step installs exactly one (stable). It is guarded on
+		// rustup existing and `|| true`d so a box whose cargo came from
+		// somewhere other than rustup degrades to today's behaviour
+		// (RUSTUP_TOOLCHAIN is then just an ignored env var) instead of
+		// failing outright.
 		BuildCmd: `rm -rf /tmp/build-lighthouse-pulse && ` +
 			`git clone --depth 1 https://github.com/valve-tech/lighthouse-pulse.git /tmp/build-lighthouse-pulse && ` +
 			`cd /tmp/build-lighthouse-pulse && ` +
 			`{ . "$HOME/.cargo/env" 2>/dev/null || true; } && ` +
-			`cargo build --release --bin lighthouse && ` +
+			`{ command -v rustup >/dev/null 2>&1 && rustup toolchain install 1.81.0 || true; } && ` +
+			`RUSTUP_TOOLCHAIN=1.81.0 cargo build --release --bin lighthouse && ` +
 			`install -m 0755 target/release/lighthouse /usr/local/bin/lighthouse-pulse && ` +
 			`/usr/local/bin/lighthouse-pulse --version`,
 		LearnURL:    learnBaseURL,

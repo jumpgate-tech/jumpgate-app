@@ -300,7 +300,14 @@ func TestRenderUnits_ErigonPulseArchiveFlags(t *testing.T) {
 // short-circuiting: if the preceding clone/cd fails, cargo must never run.
 func TestRustBuildCmd_CargoEnvSourcing_NoSubshell(t *testing.T) {
 	rustClients := []string{"reth", "lighthouse-pulse", "lighthouse"}
-	wantGroup := `{ . "$HOME/.cargo/env" 2>/dev/null || true; } && cargo`
+	// The assertion is on the brace group and its `&&` chaining, NOT on
+	// `cargo` appearing immediately after it: lighthouse-pulse legitimately
+	// interposes a `rustup toolchain install` and a RUSTUP_TOOLCHAIN=…
+	// assignment (see clients.go) between the sourcing and the build. What
+	// must not regress is the grouping form — a parenthesized subshell here
+	// would throw away the PATH edit before cargo ever runs.
+	wantGroup := `{ . "$HOME/.cargo/env" 2>/dev/null || true; } && `
+	badSubshell := `(. "$HOME/.cargo/env"`
 
 	for _, id := range rustClients {
 		id := id
@@ -311,6 +318,15 @@ func TestRustBuildCmd_CargoEnvSourcing_NoSubshell(t *testing.T) {
 			}
 			if !strings.Contains(c.BuildCmd, wantGroup) {
 				t.Fatalf("client %q BuildCmd does not contain brace-group cargo-env sourcing %q:\n%s", id, wantGroup, c.BuildCmd)
+			}
+			if strings.Contains(c.BuildCmd, badSubshell) {
+				t.Fatalf("client %q BuildCmd sources cargo env in a subshell %q — the PATH edit dies with it:\n%s", id, badSubshell, c.BuildCmd)
+			}
+			// The cargo build must still be `&&`-chained after the sourcing,
+			// so it can never run without it.
+			after := c.BuildCmd[strings.Index(c.BuildCmd, wantGroup)+len(wantGroup):]
+			if !strings.Contains(after, "cargo build --release") {
+				t.Fatalf("client %q BuildCmd has no `cargo build --release` chained after the cargo-env sourcing:\n%s", id, c.BuildCmd)
 			}
 
 			// Build a scratch HOME with a fake ~/.cargo/env (mimicking rustup's
@@ -589,11 +605,13 @@ func TestClients_DataSubdirsAgreeWithRenderedUnits(t *testing.T) {
 
 // TestNetworks_SizeAndSyncLabels locks in the size/label data ported
 // verbatim from packages/web/src/learn/data/networks.ts, per the interface
-// block in task-1-brief.md.
+// block in task-1-brief.md. snapshotSizeTB below is that file's
+// `snapshot.sizeTB` — the size of Valve's reth snapshot artifact, which is
+// the only size figure the learn data publishes.
 func TestNetworks_SizeAndSyncLabels(t *testing.T) {
 	cases := []struct {
 		chainID          int
-		archiveSizeTB    float64
+		snapshotSizeTB   float64
 		syncLabel        string
 		genesisSyncLabel string
 	}{
@@ -606,8 +624,8 @@ func TestNetworks_SizeAndSyncLabels(t *testing.T) {
 		if !ok {
 			t.Fatalf("NetworkByChainID(%d) not found", tc.chainID)
 		}
-		if net.ArchiveSizeTB != tc.archiveSizeTB {
-			t.Errorf("chain %d ArchiveSizeTB = %v, want %v", tc.chainID, net.ArchiveSizeTB, tc.archiveSizeTB)
+		if net.SnapshotSizeTB != tc.snapshotSizeTB {
+			t.Errorf("chain %d SnapshotSizeTB = %v, want %v", tc.chainID, net.SnapshotSizeTB, tc.snapshotSizeTB)
 		}
 		if net.SyncLabel != tc.syncLabel {
 			t.Errorf("chain %d SyncLabel = %q, want %q", tc.chainID, net.SyncLabel, tc.syncLabel)
@@ -618,9 +636,15 @@ func TestNetworks_SizeAndSyncLabels(t *testing.T) {
 	}
 }
 
-// TestExpectedBytes_MatchesSpec locks in ExpectedBytes' archive and full
-// (half-archive) figures as exact byte counts, ported verbatim from
-// packages/web/src/learn/data/networks.ts's snapshot.sizeTB.
+// TestExpectedBytes_MatchesSpec locks in ExpectedBytes' exact byte counts.
+// The archive figures are networks.ts's snapshot.sizeTB verbatim (Valve's
+// reth snapshot size); the full figures are those scaled by
+// fullTierFraction, which is an unsourced placeholder — see its doc
+// comment. This test exists so that placeholder cannot drift by accident:
+// internal/setup's preflight disk floor is derived from these numbers, so
+// changing them changes which machines pass preflight. Changing them
+// deliberately (once real per-client figures exist) means changing this
+// table in the same commit, on purpose.
 func TestExpectedBytes_MatchesSpec(t *testing.T) {
 	cases := []struct {
 		chainID   int
@@ -648,6 +672,77 @@ func TestExpectedBytes_MatchesSpec(t *testing.T) {
 func TestExpectedBytes_UnknownChainErrors(t *testing.T) {
 	if _, err := ExpectedBytes(9999, true); err == nil {
 		t.Fatal("ExpectedBytes(9999, true) expected error for unknown chain id, got nil")
+	}
+}
+
+// TestLighthousePulse_RustToolchainPinned locks in the RUSTUP_TOOLCHAIN
+// pin that packages/web/src/learn/data/clients.ts specifies for
+// lighthouse-pulse:
+//
+//	RUSTUP_TOOLCHAIN=1.81.0 cargo build --release --bin lighthouse
+//
+// It was absent from BuildCmd, so the fork built against whatever stable
+// rustc the toolchain step installed — a moving target that eventually
+// stops compiling an older fork. The pin only helps if the toolchain is
+// actually installed, hence the paired `rustup toolchain install`.
+func TestLighthousePulse_RustToolchainPinned(t *testing.T) {
+	c, ok := ClientByID("lighthouse-pulse")
+	if !ok {
+		t.Fatal(`ClientByID("lighthouse-pulse") not found`)
+	}
+	if !strings.Contains(c.BuildCmd, "RUSTUP_TOOLCHAIN=1.81.0 cargo build --release --bin lighthouse") {
+		t.Errorf("lighthouse-pulse BuildCmd does not pin Rust to 1.81.0 per clients.ts:\n%s", c.BuildCmd)
+	}
+	if !strings.Contains(c.BuildCmd, "rustup toolchain install 1.81.0") {
+		t.Errorf("lighthouse-pulse BuildCmd pins RUSTUP_TOOLCHAIN but never installs that toolchain, so a rustup proxy would error:\n%s", c.BuildCmd)
+	}
+	// The install must not be able to abort the build chain on a box where
+	// cargo did not come from rustup (no rustup binary present).
+	if !strings.Contains(c.BuildCmd, `{ command -v rustup >/dev/null 2>&1 && rustup toolchain install 1.81.0 || true; }`) {
+		t.Errorf("lighthouse-pulse BuildCmd's rustup toolchain install is not guarded/tolerant, so a non-rustup box would fail the whole build:\n%s", c.BuildCmd)
+	}
+}
+
+// TestErigonPulse_ExternalCLGotchaRecordedNotApplied pins both halves of
+// the --externalcl decision. clients.ts records that erigon-pulse older
+// than v2.3.0 needs --externalcl to disable its experimental internal
+// consensus layer; from v2.3.0 it is off by default. valve-node-app builds
+// from the default branch (>= v2.3.0), so the flag must be documented for
+// operators on old builds but must NOT appear in any rendered unit, where
+// it would be redundant at best and a startup-time unknown-flag error at
+// worst.
+func TestErigonPulse_ExternalCLGotchaRecordedNotApplied(t *testing.T) {
+	c, ok := ClientByID("erigon-pulse")
+	if !ok {
+		t.Fatal(`ClientByID("erigon-pulse") not found`)
+	}
+	var found bool
+	for _, g := range c.Gotchas {
+		if strings.Contains(g, "--externalcl") && strings.Contains(g, "v2.3.0") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("erigon-pulse has no Gotchas entry documenting the pre-v2.3.0 --externalcl requirement; got %q", c.Gotchas)
+	}
+
+	for _, chainID := range []int{369, 943} {
+		w := WireConfig{
+			ChainID:  chainID,
+			ExecID:   "erigon-pulse",
+			BeaconID: "lighthouse-pulse",
+			DataDir:  "/data",
+			JWTPath:  "/data/jwt.hex",
+		}
+		execUnit, beaconUnit, err := RenderUnits(w)
+		if err != nil {
+			t.Fatalf("RenderUnits(chain %d): %v", chainID, err)
+		}
+		for name, unit := range map[string]string{"exec": execUnit, "beacon": beaconUnit} {
+			if strings.Contains(unit, "--externalcl") {
+				t.Errorf("chain %d %s unit passes --externalcl, but we build erigon-pulse from the default branch (>= v2.3.0) where the internal CL is already off:\n%s", chainID, name, unit)
+			}
+		}
 	}
 }
 

@@ -8,6 +8,14 @@ const learnBaseURL = "https://learn.valve.city/rpc"
 // networks is the source of truth for supported chains. Chain ids,
 // checkpoint URLs, and the exec/beacon client ids valid on each are ported
 // verbatim from packages/web/src/learn/data/networks.ts.
+//
+// SnapshotSizeTB below is that file's `snapshot.sizeTB` — the size of
+// Valve's reth snapshot artifact for the chain, and nothing more. It was
+// previously imported under the name ArchiveSizeTB, which quietly turned a
+// reth-artifact size into a claim about what any archive node costs; it
+// isn't one. See the field's doc comment on Network for the full caveat,
+// and note there is still NO per-client size data in the learn source for
+// go-pulse, erigon-pulse or geth, so none is invented here.
 var networks = []Network{
 	{
 		ChainID:          1,
@@ -16,7 +24,7 @@ var networks = []Network{
 		ExecClients:      []string{"reth", "geth"},
 		BeaconClients:    []string{"lighthouse"},
 		LearnURL:         learnBaseURL,
-		ArchiveSizeTB:    3.6,
+		SnapshotSizeTB:   3.6, // networks.ts: snapshot.rethChain "mainnet"
 		SyncLabel:        "~12 hrs (snapshot)",
 		GenesisSyncLabel: "~10 days (genesis)",
 	},
@@ -27,7 +35,7 @@ var networks = []Network{
 		ExecClients:      []string{"reth", "go-pulse", "erigon-pulse"},
 		BeaconClients:    []string{"lighthouse-pulse", "prysm-pulse"},
 		LearnURL:         learnBaseURL,
-		ArchiveSizeTB:    3.9,
+		SnapshotSizeTB:   3.9, // networks.ts: snapshot.rethChain "pulsechain"
 		SyncLabel:        "< 1 day (snapshot)",
 		GenesisSyncLabel: "~8 days (genesis)",
 	},
@@ -38,7 +46,7 @@ var networks = []Network{
 		ExecClients:      []string{"reth", "go-pulse", "erigon-pulse"},
 		BeaconClients:    []string{"lighthouse-pulse", "prysm-pulse"},
 		LearnURL:         learnBaseURL,
-		ArchiveSizeTB:    1.2,
+		SnapshotSizeTB:   1.2, // networks.ts: snapshot.rethChain "pulsechain-testnet-v4"
 		SyncLabel:        "~4 hrs (snapshot)",
 		GenesisSyncLabel: "~2 days (genesis)",
 	},

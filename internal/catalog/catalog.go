@@ -23,10 +23,32 @@ type Network struct {
 	BeaconClients []string // client ids valid as the beacon client on this chain
 	LearnURL      string
 
-	// ArchiveSizeTB is the archive-tier dataset size in terabytes, ported
-	// verbatim from learn.valve.city's snapshot.sizeTB. The full(pruned)
-	// tier is estimated as half this value — see ExpectedBytes.
-	ArchiveSizeTB float64
+	// SnapshotSizeTB is the size, in decimal terabytes, of *Valve's reth
+	// snapshot artifact* for this chain. Ported verbatim from
+	// packages/web/src/learn/data/networks.ts, where it is stored as
+	// `snapshot.sizeTB` under a comment that reads:
+	//
+	//	`snapshot` present ⇒ a Valve free snapshot exists (fast sync)
+	//
+	// Read that literally, because the field was previously misnamed
+	// ArchiveSizeTB and the misnomer propagated: this number is the size of
+	// ONE artifact — a reth database, cut at one particular block height,
+	// as published for `reth download`. It is not a survey of what a node
+	// costs on disk. Specifically it is NOT:
+	//
+	//   - a per-client figure. go-pulse, erigon-pulse and geth lay their
+	//     databases out completely differently (erigon in particular is
+	//     advertised by its own maintainers as far more compact for
+	//     archive), and the learn data publishes no size for any of them.
+	//   - a full-vs-archive figure. The learn data says nothing about which
+	//     pruning tier the snapshot corresponds to, and publishes no second
+	//     number to contrast it with.
+	//   - stable over time. A chain grows; the snapshot is re-cut.
+	//
+	// Everything the app derives from it for another client or another tier
+	// is an estimate, not a measurement — see fullTierFraction and
+	// ExpectedBytes, and keep the UI's wording honest about that.
+	SnapshotSizeTB float64
 	// SyncLabel and GenesisSyncLabel are the human sync-time estimates
 	// shown on learn.valve.city — SyncLabel for a snapshot-assisted sync,
 	// GenesisSyncLabel for a from-genesis sync.
@@ -34,21 +56,52 @@ type Network struct {
 	GenesisSyncLabel string
 }
 
+// fullTierFraction is the fraction of Network.SnapshotSizeTB that
+// ExpectedBytes reports for the full(pruned) tier.
+//
+// THIS NUMBER HAS NO SOURCE. It is an unsourced placeholder, not a
+// measurement and not a figure taken from the learn data — the only size
+// the learn data publishes for a chain is the reth snapshot artifact's
+// (see Network.SnapshotSizeTB). "Half the snapshot" was chosen when the
+// size heuristic was first written and nothing has ever validated it, for
+// any client or any chain.
+//
+// It is kept, unchanged, for one reason only: internal/setup's preflight
+// disk floor is derived from ExpectedBytes (minDiskBytesFor = expected *
+// 1.10), so changing this silently changes which machines pass preflight.
+// Replacing a made-up number with a differently made-up number would be
+// churn, not an improvement.
+//
+// It lives here, alone, as a single named constant so that when real
+// figures do arrive the fix is mechanical: delete this constant and give
+// ExpectedBytes a per-(client, tier, chain) lookup. Do not scatter `/ 2`
+// back through the codebase; the UI mirrors this one value deliberately
+// (see FULL_TIER_FRACTION in cmd/valve-node-app/web/src/wizard.ts).
+const fullTierFraction = 0.5
+
 // ExpectedBytes returns the expected on-disk dataset size, in bytes, for a
 // chain at either the archive or full(pruned) tier. This is the single
 // shared implementation of the size heuristic — setup's preflight disk
-// check imports it rather than keeping its own copy. The full tier is
-// estimated as half the archive tier's size; there is no learn-data source
-// for a full-tier figure (see chainArchiveSizeTB's original comment in
-// setup/steps.go, now folded in here).
+// check imports it rather than keeping its own copy, so both agree by
+// construction.
+//
+// Be clear-eyed about what this returns. The archive tier reports Valve's
+// reth *snapshot* size for the chain, which is the only published figure
+// that exists (Network.SnapshotSizeTB) — it is reth-specific and says
+// nothing about go-pulse, erigon-pulse or geth. The full tier reports that
+// same figure scaled by fullTierFraction, which is an unsourced
+// placeholder. Treat both as a coarse floor for "is this disk plausibly
+// big enough", never as a promise of how much space a given client will
+// actually consume, and never present either to an operator as measured
+// fact.
 func ExpectedBytes(chainID int, archive bool) (uint64, error) {
 	net, ok := NetworkByChainID(chainID)
 	if !ok {
 		return 0, fmt.Errorf("catalog: no size guidance for chain id %d", chainID)
 	}
-	sizeTB := net.ArchiveSizeTB
+	sizeTB := net.SnapshotSizeTB
 	if !archive {
-		sizeTB /= 2
+		sizeTB *= fullTierFraction
 	}
 	return uint64(sizeTB * 1e12), nil
 }
@@ -86,6 +139,24 @@ type Client struct {
 	// Valve's free snapshot via `reth download` (reth only today), letting
 	// the operator fast-sync instead of syncing from genesis.
 	SnapshotSupported bool
+
+	// Gotchas records operator-facing caveats about running this client
+	// that the catalog knows but deliberately does not act on — typically
+	// because the caveat is conditional on a version or environment
+	// valve-node-app does not itself produce, so applying it
+	// unconditionally would be wrong (see erigon-pulse's --externalcl note
+	// in clients.go for the worked example).
+	//
+	// These are ported from the `diversityNote` prose on
+	// packages/web/src/learn/data/clients.ts, which is where the runbook
+	// records them for human readers. Each entry is a complete sentence
+	// aimed at an operator, not a flag fragment.
+	//
+	// Not yet on the wire: internal/server's catalog DTO would have to
+	// carry the field before the UI could show it. Until then this is
+	// documentation that at least lives next to the client it constrains,
+	// rather than only in a monorepo the node operator never reads.
+	Gotchas []string
 }
 
 // Networks returns the full catalog of supported chains.
