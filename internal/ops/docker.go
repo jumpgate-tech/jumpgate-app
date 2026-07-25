@@ -354,9 +354,33 @@ const (
 	// of provisioning is idempotent instead of spawning a second gateway.
 	ERPCContainerName = "valve-node-app-erpc"
 
-	// DefaultERPCImage is the pinned gateway image. Pinned, not :latest, for
-	// the same reason catalog.Client.PinVersion exists — an operator's
-	// gateway must not silently change version under them on a restart.
+	// ERPCSourceRepo and ERPCSourceRef pin the gateway's source. The image is
+	// BUILT ON THE TARGET from this ref rather than pulled, for three
+	// reasons: upstream eRPC has no WebSocket support at all, so a published
+	// upstream image is the wrong binary for us; valve-tech/erpc publishes no
+	// image (its CI builds and tests but never pushes); and a local build is
+	// native-arch by construction, which sidesteps the missing-arm64-image
+	// problem entirely instead of needing it solved.
+	//
+	// The ref is a full commit SHA, not the branch name. valve-ws is a moving
+	// feature branch based on an open upstream PR, so building from the
+	// branch head would silently change an operator's gateway between runs.
+	// This SHA is the exact commit whose WebSocket support was verified end
+	// to end (eth_subscribe newHeads through a real container).
+	ERPCSourceRepo = "https://github.com/valve-tech/erpc.git"
+	ERPCSourceRef  = "e909aacb462120e39db8d9a285dff4cde596425f"
+
+	// erpcImageRepo is the local tag the built image carries. It is tagged by
+	// source SHA so a rebuild is skippable when the image already exists, and
+	// so bumping ERPCSourceRef produces a distinct image rather than silently
+	// replacing one that containers may still reference.
+	erpcImageRepo = "valve-node-app/erpc"
+
+	// DefaultERPCImage is the pulled fallback for operators who would rather
+	// not build. It is UPSTREAM eRPC and therefore has NO WebSocket support —
+	// eth_subscribe against a gateway running this image fails with
+	// ErrNoWsUpstreamAvailable. Only correct when the gateway is used purely
+	// for request/response RPC.
 	DefaultERPCImage = "ghcr.io/erpc/erpc:0.1.1"
 
 	// erpcContainerConfigPath is where the host's erpc.yaml is mounted
@@ -436,7 +460,10 @@ func ERPCRunArgs(spec ERPCRunSpec) []string {
 	}
 	image := spec.Image
 	if image == "" {
-		image = DefaultERPCImage
+		// The built-from-source image, not the upstream pull: upstream eRPC
+		// cannot do WebSocket, and a gateway that silently drops
+		// eth_subscribe is worse than one that fails to start.
+		image = ERPCImageTag()
 	}
 	hostPort := spec.HostPort
 	if hostPort == 0 {
@@ -704,4 +731,110 @@ func firstNonEmptyLine(streams ...string) string {
 		}
 	}
 	return ""
+}
+
+// ---------------------------------------------------------------------
+// building the gateway image on the target
+// ---------------------------------------------------------------------
+//
+// Publishing multi-arch images for the valve forks would be a nicer setup
+// experience, but it is not a prerequisite and treating it as one was a
+// mistake. Building on the target removes the dependency entirely and is
+// native-arch by construction, so the absence of arm64 images stops being a
+// problem to solve rather than one to work around. It is also what this
+// codebase already does everywhere else: every catalog.Client installs by
+// source build.
+//
+// Docker builds straight from a git ref, so there is no clone step to manage:
+// measured at ~83s cold for the gateway and ~1s when the layers are cached.
+
+// ERPCImageTag is the local tag the gateway image is built as, derived from
+// the pinned source SHA so that bumping ERPCSourceRef yields a distinct image
+// and an unchanged ref makes the build skippable.
+func ERPCImageTag() string {
+	ref := ERPCSourceRef
+	if len(ref) > 8 {
+		ref = ref[:8]
+	}
+	return erpcImageRepo + ":" + ref
+}
+
+// ERPCBuildContext is the git build context docker resolves the source from.
+// A full commit SHA is a valid ref here, which is what makes the build
+// reproducible against a moving feature branch.
+func ERPCBuildContext() string {
+	return ERPCSourceRepo + "#" + ERPCSourceRef
+}
+
+// ImageBuildSpec is everything the pure build-arg renderer needs.
+type ImageBuildSpec struct {
+	// Tag is the image tag to produce ("" → ERPCImageTag()).
+	Tag string
+	// Context is a git URL with a #ref, or a directory on the target
+	// ("" → ERPCBuildContext()).
+	Context string
+	// Platform is the target platform, e.g. "linux/arm64" ("" →
+	// DefaultPlatform()). Omitted entirely when no architecture is
+	// recognizable, for the same reason ERPCRunArgs omits it: a wrong
+	// --platform turns correct manifest selection into a hard failure.
+	Platform string
+}
+
+// ImageBuildArgs renders the docker build argv. Pure, so the argv is testable
+// without a daemon.
+func ImageBuildArgs(spec ImageBuildSpec) []string {
+	tag := spec.Tag
+	if tag == "" {
+		tag = ERPCImageTag()
+	}
+	buildCtx := spec.Context
+	if buildCtx == "" {
+		buildCtx = ERPCBuildContext()
+	}
+	platform := spec.Platform
+	if platform == "" {
+		platform = DefaultPlatform()
+	}
+
+	args := []string{"build"}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	// The context goes last: docker treats the first non-flag argument as
+	// the context, so an option appended after it would be read as a second
+	// context and rejected.
+	return append(args, "-t", tag, buildCtx)
+}
+
+// ImageExists reports whether tag is already present on the target, so a
+// re-run of provisioning skips a rebuild rather than repeating it. `docker
+// image inspect` is used rather than `docker images -q` because it
+// distinguishes "absent" (non-zero exit) from "daemon unreachable" (an error
+// on the command itself).
+func ImageExists(ctx context.Context, e executor.Executor, tag string) (bool, error) {
+	res, err := e.Run(ctx, "docker image inspect "+shQuote(tag)+" --format '{{.Id}}'", nil)
+	if err != nil {
+		return false, fmt.Errorf("ops: docker image inspect %s: %w", tag, err)
+	}
+	return res.ExitCode == 0 && strings.TrimSpace(res.Stdout) != "", nil
+}
+
+// BuildImage runs a docker build on the target. Each argv element is quoted at
+// the sh -c boundary, matching DockerRun.
+func BuildImage(ctx context.Context, e executor.Executor, args ...string) (executor.Result, error) {
+	quoted := make([]string, 0, len(args)+1)
+	quoted = append(quoted, "docker")
+	for _, a := range args {
+		quoted = append(quoted, shQuote(a))
+	}
+	cmd := strings.Join(quoted, " ")
+	res, err := e.Run(ctx, cmd, nil)
+	if err != nil {
+		return res, fmt.Errorf("ops: docker build: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return res, fmt.Errorf("ops: docker build failed (exit %d): %s",
+			res.ExitCode, firstNonEmptyLine(res.Stderr, res.Stdout))
+	}
+	return res, nil
 }
