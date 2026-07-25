@@ -125,10 +125,15 @@ export function renderTargets(root: HTMLElement): () => void {
   async function addLocal(): Promise<void> {
     clearFormError();
     if (hostOS !== "linux") {
+      // Node setup needs systemd/apt/root, so it stops at preflight on a
+      // non-Linux host. Saying only that leaves the user stuck, so name the
+      // path that does work — an SSH target — rather than dead-ending them.
       const proceed = confirm(
         "This machine (" +
           hostOS +
-          ") isn't a Linux host, so node setup can't complete here — it's only useful for previewing the setup wizard. Add it anyway?",
+          ") isn't a Linux host, so node setup can't complete here — it's only useful for previewing the setup wizard.\n\n" +
+          "To actually run a node, add a Linux server instead — use “Add a server (SSH)”.\n\n" +
+          "Add this machine anyway?",
       );
       if (!proceed) return;
     }
