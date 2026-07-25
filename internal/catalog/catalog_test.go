@@ -891,20 +891,20 @@ func TestRenderERPCConfig_FullNode(t *testing.T) {
 	for _, want := range []string{
 		`httpHostV4: "127.0.0.1"`,
 		"httpPortV4: 4000",
+		// The networks block is what makes eRPC serve the chain at
+		// /main/evm/369; upstreams alone are not enough.
+		"architecture: evm",
 		"id: local-node",
-		"endpoint: http://127.0.0.1:8545",
+		`endpoint: "http://127.0.0.1:8545"`,
 		"chainId: 369",
 		"latestBlockMinus: 128",
-		"endpoint: https://rpc.pulsechain.com",
+		`endpoint: "https://rpc.pulsechain.com"`,
 		"tier:fallback",
 		"overall: 0.2",
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("config missing %q:\n%s", want, cfg)
 		}
-	}
-	if strings.Contains(cfg, "lower: null") {
-		t.Errorf("full node must not declare unbounded history:\n%s", cfg)
 	}
 }
 
@@ -915,8 +915,12 @@ func TestRenderERPCConfig_ArchiveUnbounded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderERPCConfig: %v", err)
 	}
-	if !strings.Contains(cfg, "lower: null") {
-		t.Errorf("archive node should declare unbounded history (lower: null):\n%s", cfg)
+	// eRPC treats a blockAvailability with no bounds as "feature off", so an
+	// archive node declares unbounded history by omitting the block entirely
+	// rather than by an explicit `lower: null` — omission cannot be misread
+	// as a present-but-empty bound.
+	if strings.Contains(cfg, "blockAvailability") {
+		t.Errorf("archive node must not declare block availability bounds:\n%s", cfg)
 	}
 	if strings.Contains(cfg, "latestBlockMinus") {
 		t.Errorf("archive node must not cap block availability:\n%s", cfg)
@@ -934,7 +938,7 @@ func TestRenderERPCConfig_BindPortAndRPCBind(t *testing.T) {
 	if !strings.Contains(cfg, `httpHostV4: "`+ip+`"`) || !strings.Contains(cfg, "httpPortV4: 8080") {
 		t.Errorf("server host/port not applied:\n%s", cfg)
 	}
-	if !strings.Contains(cfg, "endpoint: http://"+ip+":8545") {
+	if !strings.Contains(cfg, `endpoint: "http://`+ip+`:8545"`) {
 		t.Errorf("local upstream should follow the node's RPC bind:\n%s", cfg)
 	}
 }
