@@ -167,3 +167,46 @@ figures have to be measured or supplied, not guessed.
 Two gotchas in learn data are missing from the catalog: `lighthouse-pulse`
 pins `RUSTUP_TOOLCHAIN=1.81.0`, and `erigon-pulse` below v2.3.0 needs
 `--externalcl`.
+
+## Local devnet as the QA fixture
+
+A dev chain costs zero disk and needs no consensus client, which makes the
+whole lifecycle — start, restart, wipe, reconfigure — testable on any machine.
+`ghcr.io/paradigmxyz/reth` is multi-arch, so this works on Apple Silicon
+natively and sidesteps the missing arm64 PulseChain images entirely.
+
+Verified working invocation (blocks within ~10s, chain id 1337):
+
+```
+docker run -d --platform linux/arm64 --name vna-devnet -p 8545:8545 \
+  ghcr.io/paradigmxyz/reth:latest \
+  node --dev --dev.block-time 2s \
+  --http --http.addr 0.0.0.0 --http.port 8545 --http.api eth,net,web3,txpool
+```
+
+### Lifecycle results
+
+| Scenario | Result |
+| --- | --- |
+| Devnet start | blocks in ~10s, no chain data, no beacon client |
+| Gateway in front (config from `RenderGatewayConfig`) | serves the devnet correctly |
+| Chain stopped | structured `ErrUpstreamsExhausted`, cause chain names upstream id, host and transport failure |
+| Chain restarted | gateway recovers unattended — no restart needed |
+| Gateway restarted | fine |
+| **Chain wiped** | **gateway serves a stale head** |
+
+### The stale-head rule
+
+Wiping a chain and restarting it leaves a gateway in front of it advertising
+the old height. Measured: chain at block `0x4`, gateway still reporting `0x2c`.
+
+eRPC keeps a monotonic highest-block guard per network and will not go
+backwards, so it never detects the reset. It only appears to recover once the
+fresh chain overtakes the old high-water mark — about 40s on a 2s-block
+devnet, and effectively never for a real chain resyncing from genesis.
+
+This is silently wrong rather than an error: the gateway advertises a head the
+chain does not have, so a caller requesting that block gets nothing back.
+
+**A wipe must cascade a restart of whatever fronts the wiped service.** This
+belongs in the lifecycle layer, not in the operator's memory.
