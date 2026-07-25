@@ -99,6 +99,43 @@ func PlanGateway(g catalog.GatewayConfig, backend string) ([]Step, error) {
 	return []Step{p.preflightStep(), p.configStep(), p.runStep()}, nil
 }
 
+// GatewayService is the ops lifecycle descriptor for the docker-hosted eRPC
+// gateway: ops.ERPCService() plus the Create hook that package deliberately
+// leaves nil, because creating the container needs the rendered erpc.yaml
+// path, the resolved platform and the built image — all of which this plan
+// owns.
+//
+// Create writes the config and then runs the container, in that order and
+// through the plan's own step bodies rather than a second copy of them. Both
+// halves are necessary: a gateway container started against a missing
+// erpc.yaml comes up and then serves nothing, which reads as "the gateway is
+// running" everywhere a container state is displayed.
+//
+// The systemd backend is deliberately not offered here. A unit-hosted gateway
+// is not a container at all, so its lifecycle belongs to ops.ServiceAction
+// (systemctl), not to this file's docker verbs.
+func GatewayService(g catalog.GatewayConfig) ops.DockerService {
+	p := &gatewayPlan{gw: g, backend: BackendDocker}
+	s := ops.ERPCService()
+	s.Create = func(ctx context.Context, e executor.Executor) error {
+		// Rendering up front, exactly as PlanGateway does, so an unusable
+		// config (no networks, an endpoint with no scheme) fails before the
+		// image is built or a container is created.
+		if _, err := catalog.RenderGatewayConfig(g); err != nil {
+			return fmt.Errorf("gateway: %w", err)
+		}
+		// nil State: this path has no event stream to report into. emit and
+		// streamOpts are both nil-State safe precisely so one step body can
+		// run under RunAll and under a plain lifecycle call. runDocker
+		// resolves the platform and builds the image itself when needed.
+		if err := p.configStep().Run(ctx, e, nil); err != nil {
+			return err
+		}
+		return p.runDocker(ctx, e, nil)
+	}
+	return s
+}
+
 // gatewayPlan is the state the three steps share. It exists because Step's
 // funcs are handed a *State carrying a catalog.WireConfig — a node's config,
 // which cannot describe a gateway — so the gateway config travels by closure

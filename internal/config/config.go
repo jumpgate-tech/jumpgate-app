@@ -22,11 +22,31 @@ import (
 const defaultRefRPCBase = "https://rpc.valve.city/v1/vk_Et-4emAlBIym1PjiCogh5p7IuGtS-Rpj"
 
 // Target is one machine valve-node-app can set up and monitor a node on.
+//
+// Wire, Devnet and Gateway are three INDEPENDENT things a target may host,
+// not three spellings of one. A machine can run a devnet and nothing else, a
+// gateway in front of somebody else's node, or a full node with neither — so
+// each is its own optional pointer whose nil means "not configured here",
+// rather than fields on a single config that would have to be two-thirds
+// ignored depending on which one the operator actually asked for. See
+// catalog/devnet.go and catalog/gateway.go for why the three configs cannot
+// be collapsed into one.
 type Target struct {
 	ID   string              `json:"id"`   // "local" or a slug of the host
 	Mode string              `json:"mode"` // "local" | "ssh"
 	SSH  *executor.SSHConfig `json:"ssh,omitempty"`
 	Wire *catalog.WireConfig `json:"wire,omitempty"` // set once the wizard has run
+
+	// Devnet is the throwaway local chain this target hosts, if any. It is
+	// the DESIRED configuration, which is not the same as what is running:
+	// a container's ports and command line are fixed at creation, so an
+	// edited config only takes effect once the service is re-provisioned.
+	Devnet *catalog.DevnetConfig `json:"devnet,omitempty"`
+
+	// Gateway is the eRPC gateway this target hosts, if any. One gateway
+	// serves every chain listed in it, so this is deliberately not
+	// per-chain.
+	Gateway *catalog.GatewayConfig `json:"gateway,omitempty"`
 }
 
 // Config is valve-node-app's persisted local state.

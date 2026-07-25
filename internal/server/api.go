@@ -444,6 +444,9 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/targets/{id}/diagnostics", s.handleDiagnostics)
 	mux.HandleFunc("GET /api/targets/{id}/diagnostics/latest", s.handleDiagnosticsLatest)
 
+	// The docker-backed services (devnet, eRPC gateway) — see containers.go.
+	s.registerContainerRoutes(mux)
+
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 }
@@ -754,17 +757,10 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry := s.reg.get(id)
-	entry.mu.Lock()
-	if entry.setup != nil && entry.setup.running {
-		entry.mu.Unlock()
-		writeError(w, http.StatusConflict, "setup is already running for this target")
+	claimed, ok := s.claimSetupRun(w, id)
+	if !ok {
 		return
 	}
-	setupCtx, setupCancel := context.WithCancel(context.Background())
-	run := newSetupRun(setupCancel)
-	entry.setup = run
-	entry.mu.Unlock()
 
 	// The wizard "has run" as soon as setup is kicked off, even if it fails
 	// partway — the engine is idempotent (each step's Verify is also its
@@ -783,31 +779,78 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		// Undo the "running" mark: the run never actually started, so a
 		// retry must not be told setup is already in progress.
-		entry.mu.Lock()
-		entry.setup = nil
-		entry.mu.Unlock()
-		setupCancel()
+		s.releaseSetupRun(id, claimed)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	s.launchSetupRun(claimed, ex, steps, wire)
+
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
+// claimedRun is one reserved setup slot: the run every subscriber of
+// .../setup/stream will see, plus the context that cancels it.
+type claimedRun struct {
+	id     string
+	run    *setupRun
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// claimSetupRun reserves the target's single setup slot, answering 409 if one
+// is already in flight and returning false when it has already written a
+// response.
+//
+// There is exactly one slot per target, shared by the node wizard and by the
+// container services' provisioning (containers.go), because they all drive
+// the same executor against the same machine — and because the SSE stream
+// that reports progress is likewise per-target. Two runs interleaving would
+// produce one event stream describing two different things.
+func (s *Server) claimSetupRun(w http.ResponseWriter, id string) (claimedRun, bool) {
+	entry := s.reg.get(id)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.setup != nil && entry.setup.running {
+		writeError(w, http.StatusConflict, "setup is already running for this target")
+		return claimedRun{}, false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	run := newSetupRun(cancel)
+	entry.setup = run
+	return claimedRun{id: id, run: run, ctx: ctx, cancel: cancel}, true
+}
+
+// releaseSetupRun undoes a claim whose run never started, so a retry is not
+// told setup is already in progress.
+func (s *Server) releaseSetupRun(id string, c claimedRun) {
+	entry := s.reg.get(id)
+	entry.mu.Lock()
+	if entry.setup == c.run {
+		entry.setup = nil
+	}
+	entry.mu.Unlock()
+	c.cancel()
+}
+
+// launchSetupRun runs steps in the background, feeding every event into the
+// claimed run so .../setup/stream can replay and follow it.
+func (s *Server) launchSetupRun(c claimedRun, ex executor.Executor, steps []setup.Step, wire catalog.WireConfig) {
 	events := make(chan setup.Event, 32)
 	go func() {
 		for ev := range events {
-			run.append(ev)
+			c.run.append(ev)
 		}
 	}()
 	go func() {
 		defer close(events)
-		runErr := setup.RunAll(setupCtx, ex, steps, &setup.State{Wire: wire, Events: events})
-		run.finish(runErr)
+		runErr := setup.RunAll(c.ctx, ex, steps, &setup.State{Wire: wire, Events: events})
+		c.run.finish(runErr)
 		// Signal that this goroutine is done touching ex — registry.remove
 		// waits on this before Close()ing the executor out from under a
 		// still-running setup step.
-		close(run.done)
+		close(c.run.done)
 	}()
-
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
 func (s *Server) handleSetupStream(w http.ResponseWriter, r *http.Request) {

@@ -259,14 +259,28 @@ function targetCard(t: api.Target, catalog: api.Catalog, canRunNode: boolean, ho
   const modeLabel = t.mode === "local" ? "this machine" : "SSH";
   const location = t.mode === "ssh" && t.ssh ? `${escapeHtml(t.ssh.User)}@${escapeHtml(t.ssh.Host)}` : modeLabel;
 
+  // The container-backed services (devnet, gateway) are offered on EVERY
+  // machine, whatever its node status. That is not generosity, it is the
+  // actual capability: they are containers, so unlike a node they need no
+  // Linux host and no root — which makes them the one thing a macOS or
+  // Windows controller can genuinely run for itself. Hiding them behind
+  // "not set up" would be hiding the option that works.
+  const servicesLink = `<a class="btn btn-ghost" href="#/services/${encodeURIComponent(t.id)}">Devnet &amp; gateway</a>`;
+
   let statusLine: string;
   let actions: string;
   if (!wire && !canRunNode) {
     statusLine = `${badge("can't run a node", "warn")} ${badge(hostOS || "not Linux", "neutral")}`;
-    actions = `<a class="btn btn-ghost" href="#/setup/${encodeURIComponent(t.id)}">Preview setup wizard</a>`;
+    actions = `
+      ${servicesLink}
+      <a class="btn btn-ghost" href="#/setup/${encodeURIComponent(t.id)}">Preview setup wizard</a>
+    `;
   } else if (!wire) {
     statusLine = badge("not set up", "neutral");
-    actions = `<a class="btn" href="#/setup/${encodeURIComponent(t.id)}">Run setup wizard</a>`;
+    actions = `
+      <a class="btn" href="#/setup/${encodeURIComponent(t.id)}">Run setup wizard</a>
+      ${servicesLink}
+    `;
   } else {
     const net = catalog.networks.find((n) => n.ChainID === wire.ChainID);
     const netName = net ? net.Name : `chain ${wire.ChainID}`;
@@ -274,6 +288,7 @@ function targetCard(t: api.Target, catalog: api.Catalog, canRunNode: boolean, ho
     actions = `
       <a class="btn" href="#/dash/${encodeURIComponent(t.id)}">Dashboard</a>
       <a class="btn" href="#/logs/${encodeURIComponent(t.id)}">Logs</a>
+      ${servicesLink}
       <a class="btn btn-ghost" href="#/setup/${encodeURIComponent(t.id)}">Re-run setup</a>
     `;
   }

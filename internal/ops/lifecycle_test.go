@@ -771,3 +771,75 @@ func TestWipeService_CascadeIsTransitiveAndCycleSafe(t *testing.T) {
 		t.Fatalf("Cascaded: got %#v, want both hops nearest-first", rep.Cascaded)
 	}
 }
+
+// ---------------------------------------------------------------------
+// published ports
+// ---------------------------------------------------------------------
+
+// The reading that lets a caller print a URL that is TRUE rather than one
+// derived from a config the running container may predate.
+func TestPublishedPorts_ReadsTheLiveMapping(t *testing.T) {
+	f := newFakeExecutor()
+	f.script(dockerCmd(ContainerPortsArgs("valve-devnet")...), executor.Result{
+		Stdout: "8545/tcp=127.0.0.1:8600\n8546/tcp=127.0.0.1:8601\n",
+	})
+
+	got, err := PublishedPorts(context.Background(), f, "valve-devnet")
+	if err != nil {
+		t.Fatalf("PublishedPorts: %v", err)
+	}
+	if b := got[8545]; b.HostIP != "127.0.0.1" || b.HostPort != 8600 {
+		t.Fatalf("8545: got %+v, want 127.0.0.1:8600", b)
+	}
+	if b := got[8546]; b.HostPort != 8601 {
+		t.Fatalf("8546: got %+v, want host port 8601", b)
+	}
+}
+
+// An absent container is a reading, not a failure — the same treatment
+// ServiceStatus gives it, so a caller can ask this of anything.
+func TestPublishedPorts_AbsentContainerIsEmptyNotAnError(t *testing.T) {
+	f := newFakeExecutor()
+	f.script(dockerCmd(ContainerPortsArgs("gone")...), executor.Result{
+		ExitCode: 1,
+		Stderr:   "Error: No such object: gone",
+	})
+
+	got, err := PublishedPorts(context.Background(), f, "gone")
+	if err != nil {
+		t.Fatalf("PublishedPorts: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %+v, want no bindings", got)
+	}
+}
+
+func TestParsePublishedPorts(t *testing.T) {
+	for name, tc := range map[string]struct {
+		in   string
+		port int
+		want PortBinding
+	}{
+		"ipv4": {"4000/tcp=0.0.0.0:4100\n", 4000, PortBinding{HostIP: "0.0.0.0", HostPort: 4100}},
+		// A wildcard IPv6 binding is written "::", so splitting the host off
+		// at the FIRST colon would yield a port of ":4100".
+		"ipv6 wildcard": {"4000/tcp=:::4100\n", 4000, PortBinding{HostIP: "::", HostPort: 4100}},
+		// docker emits one line per binding; the first wins, because a caller
+		// needs one URL rather than a list of the same port twice.
+		"two bindings, first wins": {"4000/tcp=127.0.0.1:4100\n4000/tcp=:::4100\n", 4000, PortBinding{HostIP: "127.0.0.1", HostPort: 4100}},
+		"udp is kept":              {"30303/udp=0.0.0.0:30303\n", 30303, PortBinding{HostIP: "0.0.0.0", HostPort: 30303}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := parsePublishedPorts(tc.in)
+			if got[tc.port] != tc.want {
+				t.Fatalf("got %+v, want %+v", got[tc.port], tc.want)
+			}
+		})
+	}
+
+	// An EXPOSEd but unpublished port has no binding line at all, and junk is
+	// skipped rather than guessed at.
+	if got := parsePublishedPorts("9001/tcp\nnonsense\n\n"); len(got) != 0 {
+		t.Fatalf("got %+v, want nothing", got)
+	}
+}
