@@ -268,7 +268,19 @@ func (d DockerInfo) VMBacked() bool {
 // unameArchProbe asks the TARGET HOST's own shell what CPU it is on. It is
 // the second opinion EnginePlatform needs; see there for why one reading is
 // not enough.
-const unameArchProbe = "uname -m"
+//
+// `command -p` is load-bearing, not decoration: it runs uname from the
+// system's DEFAULT PATH, so a shim earlier in the operator's PATH cannot
+// answer for it. MEASURED failure this prevents — a macOS host with Homebrew
+// `coreutils` installed has an x86_64 GNU uname ahead of /usr/bin/uname, and
+// that binary (itself translated by Rosetta) reports "x86_64" on an Apple
+// Silicon machine. EnginePlatform then takes the host's word over the
+// engine's (the VM-backed rule below), resolves linux/amd64, and `docker run
+// --platform linux/amd64` of a locally built arm64 image does not fail with a
+// platform error — it reports "Unable to find image locally" and tries to
+// PULL, so the operator is shown a registry authentication failure for an
+// image sitting on their own disk.
+const unameArchProbe = "command -p uname -m"
 
 // PlatformForArch maps a CPU architecture name onto a docker `--platform`
 // value. It accepts every spelling this codebase meets: `docker info`'s and
@@ -389,13 +401,13 @@ const (
 	// braces rather than the only thing making this work.
 	erpcContainerConfigPath = "/erpc.yaml"
 
-	// erpcContainerPort is the port eRPC listens on INSIDE the container.
+	// ERPCContainerPort is the port eRPC listens on INSIDE the container.
 	// It is fixed at eRPC's own default (catalog's defaultERPCPort) and is
 	// deliberately not configurable: the container's port namespace is
 	// private, so there is nothing to avoid colliding with, and the
 	// operator's choice of port is expressed on the host side of the -p
 	// mapping instead.
-	erpcContainerPort = 4000
+	ERPCContainerPort = 4000
 
 	// DockerHostAlias is the DNS name that resolves to the container's host
 	// from inside a container. It is built in on Docker Desktop, OrbStack,
@@ -418,7 +430,7 @@ type ERPCRunSpec struct {
 	// only thing controlling who can reach the gateway; the in-container
 	// listener is always wide open on the container's private namespace.
 	BindAddr string
-	// HostPort is the host-side port (0 → erpcContainerPort).
+	// HostPort is the host-side port (0 → ERPCContainerPort).
 	HostPort int
 	// Platform is the image platform to run as, e.g. "linux/arm64"
 	// ("" → DefaultPlatform()). It must be set on RUN, not only on BUILD:
@@ -467,7 +479,7 @@ func ERPCRunArgs(spec ERPCRunSpec) []string {
 	}
 	hostPort := spec.HostPort
 	if hostPort == 0 {
-		hostPort = erpcContainerPort
+		hostPort = ERPCContainerPort
 	}
 	bind := spec.BindAddr
 	if bind == "" {
@@ -493,11 +505,25 @@ func ERPCRunArgs(spec ERPCRunSpec) []string {
 		args = append(args, "--add-host", DockerHostAlias+":host-gateway")
 	}
 	args = append(args,
-		"-p", publishSpec(bind, hostPort, erpcContainerPort),
+		"-p", publishSpec(bind, hostPort, ERPCContainerPort),
 		"-v", spec.HostConfigPath+":"+erpcContainerConfigPath+":ro",
 		image,
-		"--config", erpcContainerConfigPath,
 	)
+	// NOTHING is appended after the image ref, and that is a correction, not
+	// an omission. This used to end `image --config /erpc.yaml`, which reads
+	// as belt-and-braces and is in fact fatal: anything after the image ref
+	// REPLACES the image's CMD, and the gateway image built from
+	// ERPCBuildContext carries no ENTRYPOINT — its CMD *is* ["/erpc-server"].
+	// Overriding it left docker trying to exec a flag, and the container died
+	// at creation with:
+	//
+	//   exec: "--config": executable file not found in $PATH
+	//
+	// (measured against the image built from e909aacb). The config path is
+	// already the one the image looks in by default — that is why
+	// erpcContainerConfigPath is what it is — so the mount alone is what makes
+	// this work, on this image and on the upstream one, whichever of them
+	// declares its binary as an ENTRYPOINT and whichever as a CMD.
 	return args
 }
 
@@ -549,7 +575,7 @@ func ERPCRunSpecFor(w catalog.WireConfig, addHostGateway bool) ERPCRunSpec {
 // gateway and node share a network some other way).
 func ERPCContainerWire(w catalog.WireConfig, hostAlias string) catalog.WireConfig {
 	w.ERPCBindAddr = "0.0.0.0"
-	w.ERPCPort = erpcContainerPort
+	w.ERPCPort = ERPCContainerPort
 	if hostAlias != "" && isLoopbackAddr(w.RPCBind()) {
 		w.RPCBindAddr = hostAlias
 	}
@@ -576,7 +602,7 @@ func ERPCContainerWire(w catalog.WireConfig, hostAlias string) catalog.WireConfi
 func GatewayContainerConfig(g catalog.GatewayConfig, hostAlias string) catalog.GatewayConfig {
 	out := g
 	out.BindAddr = "0.0.0.0"
-	out.Port = erpcContainerPort
+	out.Port = ERPCContainerPort
 
 	out.Networks = make([]catalog.GatewayNetwork, len(g.Networks))
 	for i, n := range g.Networks {
