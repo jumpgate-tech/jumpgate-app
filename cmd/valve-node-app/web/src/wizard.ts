@@ -297,9 +297,53 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
   // dataset estimate.
   const FIT_MARGIN = 1.1;
 
+  // FULL_TIER_FRACTION mirrors Go's catalog.fullTierFraction — how much of
+  // the reth snapshot size we quote for the full(pruned) tier. It is an
+  // UNSOURCED PLACEHOLDER on both sides: no measurement backs it, for any
+  // client. It is duplicated here (rather than derived from the API) only
+  // so the fit maths the browser does agrees with the server's preflight
+  // floor exactly; if the Go constant changes, change this one too.
+  //
+  // Because it has no source, every place this fraction reaches the screen
+  // is labelled FULL_SIZE_BASIS below. Do not drop that label.
+  const FULL_TIER_FRACTION = 0.5;
+
+  // The two disk figures this step can show come from very different
+  // places, and the UI used to present both as plain fact. They are
+  // qualified inline instead:
+  //
+  //   - the archive figure IS a real measurement, but of one specific
+  //     thing: Valve's reth snapshot artifact for the chain. It says
+  //     nothing about go-pulse, erigon-pulse or geth.
+  //   - the full figure is that number times FULL_TIER_FRACTION, i.e. a
+  //     guess with no source at all.
+  const ARCHIVE_SIZE_BASIS = "Valve reth snapshot";
+  const FULL_SIZE_BASIS = "rough estimate";
+
+  // archiveTierTB / fullTierTB are the single place these two figures are
+  // derived, so the accordion, the radios, the disk readout and the
+  // downgrade note can never quote different numbers. Named for the TIER
+  // they describe, not for the datum: the archive tier merely happens to
+  // reuse the snapshot size today, and calling the accessor "archive size"
+  // is exactly the slip that produced the old ArchiveSizeTB misnomer.
+  function archiveTierTB(net: api.Network): number {
+    return net.SnapshotSizeTB;
+  }
+  function fullTierTB(net: api.Network): number {
+    return net.SnapshotSizeTB * FULL_TIER_FRACTION;
+  }
+
+  // sizeBasisNote spells out, once per step, where each figure comes from —
+  // so the qualifiers on the individual numbers are not cryptic.
+  function sizeBasisNote(net: api.Network): string {
+    return `<p class="muted small">${approxSize(archiveTierTB(net))} is the measured size of Valve's reth snapshot for ${escapeHtml(net.Name)}, at the block height it was cut. The full-tier figure is a rough estimate derived from it, not a measurement, and neither figure is client-specific — go-pulse, erigon-pulse and geth store the chain differently. Treat both as a sanity check on disk size, not a promise.</p>`;
+  }
+
   function tierNeeds(net: api.Network): { archive: number; full: number } {
-    const archive = net.ArchiveSizeTB * 1e12 * FIT_MARGIN;
-    return { archive, full: archive / 2 };
+    return {
+      archive: archiveTierTB(net) * 1e12 * FIT_MARGIN,
+      full: fullTierTB(net) * 1e12 * FIT_MARGIN,
+    };
   }
 
   // storageStatusHtml renders the free-disk readout for the chosen data
@@ -317,12 +361,12 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     const needs = tierNeeds(net);
     const archiveFits = state.freeBytes >= needs.archive;
     const fullFits = state.freeBytes >= needs.full;
-    const line = `<p class="muted small">Free at <code>${escapeHtml(path)}</code>: <strong>${fmtBytes(state.freeBytes)}</strong> — archive ${archiveFits ? "fits" : "won't fit"} (${approxSize(net.ArchiveSizeTB)}), full ${fullFits ? "fits" : "won't fit"} (${approxSize(net.ArchiveSizeTB / 2)}).</p>`;
+    const line = `<p class="muted small">Free at <code>${escapeHtml(path)}</code>: <strong>${fmtBytes(state.freeBytes)}</strong> — archive ${archiveFits ? "fits" : "won't fit"} (${approxSize(archiveTierTB(net))}, ${ARCHIVE_SIZE_BASIS}), full ${fullFits ? "fits" : "won't fit"} (${approxSize(fullTierTB(net))}, ${FULL_SIZE_BASIS}).</p>`;
     let note = "";
     if (state.downgradeNote) {
       note = `<p class="banner banner-warn">${escapeHtml(state.downgradeNote)}</p>`;
     } else if (!fullFits) {
-      note = `<p class="banner banner-warn">Neither full (${approxSize(net.ArchiveSizeTB / 2)}) nor archive (${approxSize(net.ArchiveSizeTB)}) fits the free space here — choose a location with more room.</p>`;
+      note = `<p class="banner banner-warn">Neither full (${approxSize(fullTierTB(net))}, ${FULL_SIZE_BASIS}) nor archive (${approxSize(archiveTierTB(net))}, ${ARCHIVE_SIZE_BASIS}) fits the free space here — choose a location with more room.</p>`;
     }
     return line + note;
   }
@@ -338,7 +382,7 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     const needs = tierNeeds(net);
     if (state.archive && state.freeBytes < needs.archive && state.freeBytes >= needs.full) {
       state.archive = false;
-      state.downgradeNote = `Not enough space at ${path} for archive (${approxSize(net.ArchiveSizeTB)}) — switched to Full (${approxSize(net.ArchiveSizeTB / 2)}). Pick a location with more room to run archive.`;
+      state.downgradeNote = `Not enough space at ${path} for archive (${approxSize(archiveTierTB(net))}, ${ARCHIVE_SIZE_BASIS}) — switched to Full (${approxSize(fullTierTB(net))}, ${FULL_SIZE_BASIS}). Pick a location with more room to run archive.`;
     }
   }
 
@@ -401,9 +445,13 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
     const defaultDataDir = state.chainId !== null ? `/var/lib/valve-node-app/${state.chainId}` : "";
     const net = state.catalog?.networks.find((n) => n.ChainID === state.chainId);
     const execSnapshotSupported = state.catalog?.clients.find((c) => c.id === state.execId)?.snapshotSupported ?? false;
-    const archiveTB = net?.ArchiveSizeTB ?? 0;
-    const fullSizeCell = net ? approxSize(archiveTB / 2) : "Smaller";
-    const archiveSizeCell = net ? approxSize(archiveTB) : "Much larger";
+    // Both cells carry their basis, because neither is a measured
+    // per-client node size: the archive figure is Valve's reth snapshot,
+    // the full figure is derived from it by an unsourced fraction. With no
+    // network picked yet we have no figure at all, so fall back to the
+    // purely relative wording rather than inventing one.
+    const fullSizeCell = net ? `${approxSize(fullTierTB(net))} (${FULL_SIZE_BASIS})` : "Smaller";
+    const archiveSizeCell = net ? `${approxSize(archiveTierTB(net))} (${ARCHIVE_SIZE_BASIS})` : "Much larger";
     const netLabel = net ? ` on ${escapeHtml(net.Name)}` : "";
     // Sync time is driven by checkpoint sync (snapshot-assisted vs from
     // genesis), not by full/archive — so it reacts to the checkpoint toggle.
@@ -469,7 +517,7 @@ export function renderWizard(root: HTMLElement, targetId: string): () => void {
               <tr><th>Best for</th><td>Validators, wallets, everyday RPC</td><td>Explorers, analytics, historical queries</td></tr>
             </tbody>
           </table>
-          <p class="muted small">Disk sizes are rough baselines — they vary by client and setup.</p>
+          ${net ? sizeBasisNote(net) : `<p class="muted small">Disk sizes depend on the network, the execution client and the sync mode — pick a network to see figures.</p>`}
         </details>
         <label class="radio">
           <input type="radio" name="mode" value="archive" data-action="pick-mode" ${state.archive ? "checked" : ""} />

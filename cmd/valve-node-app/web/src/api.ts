@@ -22,9 +22,19 @@ export interface Network {
   ExecClients: string[];
   BeaconClients: string[];
   LearnURL: string;
-  // ArchiveSizeTB is the archive-tier dataset size in decimal TB; the
-  // full(pruned) tier is estimated as half this (mirrors Go ExpectedBytes).
-  ArchiveSizeTB: number;
+  // SnapshotSizeTB is the size, in decimal TB, of *Valve's reth snapshot
+  // artifact* for this chain — the `snapshot.sizeTB` figure from
+  // learn.valve.city's network data, and the only published size that
+  // exists. It is reth-specific and tied to one block height: it is not a
+  // per-client node size (nothing is published for go-pulse, erigon-pulse
+  // or geth) and not a full-vs-archive figure.
+  //
+  // The wizard uses it as the archive-tier baseline and scales it by
+  // FULL_TIER_FRACTION for the full tier, mirroring Go's ExpectedBytes —
+  // but that fraction is an unsourced placeholder, so anything shown to
+  // the operator must be labelled as an estimate, never as measured fact.
+  // See catalog.Network.SnapshotSizeTB for the authoritative caveat.
+  SnapshotSizeTB: number;
   // Human sync-time estimates: SyncLabel for a snapshot-assisted sync
   // (a full/pruned node), GenesisSyncLabel for a from-genesis sync (what an
   // archive node generally needs). Baseline figures — real time scales with
