@@ -452,6 +452,36 @@ func (p *gatewayPlan) runStep() Step {
 	}
 }
 
+// ensureImage builds the gateway image on the target unless it is already
+// present. Presence is checked rather than always rebuilding because docker's
+// own layer cache still costs a network round trip to resolve the git ref, and
+// a re-run of provisioning should be quick.
+//
+// A build failure is terminal: continuing would call `docker run` on an image
+// that does not exist, and docker would then try to PULL it — reporting a
+// registry error for a build problem, which is a thoroughly misleading thing
+// to show an operator.
+func (p *gatewayPlan) ensureImage(ctx context.Context, e executor.Executor, st *State, platform string) error {
+	tag := ops.ERPCImageTag()
+	present, err := ops.ImageExists(ctx, e, tag)
+	if err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	if present {
+		_ = emit(ctx, st, Event{StepID: "run", Line: "image " + tag + " already present, skipping build"})
+		return nil
+	}
+
+	_ = emit(ctx, st, Event{StepID: "run", Line: "building " + tag + " from " + ops.ERPCBuildContext() + " (first run: a few minutes)"})
+	if _, err := ops.BuildImage(ctx, e, ops.ImageBuildArgs(ops.ImageBuildSpec{
+		Tag:      tag,
+		Platform: platform,
+	})...); err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	return nil
+}
+
 func (p *gatewayPlan) runDocker(ctx context.Context, e executor.Executor, st *State) error {
 	dest, err := p.configPath(ctx, e)
 	if err != nil {
@@ -460,6 +490,21 @@ func (p *gatewayPlan) runDocker(ctx context.Context, e executor.Executor, st *St
 	info, err := ops.ProbeDocker(ctx, e)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
+	}
+	platform := ops.EnginePlatform(ctx, e, info)
+
+	// Build the image on the target when it isn't already there.
+	//
+	// The gateway image is built rather than pulled: upstream eRPC has no
+	// WebSocket support, so its published image is the wrong binary, and the
+	// valve fork publishes none. Building here also makes the image
+	// native-arch by construction, which is what removes the missing-arm64
+	// problem rather than working around it.
+	//
+	// Tagged by source SHA, so this is a one-time cost per pinned ref —
+	// roughly 80s cold, seconds once docker's layer cache is warm.
+	if err := p.ensureImage(ctx, e, st, platform); err != nil {
+		return err
 	}
 
 	// Remove before run, always. A container's published port, mounts and
@@ -479,7 +524,7 @@ func (p *gatewayPlan) runDocker(ctx context.Context, e executor.Executor, st *St
 		// mapping, and the rendered config points local upstreams at exactly
 		// that name.
 		AddHostGateway: !info.VMBacked(),
-		Platform:       ops.EnginePlatform(ctx, e, info),
+		Platform:       platform,
 	})
 	res, err := ops.DockerRun(ctx, e, args...)
 	if err != nil {

@@ -641,3 +641,58 @@ func TestPlanGateway_RunAllIsIdempotent(t *testing.T) {
 		}
 	}
 }
+
+// The gateway image is built on the target rather than pulled: upstream eRPC
+// has no WebSocket support and the valve fork publishes no image, so a pull
+// would fetch either the wrong binary or nothing at all.
+
+func TestRunDocker_BuildsTheImageWhenAbsent(t *testing.T) {
+	e := dockerReady().
+		script("docker image inspect", executor.Result{ExitCode: 1}).
+		script("docker 'build'", executor.Result{Stdout: "built\n"}).
+		script("docker 'run'", executor.Result{Stdout: "deadbeef\n"})
+
+	steps := mustPlanGateway(t, testGateway(), BackendDocker)
+	run := stepByID(t, steps, "run")
+	if err := run.Run(context.Background(), e, &State{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	build := ""
+	for _, c := range e.callLog() {
+		if strings.Contains(c, "docker 'build'") {
+			build = c
+		}
+	}
+	if build == "" {
+		t.Fatalf("no docker build ran: %v", e.callLog())
+	}
+	if !strings.Contains(build, ops.ERPCSourceRef) {
+		t.Errorf("build must pin the source SHA, got: %s", build)
+	}
+	if strings.Contains(build, "#valve-ws") {
+		t.Errorf("build must not track a moving branch head, got: %s", build)
+	}
+	if !strings.Contains(build, ops.ERPCImageTag()) {
+		t.Errorf("build must tag %q, got: %s", ops.ERPCImageTag(), build)
+	}
+}
+
+func TestRunDocker_SkipsTheBuildWhenTheImageIsPresent(t *testing.T) {
+	e := dockerReady().
+		script("docker image inspect", executor.Result{Stdout: "sha256:abc\n"}).
+		script("docker 'run'", executor.Result{Stdout: "deadbeef\n"})
+
+	steps := mustPlanGateway(t, testGateway(), BackendDocker)
+	run := stepByID(t, steps, "run")
+	if err := run.Run(context.Background(), e, &State{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// A rebuild on every provisioning run would turn a seconds-long re-run
+	// into a minutes-long one.
+	for _, cmd := range e.callLog() {
+		if strings.Contains(cmd, "docker 'build'") {
+			t.Fatalf("image was present; no build should have run, got: %s", cmd)
+		}
+	}
+}

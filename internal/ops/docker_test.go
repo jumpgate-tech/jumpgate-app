@@ -31,7 +31,7 @@ func TestERPCRunArgs_Defaults(t *testing.T) {
 	want = append(want,
 		"-p", "127.0.0.1:4000:4000",
 		"-v", "/var/lib/valve-node-app/369/erpc.yaml:/erpc.yaml:ro",
-		"ghcr.io/erpc/erpc:0.1.1",
+		ERPCImageTag(),
 		"--config", "/erpc.yaml",
 	)
 	if !reflect.DeepEqual(got, want) {
@@ -50,7 +50,7 @@ func TestERPCRunArgs_EmitsPlatformBeforeTheImage(t *testing.T) {
 		switch a {
 		case "--platform":
 			idxPlatform = i
-		case DefaultERPCImage:
+		case ERPCImageTag():
 			idxImage = i
 		}
 	}
@@ -257,7 +257,7 @@ func TestERPCRunArgs_AddHostGateway(t *testing.T) {
 		switch a {
 		case "--add-host":
 			idxAddHost = i
-		case DefaultERPCImage:
+		case ERPCImageTag():
 			idxImage = i
 		}
 	}
@@ -809,4 +809,75 @@ func containsArg(args []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestERPCImageTag_DerivedFromPinnedSHA(t *testing.T) {
+	tag := ERPCImageTag()
+	if !strings.HasPrefix(tag, erpcImageRepo+":") {
+		t.Fatalf("tag %q should be under %q", tag, erpcImageRepo)
+	}
+	// Tagging by source SHA is what makes a rebuild skippable and what makes
+	// bumping the ref produce a distinct image rather than replacing one.
+	if !strings.HasPrefix(ERPCSourceRef, strings.TrimPrefix(tag, erpcImageRepo+":")) {
+		t.Errorf("tag %q is not derived from ERPCSourceRef %q", tag, ERPCSourceRef)
+	}
+	if strings.Contains(tag, "latest") {
+		t.Errorf("gateway image must not be :latest, got %q", tag)
+	}
+}
+
+func TestERPCBuildContext_PinsFullSHA(t *testing.T) {
+	got := ERPCBuildContext()
+	if got != ERPCSourceRepo+"#"+ERPCSourceRef {
+		t.Fatalf("build context = %q", got)
+	}
+	// valve-ws is a moving feature branch off an open upstream PR; building
+	// from the branch name would change an operator's gateway between runs.
+	if strings.HasSuffix(got, "#valve-ws") {
+		t.Error("build context must pin a commit, not the branch head")
+	}
+	if len(ERPCSourceRef) != 40 {
+		t.Errorf("ERPCSourceRef should be a full 40-char SHA, got %d chars", len(ERPCSourceRef))
+	}
+}
+
+func TestImageBuildArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		spec ImageBuildSpec
+		want []string
+	}{
+		{
+			name: "defaults",
+			spec: ImageBuildSpec{Platform: "linux/arm64"},
+			want: []string{"build", "--platform", "linux/arm64", "-t", ERPCImageTag(), ERPCBuildContext()},
+		},
+		{
+			name: "explicit tag and context",
+			spec: ImageBuildSpec{Tag: "x:1", Context: "/src", Platform: "linux/amd64"},
+			want: []string{"build", "--platform", "linux/amd64", "-t", "x:1", "/src"},
+		},
+	}
+	// The "unrecognized arch omits --platform entirely" branch is governed by
+	// PlatformForArch returning "", which TestPlatformForArch already pins;
+	// a wrong --platform is worse than none, since it converts correct
+	// manifest selection into a hard failure.
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ImageBuildArgs(tc.spec)
+			if len(got) != len(tc.want) {
+				t.Fatalf("args = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("args = %v, want %v", got, tc.want)
+				}
+			}
+			// docker reads the first non-flag argument as the context, so it
+			// must be last or a trailing option would be read as a second one.
+			if got[len(got)-1] != tc.spec.Context && tc.spec.Context != "" {
+				t.Errorf("context must be the final argument, got %v", got)
+			}
+		})
+	}
 }
