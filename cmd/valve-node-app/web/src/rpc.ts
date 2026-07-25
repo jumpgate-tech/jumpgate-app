@@ -90,6 +90,12 @@ export function renderRPC(root: HTMLElement): () => void {
   // The bar's own settings (port, bind) are edited in place, opened per
   // gateway. Kept out of the DOM for the same reason as focus.
   const settingsOpen: Record<string, boolean> = {};
+  // The live HTTPS verification per gateway: the last result this screen ran
+  // (the server also returns its own last one on the view, which is what shows
+  // after a reload), whether one is in flight, and why one failed to run.
+  const verifyResult: Record<string, api.TlsVerification | null> = {};
+  const verifyBusy: Record<string, boolean> = {};
+  const verifyErr: Record<string, string | null> = {};
   let streamStop: (() => void) | null = null;
 
   root.innerHTML = `
@@ -478,6 +484,7 @@ export function renderRPC(root: HTMLElement): () => void {
     const t = gw.config.TLS ?? null;
     const on = t?.Enabled ?? false;
     const source = t?.CertSource || "internal";
+    const suggested = gw.tls?.suggestedHostname ?? "";
     return `
       <hr />
       <label class="check">
@@ -491,9 +498,19 @@ export function renderRPC(root: HTMLElement): () => void {
       </p>
       <label>
         Hostname <span class="muted">— must resolve to this machine</span>
-        <input type="text" id="gw-${id}-tls-host" value="${escapeHtml(t?.Hostname ?? "")}"
-               placeholder="gateway.example.com" autocomplete="off" spellcheck="false" />
+        <input type="text" id="gw-${id}-tls-host" value="${escapeHtml(t?.Hostname ?? suggested)}"
+               placeholder="${escapeHtml(suggested || "gateway.example.com")}" autocomplete="off" spellcheck="false" />
       </label>
+      ${
+        suggested
+          ? `<p class="muted small">
+               The default is <code>${escapeHtml(suggested)}</code>. That whole domain's wildcard resolves to
+               <code>127.0.0.1</code> from any network, so the name works on this machine with nothing to install and
+               no hosts file to edit — and it is unique to this install, so two machines never serve different
+               certificates for the same name.
+             </p>`
+          : ""
+      }
       <label>
         HTTPS port
         <input type="text" inputmode="numeric" id="gw-${id}-tls-port" value="${t?.HTTPSPort || 443}" autocomplete="off" />
@@ -520,7 +537,89 @@ export function renderRPC(root: HTMLElement): () => void {
         back to Caddy's own authority — with the reason shown above. A dead endpoint is worse than a one-time browser
         warning, and certificate lifetimes are shrinking every year.
       </p>
+      ${verifyPanel(gw)}
     `;
+  }
+
+  // verifyPanel is the live "is HTTPS actually serving?" check, sitting with
+  // the TLS settings because that is where the question is asked.
+  //
+  // It is a BUTTON, not something that runs on every render: the check opens
+  // real connections, subscribes, and waits for a block. What it shows is
+  // per-assertion, because "HTTPS works" is five different claims and the
+  // interesting failures are the ones where four of them hold — a certificate
+  // for the wrong name, or a front that serves every call except the
+  // subscriptions a dApp is waiting on.
+  function verifyPanel(gw: api.GatewayView): string {
+    const gid = escapeHtml(gw.id);
+    const on = gw.config.TLS?.Enabled ?? false;
+    const res = verifyResult[gw.id] ?? gw.tls?.verification ?? null;
+    const busy = verifyBusy[gw.id] ?? false;
+    const err = verifyErr[gw.id] ?? null;
+
+    return `
+      <hr />
+      <div class="card-actions">
+        <button class="btn btn-ghost" data-action="verify-tls" data-gid="${gid}" ${on && !busy ? "" : "disabled"}
+                title="Open a real connection to this front: handshake, certificate name, chain, an RPC call and a subscription.">
+          ${busy ? `<span class="spinner" aria-label="verifying"></span> Verifying…` : "Verify HTTPS now"}
+        </button>
+        ${on ? "" : `<span class="muted small">Turn HTTPS on and re-create the gateway — there is nothing to verify yet.</span>`}
+      </div>
+      ${err ? `<p class="error small">${escapeHtml(err)}</p>` : ""}
+      ${res ? verifyReport(res) : ""}
+    `;
+  }
+
+  function verifyReport(v: api.TlsVerification): string {
+    const rows = (v.assertions ?? [])
+      .map(
+        (a) => `
+          <li class="small">
+            ${verifyBadge(a.status)}
+            <strong>${escapeHtml(a.title)}</strong>
+            <div class="muted">${escapeHtml(a.detail)}</div>
+          </li>`,
+      )
+      .join("");
+    return `
+      <div class="banner ${v.ok ? (v.subscriptionsOk ? "banner-ok" : "banner-warn") : "banner-bad"}">
+        ${escapeHtml(v.summary)}
+      </div>
+      <ul class="verify-list">${rows}</ul>
+      <p class="muted small">
+        Checked ${escapeHtml(new Date(v.at).toLocaleString())} against <code>${escapeHtml(v.address)}</code>
+        ${v.notAfter ? `· certificate valid until <code>${escapeHtml(new Date(v.notAfter).toLocaleString())}</code> (${escapeHtml(v.expiresIn ?? "")})` : ""}
+      </p>
+      ${v.expiryWarning ? `<div class="banner banner-warn">${escapeHtml(v.expiryWarning)}</div>` : ""}
+    `;
+  }
+
+  function verifyBadge(status: string): string {
+    switch (status) {
+      case "pass":
+        return badge("pass", "ok");
+      case "fail":
+        return badge("fail", "bad");
+      case "unavailable":
+        return badge("unavailable", "warn");
+      default:
+        return badge("skipped", "neutral");
+    }
+  }
+
+  async function verifyTLS(gid: string): Promise<void> {
+    verifyBusy[gid] = true;
+    verifyErr[gid] = null;
+    render();
+    try {
+      verifyResult[gid] = await api.verifyGatewayTls(gid);
+    } catch (err) {
+      verifyErr[gid] = `${message(err)}${hintOf(err)}`;
+    } finally {
+      verifyBusy[gid] = false;
+      render();
+    }
   }
 
   // tlsBanner is what the front is ACTUALLY doing, as opposed to what was
@@ -542,6 +641,20 @@ export function renderRPC(root: HTMLElement): () => void {
          ${escapeHtml(t.status?.State ?? "unknown")}, so nothing is answering on
          <code>${escapeHtml(t.url ?? "")}</code> even if the gateway itself is up.</div>`,
       );
+    }
+    // The last live verification, surfaced WITHOUT opening settings when it
+    // found something. A front that terminates TLS perfectly and refuses every
+    // subscription looks identical to a healthy one from out here, so the one
+    // place that knows says so where the state is shown.
+    const v = verifyResult[gw.id] ?? t.verification ?? null;
+    if (v && (!v.ok || !v.subscriptionsOk)) {
+      parts.push(
+        `<div class="banner ${v.ok ? "banner-warn" : "banner-bad"}">${escapeHtml(v.summary)}
+         <div class="small">Checked ${escapeHtml(new Date(v.at).toLocaleString())} — open Settings for the full check.</div></div>`,
+      );
+    }
+    if (v?.expiryWarning) {
+      parts.push(`<div class="banner banner-warn">${escapeHtml(v.expiryWarning)}</div>`);
     }
     if (t.rootCaPath && t.effectiveCertSource === "internal") {
       parts.push(
@@ -603,6 +716,9 @@ export function renderRPC(root: HTMLElement): () => void {
         return;
       case "save-settings":
         await saveSettings(gid);
+        return;
+      case "verify-tls":
+        await verifyTLS(gid);
         return;
       case "gw-start":
       case "gw-stop":

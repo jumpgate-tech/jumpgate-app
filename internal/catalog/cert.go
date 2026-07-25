@@ -114,7 +114,7 @@ func CheckCertificate(certPEM []byte, hostname string, now time.Time) *CertProbl
 		return &CertProblem{
 			Reason: CertProblemExpired,
 			Detail: fmt.Sprintf("the certificate expired on %s (%s ago)",
-				leaf.NotAfter.UTC().Format(time.RFC3339), roundedSince(now.Sub(leaf.NotAfter))),
+				leaf.NotAfter.UTC().Format(time.RFC3339), RoundedDuration(now.Sub(leaf.NotAfter))),
 		}
 	}
 	if !leaf.NotBefore.IsZero() && now.Before(leaf.NotBefore) {
@@ -135,7 +135,7 @@ func CheckCertificate(certPEM []byte, hostname string, now time.Time) *CertProbl
 	if err := leaf.VerifyHostname(host); err != nil {
 		return &CertProblem{
 			Reason: CertProblemMismatch,
-			Detail: fmt.Sprintf("the certificate does not cover %q (it covers %s)", host, certNames(leaf)),
+			Detail: fmt.Sprintf("the certificate does not cover %q (it covers %s)", host, CertNames(leaf)),
 		}
 	}
 	return nil
@@ -160,9 +160,12 @@ func parseLeafCertificate(certPEM []byte) (*x509.Certificate, error) {
 	}
 }
 
-// certNames lists what a certificate actually covers, so a mismatch says which
-// name to use instead of only which one failed.
-func certNames(c *x509.Certificate) string {
+// CertNames lists what a certificate actually covers, so a mismatch says which
+// name to use instead of only which one failed. It is exported because the
+// live HTTPS verification (setup.VerifyGatewayTLS) reports the same fact about
+// a certificate it pulled off the wire rather than off disk, and two spellings
+// of "it covers ..." would be two things to keep in step.
+func CertNames(c *x509.Certificate) string {
 	var names []string
 	names = append(names, c.DNSNames...)
 	for _, ip := range c.IPAddresses {
@@ -177,10 +180,11 @@ func certNames(c *x509.Certificate) string {
 	return strings.Join(names, ", ")
 }
 
-// roundedSince renders a duration at a granularity worth reading. An expiry is
-// interesting in days, or in hours when it just happened; nobody needs the
-// nanoseconds Go prints by default.
-func roundedSince(d time.Duration) string {
+// RoundedDuration renders a duration at a granularity worth reading. An expiry
+// is interesting in days, or in hours when it is close; nobody needs the
+// nanoseconds Go prints by default. Exported for the same reason CertNames is:
+// the live verification reports "expires in ..." and must say it the same way.
+func RoundedDuration(d time.Duration) string {
 	if d < 0 {
 		d = -d
 	}

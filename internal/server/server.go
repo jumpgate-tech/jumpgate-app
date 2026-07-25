@@ -17,6 +17,7 @@ import (
 	"github.com/valve-tech/valve-node-app/internal/ai"
 	"github.com/valve-tech/valve-node-app/internal/config"
 	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/valve-node-app/internal/setup"
 )
 
 // cookieName is the name of the cookie that carries the session token once
@@ -49,6 +50,13 @@ type Server struct {
 	cfgMu sync.Mutex
 
 	reg *registry
+
+	// tlsChecks is the last live HTTPS verification per gateway id, guarded by
+	// tlsMu. It is a cache of an EXPENSIVE read (real connections, a real
+	// subscription), kept so the RPC screen can show the last answer without
+	// re-running it on every poll — see handleGatewayTLSVerify.
+	tlsMu     sync.Mutex
+	tlsChecks map[string]setup.TLSVerification
 
 	newExecutor   func(config.Target) (executor.Executor, error)
 	newAIProvider func(id, apiKey, baseURL string) (ai.Provider, error)

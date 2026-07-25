@@ -30,13 +30,17 @@ package server
 //     cannot drift from what the app actually supports.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/valve-tech/valve-node-app/internal/catalog"
 	"github.com/valve-tech/valve-node-app/internal/config"
@@ -148,6 +152,23 @@ type tlsView struct {
 	// naming it is the difference between a solvable warning and a mystery.
 	RootCAPath string `json:"rootCaPath,omitempty"`
 
+	// SuggestedHostname is the name this gateway would get by default: one
+	// under a domain whose wildcard already resolves to loopback, so HTTPS can
+	// be turned on without first owning a name. It is sent whether or not TLS
+	// is on, because the moment it is needed is the moment the operator is
+	// looking at an empty hostname field.
+	SuggestedHostname string `json:"suggestedHostname,omitempty"`
+
+	// Verification is the LAST live check of this front (GET
+	// .../tls/verify), or nil if none has been run since the app started.
+	//
+	// It is a cached result rather than something re-measured on every read,
+	// and deliberately so: the check opens real connections, subscribes, and
+	// waits for a block, so running it on every poll of the RPC screen would
+	// turn a status read into a load generator. Its At field is on the wire so
+	// a stale answer reads as stale.
+	Verification *setup.TLSVerification `json:"verification,omitempty"`
+
 	Error string `json:"error,omitempty"`
 }
 
@@ -249,6 +270,10 @@ func (s *Server) registerGatewayRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/gateways/{gid}/config", s.handleGatewayPutConfig)
 	mux.HandleFunc("POST /api/gateways/{gid}/provision", s.handleGatewayProvision)
 	mux.HandleFunc("POST /api/gateways/{gid}/wipe", s.handleGatewayWipe)
+	// The live HTTPS check. GET because it reads — it writes nothing, touches
+	// no container and creates nothing — even though it is the one read here
+	// that opens sockets of its own.
+	mux.HandleFunc("GET /api/gateways/{gid}/tls/verify", s.handleGatewayTLSVerify)
 	mux.HandleFunc("POST /api/gateways/{gid}/{action}", s.handleGatewayAction)
 
 	// Public-endpoint discovery. It is NOT under /api/gateways/{gid} because
@@ -412,8 +437,9 @@ func (s *Server) gatewayViewFor(r *http.Request, cfg config.Config, gw config.Ga
 // serving a fallback certificate weeks later with nothing having happened in
 // between. This screen is where that becomes visible.
 func (s *Server) tlsViewFor(r *http.Request, ex executor.Executor, gw config.Gateway, resolved catalog.GatewayConfig) tlsView {
+	suggested := suggestedTLSHostname(gw.ID)
 	if !resolved.Fronted() {
-		return tlsView{Status: ops.ContainerStatus{State: ops.StateNotCreated}}
+		return tlsView{Status: ops.ContainerStatus{State: ops.StateNotCreated}, SuggestedHostname: suggested}
 	}
 
 	tls := resolved.TLS
@@ -424,6 +450,8 @@ func (s *Server) tlsViewFor(r *http.Request, ex executor.Executor, gw config.Gat
 		CertSource:          tls.CertSourceOrDefault(),
 		EffectiveCertSource: tls.CertSourceOrDefault(),
 		ContainerName:       ops.CaddyContainerNameFor(gw.ID),
+		SuggestedHostname:   suggested,
+		Verification:        s.lastTLSVerification(gw.ID),
 	}
 
 	csvc := ops.CaddyServiceKeepingCA(gw.ID)
@@ -903,6 +931,13 @@ func (s *Server) handleGatewayCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Config != nil {
 		gwCfg = *req.Config
 	}
+	// A new gateway starts with a hostname that actually resolves, rather than
+	// with an empty field and a placeholder. Turning HTTPS on then needs no
+	// domain, no hosts-file edit and no decision — which is the difference
+	// between the feature being used and being skipped. A hostname the caller
+	// supplied is never touched, and this does NOT turn HTTPS on: it only means
+	// the name is there when it is.
+	defaultTLSHostname(&gwCfg, id)
 	// TLS is validated unconditionally, unlike the networks: a gateway with no
 	// chains yet is a legitimate starting state, but a gateway with a malformed
 	// hostname is not one at any stage.
@@ -1231,6 +1266,125 @@ func gatewayUnprovisionable(gw config.Gateway, problems []string) string {
 	}
 	return "this gateway has chains but not one usable endpoint between them, so there is nothing to serve: " + strings.Join(problems, "; ")
 }
+
+// ---------------------------------------------------------------------
+// GET /api/gateways/{gid}/tls/verify
+// ---------------------------------------------------------------------
+
+// tlsVerifyTimeout bounds one whole run. It is generous because the run
+// deliberately waits for a block on the subscription, and stingy enough that a
+// wedged front cannot hold a request open indefinitely.
+const tlsVerifyTimeout = 60 * time.Second
+
+// handleGatewayTLSVerify answers "is this gateway ACTUALLY serving HTTPS?"
+// with evidence rather than a boolean.
+//
+// It re-measures every time it is called — a certificate expires on a wall
+// clock, an upstream is re-pointed without anything here changing — and caches
+// the answer so the RPC screen can show the last result beside the front
+// without re-running the whole thing on every poll.
+func (s *Server) handleGatewayTLSVerify(w http.ResponseWriter, r *http.Request) {
+	cfg, gw, ok := s.gateway(w, r)
+	if !ok {
+		return
+	}
+	resolved, _ := resolveGateway(cfg, gw)
+	if !resolved.Fronted() {
+		writeErrorDetail(w, http.StatusBadRequest, setup.ErrNoTLSFront.Error(),
+			"turn on “Serve HTTPS” in this gateway's settings and re-create it, then there will be something to verify", codeNotConfigured)
+		return
+	}
+
+	ex, host, ok := s.gatewayExecutor(w, cfg, gw)
+	if !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), tlsVerifyTimeout)
+	defer cancel()
+
+	res, err := setup.VerifyGatewayTLS(ctx, ex, gw.ID, resolved, tlsDialHost(host, resolved.TLS))
+	if err != nil {
+		status, hint, code := classifyOpsError(err)
+		writeErrorDetail(w, status, err.Error(), hint, code)
+		return
+	}
+	s.storeTLSVerification(gw.ID, res)
+	writeJSON(w, http.StatusOK, res)
+}
+
+// tlsDialHost is the address the gateway's hostname is pinned to, which is the
+// same choice the provisioner's curl --resolve makes and for the same reason:
+// the check is about what the front serves, not about whether the operator has
+// pointed DNS at their machine yet.
+//
+// For a local machine that is the published bind (0.0.0.0 → loopback). For an
+// SSH target it is the host this app reaches it on — the one address that is
+// known to route there from here.
+func tlsDialHost(host config.Target, tls *catalog.GatewayTLS) string {
+	if host.Mode == "ssh" && host.SSH != nil && strings.TrimSpace(host.SSH.Host) != "" {
+		return strings.TrimSpace(host.SSH.Host)
+	}
+	return endpointHost(tls.Bind())
+}
+
+// storeTLSVerification / lastTLSVerification keep the most recent run per
+// gateway so the status view can show it. Nothing expires it: a result with a
+// timestamp on it is more use than no result, and the UI says when it ran.
+func (s *Server) storeTLSVerification(gid string, v setup.TLSVerification) {
+	s.tlsMu.Lock()
+	defer s.tlsMu.Unlock()
+	if s.tlsChecks == nil {
+		s.tlsChecks = map[string]setup.TLSVerification{}
+	}
+	s.tlsChecks[gid] = v
+}
+
+func (s *Server) lastTLSVerification(gid string) *setup.TLSVerification {
+	s.tlsMu.Lock()
+	defer s.tlsMu.Unlock()
+	v, ok := s.tlsChecks[gid]
+	if !ok {
+		return nil
+	}
+	return &v
+}
+
+// ---------------------------------------------------------------------
+// the default TLS hostname
+// ---------------------------------------------------------------------
+
+// suggestedTLSHostname is the name a gateway gets by default, under a domain
+// whose wildcard resolves to loopback (catalog.DefaultTLSDomain).
+//
+// It is per-INSTALL rather than a single shared name. The wildcard supports it
+// at no cost, and it means two machines that both turn HTTPS on do not end up
+// serving different certificates for the same name — which is confusing
+// exactly when someone is debugging a trust-store install.
+func suggestedTLSHostname(gatewayID string) string {
+	return catalog.DefaultTLSHostname(gatewayID, installSeed())
+}
+
+// defaultTLSHostname fills in a missing TLS hostname on a config being stored,
+// leaving everything else — including whether HTTPS is on at all — alone.
+func defaultTLSHostname(g *catalog.GatewayConfig, gatewayID string) {
+	if g.TLS == nil {
+		g.TLS = &catalog.GatewayTLS{Hostname: suggestedTLSHostname(gatewayID)}
+		return
+	}
+	if strings.TrimSpace(g.TLS.Hostname) == "" {
+		g.TLS.Hostname = suggestedTLSHostname(gatewayID)
+	}
+}
+
+// installSeed identifies THIS install. The machine's own hostname plus the
+// state directory is enough: it is stable across restarts, needs nothing
+// stored, and two installs on one machine (different $HOME) still differ.
+var installSeed = sync.OnceValue(func() string {
+	name, _ := os.Hostname()
+	dir, _ := config.Dir()
+	return name + "\x00" + dir
+})
 
 // ---------------------------------------------------------------------
 // GET /api/chainlist/{chainId}
