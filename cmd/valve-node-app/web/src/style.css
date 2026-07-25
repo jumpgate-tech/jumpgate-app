@@ -170,6 +170,12 @@ pre {
   margin: 0.75rem 0;
 }
 
+/* Cards carrying a paragraph of explanation rather than a row of badges.
+   220px columns wrap prose into a tall thin ribbon that is hard to read. */
+.card-grid-wide {
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+}
+
 .card {
   background: var(--bg-raised);
   border: 1px solid var(--border);
