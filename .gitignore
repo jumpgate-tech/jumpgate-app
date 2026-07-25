@@ -11,3 +11,7 @@ cmd/valve-node/web/node_modules/
 
 # OS
 .DS_Store
+
+# local debugging artifacts
+*.png
+.playwright-mcp/
