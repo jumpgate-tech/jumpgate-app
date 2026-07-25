@@ -5,7 +5,20 @@
 // clear-and-resync (behind a typed-confirm modal), disk usage/size
 // estimates, and endpoint reachability.
 import * as api from "./api";
-import { badge, copyToClipboard, dot, escapeHtml, fmtBytes, fmtDuration, fmtInt, fmtPct, footer } from "./ui";
+import {
+  badge,
+  closeModal,
+  copyToClipboard,
+  dot,
+  escapeHtml,
+  fmtBytes,
+  fmtDuration,
+  fmtInt,
+  fmtPct,
+  footer,
+  modalBody,
+  openModal,
+} from "./ui";
 
 // highDiskUsagePct is the threshold above which the disk card switches from
 // its normal styling to a warning one.
@@ -471,36 +484,18 @@ export function renderDashboard(root: HTMLElement, targetId: string): () => void
       closeModal();
       void loadDiskUsage();
     } catch (err) {
-      const modalBody = document.querySelector<HTMLElement>("#clear-modal .modal");
-      if (modalBody) {
+      const panel = modalBody();
+      if (panel) {
         const msg = document.createElement("p");
         msg.className = "error small";
         msg.textContent = `Clear failed: ${err instanceof Error ? err.message : String(err)}`;
-        modalBody.appendChild(msg);
+        panel.appendChild(msg);
       }
       if (confirmBtn) {
         confirmBtn.disabled = false;
         confirmBtn.textContent = "Clear and resync";
       }
     }
-  }
-
-  function openModal(innerHtml: string, onModalAction: (action: string) => void): void {
-    closeModal();
-    const overlay = document.createElement("div");
-    overlay.className = "modal-overlay";
-    overlay.id = "clear-modal";
-    overlay.innerHTML = `<div class="modal">${innerHtml}</div>`;
-    overlay.addEventListener("click", (ev) => {
-      const t = (ev.target as HTMLElement).closest<HTMLElement>("[data-modal-action]");
-      if (t?.dataset.modalAction) onModalAction(t.dataset.modalAction);
-      if (ev.target === overlay) onModalAction("cancel");
-    });
-    document.body.appendChild(overlay);
-  }
-
-  function closeModal(): void {
-    document.getElementById("clear-modal")?.remove();
   }
 
   return () => {

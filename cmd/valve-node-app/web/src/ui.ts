@@ -235,3 +235,85 @@ export function wireDropdowns(root: HTMLElement, onSelect: (id: string, value: s
   document.addEventListener("click", onDocClick);
   document.addEventListener("keydown", onDocKey);
 }
+
+// --- modal ---------------------------------------------------------------
+//
+// One shared overlay, so a single place knows how a modal is dismissed: a
+// [data-modal-action] click, a click on the backdrop, or Escape.
+//
+// Native confirm()/alert() are deliberately not used anywhere in this app.
+// They block the event loop, cannot be styled to match the rest of the UI,
+// and browsers increasingly suppress or throttle them — a suppressed confirm()
+// silently returns false, which for a destructive action reads as "the button
+// did nothing".
+
+const MODAL_ID = "app-modal";
+
+let modalKeyHandler: ((ev: KeyboardEvent) => void) | null = null;
+
+export function openModal(innerHtml: string, onModalAction: (action: string) => void): void {
+  closeModal();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.id = MODAL_ID;
+  overlay.innerHTML = `<div class="modal">${innerHtml}</div>`;
+  overlay.addEventListener("click", (ev) => {
+    const t = (ev.target as HTMLElement).closest<HTMLElement>("[data-modal-action]");
+    if (t?.dataset.modalAction) onModalAction(t.dataset.modalAction);
+    else if (ev.target === overlay) onModalAction("cancel");
+  });
+  // Escape is bound on document because the overlay isn't focusable, so key
+  // events would otherwise never reach it.
+  const onKey = (ev: KeyboardEvent): void => {
+    if (ev.key === "Escape") onModalAction("cancel");
+  };
+  document.addEventListener("keydown", onKey);
+  modalKeyHandler = onKey;
+  document.body.appendChild(overlay);
+}
+
+export function closeModal(): void {
+  document.getElementById(MODAL_ID)?.remove();
+  if (modalKeyHandler) {
+    document.removeEventListener("keydown", modalKeyHandler);
+    modalKeyHandler = null;
+  }
+}
+
+// modalBody is the inner panel, for callers that append status or errors to
+// an open modal rather than closing it.
+export function modalBody(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`#${MODAL_ID} .modal`);
+}
+
+// confirmModal is the styled replacement for window.confirm: same
+// question/answer shape, resolving true only on an explicit confirm. `body` is
+// plain text and is escaped — callers needing markup should use openModal.
+export function confirmModal(opts: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  danger?: boolean;
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value: boolean): void => {
+      if (settled) return;
+      settled = true;
+      closeModal();
+      resolve(value);
+    };
+    openModal(
+      `
+        <h2>${escapeHtml(opts.title)}</h2>
+        <p>${escapeHtml(opts.body)}</p>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" data-modal-action="cancel">Cancel</button>
+          <button class="btn${opts.danger ? " btn-danger" : ""}" data-modal-action="confirm">${escapeHtml(opts.confirmLabel)}</button>
+        </div>
+      `,
+      (action) => done(action === "confirm"),
+    );
+    document.querySelector<HTMLButtonElement>(`#${MODAL_ID} [data-modal-action="confirm"]`)?.focus();
+  });
+}
