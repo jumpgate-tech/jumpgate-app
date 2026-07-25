@@ -1,5 +1,5 @@
 // Hash-routed SPA shell: #/targets, #/setup/<id>, #/dash/<id>, #/logs/<id>,
-// #/settings. No framework — each screen module renders into a shared
+// #/services/<id>, #/settings. No framework — each screen module renders into a shared
 // content element and returns a cleanup function (closes any EventSource /
 // timers) that main.ts calls before routing away.
 import "./style.css";
@@ -9,6 +9,7 @@ import { renderDiagnostics } from "./diag";
 import { renderSecurity } from "./security";
 import { renderSettings } from "./settings";
 import { renderShell } from "./ui";
+import { renderServices } from "./services";
 import { renderTargets } from "./targets";
 import { renderWizard } from "./wizard";
 
@@ -29,7 +30,14 @@ function parseHash(): Route {
   const parts = hash.split("/").filter(Boolean);
   if (parts.length === 0) return { screen: "targets" };
   const [screen, rawId] = parts;
-  if (screen === "setup" || screen === "dash" || screen === "logs" || screen === "security" || screen === "diag") {
+  if (
+    screen === "setup" ||
+    screen === "dash" ||
+    screen === "logs" ||
+    screen === "security" ||
+    screen === "diag" ||
+    screen === "services"
+  ) {
     return { screen, id: rawId ? decodeURIComponent(rawId) : undefined };
   }
   return { screen: screen ?? "targets" };
@@ -95,6 +103,13 @@ function route(): void {
         return;
       }
       currentCleanup = mount((root) => renderDiagnostics(root, id));
+      break;
+    case "services":
+      if (!id) {
+        location.hash = "#/targets";
+        return;
+      }
+      currentCleanup = mount((root) => renderServices(root, id));
       break;
     case "settings":
       currentCleanup = mount((root) => renderSettings(root));

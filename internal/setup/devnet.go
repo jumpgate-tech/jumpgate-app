@@ -71,6 +71,48 @@ func PlanDevnet(d catalog.DevnetConfig) ([]Step, error) {
 	return []Step{p.preflightStep(), p.runStep()}, nil
 }
 
+// DevnetService is the ops lifecycle descriptor for d's container: the value
+// ops.ServiceStatus / ContainerAction / WipeService are driven with, so a
+// devnet can be started, stopped, restarted, wiped and read from the API
+// without going anywhere near a setup plan.
+//
+// It lives HERE rather than in ops for the reason ops.ERPCService documents
+// about its own missing Create hook: creating the container needs a resolved
+// image platform and the rendered `docker run` argv, which this package owns
+// and ops (which catalog and setup both sit on top of) cannot reach. Wiring
+// Create to the run step's own runDocker — rather than re-deriving the argv —
+// is what keeps "the devnet the wizard creates" and "the devnet a wipe
+// re-creates" the same container, down to the flag order.
+//
+// frontedBy names the services that PROXY this devnet, normally the eRPC
+// gateway. Passing it is what makes ops.WipeService bounce the gateway
+// afterwards, which is not optional: eRPC's per-network head is monotonic, so
+// a wiped chain leaves the gateway advertising a head that no longer exists
+// (measured: chain back at 0x4, gateway still reporting 0x2c). See
+// ops.WipeService for the full account.
+//
+// No Volumes are declared, and that is a fact about reth --dev rather than an
+// omission: the chain lives in the container's own writable layer (see
+// catalog.DevnetRunArgs, which mounts nothing), so `docker rm -f -v` takes
+// every byte of it with the container.
+func DevnetService(d catalog.DevnetConfig, frontedBy ...ops.DockerService) ops.DockerService {
+	p := &devnetPlan{dev: d}
+	return ops.DockerService{
+		ID:            "devnet",
+		ContainerName: d.Name(),
+		FrontedBy:     frontedBy,
+		Create: func(ctx context.Context, e executor.Executor) error {
+			if err := d.Validate(); err != nil {
+				return err
+			}
+			// nil State: this path has no event stream to report into. emit
+			// is nil-State safe precisely so the same step body can run
+			// under RunAll and under a plain lifecycle call.
+			return p.runDocker(ctx, e, nil)
+		},
+	}
+}
+
 // devnetPlan is the state the two steps share. It exists for the same reason
 // gatewayPlan does: Step's funcs are handed a *State carrying a
 // catalog.WireConfig — a real node's config, which cannot describe a devnet —

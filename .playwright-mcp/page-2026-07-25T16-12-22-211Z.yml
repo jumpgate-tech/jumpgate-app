@@ -1,0 +1,118 @@
+- generic [ref=f2e3]:
+  - banner [ref=f2e4]:
+    - link "valve-node-app" [ref=f2e5] [cursor=pointer]:
+      - /url: "#/targets"
+    - navigation [ref=f2e6]:
+      - link "Targets" [ref=f2e7] [cursor=pointer]:
+        - /url: "#/targets"
+      - link "Settings" [ref=f2e8] [cursor=pointer]:
+        - /url: "#/settings"
+  - main [ref=f2e9]:
+    - generic [ref=f2e10]:
+      - generic [ref=f2e11]:
+        - 'heading "Services: local" [level=1] [ref=f2e12]'
+        - button "Refresh" [ref=f2e13] [cursor=pointer]
+      - paragraph [ref=f2e14]: Containers this machine hosts. They are independent of any node setup — a machine can run a devnet, a gateway, both, or neither.
+      - generic [ref=f2e15]:
+        - paragraph [ref=f2e195]: "Docker: colima 29.5.2 · reachable"
+        - generic [ref=f2e196]:
+          - generic [ref=f2e197]:
+            - generic [ref=f2e198]:
+              - heading "Local devnet" [level=2] [ref=f2e199]
+              - generic [ref=f2e200]: running
+            - paragraph [ref=f2e201]: "A throwaway chain that runs entirely on this machine: reth in --dev mode, sealing a block on a timer from its own genesis. Nothing to sync, nothing on disk outside the container."
+            - generic [ref=f2e202]:
+              - generic [ref=f2e203]:
+                - term [ref=f2e204]: Container
+                - definition [ref=f2e205]:
+                  - code [ref=f2e206]: valve-node-app-devnet
+              - generic [ref=f2e207]:
+                - term [ref=f2e208]: Image
+                - definition [ref=f2e209]:
+                  - code [ref=f2e210]: ghcr.io/paradigmxyz/reth:latest
+            - generic [ref=f2e211]:
+              - generic [ref=f2e213]: JSON-RPC
+              - code [ref=f2e214]: http://127.0.0.1:8600
+              - button "Copy" [ref=f2e215] [cursor=pointer]
+            - generic [ref=f2e216]:
+              - generic [ref=f2e218]: WebSocket
+              - code [ref=f2e219]: ws://127.0.0.1:8601
+              - button "Copy" [ref=f2e220] [cursor=pointer]
+            - generic [ref=f2e221]:
+              - button "Stop" [ref=f2e222] [cursor=pointer]
+              - button "Restart" [ref=f2e223] [cursor=pointer]
+              - button "Re-create (apply config)" [ref=f2e224] [cursor=pointer]
+              - button "Wipe…" [ref=f2e225] [cursor=pointer]
+            - generic [ref=f2e226]:
+              - generic [ref=f2e227]:
+                - paragraph [ref=f2e228]: Configuration
+                - button "Edit" [ref=f2e229] [cursor=pointer]
+              - paragraph [ref=f2e230]: Chain 1337 · a block every 2s · JSON-RPC on 127.0.0.1:8600 · WebSocket on 127.0.0.1:8601
+          - generic [ref=f2e231]:
+            - generic [ref=f2e232]:
+              - heading "RPC gateway (eRPC)" [level=2] [ref=f2e233]
+              - generic [ref=f2e234]: running
+            - paragraph [ref=f2e235]: One eRPC instance in front of however many chains you list. It addresses a chain by URL path, so a single port serves all of them — and the same path serves WebSocket.
+            - generic [ref=f2e236]:
+              - generic [ref=f2e237]:
+                - term [ref=f2e238]: Container
+                - definition [ref=f2e239]:
+                  - code [ref=f2e240]: valve-node-app-erpc
+              - generic [ref=f2e241]:
+                - term [ref=f2e242]: Image
+                - definition [ref=f2e243]:
+                  - code [ref=f2e244]: valve-node-app/erpc:e909aacb
+            - generic [ref=f2e245]:
+              - generic [ref=f2e247]: chain 1337
+              - code [ref=f2e248]: http://127.0.0.1:4100/main/evm/1337
+              - button "Copy" [ref=f2e249] [cursor=pointer]
+            - generic [ref=f2e250]:
+              - button "Stop" [ref=f2e251] [cursor=pointer]
+              - button "Restart" [ref=f2e252] [cursor=pointer]
+              - button "Re-create (apply config)" [ref=f2e253] [cursor=pointer]
+              - button "Wipe…" [ref=f2e254] [cursor=pointer]
+            - generic [ref=f2e255]:
+              - generic [ref=f2e256]:
+                - paragraph [ref=f2e257]: Configuration
+                - button "Close" [ref=f2e258] [cursor=pointer]
+              - generic [ref=f2e259]:
+                - text: Listen port
+                - textbox "Listen port" [ref=f2e260]: "4100"
+              - generic [ref=f2e261]:
+                - text: Bind address
+                - textbox "Bind address" [ref=f2e262]: 127.0.0.1
+              - paragraph [ref=f2e263]:
+                - text: "Requests are addressed by path:"
+                - code [ref=f2e264]: /main/evm/<chainId>
+                - text: . One port serves every chain below, and the same path serves WebSocket with a
+                - code [ref=f2e265]: ws://
+                - text: scheme.
+              - generic [ref=f2e266]:
+                - generic [ref=f2e267]:
+                  - generic [ref=f2e268]:
+                    - text: Chain id
+                    - textbox "Chain id" [ref=f2e269]: "1337"
+                  - button "Remove chain" [ref=f2e270] [cursor=pointer]
+                - generic [ref=f2e271]:
+                  - generic [ref=f2e272]:
+                    - text: Name
+                    - textbox "Name" [ref=f2e273]: devnet
+                  - generic [ref=f2e274]:
+                    - text: Endpoint
+                    - textbox "Endpoint" [ref=f2e275]:
+                      - /placeholder: http://127.0.0.1:8545
+                      - text: http://127.0.0.1:8600
+                  - generic [ref=f2e276]:
+                    - checkbox "Mine — prefer it" [checked] [ref=f2e277]
+                    - text: Mine — prefer it
+                  - generic [ref=f2e278]:
+                    - checkbox "Recent blocks only" [ref=f2e279]
+                    - text: Recent blocks only
+                  - button "Remove" [ref=f2e280] [cursor=pointer]
+                - button "Add an upstream" [ref=f2e281] [cursor=pointer]
+              - generic [ref=f2e282]:
+                - button "Add a chain" [ref=f2e283] [cursor=pointer]
+                - button "Front the local devnet" [ref=f2e284] [cursor=pointer]
+                - button "Save configuration" [ref=f2e285] [cursor=pointer]
+      - link "Learn how this works → learn.valve.city/rpc" [ref=f2e18] [cursor=pointer]:
+        - /url: https://learn.valve.city/rpc

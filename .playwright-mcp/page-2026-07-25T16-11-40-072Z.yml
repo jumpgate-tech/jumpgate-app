@@ -1,0 +1,131 @@
+- generic [ref=f2e1]:
+  - generic [ref=f2e3]:
+    - banner [ref=f2e4]:
+      - link "valve-node-app" [ref=f2e5] [cursor=pointer]:
+        - /url: "#/targets"
+      - navigation [ref=f2e6]:
+        - link "Targets" [ref=f2e7] [cursor=pointer]:
+          - /url: "#/targets"
+        - link "Settings" [ref=f2e8] [cursor=pointer]:
+          - /url: "#/settings"
+    - main [ref=f2e9]:
+      - generic [ref=f2e10]:
+        - generic [ref=f2e11]:
+          - 'heading "Services: local" [level=1] [ref=f2e12]'
+          - button "Refresh" [ref=f2e13] [cursor=pointer]
+        - paragraph [ref=f2e14]: Containers this machine hosts. They are independent of any node setup — a machine can run a devnet, a gateway, both, or neither.
+        - generic [ref=f2e15]:
+          - paragraph [ref=f2e84]: "Docker: colima 29.5.2 · reachable"
+          - generic [ref=f2e85]:
+            - generic [ref=f2e86]:
+              - generic [ref=f2e87]:
+                - heading "Local devnet" [level=2] [ref=f2e88]
+                - generic [ref=f2e89]: running
+              - paragraph [ref=f2e90]: "A throwaway chain that runs entirely on this machine: reth in --dev mode, sealing a block on a timer from its own genesis. Nothing to sync, nothing on disk outside the container."
+              - generic [ref=f2e91]:
+                - generic [ref=f2e92]:
+                  - term [ref=f2e93]: Container
+                  - definition [ref=f2e94]:
+                    - code [ref=f2e95]: valve-node-app-devnet
+                - generic [ref=f2e96]:
+                  - term [ref=f2e97]: Image
+                  - definition [ref=f2e98]:
+                    - code [ref=f2e99]: ghcr.io/paradigmxyz/reth:latest
+              - generic [ref=f2e100]:
+                - generic [ref=f2e102]: JSON-RPC
+                - code [ref=f2e103]: http://127.0.0.1:8600
+                - button "Copy" [ref=f2e104] [cursor=pointer]
+              - generic [ref=f2e105]:
+                - generic [ref=f2e107]: WebSocket
+                - code [ref=f2e108]: ws://127.0.0.1:8601
+                - button "Copy" [ref=f2e109] [cursor=pointer]
+              - generic [ref=f2e110]:
+                - button "Stop" [ref=f2e111] [cursor=pointer]
+                - button "Restart" [ref=f2e112] [cursor=pointer]
+                - button "Re-create (apply config)" [ref=f2e113] [cursor=pointer]
+                - button "Wipe…" [ref=f2e114] [cursor=pointer]
+              - generic [ref=f2e115]:
+                - generic [ref=f2e116]:
+                  - paragraph [ref=f2e117]: Configuration
+                  - button "Edit" [ref=f2e118] [cursor=pointer]
+                - paragraph [ref=f2e119]: Chain 1337 · a block every 2s · JSON-RPC on 127.0.0.1:8600 · WebSocket on 127.0.0.1:8601
+            - generic [ref=f2e120]:
+              - generic [ref=f2e121]:
+                - heading "RPC gateway (eRPC)" [level=2] [ref=f2e122]
+                - generic [ref=f2e123]: running
+              - paragraph [ref=f2e124]: One eRPC instance in front of however many chains you list. It addresses a chain by URL path, so a single port serves all of them — and the same path serves WebSocket.
+              - generic [ref=f2e125]:
+                - generic [ref=f2e126]:
+                  - term [ref=f2e127]: Container
+                  - definition [ref=f2e128]:
+                    - code [ref=f2e129]: valve-node-app-erpc
+                - generic [ref=f2e130]:
+                  - term [ref=f2e131]: Image
+                  - definition [ref=f2e132]:
+                    - code [ref=f2e133]: valve-node-app/erpc:e909aacb
+              - generic [ref=f2e134]:
+                - generic [ref=f2e136]: chain 1337
+                - code [ref=f2e137]: http://127.0.0.1:4100/main/evm/1337
+                - button "Copy" [ref=f2e138] [cursor=pointer]
+              - generic [ref=f2e139]:
+                - button "Stop" [ref=f2e140] [cursor=pointer]
+                - button "Restart" [ref=f2e141] [cursor=pointer]
+                - button "Re-create (apply config)" [ref=f2e142] [cursor=pointer]
+                - button "Wipe…" [ref=f2e143] [cursor=pointer]
+              - generic [ref=f2e144]:
+                - generic [ref=f2e145]:
+                  - paragraph [ref=f2e146]: Configuration
+                  - button "Close" [ref=f2e147] [cursor=pointer]
+                - generic [ref=f2e148]:
+                  - text: Listen port
+                  - textbox "Listen port" [ref=f2e149]: "4100"
+                - generic [ref=f2e150]:
+                  - text: Bind address
+                  - textbox "Bind address" [ref=f2e151]: 127.0.0.1
+                - paragraph [ref=f2e152]:
+                  - text: "Requests are addressed by path:"
+                  - code [ref=f2e153]: /main/evm/<chainId>
+                  - text: . One port serves every chain below, and the same path serves WebSocket with a
+                  - code [ref=f2e154]: ws://
+                  - text: scheme.
+                - generic [ref=f2e155]:
+                  - generic [ref=f2e156]:
+                    - generic [ref=f2e157]:
+                      - text: Chain id
+                      - textbox "Chain id" [ref=f2e158]: "1337"
+                    - button "Remove chain" [ref=f2e159] [cursor=pointer]
+                  - generic [ref=f2e160]:
+                    - generic [ref=f2e161]:
+                      - text: Name
+                      - textbox "Name" [ref=f2e162]: devnet
+                    - generic [ref=f2e163]:
+                      - text: Endpoint
+                      - textbox "Endpoint" [ref=f2e164]:
+                        - /placeholder: http://127.0.0.1:8545
+                        - text: http://127.0.0.1:8600
+                    - generic [ref=f2e165]:
+                      - checkbox "Mine — prefer it" [checked] [ref=f2e166]
+                      - text: Mine — prefer it
+                    - generic [ref=f2e167]:
+                      - checkbox "Recent blocks only" [ref=f2e168]
+                      - text: Recent blocks only
+                    - button "Remove" [ref=f2e169] [cursor=pointer]
+                  - button "Add an upstream" [ref=f2e170] [cursor=pointer]
+                - generic [ref=f2e171]:
+                  - button "Add a chain" [ref=f2e172] [cursor=pointer]
+                  - button "Front the local devnet" [ref=f2e173] [cursor=pointer]
+                  - button "Save configuration" [ref=f2e174] [cursor=pointer]
+        - link "Learn how this works → learn.valve.city/rpc" [ref=f2e18] [cursor=pointer]:
+          - /url: https://learn.valve.city/rpc
+  - generic [ref=f2e176]:
+    - heading "Wipe Local devnet" [level=2] [ref=f2e177]
+    - paragraph [ref=f2e178]: This deletes the entire chain — every block, transaction and account state this devnet has produced. It comes back from genesis at block 0.
+    - paragraph [ref=f2e179]: "It also restarts RPC gateway (eRPC), in front of it. That restart is required, not tidy-up: eRPC only ever moves a chain's head forward, so once this chain restarts at block 0 the gateway would keep advertising the old head — answering for blocks the chain no longer has — until the new chain grew past it."
+    - paragraph [ref=f2e180]:
+      - text: Type
+      - code [ref=f2e181]: devnet
+      - text: to confirm.
+    - textbox [active] [ref=f2e182]
+    - generic [ref=f2e183]:
+      - button "Cancel" [ref=f2e184] [cursor=pointer]
+      - button "Wipe devnet" [disabled] [ref=f2e185]

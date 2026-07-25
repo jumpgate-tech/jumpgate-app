@@ -452,6 +452,97 @@ func ServiceStatus(ctx context.Context, e executor.Executor, s DockerService) (C
 }
 
 // ---------------------------------------------------------------------
+// published ports
+// ---------------------------------------------------------------------
+
+// portsInspectFormat renders one line per published container port as
+// "<containerPort>=<hostIp>:<hostPort>". Rendered by the engine rather than
+// parsed out of `{{json .NetworkSettings.Ports}}` because the JSON shape
+// (a map of "8545/tcp" to a list of bindings, null when unpublished) needs
+// three levels of unmarshalling to answer a one-line question.
+const portsInspectFormat = `{{range $p, $bindings := .NetworkSettings.Ports}}{{range $bindings}}{{$p}}={{.HostIp}}:{{.HostPort}}{{println}}{{end}}{{end}}`
+
+// ContainerPortsArgs renders the argv for the published-port probe.
+func ContainerPortsArgs(name string) []string {
+	return []string{"inspect", "-f", portsInspectFormat, name}
+}
+
+// PortBinding is one published port's host side: the address docker bound it
+// to and the port it bound there.
+type PortBinding struct {
+	HostIP   string
+	HostPort int
+}
+
+// PublishedPorts reports where a container's ports are ACTUALLY published on
+// the host, keyed by the container-side port.
+//
+// It exists because a service's configuration and a running container are two
+// different facts, and only one of them is what a caller can dial. A
+// container's -p mapping is fixed at creation, so a config edited since then
+// describes a devnet that does not exist yet — and showing an operator a URL
+// derived from it is showing them a port nothing is listening on. Reading the
+// mapping back off the container is the only way to print a URL that is true.
+//
+// An absent container yields an empty map and no error, matching
+// ServiceStatus's treatment of absence as a reading. Ports with no host
+// binding (EXPOSEd but not published) simply do not appear.
+func PublishedPorts(ctx context.Context, e executor.Executor, name string) (map[int]PortBinding, error) {
+	out := map[int]PortBinding{}
+	res, err := DockerRun(ctx, e, ContainerPortsArgs(name)...)
+	if err != nil {
+		return out, err
+	}
+	if res.ExitCode != 0 {
+		if classifyDockerFailure(res.ExitCode, res.Stderr, res.Stdout) == dockerFailureAbsentContainer {
+			return out, nil
+		}
+		return out, fmt.Errorf("ops: docker inspect (ports) %s failed (exit %d): %s",
+			name, res.ExitCode, firstNonEmptyLine(res.Stderr, res.Stdout))
+	}
+	return parsePublishedPorts(res.Stdout), nil
+}
+
+// parsePublishedPorts reads portsInspectFormat's output. Pure, so the (fiddly)
+// splitting is testable without a daemon.
+//
+// A container port published on several host addresses (docker emits one line
+// per binding, e.g. an IPv4 and an IPv6 one) keeps the FIRST binding: they are
+// the same port on the same host, and a caller needs one URL, not a list.
+//
+// The host address is split off at the LAST colon, not the first: docker
+// writes a wildcard IPv6 binding as "::" and splitting that at the first colon
+// would yield an empty address and a port of ":4000".
+func parsePublishedPorts(stdout string) map[int]PortBinding {
+	out := map[int]PortBinding{}
+	for _, line := range strings.Split(stdout, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		// "8545/tcp" → 8545. A udp mapping is kept too; the caller asks by
+		// number and this app publishes no port on both protocols.
+		port, err := strconv.Atoi(strings.SplitN(key, "/", 2)[0])
+		if err != nil {
+			continue
+		}
+		cut := strings.LastIndex(value, ":")
+		if cut < 0 {
+			continue
+		}
+		hostPort, err := strconv.Atoi(strings.TrimSpace(value[cut+1:]))
+		if err != nil {
+			continue
+		}
+		if _, seen := out[port]; seen {
+			continue
+		}
+		out[port] = PortBinding{HostIP: strings.TrimSpace(value[:cut]), HostPort: hostPort}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------
 // start / stop / restart
 // ---------------------------------------------------------------------
 

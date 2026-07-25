@@ -67,15 +67,15 @@ const (
 )
 
 // The ports the devnet listens on INSIDE the container. Fixed, and
-// deliberately not configurable, for exactly the reason ops.erpcContainerPort
+// deliberately not configurable, for exactly the reason ops.ERPCContainerPort
 // is fixed: the container's port namespace is private, so there is nothing in
 // there to collide with, and the operator's choice of port belongs on the HOST
 // side of the -p mapping instead. Keeping the in-container side constant also
 // keeps the reth argv constant, which is what lets a running container's
 // command be compared against a freshly rendered one to detect drift.
 const (
-	devnetContainerHTTPPort = 8545
-	devnetContainerWSPort   = 8546
+	DevnetContainerHTTPPort = 8545
+	DevnetContainerWSPort   = 8546
 )
 
 // devnetHTTPAPIs / devnetWSAPIs are the RPC namespaces the devnet exposes.
@@ -179,7 +179,7 @@ func (d DevnetConfig) Bind() string {
 // HTTP resolves the host-side JSON-RPC port (0 → 8545).
 func (d DevnetConfig) HTTP() int {
 	if d.HTTPPort == 0 {
-		return devnetContainerHTTPPort
+		return DevnetContainerHTTPPort
 	}
 	return d.HTTPPort
 }
@@ -187,7 +187,7 @@ func (d DevnetConfig) HTTP() int {
 // WS resolves the host-side WebSocket port (0 → 8546).
 func (d DevnetConfig) WS() int {
 	if d.WSPort == 0 {
-		return devnetContainerWSPort
+		return DevnetContainerWSPort
 	}
 	return d.WSPort
 }
@@ -285,11 +285,11 @@ func DevnetCommand(d DevnetConfig) []string {
 		"--dev.block-time", d.BlockTimeOrDefault(),
 		"--http",
 		"--http.addr", "0.0.0.0",
-		"--http.port", strconv.Itoa(devnetContainerHTTPPort),
+		"--http.port", strconv.Itoa(DevnetContainerHTTPPort),
 		"--http.api", devnetHTTPAPIs,
 		"--ws",
 		"--ws.addr", "0.0.0.0",
-		"--ws.port", strconv.Itoa(devnetContainerWSPort),
+		"--ws.port", strconv.Itoa(DevnetContainerWSPort),
 		"--ws.api", devnetWSAPIs,
 	}
 }
@@ -326,8 +326,8 @@ func DevnetRunArgs(d DevnetConfig) []string {
 		args = append(args, "--platform", p)
 	}
 	args = append(args,
-		"-p", devnetPublishSpec(d.Bind(), d.HTTP(), devnetContainerHTTPPort),
-		"-p", devnetPublishSpec(d.Bind(), d.WS(), devnetContainerWSPort),
+		"-p", devnetPublishSpec(d.Bind(), d.HTTP(), DevnetContainerHTTPPort),
+		"-p", devnetPublishSpec(d.Bind(), d.WS(), DevnetContainerWSPort),
 		d.Image(),
 	)
 	// Everything from here on is reth's, not docker's: the image ref is the
