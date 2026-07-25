@@ -21,13 +21,222 @@ func TestERPCRunArgs_Defaults(t *testing.T) {
 		"run", "-d",
 		"--name", "valve-node-app-erpc",
 		"--restart", "unless-stopped",
+	}
+	// The default platform is this machine's, so the expectation has to be
+	// built the same way rather than hard-coded — the test must pass on an
+	// arm64 laptop and an amd64 CI runner alike.
+	if p := DefaultPlatform(); p != "" {
+		want = append(want, "--platform", p)
+	}
+	want = append(want,
 		"-p", "127.0.0.1:4000:4000",
 		"-v", "/var/lib/valve-node-app/369/erpc.yaml:/erpc.yaml:ro",
 		"ghcr.io/erpc/erpc:0.1.1",
 		"--config", "/erpc.yaml",
-	}
+	)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ERPCRunArgs mismatch\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+// The regression this guards: without --platform on RUN, a docker CLI that
+// misreports its architecture (Rosetta on Apple Silicon) looks up the wrong
+// variant of a present local image and falls through to a pull.
+func TestERPCRunArgs_EmitsPlatformBeforeTheImage(t *testing.T) {
+	args := ERPCRunArgs(ERPCRunSpec{HostConfigPath: "/tmp/erpc.yaml", Platform: "linux/arm64"})
+
+	idxPlatform, idxImage := -1, -1
+	for i, a := range args {
+		switch a {
+		case "--platform":
+			idxPlatform = i
+		case DefaultERPCImage:
+			idxImage = i
+		}
+	}
+	if idxPlatform < 0 {
+		t.Fatalf("want --platform in %#v", args)
+	}
+	if idxPlatform > idxImage {
+		t.Fatalf("--platform (%d) must precede the image ref (%d) — anything after the image goes to the container: %#v", idxPlatform, idxImage, args)
+	}
+	if got := valueAfter(t, args, "--platform"); got != "linux/arm64" {
+		t.Fatalf("--platform: got %q, want an explicit spec value to win", got)
+	}
+}
+
+func TestERPCRunArgs_PlatformDefaultsToThisMachine(t *testing.T) {
+	args := ERPCRunArgs(ERPCRunSpec{HostConfigPath: "/tmp/erpc.yaml"})
+
+	want := DefaultPlatform()
+	if want == "" {
+		t.Skip("unrecognized GOARCH: no default platform to assert")
+	}
+	if got := valueAfter(t, args, "--platform"); got != want {
+		t.Fatalf("--platform: got %q, want %q", got, want)
+	}
+}
+
+func TestPlatformForArch(t *testing.T) {
+	cases := map[string]string{
+		"x86_64":  "linux/amd64", // docker info / uname -m
+		"amd64":   "linux/amd64", // runtime.GOARCH
+		"aarch64": "linux/arm64", // docker info / uname -m
+		"arm64":   "linux/arm64", // runtime.GOARCH
+		"ARM64":   "linux/arm64",
+		"armv7l":  "linux/arm/v7",
+		"":        "", // nothing known: say nothing
+		"riscv64": "", // unrecognized: an engine's own choice beats a guess
+	}
+	for arch, want := range cases {
+		if got := PlatformForArch(arch); got != want {
+			t.Fatalf("PlatformForArch(%q): got %q, want %q", arch, got, want)
+		}
+	}
+}
+
+// The Rosetta case, verbatim: a VM-backed desktop engine whose CLI claims
+// x86_64 on a machine whose own shell says arm64. The VM runs on the host's
+// silicon, so the host reading is the true one.
+func TestEnginePlatform_HostWinsOnAVMBackedEngineThatDisagrees(t *testing.T) {
+	e := newFakeExecutor().script("uname -m", executor.Result{Stdout: "arm64\n"})
+	info := DockerInfo{Architecture: "x86_64", Flavor: FlavorDockerDesktop}
+
+	if got := EnginePlatform(context.Background(), e, info); got != "linux/arm64" {
+		t.Fatalf("got %q, want linux/arm64 (the CLI's x86_64 reading is a translation artifact)", got)
+	}
+}
+
+// A plain engine can genuinely be a different architecture from the machine
+// probing it (SSH, DOCKER_HOST), so there the engine's reading must stand.
+func TestEnginePlatform_EngineWinsWhenNotVMBacked(t *testing.T) {
+	e := newFakeExecutor().script("uname -m", executor.Result{Stdout: "arm64\n"})
+	info := DockerInfo{Architecture: "x86_64", Flavor: FlavorDockerEngine}
+
+	if got := EnginePlatform(context.Background(), e, info); got != "linux/amd64" {
+		t.Fatalf("got %q, want linux/amd64", got)
+	}
+}
+
+func TestEnginePlatform_AgreementNeedsNoAdjudication(t *testing.T) {
+	e := newFakeExecutor().script("uname -m", executor.Result{Stdout: "x86_64\n"})
+	info := DockerInfo{Architecture: "x86_64", Flavor: FlavorDockerDesktop}
+
+	if got := EnginePlatform(context.Background(), e, info); got != "linux/amd64" {
+		t.Fatalf("got %q, want linux/amd64", got)
+	}
+}
+
+func TestEnginePlatform_FallsBackToEachReadingWhenTheOtherIsUnusable(t *testing.T) {
+	ctx := context.Background()
+
+	// No usable uname (missing binary / transport failure) → engine's word.
+	noUname := newFakeExecutor().script("uname -m", executor.Result{ExitCode: 127})
+	if got := EnginePlatform(ctx, noUname, DockerInfo{Architecture: "aarch64", Flavor: FlavorDockerDesktop}); got != "linux/arm64" {
+		t.Fatalf("got %q, want the engine's reading when uname is unavailable", got)
+	}
+
+	// No engine reading (daemon down, partial info) → the host's word, even
+	// on a flavor whose engine reading would normally win.
+	noArch := newFakeExecutor().script("uname -m", executor.Result{Stdout: "x86_64\n"})
+	if got := EnginePlatform(ctx, noArch, DockerInfo{Flavor: FlavorDockerEngine}); got != "linux/amd64" {
+		t.Fatalf("got %q, want the host's reading when the engine reported none", got)
+	}
+
+	// Neither readable → no flag at all.
+	blind := newFakeExecutor().script("uname -m", executor.Result{Stdout: "sparc64\n"})
+	if got := EnginePlatform(ctx, blind, DockerInfo{Architecture: "sparc64"}); got != "" {
+		t.Fatalf("got %q, want no platform when nothing recognizable was reported", got)
+	}
+}
+
+// ---- GatewayContainerConfig ----
+
+func testGateway() catalog.GatewayConfig {
+	return catalog.GatewayConfig{
+		BindAddr: "127.0.0.1",
+		Port:     4100,
+		Networks: []catalog.GatewayNetwork{
+			{ChainID: 369, Upstreams: []catalog.GatewayUpstream{
+				{ID: "local-node", Endpoint: "http://127.0.0.1:8545", Local: true},
+				{ID: "fallback-1", Endpoint: "https://rpc.example.com"},
+			}},
+			{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+				{ID: "mainnet-1", Endpoint: "wss://mainnet.example.com/ws"},
+			}},
+		},
+	}
+}
+
+func TestGatewayContainerConfig_ListensWideOnTheContainerPort(t *testing.T) {
+	got := GatewayContainerConfig(testGateway(), DockerHostAlias)
+
+	if got.Bind() != "0.0.0.0" {
+		t.Fatalf("in-container bind: got %q, want 0.0.0.0", got.Bind())
+	}
+	if got.HTTP() != 4000 {
+		t.Fatalf("in-container port: got %d, want 4000 (the host port lives on the -p mapping)", got.HTTP())
+	}
+}
+
+func TestGatewayContainerConfig_RewritesLoopbackUpstreamsOnly(t *testing.T) {
+	g := testGateway()
+	g.Networks[0].Upstreams = append(g.Networks[0].Upstreams,
+		catalog.GatewayUpstream{Endpoint: "ws://localhost:8546"},
+		catalog.GatewayUpstream{Endpoint: "http://[::1]:8545/path"},
+		catalog.GatewayUpstream{Endpoint: "http://100.64.0.7:8545"},
+	)
+	got := GatewayContainerConfig(g, DockerHostAlias)
+
+	want := []string{
+		"http://" + DockerHostAlias + ":8545",
+		"https://rpc.example.com",
+		"ws://" + DockerHostAlias + ":8546",
+		"http://" + DockerHostAlias + ":8545/path",
+		"http://100.64.0.7:8545",
+	}
+	for i, w := range want {
+		if got := got.Networks[0].Upstreams[i].Endpoint; got != w {
+			t.Fatalf("upstream %d: got %q, want %q", i, got, w)
+		}
+	}
+}
+
+func TestGatewayContainerConfig_EmptyAliasDisablesUpstreamRewrite(t *testing.T) {
+	got := GatewayContainerConfig(testGateway(), "")
+	if ep := got.Networks[0].Upstreams[0].Endpoint; ep != "http://127.0.0.1:8545" {
+		t.Fatalf("got %q, want the endpoint untouched", ep)
+	}
+}
+
+// The deep copy is the point: a shallow one would rewrite the operator's own
+// upstream slice through the shared backing array.
+func TestGatewayContainerConfig_DoesNotMutateCaller(t *testing.T) {
+	g := testGateway()
+	_ = GatewayContainerConfig(g, DockerHostAlias)
+
+	if ep := g.Networks[0].Upstreams[0].Endpoint; ep != "http://127.0.0.1:8545" {
+		t.Fatalf("caller's config was mutated: upstream endpoint is now %q", ep)
+	}
+	if g.BindAddr != "127.0.0.1" || g.Port != 4100 {
+		t.Fatalf("caller's config was mutated: %+v", g)
+	}
+}
+
+func TestGatewayContainerConfig_RendersUsableContainerConfig(t *testing.T) {
+	yaml, err := catalog.RenderGatewayConfig(GatewayContainerConfig(testGateway(), DockerHostAlias))
+	if err != nil {
+		t.Fatalf("RenderGatewayConfig: %v", err)
+	}
+	for _, want := range []string{
+		`httpHostV4: "0.0.0.0"`,
+		"httpPortV4: 4000",
+		`endpoint: "http://host.docker.internal:8545"`,
+		"chainId: 1",
+	} {
+		if !strings.Contains(yaml, want) {
+			t.Fatalf("want %q in:\n%s", want, yaml)
+		}
 	}
 }
 

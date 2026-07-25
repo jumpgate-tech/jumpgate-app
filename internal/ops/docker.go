@@ -20,6 +20,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -259,6 +262,88 @@ func (d DockerInfo) VMBacked() bool {
 }
 
 // ---------------------------------------------------------------------
+// image platform
+// ---------------------------------------------------------------------
+
+// unameArchProbe asks the TARGET HOST's own shell what CPU it is on. It is
+// the second opinion EnginePlatform needs; see there for why one reading is
+// not enough.
+const unameArchProbe = "uname -m"
+
+// PlatformForArch maps a CPU architecture name onto a docker `--platform`
+// value. It accepts every spelling this codebase meets: `docker info`'s and
+// `uname -m`'s (x86_64, aarch64, armv7l) and Go's runtime.GOARCH (amd64,
+// arm64).
+//
+// An empty or unrecognized arch yields "", meaning "emit no --platform and
+// let the engine choose". That is deliberate: a WRONG --platform is strictly
+// worse than none, because it turns an engine's correct multi-arch manifest
+// selection into a hard "no matching manifest" failure.
+func PlatformForArch(arch string) string {
+	switch strings.ToLower(strings.TrimSpace(arch)) {
+	case "x86_64", "x86-64", "amd64":
+		return "linux/amd64"
+	case "aarch64", "arm64", "arm64v8":
+		return "linux/arm64"
+	case "armv7l", "armhf", "arm":
+		return "linux/arm/v7"
+	default:
+		return ""
+	}
+}
+
+// DefaultPlatform is the --platform ERPCRunArgs emits when a run spec names
+// none: the architecture valve-node-app ITSELF was built for.
+//
+// That is the right default because the container backend exists for the
+// operator's own desktop (see this file's header), where the app and the
+// engine are on the same machine — and unlike anything reported by the
+// docker CLI, this reading cannot be distorted by binary translation.
+func DefaultPlatform() string { return PlatformForArch(runtime.GOARCH) }
+
+// EnginePlatform resolves the --platform value to run images as on this
+// target. It exists because `docker info`'s architecture cannot be trusted
+// on its own, which is a real, hand-observed failure and not a theoretical
+// one:
+//
+// On an Apple Silicon Mac whose docker CLI is an x86_64 binary running under
+// Rosetta, the arch reading comes back "x86_64". `docker run` of a locally
+// built arm64 image then reports "Unable to find image locally" and goes off
+// to PULL a nonexistent amd64 variant — the image is right there, it is just
+// being looked up under the wrong platform. Passing --platform on BUILD is
+// not enough; it is required on RUN.
+//
+// The host's own shell is not translated, so `uname -m` there reports the
+// real CPU. When the two readings disagree AND the engine is VM-backed, the
+// host wins: a desktop VM engine runs on the same silicon as its host, so a
+// disagreement there means the CLI is misreporting. When the engine is NOT
+// VM-backed the engine's reading wins — a plain engine reached over SSH or
+// DOCKER_HOST genuinely can be a different architecture from the machine
+// running this probe, and there the host reading is the misleading one.
+//
+// The one case this rule gets wrong is a deliberately cross-architecture
+// desktop VM (`colima start --arch x86_64` on an arm64 Mac). Set
+// ERPCRunSpec.Platform explicitly for that; an explicit value always wins.
+func EnginePlatform(ctx context.Context, e executor.Executor, info DockerInfo) string {
+	engine := PlatformForArch(info.Architecture)
+
+	res, err := e.Run(ctx, unameArchProbe, nil)
+	if err != nil || res.ExitCode != 0 {
+		// Best effort by design: a target without `uname` still deserves the
+		// engine's own reading rather than a failed provisioning run.
+		return engine
+	}
+	host := PlatformForArch(firstNonEmptyLine(res.Stdout))
+	if host == "" {
+		return engine
+	}
+	if engine == "" || (host != engine && info.VMBacked()) {
+		return host
+	}
+	return engine
+}
+
+// ---------------------------------------------------------------------
 // eRPC container spec (pure rendering)
 // ---------------------------------------------------------------------
 
@@ -311,6 +396,13 @@ type ERPCRunSpec struct {
 	BindAddr string
 	// HostPort is the host-side port (0 → erpcContainerPort).
 	HostPort int
+	// Platform is the image platform to run as, e.g. "linux/arm64"
+	// ("" → DefaultPlatform()). It must be set on RUN, not only on BUILD:
+	// docker resolves an image ref by (ref, platform), so a CLI that
+	// misreports its architecture looks up the wrong variant of a perfectly
+	// present local image and falls through to a pull. See EnginePlatform
+	// for how to derive this for a target the app is not running on.
+	Platform string
 	// HostConfigPath is the absolute path to erpc.yaml ON THE HOST. It is
 	// bind-mounted read-only: the gateway never writes its config, and a
 	// read-only mount means a compromised gateway cannot rewrite its own
@@ -354,11 +446,21 @@ func ERPCRunArgs(spec ERPCRunSpec) []string {
 	if bind == "" {
 		bind = "127.0.0.1"
 	}
+	platform := spec.Platform
+	if platform == "" {
+		platform = DefaultPlatform()
+	}
 
 	args := []string{
 		"run", "-d",
 		"--name", name,
 		"--restart", "unless-stopped",
+	}
+	// Emitted only when a platform is actually known: PlatformForArch
+	// returns "" for an architecture nobody recognized, and there the
+	// engine's own manifest selection beats a guess.
+	if platform != "" {
+		args = append(args, "--platform", platform)
 	}
 	if spec.AddHostGateway {
 		args = append(args, "--add-host", DockerHostAlias+":host-gateway")
@@ -425,6 +527,59 @@ func ERPCContainerWire(w catalog.WireConfig, hostAlias string) catalog.WireConfi
 		w.RPCBindAddr = hostAlias
 	}
 	return w
+}
+
+// GatewayContainerConfig is ERPCContainerWire's equivalent for a multi-chain
+// gateway (catalog.GatewayConfig): it returns a COPY of g describing the
+// gateway as it must be configured from INSIDE the container. The two
+// rewrites, and why each is mandatory, are documented on ERPCContainerWire —
+// they apply identically here, just across every configured chain rather
+// than one.
+//
+// The copy is deep, unlike ERPCContainerWire's. A GatewayConfig carries
+// slices, so a plain value copy would share the caller's upstream backing
+// array and the endpoint rewrite below would reach back and mutate the
+// operator's own config — the kind of aliasing bug that only shows up once
+// the same GatewayConfig is rendered twice (once for the container, once for
+// the UI) and the second render is already container-flavored.
+//
+// Every loopback endpoint is rewritten, not just the ones flagged Local: an
+// endpoint on 127.0.0.1 is unreachable from inside the container regardless
+// of which tier the operator filed it under.
+func GatewayContainerConfig(g catalog.GatewayConfig, hostAlias string) catalog.GatewayConfig {
+	out := g
+	out.BindAddr = "0.0.0.0"
+	out.Port = erpcContainerPort
+
+	out.Networks = make([]catalog.GatewayNetwork, len(g.Networks))
+	for i, n := range g.Networks {
+		ups := make([]catalog.GatewayUpstream, len(n.Upstreams))
+		copy(ups, n.Upstreams)
+		if hostAlias != "" {
+			for j := range ups {
+				ups[j].Endpoint = rewriteLoopbackHost(ups[j].Endpoint, hostAlias)
+			}
+		}
+		out.Networks[i] = catalog.GatewayNetwork{ChainID: n.ChainID, Upstreams: ups}
+	}
+	return out
+}
+
+// rewriteLoopbackHost swaps a loopback host in endpoint for hostAlias,
+// preserving scheme, port and path. An endpoint that does not parse, or that
+// is not loopback, is returned untouched — being conservative here matters
+// because a mangled upstream URL is a gateway that silently serves nothing.
+func rewriteLoopbackHost(endpoint, hostAlias string) string {
+	u, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || u.Host == "" || !isLoopbackAddr(u.Hostname()) {
+		return endpoint
+	}
+	if port := u.Port(); port != "" {
+		u.Host = net.JoinHostPort(hostAlias, port)
+	} else {
+		u.Host = hostAlias
+	}
+	return u.String()
 }
 
 // isLoopbackAddr reports whether addr is one of the loopback spellings a

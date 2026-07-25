@@ -1,0 +1,623 @@
+package setup
+
+// Gateway provisioning: getting ONE eRPC instance up, fronting however many
+// chains the operator configured.
+//
+// WHY this is a separate plan rather than a mode of Plan(): the nine-step
+// node chain exists because a chain client is a big, stateful, Linux-only
+// install — it needs its own service account, a toolchain to build with,
+// gigabytes of dataset, and a two-process handshake before it is worth
+// anything. A gateway is a config file and a listener. It has no dataset, no
+// account of its own, nothing to build, and no peer to shake hands with, so
+// six of those nine steps have nothing to do. Expressing it as a short,
+// honest three-step plan is what lets a gateway run on a macOS or Windows
+// desktop (via the docker backend) that Plan's preflight can never accept.
+//
+// The steps are: preflight (can this target host a gateway, and is the port
+// free), config (render erpc.yaml and put it on the target), run (start it
+// and confirm it actually answers RPC).
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"path"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/valve-tech/valve-node-app/internal/catalog"
+	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/valve-node-app/internal/ops"
+)
+
+// Backends a gateway can be hosted on.
+//
+// Docker is the cross-platform one and the reason the container path exists
+// at all (internal/ops/docker.go): it is the only way to run a gateway on
+// the operator's own macOS/Windows machine. Systemd is for a Linux target
+// that is already hosting node services — the gateway then joins them as
+// another hardened, de-rooted unit.
+const (
+	BackendDocker  = "docker"
+	BackendSystemd = "systemd"
+)
+
+// Unit naming for the systemd backend, matching execUnitName/beaconUnitName.
+const (
+	erpcUnitName = "valve-node-app-erpc.service"
+	erpcUnitPath = "/etc/systemd/system/" + erpcUnitName
+)
+
+// gatewayDataDir is the systemd backend's data root. A gateway has no
+// dataset, so this exists only to give the unit a ReadWritePaths= and to
+// hold erpc.yaml. It is deliberately NOT chain-scoped (unlike a node's
+// /var/lib/valve-node-app/<chainId>): one gateway serves every chain.
+const gatewayDataDir = "/var/lib/valve-node-app"
+
+// gatewayHomeDir is the per-user directory the docker backend keeps
+// erpc.yaml in, under the target's $HOME.
+const gatewayHomeDir = ".valve-node-app"
+
+// gatewayReadyTimeout/gatewayPollInterval bound the wait for a freshly
+// started gateway to answer RPC. Package vars, not consts, so tests can
+// shrink them to avoid real sleeps — same arrangement as handshakeTimeout.
+var (
+	gatewayReadyTimeout = 60 * time.Second
+	gatewayPollInterval = 2 * time.Second
+)
+
+// gatewayChainIDCall is the probe body the run step's check posts.
+const gatewayChainIDCall = `{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}`
+
+// PlanGateway returns the ordered steps that put a gateway on a target:
+// preflight, config, run.
+//
+// The config is validated here, at plan time, by rendering it — exactly as
+// Plan calls RenderUnits up front — so an unusable gateway (no networks, a
+// bad chain id, an endpoint with no scheme) fails immediately instead of
+// partway through RunAll with a container already removed.
+//
+// Note for the systemd backend: the unit runs as catalog.ServiceUser, and
+// this plan does not create that account or install the erpc binary. Both
+// are the node plan's job. A systemd gateway is therefore an addition to a
+// box valve-node-app already provisioned; a gateway on a bare machine is
+// what the docker backend is for.
+func PlanGateway(g catalog.GatewayConfig, backend string) ([]Step, error) {
+	switch backend {
+	case BackendDocker, BackendSystemd:
+	default:
+		return nil, fmt.Errorf("setup: unknown gateway backend %q (want %q or %q)", backend, BackendDocker, BackendSystemd)
+	}
+	if _, err := catalog.RenderGatewayConfig(g); err != nil {
+		return nil, fmt.Errorf("setup: %w", err)
+	}
+
+	p := &gatewayPlan{gw: g, backend: backend}
+	return []Step{p.preflightStep(), p.configStep(), p.runStep()}, nil
+}
+
+// gatewayPlan is the state the three steps share. It exists because Step's
+// funcs are handed a *State carrying a catalog.WireConfig — a node's config,
+// which cannot describe a gateway — so the gateway config travels by closure
+// instead, and this is what those closures close over.
+type gatewayPlan struct {
+	gw      catalog.GatewayConfig
+	backend string
+
+	// mu guards the two fields below. RunAll is sequential, so the lock is
+	// not contended; it is here so a caller driving steps concurrently
+	// cannot race on them.
+	mu sync.Mutex
+	// dockerConfigPath memoizes the path resolved lazily on the target (see
+	// configPath) so every step that needs it agrees on one answer.
+	dockerConfigPath string
+	// configPending is set by the config step whenever it (re)writes
+	// erpc.yaml and cleared by the run step once the gateway has actually
+	// been restarted onto it.
+	//
+	// WHY it has to exist: RunAll skips any step whose Verify already holds,
+	// and a gateway serving the PREVIOUS config answers eth_chainId exactly
+	// like one serving the new config. Without this, editing an upstream
+	// would rewrite the file and then skip the restart entirely — setup
+	// would report success while the old config kept serving. It is the
+	// cross-step form of the change detection wireStep does within one step.
+	configPending bool
+}
+
+func (p *gatewayPlan) markConfigPending() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.configPending = true
+}
+
+func (p *gatewayPlan) clearConfigPending() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.configPending = false
+}
+
+func (p *gatewayPlan) configIsPending() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.configPending
+}
+
+// ---------------------------------------------------------------------
+// paths
+// ---------------------------------------------------------------------
+
+// configPath resolves where erpc.yaml lives ON THE TARGET.
+//
+// The systemd answer is fixed and is derived from the same WireConfig the
+// unit is rendered from, so the file's location and the unit's --config flag
+// cannot drift apart.
+//
+// The docker answer is under the target's $HOME, and that is not arbitrary:
+// on a macOS/Windows desktop — the whole reason the docker backend exists —
+// /var/lib is not writable without root, and worse, it is not shared into
+// the engine's VM (Docker Desktop shares /Users, /tmp and /private, not
+// /var/lib). A bind mount whose host path the VM cannot see does not fail;
+// it silently mounts an empty directory, and the gateway starts with no
+// config at all. $HOME is inside a shared path on every desktop engine.
+func (p *gatewayPlan) configPath(ctx context.Context, e executor.Executor) (string, error) {
+	if p.backend == BackendSystemd {
+		return p.unitWire().ERPCConfigPath(), nil
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.dockerConfigPath != "" {
+		return p.dockerConfigPath, nil
+	}
+	res, err := e.Run(ctx, `printf '%s\n' "$HOME"`, nil)
+	if err != nil {
+		return "", fmt.Errorf("gateway: resolve $HOME on the target: %w", err)
+	}
+	home := strings.TrimSpace(res.Stdout)
+	if res.ExitCode != 0 || home == "" {
+		return "", fmt.Errorf("gateway: could not resolve $HOME on the target (exit %d): the docker backend keeps erpc.yaml there because it must be a path the engine can bind-mount", res.ExitCode)
+	}
+	p.dockerConfigPath = path.Join(home, gatewayHomeDir, "erpc.yaml")
+	return p.dockerConfigPath, nil
+}
+
+// unitWire is the minimal catalog.WireConfig catalog.RenderERPCUnit needs.
+// It reads exactly three things from it — DataDir (for ReadWritePaths= and
+// the --config path) and the eRPC bind/port (to decide whether the unit
+// needs CAP_NET_BIND_SERVICE for a privileged port) — and none of the
+// node-shaped fields, which is why a gateway can borrow the node's unit
+// template without pretending to be a node.
+func (p *gatewayPlan) unitWire() catalog.WireConfig {
+	return catalog.WireConfig{
+		DataDir:      gatewayDataDir,
+		ERPCBindAddr: p.gw.Bind(),
+		ERPCPort:     p.gw.HTTP(),
+	}
+}
+
+// ---------------------------------------------------------------------
+// preflight
+// ---------------------------------------------------------------------
+
+// preflightStep, like the node plan's, has nothing to fix and so has no Run:
+// RunAll's Verify pre-check IS the check, and its failure is terminal.
+func (p *gatewayPlan) preflightStep() Step {
+	return Step{
+		ID:    "preflight",
+		Title: "Preflight checks (" + p.backend + " gateway)",
+		Verify: func(ctx context.Context, e executor.Executor, st *State) error {
+			return p.preflight(ctx, e)
+		},
+	}
+}
+
+func (p *gatewayPlan) preflight(ctx context.Context, e executor.Executor) error {
+	switch p.backend {
+	case BackendDocker:
+		info, err := ops.ProbeDocker(ctx, e)
+		if err != nil {
+			// Wrapped, not reworded: ops.ErrDockerAbsent must survive to the
+			// caller so the UI can offer an install prompt instead of a
+			// generic failure, and the typed error already carries the hint.
+			return fmt.Errorf("preflight: %w", err)
+		}
+		if info.WindowsContainers() {
+			return fmt.Errorf("preflight: this docker engine is in Windows-container mode, and the eRPC image is a Linux image — switch Docker to Linux containers and retry")
+		}
+		if !info.DaemonReachable {
+			return fmt.Errorf("preflight: the docker CLI is installed but no engine answered — start Docker Desktop / OrbStack / colima (or `systemctl start docker`) and retry: %s", info.DaemonError)
+		}
+	case BackendSystemd:
+		if err := requireLinuxRoot(ctx, e); err != nil {
+			return err
+		}
+	}
+	return p.checkPortFree(ctx, e)
+}
+
+// requireLinuxRoot performs the two host expectations a systemd install has.
+//
+// steps.go's preflightCheck opens with the same two probes, but a gateway
+// cannot call it: the rest of that function sizes a chain dataset via
+// catalog.ExpectedBytes and scans the exec/beacon/engine ports, and neither
+// applies here — a gateway stores nothing, and it fronts chains this app has
+// no node support for at all, so ExpectedBytes would reject the config
+// outright. The overlap is these two commands, deliberately left duplicated
+// rather than refactoring a function two plans depend on.
+func requireLinuxRoot(ctx context.Context, e executor.Executor) error {
+	res, err := e.Run(ctx, "uname", nil)
+	if err != nil {
+		return fmt.Errorf("preflight: uname: %w", err)
+	}
+	if osName := strings.TrimSpace(res.Stdout); osName != "Linux" {
+		return fmt.Errorf("preflight: a systemd gateway targets a Linux host, but this one reports %q — run the gateway on the %q backend instead, or point valve-node-app at a Linux target over SSH.", osName, BackendDocker)
+	}
+
+	res, err = e.Run(ctx, "id -u", nil)
+	if err != nil {
+		return fmt.Errorf("preflight: id -u: %w", err)
+	}
+	if uid := strings.TrimSpace(res.Stdout); uid != "0" {
+		return fmt.Errorf("preflight: installing a systemd unit needs root on the target (SSH as root, or run valve-node-app as root in local mode); id -u reported %q.", uid)
+	}
+	return nil
+}
+
+// listenerProbe lists the target's listening TCP sockets using whichever
+// tool it actually has. `ss` is Linux-only and `netstat -an` is what a macOS
+// desktop has; `lsof` is last because without root it only sees the invoking
+// user's own sockets, which would make a busy port look free. Each is tried
+// in turn — a missing binary exits non-zero and falls through.
+//
+// LISTEN filtering matters: `netstat -an` prints established connections
+// too, and a connection whose remote port happens to match would otherwise
+// read as a busy local port and terminally fail a preflight that has no Run
+// to fix it.
+const listenerProbe = `{ ss -ltn 2>/dev/null || netstat -an 2>/dev/null || lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null; } | grep -Ei '[:.]%d([^0-9]|$)' | grep -i listen`
+
+// checkPortFree fails when something other than our own gateway is already
+// listening on the port the gateway is about to publish.
+//
+// Two deliberate leniencies. A target with none of the three tools yields no
+// output and reads as free: docker and systemd both fail loudly and
+// specifically on a port collision anyway ("port is already allocated"), so
+// the cost of guessing wrong that way is a worse error message, whereas a
+// false "busy" blocks setup outright. And our own already-running gateway is
+// exempt, which is what makes re-running this plan against a live gateway
+// (a config change, a resume) work at all.
+func (p *gatewayPlan) checkPortFree(ctx context.Context, e executor.Executor) error {
+	if p.gatewayHoldsPort(ctx, e) {
+		return nil
+	}
+	port := p.gw.HTTP()
+	res, err := e.Run(ctx, fmt.Sprintf(listenerProbe, port), nil)
+	if err != nil {
+		return fmt.Errorf("preflight: probe listeners on port %d: %w", port, err)
+	}
+	if res.ExitCode == 0 && strings.TrimSpace(res.Stdout) != "" {
+		return fmt.Errorf("preflight: port %d is already in use by something other than valve-node-app's gateway:\n%s", port, strings.TrimSpace(res.Stdout))
+	}
+	return nil
+}
+
+// gatewayHoldsPort reports whether OUR gateway is the thing already on the
+// port. Any failure reading that answer is reported as "no": the caller then
+// runs the port check, which produces a precise, evidence-carrying error
+// rather than this function inventing one.
+func (p *gatewayPlan) gatewayHoldsPort(ctx context.Context, e executor.Executor) bool {
+	switch p.backend {
+	case BackendDocker:
+		running, err := ops.ContainerRunning(ctx, e, ops.ERPCContainerName)
+		return err == nil && running
+	case BackendSystemd:
+		res, err := e.Run(ctx, "systemctl is-active "+erpcUnitName, nil)
+		return err == nil && strings.TrimSpace(res.Stdout) == "active"
+	}
+	return false
+}
+
+// ---------------------------------------------------------------------
+// config
+// ---------------------------------------------------------------------
+
+func (p *gatewayPlan) configStep() Step {
+	return Step{
+		ID:    "config",
+		Title: "Write gateway config (erpc.yaml)",
+		Run: func(ctx context.Context, e executor.Executor, st *State) error {
+			cfg, err := p.renderConfig()
+			if err != nil {
+				return err
+			}
+			dest, err := p.configPath(ctx, e)
+			if err != nil {
+				return err
+			}
+			// 0640 on the systemd backend, then a chgrp so the unprivileged
+			// service user can still read it: upstream endpoints routinely
+			// carry provider API keys, so this file is a secret in the same
+			// sense the JWT is. The container backend keeps 0644 — the file
+			// is bind-mounted read-only into an image whose eRPC process is
+			// not the host user, so narrowing it would only lock the gateway
+			// out of its own config.
+			mode := writeModeGatewayConfig(p.backend)
+			if err := e.WriteFile(ctx, dest, []byte(cfg), mode); err != nil {
+				return fmt.Errorf("config: write %s: %w", dest, err)
+			}
+			if p.backend == BackendSystemd {
+				res, err := e.Run(ctx, fmt.Sprintf("chgrp %s %s", catalog.ServiceGroup, shQuote(dest)), streamOpts(ctx, st, "config"))
+				if err != nil {
+					return fmt.Errorf("config: chgrp %s: %w", dest, err)
+				}
+				if res.ExitCode != 0 {
+					return fmt.Errorf("config: could not give group %s read access to %s (exit %d): %s — the gateway unit runs as that account, which the node setup creates",
+						catalog.ServiceGroup, dest, res.ExitCode, strings.TrimSpace(res.Stderr))
+				}
+			}
+			p.markConfigPending()
+			return nil
+		},
+		Verify: func(ctx context.Context, e executor.Executor, st *State) error {
+			want, err := p.renderConfig()
+			if err != nil {
+				return err
+			}
+			dest, err := p.configPath(ctx, e)
+			if err != nil {
+				return err
+			}
+			got, err := e.ReadFile(ctx, dest)
+			if err != nil {
+				return fmt.Errorf("config: %s is not written yet: %w", dest, err)
+			}
+			// Byte comparison, for the same reason wireStep does it: a file
+			// that merely EXISTS may be a leftover from a previous run with
+			// different chains or upstreams. Treating that as unverified is
+			// what drives Run to rewrite it and the run step to restart the
+			// gateway, instead of reporting success while the old config
+			// keeps serving.
+			if string(got) != want {
+				return fmt.Errorf("config: %s does not match the desired gateway config (chains or upstreams changed since it was written)", dest)
+			}
+			return nil
+		},
+	}
+}
+
+// writeModeGatewayConfig is split out only so the two modes are stated once.
+func writeModeGatewayConfig(backend string) fs.FileMode {
+	if backend == BackendSystemd {
+		return 0640
+	}
+	return 0644
+}
+
+// renderConfig produces the erpc.yaml for this backend.
+//
+// The docker backend renders the CONTAINER's view of the gateway (wide
+// in-container listener, loopback upstreams re-pointed at the host alias)
+// rather than the operator's view — see ops.GatewayContainerConfig for why
+// each rewrite is mandatory. Both the write and the verify go through here,
+// so a container config can never be verified against a host config.
+func (p *gatewayPlan) renderConfig() (string, error) {
+	g := p.gw
+	if p.backend == BackendDocker {
+		g = ops.GatewayContainerConfig(g, ops.DockerHostAlias)
+	}
+	cfg, err := catalog.RenderGatewayConfig(g)
+	if err != nil {
+		return "", fmt.Errorf("config: render gateway config: %w", err)
+	}
+	return cfg, nil
+}
+
+// ---------------------------------------------------------------------
+// run
+// ---------------------------------------------------------------------
+
+func (p *gatewayPlan) runStep() Step {
+	title := "Start gateway container"
+	if p.backend == BackendSystemd {
+		title = "Start gateway service (" + erpcUnitName + ")"
+	}
+	return Step{
+		ID:    "run",
+		Title: title,
+		Run: func(ctx context.Context, e executor.Executor, st *State) error {
+			var err error
+			switch p.backend {
+			case BackendDocker:
+				err = p.runDocker(ctx, e, st)
+			case BackendSystemd:
+				err = p.runSystemd(ctx, e, st)
+			}
+			if err != nil {
+				return err
+			}
+			if err := p.waitReady(ctx, e); err != nil {
+				return err
+			}
+			p.clearConfigPending()
+			return nil
+		},
+		Verify: func(ctx context.Context, e executor.Executor, st *State) error {
+			if p.configIsPending() {
+				return fmt.Errorf("run: the gateway has not been (re)started onto the config just written")
+			}
+			return p.gatewayCheck(ctx, e)
+		},
+	}
+}
+
+func (p *gatewayPlan) runDocker(ctx context.Context, e executor.Executor, st *State) error {
+	dest, err := p.configPath(ctx, e)
+	if err != nil {
+		return err
+	}
+	info, err := ops.ProbeDocker(ctx, e)
+	if err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+
+	// Remove before run, always. A container's published port, mounts and
+	// image are all fixed at creation, so applying a changed config is
+	// necessarily remove + run, never a restart — and an absent container
+	// makes this a no-op rather than an error.
+	if err := ops.RemoveContainer(ctx, e, ops.ERPCContainerName); err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+
+	args := ops.ERPCRunArgs(ops.ERPCRunSpec{
+		BindAddr:       p.gw.Bind(),
+		HostPort:       p.gw.HTTP(),
+		HostConfigPath: dest,
+		// A VM-backed engine already provides host.docker.internal; a plain
+		// Linux engine only has it when the container is started with this
+		// mapping, and the rendered config points local upstreams at exactly
+		// that name.
+		AddHostGateway: !info.VMBacked(),
+		Platform:       ops.EnginePlatform(ctx, e, info),
+	})
+	res, err := ops.DockerRun(ctx, e, args...)
+	if err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("run: docker run failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	_ = emit(ctx, st, Event{StepID: "run", Line: strings.TrimSpace(res.Stdout)})
+	return nil
+}
+
+func (p *gatewayPlan) runSystemd(ctx context.Context, e executor.Executor, st *State) error {
+	unit, err := catalog.RenderERPCUnit(p.unitWire())
+	if err != nil {
+		return fmt.Errorf("run: render %s: %w", erpcUnitName, err)
+	}
+	if err := e.WriteFile(ctx, erpcUnitPath, []byte(unit), 0644); err != nil {
+		return fmt.Errorf("run: write %s: %w", erpcUnitPath, err)
+	}
+
+	// The unconditional restart is what applies a config change. wireStep
+	// goes to the trouble of detecting a content change first because
+	// restarting a chain client costs a resync-shaped outage; restarting a
+	// stateless gateway costs a few hundred milliseconds, so buying that
+	// distinction with extra machinery would be a bad trade.
+	cmd := fmt.Sprintf("systemctl daemon-reload && systemctl enable --now %[1]s && systemctl restart %[1]s", erpcUnitName)
+	res, err := e.Run(ctx, cmd, streamOpts(ctx, st, "run"))
+	if err != nil {
+		return fmt.Errorf("run: systemctl: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("run: systemctl daemon-reload/enable/restart %s failed (exit %d): %s", erpcUnitName, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return nil
+}
+
+// waitReady polls until the gateway answers, because "the container started"
+// and "the gateway serves RPC" are seconds apart — eRPC has to read its
+// config and open its listener — and a Verify run immediately after Run
+// would otherwise fail a gateway that is merely still starting.
+func (p *gatewayPlan) waitReady(ctx context.Context, e executor.Executor) error {
+	deadline := time.Now().Add(gatewayReadyTimeout)
+	for {
+		err := p.gatewayCheck(ctx, e)
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("run: gateway did not answer within %s: %w", gatewayReadyTimeout, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(gatewayPollInterval):
+		}
+	}
+}
+
+// gatewayCheck is the gateway's equivalent of the node plan's handshake: one
+// real RPC call, end to end, through the gateway's own port and the URL path
+// callers will actually use (/<project>/evm/<chainId>).
+//
+// It targets the FIRST configured chain. Checking every chain would make the
+// step's success depend on every upstream the operator listed being healthy
+// right now, which is the opposite of what a gateway is for — a gateway with
+// one dead fallback is still a working gateway. One chain proves what this
+// step is responsible for: the process is up, the config parsed, the routing
+// path resolves, and an upstream can be reached.
+//
+// eth_chainId specifically, because its answer is verifiable: a gateway that
+// happily returns some OTHER chain's id has misrouted, and that is a
+// misconfiguration worth failing on rather than a transient upstream fault.
+func (p *gatewayPlan) gatewayCheck(ctx context.Context, e executor.Executor) error {
+	chainID := p.gw.Networks[0].ChainID
+	url := fmt.Sprintf("http://%s:%d%s", probeHost(p.gw.Bind()), p.gw.HTTP(), p.gw.PathFor(chainID))
+
+	cmd := fmt.Sprintf("curl -s -X POST -H 'Content-Type: application/json' --data %s %s",
+		shQuote(gatewayChainIDCall), shQuote(url))
+	res, err := e.Run(ctx, cmd, nil)
+	if err != nil {
+		return fmt.Errorf("gateway: eth_chainId probe: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("gateway: eth_chainId at %s failed (curl exit %d): %s", url, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+
+	var body struct {
+		Result string `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	raw := strings.TrimSpace(res.Stdout)
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		// Not JSON at all is the normal shape of "nothing is listening yet"
+		// (empty body) — report the raw answer, which is what the operator
+		// needs to tell that apart from an HTML error page from something
+		// else on the port.
+		return fmt.Errorf("gateway: %s did not answer eth_chainId with JSON: %q", url, raw)
+	}
+	if body.Error != nil {
+		return fmt.Errorf("gateway: %s answered eth_chainId with an error: %s", url, body.Error.Message)
+	}
+	got, err := parseHexChainID(body.Result)
+	if err != nil {
+		return fmt.Errorf("gateway: %s returned an unreadable eth_chainId result %q: %w", url, body.Result, err)
+	}
+	if got != chainID {
+		return fmt.Errorf("gateway: %s is serving chain %d, but the config routes that path to chain %d", url, got, chainID)
+	}
+	return nil
+}
+
+// probeHost turns the gateway's bind address into something connectable. A
+// wildcard bind names every interface but is not itself a destination on
+// every platform (macOS refuses a connect to 0.0.0.0), so loopback is
+// probed instead — a wildcard listener is on loopback too. IPv6 literals are
+// bracketed because this value goes straight into a URL.
+func probeHost(bind string) string {
+	host := strings.Trim(bind, "[]")
+	switch host {
+	case "", "0.0.0.0":
+		return "127.0.0.1"
+	case "::", "::0":
+		return "[::1]"
+	}
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
+}
+
+// parseHexChainID reads a JSON-RPC quantity ("0x171") as a chain id.
+func parseHexChainID(hex string) (int, error) {
+	n, err := strconv.ParseUint(strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(hex), "0x"), "0X"), 16, 64)
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
