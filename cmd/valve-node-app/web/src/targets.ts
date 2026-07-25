@@ -53,9 +53,17 @@ export function renderTargets(root: HTMLElement): () => void {
 
     // One unified list, local target(s) first, then SSH servers.
     const ordered = [...targets].sort((a, b) => (a.mode === "local" ? -1 : 0) - (b.mode === "local" ? -1 : 0));
+    // A local target's capability is the host's; an SSH target is a Linux
+    // server by construction, so it can always run a node.
     const list = ordered.length
-      ? `<div class="card-grid">${ordered.map((t) => targetCard(t, catalog)).join("")}</div>`
+      ? `<div class="card-grid">${ordered
+          .map((t) => targetCard(t, catalog, t.mode !== "local" || localViable, hostOS))
+          .join("")}</div>`
       : `<div class="card empty-state"><p class="muted">No machines yet — pick an option below.</p></div>`;
+
+    // This machine can only be added once, so stop offering it once it is
+    // in the list — an option that can only fail is worse than no option.
+    const hasLocal = targets.some((t) => t.mode === "local");
 
     body.innerHTML = `
       <section class="section">
@@ -64,7 +72,7 @@ export function renderTargets(root: HTMLElement): () => void {
       </section>
       <section class="section">
         <div class="section-head"><h2>Add a machine</h2></div>
-        ${addOptions(localViable)}
+        ${addOptions(localViable, hasLocal)}
         ${showSSHForm ? sshFormMarkup() : ""}
       </section>
     `;
@@ -78,7 +86,7 @@ export function renderTargets(root: HTMLElement): () => void {
   // stated up front was a modal that interrupted you to say what the screen
   // already said, after you had committed to the action. Availability belongs
   // on the option itself, visible before you choose.
-  function addOptions(localViable: boolean): string {
+  function addOptions(localViable: boolean, hasLocal: boolean): string {
     const ssh = `
       <div class="card">
         <h3>A server over SSH ${badge("Available", "ok")}</h3>
@@ -117,8 +125,9 @@ export function renderTargets(root: HTMLElement): () => void {
         </div>
       `;
 
+    if (hasLocal) return `<div class="card-grid card-grid-wide">${ssh}</div>`;
     // Lead with whichever option can actually complete setup.
-    return `<div class="card-grid">${localViable ? local + ssh : ssh + local}</div>`;
+    return `<div class="card-grid card-grid-wide">${localViable ? local + ssh : ssh + local}</div>`;
   }
 
   async function handleAction(action: string, el: HTMLElement): Promise<void> {
@@ -240,14 +249,22 @@ export function renderTargets(root: HTMLElement): () => void {
   };
 }
 
-function targetCard(t: api.Target, catalog: api.Catalog): string {
+// canRunNode says whether THIS target can actually complete node setup. It has
+// to reach the card, not just the add-a-machine options: once a machine is
+// added the card is the only thing you interact with, and a card that offers
+// "Run setup wizard" on a host where setup cannot finish contradicts the very
+// option that warned you about it.
+function targetCard(t: api.Target, catalog: api.Catalog, canRunNode: boolean, hostOS: string): string {
   const wire = t.wire;
   const modeLabel = t.mode === "local" ? "this machine" : "SSH";
   const location = t.mode === "ssh" && t.ssh ? `${escapeHtml(t.ssh.User)}@${escapeHtml(t.ssh.Host)}` : modeLabel;
 
   let statusLine: string;
   let actions: string;
-  if (!wire) {
+  if (!wire && !canRunNode) {
+    statusLine = `${badge("can't run a node", "warn")} ${badge(hostOS || "not Linux", "neutral")}`;
+    actions = `<a class="btn btn-ghost" href="#/setup/${encodeURIComponent(t.id)}">Preview setup wizard</a>`;
+  } else if (!wire) {
     statusLine = badge("not set up", "neutral");
     actions = `<a class="btn" href="#/setup/${encodeURIComponent(t.id)}">Run setup wizard</a>`;
   } else {
