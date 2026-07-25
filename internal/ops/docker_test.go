@@ -32,10 +32,31 @@ func TestERPCRunArgs_Defaults(t *testing.T) {
 		"-p", "127.0.0.1:4000:4000",
 		"-v", "/var/lib/valve-node-app/369/erpc.yaml:/erpc.yaml:ro",
 		ERPCImageTag(),
-		"--config", "/erpc.yaml",
 	)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ERPCRunArgs mismatch\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+// The regression this guards is a container that cannot start at all: the
+// image ref must be the LAST argument, because anything after it replaces the
+// image's CMD — and the gateway image declares its binary as a CMD, not an
+// ENTRYPOINT. A trailing `--config /erpc.yaml` (which this function used to
+// emit) made docker try to exec the flag itself:
+// `exec: "--config": executable file not found in $PATH`.
+func TestERPCRunArgs_ImageRefIsLast(t *testing.T) {
+	for _, spec := range []ERPCRunSpec{
+		{HostConfigPath: "/tmp/erpc.yaml"},
+		{HostConfigPath: "/tmp/erpc.yaml", Platform: "linux/arm64", AddHostGateway: true, Image: "ghcr.io/erpc/erpc:0.1.1"},
+	} {
+		args := ERPCRunArgs(spec)
+		image := spec.Image
+		if image == "" {
+			image = ERPCImageTag()
+		}
+		if last := args[len(args)-1]; last != image {
+			t.Fatalf("ERPCRunArgs(%+v) ends with %q, want the image ref %q — arguments after the image replace the image's CMD", spec, last, image)
+		}
 	}
 }
 
@@ -879,5 +900,18 @@ func TestImageBuildArgs(t *testing.T) {
 				t.Errorf("context must be the final argument, got %v", got)
 			}
 		})
+	}
+}
+
+// The regression this guards was measured on a macOS host with Homebrew
+// `coreutils` installed: an x86_64 GNU uname ahead of /usr/bin/uname in PATH
+// reports "x86_64" on Apple Silicon, EnginePlatform believes the host over a
+// VM-backed engine, and `docker run --platform linux/amd64` of a locally
+// built arm64 image goes off to PULL — surfacing as "pull access denied" for
+// an image already on disk. `command -p` runs uname from the system's default
+// PATH, where no shim can answer for it.
+func TestUnameArchProbe_IgnoresPATHShims(t *testing.T) {
+	if !strings.HasPrefix(unameArchProbe, "command -p ") {
+		t.Fatalf("unameArchProbe is %q — it must resolve uname from the default PATH, or a shim can misreport the host architecture", unameArchProbe)
 	}
 }
