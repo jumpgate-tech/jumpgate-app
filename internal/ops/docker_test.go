@@ -106,8 +106,11 @@ func TestPlatformForArch(t *testing.T) {
 		"arm64":   "linux/arm64", // runtime.GOARCH
 		"ARM64":   "linux/arm64",
 		"armv7l":  "linux/arm/v7",
-		"":        "", // nothing known: say nothing
-		"riscv64": "", // unrecognized: an engine's own choice beats a guess
+		// "" means "this reading told us nothing", NOT "omit the flag" — see
+		// EnginePlatform and resolveRunPlatform, which fall through to the next
+		// reading rather than emitting no --platform.
+		"":        "",
+		"riscv64": "",
 	}
 	for arch, want := range cases {
 		if got := PlatformForArch(arch); got != want {
@@ -164,10 +167,66 @@ func TestEnginePlatform_FallsBackToEachReadingWhenTheOtherIsUnusable(t *testing.
 		t.Fatalf("got %q, want the host's reading when the engine reported none", got)
 	}
 
-	// Neither readable → no flag at all.
+	// Neither readable → this app's OWN architecture, never "".
+	//
+	// Returning "" used to mean "omit --platform", which reads as deferring to
+	// the image manifest and in fact defers to DOCKER_DEFAULT_PLATFORM. On an
+	// arm64 machine with that set to linux/amd64 it produced an emulated
+	// container that reported itself running and answered nothing.
 	blind := newFakeExecutor().script("uname -m", executor.Result{Stdout: "sparc64\n"})
-	if got := EnginePlatform(ctx, blind, DockerInfo{Architecture: "sparc64"}); got != "" {
-		t.Fatalf("got %q, want no platform when nothing recognizable was reported", got)
+	if got := EnginePlatform(ctx, blind, DockerInfo{Architecture: "sparc64"}); got != DefaultPlatform() {
+		t.Fatalf("got %q, want the fallback %q when nothing recognizable was reported", got, DefaultPlatform())
+	}
+}
+
+func TestDefaultPlatform_IsNeverEmpty(t *testing.T) {
+	if DefaultPlatform() == "" {
+		t.Fatal("an empty default is an omitted --platform, which is the bug")
+	}
+}
+
+// Emulation is an ARCHITECTURE mismatch. The ARM variant is deliberately not
+// part of it: an arm64 engine runs a linux/arm64/v8 image natively, and
+// treating that as emulation would flag every ordinary arm64 container.
+func TestEmulatedPlatform(t *testing.T) {
+	tests := []struct {
+		name       string
+		image, eng string
+		want       bool
+	}{
+		{"the measured bug: amd64 image on an arm64 engine", "linux/amd64", "linux/arm64", true},
+		{"native arm64", "linux/arm64", "linux/arm64", false},
+		{"variant is not a mismatch", "linux/arm64/v8", "linux/arm64", false},
+		{"spellings are normalized", "linux/x86_64", "linux/amd64", false},
+		{"unknown image reading accuses nobody", "", "linux/arm64", false},
+		{"unknown engine reading accuses nobody", "linux/amd64", "", false},
+		{"a malformed reading accuses nobody", "linux", "linux/arm64", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := EmulatedPlatform(tc.image, tc.eng); got != tc.want {
+				t.Fatalf("EmulatedPlatform(%q, %q) = %v, want %v", tc.image, tc.eng, got, tc.want)
+			}
+		})
+	}
+}
+
+// An emulated container is RUNNING — the engine really has it running, and
+// hiding that would remove the stop/restart the operator needs. What must not
+// happen is it reading as healthy, which is what the warning is for.
+func TestContainerStatus_EmulatedIsRunningButNotSilent(t *testing.T) {
+	st := ContainerStatus{State: StateRunning, Platform: "linux/amd64", EnginePlatform: "linux/arm64", Emulated: true}
+	if !st.Running() {
+		t.Error("an emulated container is still running")
+	}
+	w := st.EmulationWarning()
+	for _, want := range []string{"linux/amd64", "linux/arm64", "DOCKER_DEFAULT_PLATFORM"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("warning must name %q: %s", want, w)
+		}
+	}
+	if (ContainerStatus{State: StateRunning}).EmulationWarning() != "" {
+		t.Error("a native container must not be warned about")
 	}
 }
 
@@ -913,5 +972,158 @@ func TestImageBuildArgs(t *testing.T) {
 func TestUnameArchProbe_IgnoresPATHShims(t *testing.T) {
 	if !strings.HasPrefix(unameArchProbe, "command -p ") {
 		t.Fatalf("unameArchProbe is %q — it must resolve uname from the default PATH, or a shim can misreport the host architecture", unameArchProbe)
+	}
+}
+
+// ---------------------------------------------------------------------
+// the private network and the TLS front
+// ---------------------------------------------------------------------
+
+func TestERPCRunArgs_JoinsTheNetworkAndCanPublishNothing(t *testing.T) {
+	fronted := ERPCRunArgs(ERPCRunSpec{
+		ContainerName:  "valve-node-app-erpc",
+		HostConfigPath: "/home/o/.valve-node-app/erpc.yaml",
+		Network:        NetworkName,
+		NoPublish:      true,
+	})
+	joined := strings.Join(fronted, " ")
+	if !strings.Contains(joined, "--network "+NetworkName) {
+		t.Errorf("want the private network: %v", fronted)
+	}
+	if strings.Contains(joined, "-p ") {
+		// Caddy is the only front door; a published eRPC port would be a
+		// second, plaintext, unauthenticated way in that nobody asked for.
+		t.Errorf("a fronted gateway publishes nothing: %v", fronted)
+	}
+	// The config mount survives — it is how the gateway is configured at all.
+	if !strings.Contains(joined, "/home/o/.valve-node-app/erpc.yaml:/erpc.yaml:ro") {
+		t.Errorf("want the read-only config mount: %v", fronted)
+	}
+
+	plain := ERPCRunArgs(ERPCRunSpec{HostPort: 4100, Network: NetworkName})
+	if !strings.Contains(strings.Join(plain, " "), "-p 127.0.0.1:4100:4000") {
+		t.Errorf("an unfronted gateway still publishes: %v", plain)
+	}
+}
+
+// --platform is emitted on EVERY run and build, never conditionally. See
+// resolveRunPlatform for the measured failure an omitted flag produced.
+func TestRunAndBuildArgs_AlwaysCarryAPlatform(t *testing.T) {
+	if v := valueAfter(t, ERPCRunArgs(ERPCRunSpec{}), "--platform"); v != DefaultPlatform() {
+		t.Errorf("run platform = %q, want %q", v, DefaultPlatform())
+	}
+	if v := valueAfter(t, ImageBuildArgs(ImageBuildSpec{}), "--platform"); v != DefaultPlatform() {
+		t.Errorf("build platform = %q, want %q", v, DefaultPlatform())
+	}
+	if v := valueAfter(t, CaddyRunArgs(CaddyRunSpec{}), "--platform"); v != DefaultPlatform() {
+		t.Errorf("caddy platform = %q, want %q", v, DefaultPlatform())
+	}
+}
+
+func TestCaddyRunArgs(t *testing.T) {
+	args := CaddyRunArgs(CaddyRunSpec{
+		ContainerName:  "valve-node-app-caddy",
+		HostConfigPath: "/home/o/.valve-node-app/Caddyfile",
+		Network:        NetworkName,
+		HostPort:       8443,
+	})
+	joined := strings.Join(args, " ")
+
+	for _, want := range []string{
+		"--network " + NetworkName,
+		// The default bind is WIDE — a TLS front on loopback serves only the
+		// machine that never needed it.
+		"-p 0.0.0.0:8443:443",
+		"/home/o/.valve-node-app/Caddyfile:/etc/caddy/Caddyfile:ro",
+		// NOT optional: Caddy's internal CA lives in /data, and without a
+		// persistent volume it is regenerated on every recreate — measured, a
+		// different root fingerprint and every issued certificate invalidated.
+		catalog.CaddyDataVolume + ":" + catalog.CaddyDataPath,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q: %v", want, args)
+		}
+	}
+	// Nothing may follow the image ref: anything there REPLACES the image's
+	// CMD, which is what makes the config mount alone work.
+	if args[len(args)-1] != catalog.DefaultCaddyImage {
+		t.Errorf("the image ref must be last, got %v", args)
+	}
+}
+
+func TestCaddyRunArgs_MountsCertFilesAtTheSamePathBothSides(t *testing.T) {
+	args := CaddyRunArgs(CaddyRunSpec{
+		CertFile: "/var/lib/valve-node-app/tls/cert.pem",
+		KeyFile:  "/var/lib/valve-node-app/tls/key.pem",
+	})
+	joined := strings.Join(args, " ")
+	// One path true on both sides, so the Caddyfile can name it once.
+	for _, want := range []string{
+		"/var/lib/valve-node-app/tls/cert.pem:/var/lib/valve-node-app/tls/cert.pem:ro",
+		"/var/lib/valve-node-app/tls/key.pem:/var/lib/valve-node-app/tls/key.pem:ro",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q: %v", want, args)
+		}
+	}
+	// With no cert files there are exactly two mounts: the Caddyfile and the
+	// data volume. Counting them is the check, because the Caddyfile mount is
+	// itself read-only and a bare ":ro" search would always match.
+	if n := strings.Count(strings.Join(CaddyRunArgs(CaddyRunSpec{}), " "), "-v "); n != 2 {
+		t.Errorf("want only the Caddyfile and data-volume mounts, got %d: %v", n, CaddyRunArgs(CaddyRunSpec{}))
+	}
+}
+
+// A wipe of the TLS front must NOT take the certificate authority with it by
+// default: wiping chain data is routine, invalidating every trust-store
+// install on every device the operator owns is not.
+func TestCaddyService_WipeKeepsTheCAUnlessAskedOtherwise(t *testing.T) {
+	if v := CaddyServiceKeepingCA("default").Volumes; len(v) != 0 {
+		t.Errorf("the default front declares no volumes, got %v", v)
+	}
+	if v := CaddyServiceFor("default").Volumes; len(v) != 1 || v[0] != catalog.CaddyDataVolume {
+		t.Errorf("the explicit-CA form declares the data volume, got %v", v)
+	}
+	if got := CaddyContainerNameFor("default"); got != CaddyContainerName {
+		t.Errorf("the default gateway keeps the bare name, got %q", got)
+	}
+	if got := CaddyContainerNameFor("edge"); got != CaddyContainerName+"-edge" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestEnsureNetwork_IsIdempotent(t *testing.T) {
+	ctx := context.Background()
+
+	// Already there: inspect succeeds and nothing is created.
+	existing := newFakeExecutor()
+	if err := EnsureNetwork(ctx, existing, NetworkName); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	for _, c := range existing.callLog() {
+		if strings.Contains(c, "'create'") {
+			t.Fatalf("must not create a network that already exists: %v", existing.callLog())
+		}
+	}
+
+	// Absent: inspect fails, create runs.
+	absent := newFakeExecutor().script("'network' 'inspect'", executor.Result{ExitCode: 1, Stderr: "Error: No such network"})
+	if err := EnsureNetwork(ctx, absent, NetworkName); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	var created bool
+	for _, c := range absent.callLog() {
+		created = created || strings.Contains(c, "'network' 'create'")
+	}
+	if !created {
+		t.Fatalf("want a create: %v", absent.callLog())
+	}
+
+	// Lost a race with another provision: "already exists" is the goal state.
+	raced := newFakeExecutor().
+		script("'network' 'inspect'", executor.Result{ExitCode: 1}).
+		script("'network' 'create'", executor.Result{ExitCode: 1, Stderr: "Error response from daemon: network with name valve-node-app already exists"})
+	if err := EnsureNetwork(ctx, raced, NetworkName); err != nil {
+		t.Fatalf("losing the creation race is not a failure: %v", err)
 	}
 }

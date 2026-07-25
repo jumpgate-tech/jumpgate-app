@@ -13,9 +13,14 @@ import (
 // addGateway creates a top-level gateway placed on a target.
 func addGateway(t *testing.T, a *apiTestServer, id, targetID string, cfg catalog.GatewayConfig) gatewayView {
 	t.Helper()
+	return addGatewayOn(t, a, id, targetID, "docker", cfg)
+}
+
+func addGatewayOn(t *testing.T, a *apiTestServer, id, targetID, backend string, cfg catalog.GatewayConfig) gatewayView {
+	t.Helper()
 	res := a.do(t, "POST", "/api/gateways", map[string]any{
 		"id":        id,
-		"placement": map[string]string{"targetId": targetID, "backend": "docker"},
+		"placement": map[string]string{"targetId": targetID, "backend": backend},
 		"config":    cfg,
 	})
 	if res.StatusCode != http.StatusCreated {
@@ -100,11 +105,17 @@ func TestGateways_PlacementMustNameARegisteredMachine(t *testing.T) {
 // stores a REFERENCE, so moving the devnet's port moves the gateway with it.
 // With a frozen URL the gateway kept pointing at the old port and reported
 // itself perfectly healthy while every call went nowhere.
+// The gateway here is on the SYSTEMD backend on purpose: a systemd gateway is
+// an ordinary process, not a container, so it has no docker network to resolve
+// names on and must reach the devnet through its published HOST port — which
+// is what makes it the case where "does the reference follow the port" is a
+// question with an observable answer. The container-backend answer is a
+// container name, and is asserted separately below.
 func TestGateways_ManagedUpstreamFollowsTheDevnetsPort(t *testing.T) {
 	a := gatewayServer(t)
 	putConfig(t, a, svcDevnet, catalog.DevnetConfig{HTTPPort: 8600, WSPort: 8601})
 
-	addGateway(t, a, "default", "local", catalog.GatewayConfig{
+	addGatewayOn(t, a, "default", "local", "systemd", catalog.GatewayConfig{
 		Port: 4100,
 		Networks: []catalog.GatewayNetwork{{ChainID: catalog.DevnetChainID, Upstreams: []catalog.GatewayUpstream{
 			{ID: "devnet", Kind: catalog.UpstreamManagedDevnet, TargetID: "local"},
@@ -133,6 +144,40 @@ func TestGateways_ManagedUpstreamFollowsTheDevnetsPort(t *testing.T) {
 	// than filed in eRPC's 0.2-scored fallback tier.
 	if !u.Local {
 		t.Error("a managed upstream must be preferred over public fallbacks")
+	}
+}
+
+// Two containers this app placed on ONE machine talk over the private docker
+// network, by CONTAINER NAME. That is what lets the devnet publish nothing at
+// all, and it removes the host.docker.internal hop for the one case where both
+// ends are ours.
+//
+// The port asserted is the IN-CONTAINER one (8546), not the published host port
+// (8601): a container on the shared network reaches the listener directly, and
+// the publish mapping is not in that path.
+func TestGateways_SameMachineContainersTalkByContainerName(t *testing.T) {
+	a := gatewayServer(t)
+	putConfig(t, a, svcDevnet, catalog.DevnetConfig{HTTPPort: 8600, WSPort: 8601})
+
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{{ChainID: catalog.DevnetChainID, Upstreams: []catalog.GatewayUpstream{
+			{ID: "devnet", Kind: catalog.UpstreamManagedDevnet, TargetID: "local"},
+		}}},
+	})
+
+	got := decode[gatewayView](t, a.do(t, "GET", "/api/gateways/default", nil))
+	u := got.Networks[0].Upstreams[0]
+	// ws://, not http://: eRPC infers WebSocket capability from the upstream
+	// SCHEME, so an http upstream makes every eth_subscribe fail with
+	// ErrNoWsUpstreamAvailable through an otherwise healthy gateway. Measured
+	// both ways against a real fronted gateway. A ws upstream serves ordinary
+	// request/response calls too, so it costs nothing.
+	if want := "ws://valve-node-app-devnet:8546"; u.Endpoint != want {
+		t.Fatalf("endpoint: got %q, want %q — a same-host container is addressed by name, and by ws so eth_subscribe works", u.Endpoint, want)
+	}
+	if u.Problem != "" {
+		t.Errorf("a container-name upstream is reachable, not a problem: %s", u.Problem)
 	}
 }
 

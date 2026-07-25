@@ -124,7 +124,20 @@ type GatewayConfig struct {
 	// Networks is the set of chains served. Order is preserved so the
 	// rendered config stays stable across runs.
 	Networks []GatewayNetwork
+
+	// TLS is the HTTPS front for this gateway, nil when there is none.
+	//
+	// It lives on the gateway config rather than beside it because the rendered
+	// erpc.yaml DEPENDS on it: a fronted gateway must not offer gzip (see
+	// MustDisableGzipBehindProxy), and a Fronted flag stored somewhere else
+	// would be a second source of truth able to disagree with the container
+	// that is actually in front.
+	TLS *GatewayTLS
 }
+
+// Fronted reports whether something terminates TLS in front of this gateway.
+// Derived rather than stored, so it cannot drift from the TLS settings.
+func (g GatewayConfig) Fronted() bool { return g.TLS.On() }
 
 // gatewayConfigTemplate renders erpc.yaml. Hand-rendered (no YAML dependency,
 // matching the systemd unit template): the structure is fixed and only the
@@ -134,10 +147,25 @@ type GatewayConfig struct {
 // rather than its erpc.dist.yaml, which is stale. Upstreams are a flat list at
 // project level, each tagged with the chainId it serves — they are not nested
 // under their network.
+// enableGzip is rendered only when the gateway is FRONTED, and only ever as
+// false. See MustDisableGzipBehindProxy for the measurement: eRPC's WebSocket
+// upgrade returns HTTP 500 ("websocket: response does not implement
+// http.Hijacker") whenever the client advertises Accept-Encoding: gzip, and
+// every reverse proxy adds that header. An unfronted gateway keeps eRPC's own
+// default, because there the compression is free and nothing is inserting the
+// header.
 const gatewayConfigTemplate = `logLevel: warn
 server:
   httpHostV4: {{.Host}}
   httpPortV4: {{.Port}}
+{{- if .Fronted}}
+  # This gateway sits behind a reverse proxy, and every reverse proxy adds
+  # Accept-Encoding: gzip to the requests it forwards. eRPC's gzip response
+  # writer does not implement http.Hijacker, so a WebSocket upgrade carrying
+  # that header fails with HTTP 500 and eth_subscribe stops working entirely.
+  # Losing response compression is the cheaper half of that trade.
+  enableGzip: false
+{{- end}}
 projects:
   - id: {{.ProjectID}}
     networks:
@@ -187,6 +215,7 @@ type gatewayVars struct {
 	Port              int
 	ProjectID         string
 	RecentBlockWindow int
+	Fronted           bool
 	Networks          []gatewayNetworkVars
 	Upstreams         []gatewayUpstreamVars
 }
@@ -233,11 +262,16 @@ func RenderGatewayConfig(g GatewayConfig) (string, error) {
 		return "", fmt.Errorf("catalog: gateway: no networks configured")
 	}
 
+	if err := g.TLS.ValidateSettings(); err != nil {
+		return "", err
+	}
+
 	vars := gatewayVars{
 		Host:              strconv.Quote(g.Bind()),
 		Port:              g.HTTP(),
 		ProjectID:         g.ProjectIDOrDefault(),
 		RecentBlockWindow: recentBlockWindow,
+		Fronted:           g.Fronted(),
 	}
 
 	seenChains := make(map[int]bool, len(g.Networks))

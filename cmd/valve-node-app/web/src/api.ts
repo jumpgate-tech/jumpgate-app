@@ -421,6 +421,17 @@ export interface ContainerStatus {
   Image: string;
   ImageID: string;
   ExitCode: number;
+  // Platform is the image the container is ACTUALLY running; EnginePlatform is
+  // what the engine runs natively. Emulated is true when they differ, meaning
+  // every instruction is being translated by QEMU.
+  //
+  // It matters because an emulated container reports State "running" like any
+  // other: in this app's own testing an emulated node reported running and
+  // answered nothing, so a screen showing State without Emulated is showing a
+  // healthy service that does not work.
+  Platform: string;
+  EnginePlatform: string;
+  Emulated: boolean;
   Detail: string;
 }
 
@@ -647,6 +658,22 @@ export interface GatewayNetwork {
   Upstreams: GatewayUpstream[];
 }
 
+// GatewayTLS is the HTTPS front's stored settings. Null means no front.
+export interface GatewayTLS {
+  Enabled: boolean;
+  Hostname: string;
+  // CertSource: "internal" uses Caddy's own CA (no domain, no network, one
+  // trust-store install); "files" uses a certificate already on disk.
+  CertSource: string;
+  CertFile: string;
+  KeyFile: string;
+  HTTPSPort: number;
+  // BindAddr defaults to 0.0.0.0, unlike every other bind here: a TLS front on
+  // loopback serves only the machine that never needed TLS.
+  BindAddr: string;
+  ImageRef: string;
+}
+
 export interface GatewayConfig {
   ProjectID: string;
   BindAddr: string;
@@ -654,6 +681,7 @@ export interface GatewayConfig {
   // Networks is null (not []) for a gateway with nothing configured — an
   // untagged Go nil slice.
   Networks: GatewayNetwork[] | null;
+  TLS?: GatewayTLS | null;
 }
 
 export interface GatewayPlacement {
@@ -689,6 +717,27 @@ export interface NetworkView {
   warnings?: string[] | null;
 }
 
+// TlsView reports the EFFECTIVE certificate source beside the configured one.
+// They differ exactly when a certificate on disk was unusable and the app fell
+// back to its own CA rather than serving nothing — which is a thing the
+// operator has to be told, not a thing to discover in a browser warning.
+export interface TlsView {
+  enabled: boolean;
+  hostname?: string;
+  url?: string;
+  certSource?: string;
+  effectiveCertSource?: string;
+  fallback?: string;
+  fallbackReason?: string;
+  containerName?: string;
+  status: ContainerStatus;
+  // rootCaPath is the file to install in a trust store to stop the browser
+  // warning. Naming it is the difference between a solvable warning and a
+  // mystery.
+  rootCaPath?: string;
+  error?: string;
+}
+
 export interface GatewayView {
   id: string;
   label: string;
@@ -699,6 +748,7 @@ export interface GatewayView {
   // can sit on two different boxes.
   docker: DockerView;
   baseUrl: string;
+  tls: TlsView;
   networks: NetworkView[] | null;
   actions: string[] | null;
   blocked?: string;

@@ -106,15 +106,50 @@ func TestDevnetRunArgs_ImageRefSeparatesDockerFlagsFromRethFlags(t *testing.T) {
 	}
 }
 
-// A wrong --platform turns the engine's correct manifest selection into a hard
-// "no matching manifest" failure, so an unknown architecture must yield none.
-func TestDevnetRunArgs_PlatformOmittedWhenUnknown(t *testing.T) {
-	if i := argIndex(DevnetRunArgs(DevnetConfig{}), "--platform"); i >= 0 {
-		t.Fatalf("want no --platform when none was resolved: %#v", DevnetRunArgs(DevnetConfig{}))
+// --platform is ALWAYS emitted, including when the caller resolved none.
+//
+// This inverts what this test used to assert, and the reason is a measured
+// failure rather than a change of taste: an omitted --platform does not defer
+// to the image manifest, it defers to DOCKER_DEFAULT_PLATFORM. With that
+// variable exported as linux/amd64 on an arm64 machine, a devnet reset through
+// the app created a QEMU-emulated reth that reported State=running and
+// answered no RPC at all.
+func TestDevnetRunArgs_PlatformIsAlwaysExplicit(t *testing.T) {
+	fallback := DevnetRunArgs(DevnetConfig{})
+	if v := flagValue(t, fallback, "--platform"); v != DefaultPlatform() {
+		t.Fatalf("platform with none resolved = %q, want this app's own %q — omitting the flag hands the choice to DOCKER_DEFAULT_PLATFORM", v, DefaultPlatform())
 	}
 	args := DevnetRunArgs(DevnetConfig{Platform: "linux/amd64"})
 	if v := flagValue(t, args, "--platform"); v != "linux/amd64" {
 		t.Fatalf("platform = %q", v)
+	}
+}
+
+// The devnet joins the private network so a gateway beside it can address it
+// by CONTAINER NAME, which is what lets it publish nothing at all.
+func TestDevnetRunArgs_JoinsTheNetworkWhenGivenOne(t *testing.T) {
+	args := DevnetRunArgs(DevnetConfig{Network: "valve-node-app"})
+	if v := flagValue(t, args, "--network"); v != "valve-node-app" {
+		t.Fatalf("network = %q", v)
+	}
+	if i := argIndex(args, "--network"); i > argIndex(args, DefaultDevnetImage) {
+		t.Fatal("--network is docker's, so it must fall before the image ref")
+	}
+	if i := argIndex(DevnetRunArgs(DevnetConfig{}), "--network"); i >= 0 {
+		t.Fatal("no --network should be emitted when none was asked for")
+	}
+}
+
+// A container caller uses the devnet's NAME and its IN-CONTAINER port; the
+// published host port is not in that path at all, and using it would produce a
+// URL that resolves and then refuses the connection.
+func TestDevnetContainerEndpoints_UseTheFixedContainerPorts(t *testing.T) {
+	d := DevnetConfig{HTTPPort: 8600, WSPort: 8601}
+	if got, want := d.ContainerHTTPEndpoint(), "http://valve-node-app-devnet:8545"; got != want {
+		t.Errorf("http: got %q, want %q", got, want)
+	}
+	if got, want := d.ContainerWSEndpoint(), "ws://valve-node-app-devnet:8546"; got != want {
+		t.Errorf("ws: got %q, want %q", got, want)
 	}
 }
 

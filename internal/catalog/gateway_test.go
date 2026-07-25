@@ -202,3 +202,110 @@ func TestGatewayForWire(t *testing.T) {
 		t.Errorf("configured upstreams are fallbacks: %+v", ups[1])
 	}
 }
+
+// ---------------------------------------------------------------------
+// TLS: the gzip constraint
+// ---------------------------------------------------------------------
+
+// MEASURED, and the reason this flag exists at all: eRPC's WebSocket upgrade
+// returns HTTP 500 ("websocket: response does not implement http.Hijacker")
+// whenever the client advertises Accept-Encoding: gzip, and EVERY reverse proxy
+// adds that header to what it forwards. A fronted gateway that still offered
+// gzip would lose eth_subscribe entirely — silently, since ordinary
+// request/response calls keep working.
+func TestRenderGatewayConfig_FrontedGatewayDisablesGzip(t *testing.T) {
+	g := GatewayConfig{
+		Networks: []GatewayNetwork{{ChainID: 1337, Upstreams: []GatewayUpstream{
+			{ID: "devnet", Endpoint: "http://valve-node-app-devnet:8545", Local: true},
+		}}},
+	}
+
+	plain, err := RenderGatewayConfig(g)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Contains(plain, "enableGzip") {
+		// Nothing is inserting the header, so the compression is free.
+		t.Errorf("an unfronted gateway must keep eRPC's own default:\n%s", plain)
+	}
+
+	g.TLS = &GatewayTLS{Enabled: true, Hostname: "gw.example"}
+	fronted, err := RenderGatewayConfig(g)
+	if err != nil {
+		t.Fatalf("render fronted: %v", err)
+	}
+	if !strings.Contains(fronted, "enableGzip: false") {
+		t.Errorf("a fronted gateway must disable gzip or it loses eth_subscribe:\n%s", fronted)
+	}
+	if !g.Fronted() {
+		t.Error("Fronted must be derived from the TLS settings, not stored beside them")
+	}
+}
+
+// A disabled TLS block is kept rather than deleted, so turning HTTPS off and on
+// does not lose the hostname — but it must not render as fronted.
+func TestGatewayConfig_DisabledTLSIsNotFronted(t *testing.T) {
+	g := GatewayConfig{TLS: &GatewayTLS{Hostname: "gw.example"}}
+	if g.Fronted() {
+		t.Error("Enabled false means not fronted")
+	}
+	if (GatewayConfig{}).Fronted() {
+		t.Error("a nil TLS pointer means not fronted")
+	}
+}
+
+func TestGatewayTLS_Defaults(t *testing.T) {
+	var nilTLS *GatewayTLS
+	if nilTLS.On() {
+		t.Error("a nil front is off")
+	}
+	if got := nilTLS.CertSourceOrDefault(); got != CertInternal {
+		t.Errorf("cert source default = %q, want %q", got, CertInternal)
+	}
+
+	tls := &GatewayTLS{Enabled: true, Hostname: "gw.example"}
+	// The TLS front's bind defaults WIDE, unlike every other bind in this app:
+	// a front bound to loopback serves only the machine it runs on, which is the
+	// one machine that never needed TLS.
+	if got := tls.Bind(); got != "0.0.0.0" {
+		t.Errorf("bind default = %q, want 0.0.0.0", got)
+	}
+	if got := tls.HTTPS(); got != 443 {
+		t.Errorf("https default = %d, want 443", got)
+	}
+	if got := tls.URL(); got != "https://gw.example" {
+		t.Errorf("url = %q", got)
+	}
+	tls.HTTPSPort = 8443
+	if got := tls.URL(); got != "https://gw.example:8443" {
+		t.Errorf("url with a custom port = %q", got)
+	}
+}
+
+// A hostname a Caddyfile cannot serve must be refused where it was typed, not
+// discovered at provision time.
+func TestGatewayTLS_ValidateSettings(t *testing.T) {
+	if err := (&GatewayTLS{}).ValidateSettings(); err != nil {
+		t.Errorf("an off front has nothing to validate: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		tls  GatewayTLS
+		want string
+	}{
+		{"no hostname", GatewayTLS{Enabled: true}, "hostname is required"},
+		{"a pasted URL", GatewayTLS{Enabled: true, Hostname: "https://gw.example/"}, "bare host name"},
+		{"files with no files", GatewayTLS{Enabled: true, Hostname: "gw.example", CertSource: CertFiles}, "certFile and keyFile"},
+		{"port out of range", GatewayTLS{Enabled: true, Hostname: "gw.example", HTTPSPort: 70000}, "out of range"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.tls.ValidateSettings()
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %q, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}

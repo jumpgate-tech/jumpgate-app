@@ -3,6 +3,7 @@ package catalog
 import (
 	"fmt"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -122,19 +123,38 @@ type DevnetConfig struct {
 	HTTPPort int
 	WSPort   int
 
-	// Platform is the image platform to run as, e.g. "linux/arm64" ("" → emit
-	// no --platform and let the engine pick from the manifest).
+	// Platform is the image platform to run as, e.g. "linux/arm64" ("" → the
+	// architecture this app was built for, see DefaultPlatform).
 	//
-	// It is NOT defaulted here, which is a departure from ops.ERPCRunSpec. This
-	// package performs no I/O and cannot import internal/ops (ops imports
-	// catalog), so it has no way to reach ops.EnginePlatform — and a --platform
-	// guessed from the wrong reading is strictly worse than none, since it
-	// turns the engine's correct multi-arch manifest selection into a hard "no
-	// matching manifest" failure. Callers that know the target's architecture
-	// pass it; internal/setup resolves it with ops.EnginePlatform, which
-	// already yields "" for an architecture nobody recognized.
+	// It USED to mean "emit no --platform and let the engine pick from the
+	// manifest", and that was wrong in a way that cost real debugging time: an
+	// omitted --platform does not defer to the manifest, it defers to
+	// DOCKER_DEFAULT_PLATFORM. With that variable exported as linux/amd64 on an
+	// arm64 machine, a devnet reset through this app produced a QEMU-emulated
+	// reth that reported State=running and answered nothing. A value is now
+	// always emitted; internal/setup supplies the resolved one via
+	// ops.EnginePlatform, and this package's own fallback covers callers that
+	// do not.
 	Platform string
+
+	// Network is the docker network the container joins ("" → none).
+	//
+	// Joining one is what makes the devnet addressable BY CONTAINER NAME from
+	// the gateway beside it, which is the whole point: docker's embedded DNS
+	// runs on user-defined networks, so "valve-node-app-devnet:8545" resolves
+	// there and nowhere else. Without it a same-host gateway has to go back out
+	// through host.docker.internal to a published port.
+	Network string
 }
+
+// DefaultPlatform is the --platform a devnet falls back to: the architecture
+// valve-node-app itself was built for.
+//
+// It duplicates ops.DefaultPlatform rather than calling it because ops imports
+// catalog and the dependency cannot run the other way. The duplication is four
+// lines and the alternative — leaving the flag off — is the measured silent
+// failure documented on Platform above.
+func DefaultPlatform() string { return "linux/" + runtime.GOARCH }
 
 // ChainIDOrDefault resolves the chain id (0 → DevnetChainID).
 func (d DevnetConfig) ChainIDOrDefault() int {
@@ -202,6 +222,26 @@ func (d DevnetConfig) HTTPEndpoint() string {
 
 func (d DevnetConfig) WSEndpoint() string {
 	return "ws://" + net.JoinHostPort(devnetDialHost(d.Bind()), strconv.Itoa(d.WS()))
+}
+
+// ContainerHTTPEndpoint / ContainerWSEndpoint are the URLs another CONTAINER
+// on the same docker network dials — the devnet's own name and its
+// IN-CONTAINER ports, not the published host ones.
+//
+// The port difference is the easy thing to get wrong: a published mapping of
+// 8600->8545 means a host caller uses 8600 and a container caller on the shared
+// network uses 8545, because it is talking to the listener directly and the
+// mapping is not in the path at all. Using the host port here would produce a
+// URL that resolves and then refuses the connection.
+//
+// These are only correct when both containers are on the same network (see
+// DevnetConfig.Network); a caller on another machine must use HTTPEndpoint.
+func (d DevnetConfig) ContainerHTTPEndpoint() string {
+	return "http://" + net.JoinHostPort(d.Name(), strconv.Itoa(DevnetContainerHTTPPort))
+}
+
+func (d DevnetConfig) ContainerWSEndpoint() string {
+	return "ws://" + net.JoinHostPort(d.Name(), strconv.Itoa(DevnetContainerWSPort))
 }
 
 // devnetDialHost turns a bind address into something connectable.
@@ -315,15 +355,18 @@ func DevnetCommand(d DevnetConfig) []string {
 //     is precisely why a devnet costs zero host disk and why it is immune to the
 //     bind-mount-visibility problem that shapes the gateway's config path.
 func DevnetRunArgs(d DevnetConfig) []string {
+	platform := strings.TrimSpace(d.Platform)
+	if platform == "" {
+		platform = DefaultPlatform()
+	}
 	args := []string{
 		"run", "-d",
 		"--name", d.Name(),
+		// ALWAYS emitted, matching ops.ERPCRunArgs. See DevnetConfig.Platform.
+		"--platform", platform,
 	}
-	// Emitted only when a platform is actually known, matching ERPCRunArgs: a
-	// wrong --platform turns correct manifest selection into a hard failure,
-	// so no value beats a guessed one.
-	if p := strings.TrimSpace(d.Platform); p != "" {
-		args = append(args, "--platform", p)
+	if net := strings.TrimSpace(d.Network); net != "" {
+		args = append(args, "--network", net)
 	}
 	args = append(args,
 		"-p", devnetPublishSpec(d.Bind(), d.HTTP(), DevnetContainerHTTPPort),
