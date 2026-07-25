@@ -48,6 +48,7 @@ export function renderShell(root: HTMLElement): Shell {
         <a class="brand" href="#/targets">valve-node-app</a>
         <nav class="nav">
           <a href="#/targets" data-nav="targets">Targets</a>
+          <a href="#/rpc" data-nav="rpc">RPC</a>
           <a href="#/settings" data-nav="settings">Settings</a>
         </nav>
       </header>

@@ -46,10 +46,45 @@ const (
 )
 
 // Unit naming for the systemd backend, matching execUnitName/beaconUnitName.
+//
+// erpcUnitName is the DEFAULT gateway's unit; every other gateway gets
+// "valve-node-app-erpc-<id>.service". The same reasoning as
+// ops.ERPCContainerNameFor: several gateways can be placed on one machine,
+// and two units cannot share a name.
 const (
 	erpcUnitName = "valve-node-app-erpc.service"
-	erpcUnitPath = "/etc/systemd/system/" + erpcUnitName
+	erpcUnitDir  = "/etc/systemd/system/"
+	erpcUnitPath = erpcUnitDir + erpcUnitName
 )
+
+// erpcUnitNameFor derives a gateway's unit name from its id, mapping the
+// default id back to the historical name so an existing unit is restarted
+// rather than shadowed by a second one.
+func erpcUnitNameFor(gatewayID string) string {
+	id := strings.TrimSpace(gatewayID)
+	if id == "" || id == ops.DefaultGatewayID {
+		return erpcUnitName
+	}
+	return "valve-node-app-erpc-" + sanitizeGatewayID(id) + ".service"
+}
+
+// sanitizeGatewayID keeps a gateway id safe to embed in a unit name, a file
+// name and a shell command. It mirrors ops.ERPCContainerNameFor's own
+// sanitization; the id is validated at the API boundary too, and this is the
+// lock at the point of use.
+func sanitizeGatewayID(s string) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '_', r == '.', r == '-':
+			out = append(out, r)
+		default:
+			out = append(out, '-')
+		}
+	}
+	return string(out)
+}
 
 // gatewayDataDir is the systemd backend's data root. A gateway has no
 // dataset, so this exists only to give the unit a ReadWritePaths= and to
@@ -85,7 +120,10 @@ const gatewayChainIDCall = `{"jsonrpc":"2.0","id":1,"method":"eth_chainId","para
 // are the node plan's job. A systemd gateway is therefore an addition to a
 // box valve-node-app already provisioned; a gateway on a bare machine is
 // what the docker backend is for.
-func PlanGateway(g catalog.GatewayConfig, backend string) ([]Step, error) {
+// gatewayID identifies WHICH gateway is being provisioned: its container
+// name, unit name and config path are all derived from it, so two gateways
+// on one machine never contend for the same name or file.
+func PlanGateway(gatewayID string, g catalog.GatewayConfig, backend string) ([]Step, error) {
 	switch backend {
 	case BackendDocker, BackendSystemd:
 	default:
@@ -95,7 +133,7 @@ func PlanGateway(g catalog.GatewayConfig, backend string) ([]Step, error) {
 		return nil, fmt.Errorf("setup: %w", err)
 	}
 
-	p := &gatewayPlan{gw: g, backend: backend}
+	p := &gatewayPlan{id: gatewayID, gw: g, backend: backend}
 	return []Step{p.preflightStep(), p.configStep(), p.runStep()}, nil
 }
 
@@ -114,9 +152,9 @@ func PlanGateway(g catalog.GatewayConfig, backend string) ([]Step, error) {
 // The systemd backend is deliberately not offered here. A unit-hosted gateway
 // is not a container at all, so its lifecycle belongs to ops.ServiceAction
 // (systemctl), not to this file's docker verbs.
-func GatewayService(g catalog.GatewayConfig) ops.DockerService {
-	p := &gatewayPlan{gw: g, backend: BackendDocker}
-	s := ops.ERPCService()
+func GatewayService(gatewayID string, g catalog.GatewayConfig) ops.DockerService {
+	p := &gatewayPlan{id: gatewayID, gw: g, backend: BackendDocker}
+	s := ops.ERPCServiceFor(gatewayID)
 	s.Create = func(ctx context.Context, e executor.Executor) error {
 		// Rendering up front, exactly as PlanGateway does, so an unusable
 		// config (no networks, an endpoint with no scheme) fails before the
@@ -141,6 +179,10 @@ func GatewayService(g catalog.GatewayConfig) ops.DockerService {
 // which cannot describe a gateway — so the gateway config travels by closure
 // instead, and this is what those closures close over.
 type gatewayPlan struct {
+	// id is the gateway's stable id. Everything nameable — container, unit,
+	// config file — is derived from it, so a second gateway on the same
+	// machine cannot overwrite the first one's file or fight it for a name.
+	id      string
 	gw      catalog.GatewayConfig
 	backend string
 
@@ -201,7 +243,7 @@ func (p *gatewayPlan) configIsPending() bool {
 // config at all. $HOME is inside a shared path on every desktop engine.
 func (p *gatewayPlan) configPath(ctx context.Context, e executor.Executor) (string, error) {
 	if p.backend == BackendSystemd {
-		return p.unitWire().ERPCConfigPath(), nil
+		return path.Join(gatewayDataDir, p.configFileName()), nil
 	}
 
 	p.mu.Lock()
@@ -217,8 +259,22 @@ func (p *gatewayPlan) configPath(ctx context.Context, e executor.Executor) (stri
 	if res.ExitCode != 0 || home == "" {
 		return "", fmt.Errorf("gateway: could not resolve $HOME on the target (exit %d): the docker backend keeps erpc.yaml there because it must be a path the engine can bind-mount", res.ExitCode)
 	}
-	p.dockerConfigPath = path.Join(home, gatewayHomeDir, "erpc.yaml")
+	p.dockerConfigPath = path.Join(home, gatewayHomeDir, p.configFileName())
 	return p.dockerConfigPath, nil
+}
+
+// configFileName is this gateway's erpc.yaml, per gateway id. The default id
+// keeps the bare "erpc.yaml" so an existing install's file (and the
+// bind-mount path baked into its running container) is the one that gets
+// rewritten. Anything else is "erpc-<id>.yaml" — two gateways sharing one
+// file would each rewrite the other's config on every provision, and the
+// second one's container would be started against the first one's chains.
+func (p *gatewayPlan) configFileName() string {
+	id := strings.TrimSpace(p.id)
+	if id == "" || id == ops.DefaultGatewayID {
+		return "erpc.yaml"
+	}
+	return "erpc-" + sanitizeGatewayID(id) + ".yaml"
 }
 
 // unitWire is the minimal catalog.WireConfig catalog.RenderERPCUnit needs.
@@ -347,14 +403,18 @@ func (p *gatewayPlan) checkPortFree(ctx context.Context, e executor.Executor) er
 func (p *gatewayPlan) gatewayHoldsPort(ctx context.Context, e executor.Executor) bool {
 	switch p.backend {
 	case BackendDocker:
-		running, err := ops.ContainerRunning(ctx, e, ops.ERPCContainerName)
+		running, err := ops.ContainerRunning(ctx, e, p.containerName())
 		return err == nil && running
 	case BackendSystemd:
-		res, err := e.Run(ctx, "systemctl is-active "+erpcUnitName, nil)
+		res, err := e.Run(ctx, "systemctl is-active "+p.unitName(), nil)
 		return err == nil && strings.TrimSpace(res.Stdout) == "active"
 	}
 	return false
 }
+
+// containerName / unitName are this gateway's names on the target.
+func (p *gatewayPlan) containerName() string { return ops.ERPCContainerNameFor(p.id) }
+func (p *gatewayPlan) unitName() string      { return erpcUnitNameFor(p.id) }
 
 // ---------------------------------------------------------------------
 // config
@@ -458,7 +518,7 @@ func (p *gatewayPlan) renderConfig() (string, error) {
 func (p *gatewayPlan) runStep() Step {
 	title := "Start gateway container"
 	if p.backend == BackendSystemd {
-		title = "Start gateway service (" + erpcUnitName + ")"
+		title = "Start gateway service (" + p.unitName() + ")"
 	}
 	return Step{
 		ID:    "run",
@@ -548,11 +608,12 @@ func (p *gatewayPlan) runDocker(ctx context.Context, e executor.Executor, st *St
 	// image are all fixed at creation, so applying a changed config is
 	// necessarily remove + run, never a restart — and an absent container
 	// makes this a no-op rather than an error.
-	if err := ops.RemoveContainer(ctx, e, ops.ERPCContainerName); err != nil {
+	if err := ops.RemoveContainer(ctx, e, p.containerName()); err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
 
 	args := ops.ERPCRunArgs(ops.ERPCRunSpec{
+		ContainerName:  p.containerName(),
 		BindAddr:       p.gw.Bind(),
 		HostPort:       p.gw.HTTP(),
 		HostConfigPath: dest,
@@ -575,12 +636,17 @@ func (p *gatewayPlan) runDocker(ctx context.Context, e executor.Executor, st *St
 }
 
 func (p *gatewayPlan) runSystemd(ctx context.Context, e executor.Executor, st *State) error {
-	unit, err := catalog.RenderERPCUnit(p.unitWire())
+	cfgPath, err := p.configPath(ctx, e)
 	if err != nil {
-		return fmt.Errorf("run: render %s: %w", erpcUnitName, err)
+		return err
 	}
-	if err := e.WriteFile(ctx, erpcUnitPath, []byte(unit), 0644); err != nil {
-		return fmt.Errorf("run: write %s: %w", erpcUnitPath, err)
+	unit, err := catalog.RenderERPCUnitAt(p.unitWire(), cfgPath)
+	if err != nil {
+		return fmt.Errorf("run: render %s: %w", p.unitName(), err)
+	}
+	unitPath := erpcUnitDir + p.unitName()
+	if err := e.WriteFile(ctx, unitPath, []byte(unit), 0644); err != nil {
+		return fmt.Errorf("run: write %s: %w", unitPath, err)
 	}
 
 	// The unconditional restart is what applies a config change. wireStep
@@ -588,13 +654,13 @@ func (p *gatewayPlan) runSystemd(ctx context.Context, e executor.Executor, st *S
 	// restarting a chain client costs a resync-shaped outage; restarting a
 	// stateless gateway costs a few hundred milliseconds, so buying that
 	// distinction with extra machinery would be a bad trade.
-	cmd := fmt.Sprintf("systemctl daemon-reload && systemctl enable --now %[1]s && systemctl restart %[1]s", erpcUnitName)
+	cmd := fmt.Sprintf("systemctl daemon-reload && systemctl enable --now %[1]s && systemctl restart %[1]s", p.unitName())
 	res, err := e.Run(ctx, cmd, streamOpts(ctx, st, "run"))
 	if err != nil {
 		return fmt.Errorf("run: systemctl: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("run: systemctl daemon-reload/enable/restart %s failed (exit %d): %s", erpcUnitName, res.ExitCode, strings.TrimSpace(res.Stderr))
+		return fmt.Errorf("run: systemctl daemon-reload/enable/restart %s failed (exit %d): %s", p.unitName(), res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	return nil
 }

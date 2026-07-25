@@ -400,7 +400,10 @@ export function getLatestDiagnostics(id: string): Promise<DiagReport | null> {
 // catalog.GatewayConfig) carry no tags and so arrive PascalCase.
 // ---------------------------------------------------------------------
 
-export type ContainerServiceID = "devnet" | "erpc";
+// Only the devnet is addressed under a target now. The eRPC gateway is a
+// fleet-wide LAYER with its own top-level surface (/api/gateways) — see the
+// gateway section below.
+export type ContainerServiceID = "devnet";
 export type ContainerActionKind = "start" | "stop" | "restart";
 
 // ContainerState mirrors ops' State* constants. "not-created" and
@@ -432,27 +435,6 @@ export interface DevnetConfig {
   Platform: string;
 }
 
-export interface GatewayUpstream {
-  ID: string;
-  Endpoint: string;
-  Local: boolean;
-  RecentOnly: boolean;
-}
-
-export interface GatewayNetwork {
-  ChainID: number;
-  Upstreams: GatewayUpstream[];
-}
-
-export interface GatewayConfig {
-  ProjectID: string;
-  BindAddr: string;
-  Port: number;
-  // Networks is null (not []) for a gateway with nothing configured — an
-  // untagged Go nil slice.
-  Networks: GatewayNetwork[] | null;
-}
-
 export interface ServiceEndpoint {
   label: string;
   url: string;
@@ -476,7 +458,6 @@ export interface ContainerView {
   restartsOnWipe: string[] | null;
   warnings?: string[] | null;
   devnet?: DevnetConfig;
-  gateway?: GatewayConfig;
   error?: string;
   hint?: string;
   code?: string;
@@ -574,11 +555,39 @@ export function provisionContainer(id: string, svc: ContainerServiceID): Promise
   );
 }
 
+// resetDevnet throws a devnet's chain away and brings it back from genesis.
+//
+// It is the same operation as wipeContainer — ops.WipeService, so the fronting
+// gateways are restarted and the report says which — with no typed
+// confirmation, because a devnet is a scratch chain and resetting it is
+// routine. It resolves with the report even on a partial failure, for the same
+// reason wipeContainer does: a cascade that failed still reset the chain.
+export async function resetDevnet(id: string): Promise<WipeResult> {
+  const res = await fetch(`/api/targets/${encodeURIComponent(id)}/containers/devnet/reset`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+  });
+  const text = await res.text();
+  let body: unknown = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    // Not JSON — fall through to the throw below.
+  }
+  if (body && typeof body === "object" && "report" in body) {
+    return body as WipeResult;
+  }
+  const message =
+    body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+      ? (body as { error: string }).error
+      : res.statusText || `HTTP ${res.status}`;
+  throw new ApiError(res.status, message);
+}
+
 export interface ContainerConfig {
   id: ContainerServiceID;
   configured: boolean;
   devnet?: DevnetConfig;
-  gateway?: GatewayConfig;
 }
 
 export function getContainerConfig(id: string, svc: ContainerServiceID): Promise<ContainerConfig> {
@@ -599,6 +608,252 @@ export function putContainerConfig(
     `/api/targets/${encodeURIComponent(id)}/containers/${svc}/config`,
     { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(config) },
   );
+}
+
+// ---------------------------------------------------------------------
+// gateways: eRPC as a LAYER over the fleet (internal/server/gateways.go)
+//
+// A gateway is not a machine's service. It fronts N chains across M
+// endpoints, and those endpoints can be a devnet on this laptop, a node on a
+// fleet box, or a public endpoint — so it NAMES the machine it runs on
+// (placement) rather than belonging to it, and there can be several.
+//
+// The naming convention split from the container routes carries over: this
+// file's own response structs are tagged and lowerCamelCase, while values
+// lifted straight out of Go (catalog.GatewayConfig, ops.ContainerStatus)
+// carry no tags and arrive PascalCase.
+// ---------------------------------------------------------------------
+
+// UpstreamKind is what an endpoint IS. The two managed kinds store a
+// reference (kind + machine) rather than a URL, and the server derives the
+// URL on every read — which is what stops a gateway pointing at a node's old
+// address after someone changed it on the node's own screen.
+export type UpstreamKind = "managed-node" | "managed-devnet" | "external";
+
+export interface GatewayUpstream {
+  ID: string;
+  Kind?: UpstreamKind;
+  // TargetID is the machine a managed upstream refers to.
+  TargetID?: string;
+  // Endpoint is stored only for "external"; for managed kinds it is derived
+  // and whatever is stored here is ignored.
+  Endpoint: string;
+  Local: boolean;
+  RecentOnly: boolean;
+}
+
+export interface GatewayNetwork {
+  ChainID: number;
+  Upstreams: GatewayUpstream[];
+}
+
+export interface GatewayConfig {
+  ProjectID: string;
+  BindAddr: string;
+  Port: number;
+  // Networks is null (not []) for a gateway with nothing configured — an
+  // untagged Go nil slice.
+  Networks: GatewayNetwork[] | null;
+}
+
+export interface GatewayPlacement {
+  targetId: string;
+  backend: string; // "docker" | "systemd"
+}
+
+// UpstreamView is one endpoint row. endpoint is RESOLVED (what eRPC will
+// dial); label says what it is in the operator's terms; problem says why it
+// cannot be used, on the row, before you click anything.
+export interface UpstreamView {
+  id: string;
+  kind: UpstreamKind;
+  targetId?: string;
+  endpoint: string;
+  label: string;
+  local: boolean;
+  recentOnly: boolean;
+  problem?: string;
+  // actions is keyed off the KIND: only a devnet is offered "reset".
+  actions: string[] | null;
+}
+
+export interface NetworkView {
+  chainId: number;
+  name: string;
+  url?: string;
+  path: string;
+  upstreams: UpstreamView[] | null;
+  // serviceable is false when nothing on this chain can be dialed — eRPC
+  // would accept the config and fail every call on this path.
+  serviceable: boolean;
+  warnings?: string[] | null;
+}
+
+export interface GatewayView {
+  id: string;
+  label: string;
+  containerName: string;
+  placement: GatewayPlacement;
+  status: ContainerStatus;
+  // docker is the engine reading for THIS gateway's machine — two gateways
+  // can sit on two different boxes.
+  docker: DockerView;
+  baseUrl: string;
+  networks: NetworkView[] | null;
+  actions: string[] | null;
+  blocked?: string;
+  wipeDiscards: string;
+  warnings?: string[] | null;
+  // config is the STORED configuration, references intact. Editors must
+  // round-trip this, never the resolved endpoints.
+  config: GatewayConfig;
+  error?: string;
+  hint?: string;
+  code?: string;
+}
+
+// UpstreamSource is a real thing in the fleet a new upstream can point at.
+export interface UpstreamSource {
+  kind: UpstreamKind;
+  targetId: string;
+  chainId: number;
+  label: string;
+  endpoint: string;
+}
+
+// NetworkPreset is one option in the add-a-chain picker, sourced from the
+// catalog so it cannot drift from what the app supports.
+export interface NetworkPreset {
+  chainId: number;
+  name: string;
+  // devnet marks the one preset that can provision its own upstream.
+  devnet: boolean;
+}
+
+export interface TargetSummary {
+  id: string;
+  mode: string;
+  hasDevnet: boolean;
+  hasNode: boolean;
+}
+
+export interface GatewaysResponse {
+  gateways: GatewayView[] | null;
+  targets: TargetSummary[] | null;
+  sources: UpstreamSource[] | null;
+  presets: NetworkPreset[] | null;
+}
+
+export function getGateways(): Promise<GatewaysResponse> {
+  return request<GatewaysResponse>("/api/gateways");
+}
+
+export interface CreateGatewayRequest {
+  id: string;
+  placement: GatewayPlacement;
+  config?: GatewayConfig;
+}
+
+export function createGateway(body: CreateGatewayRequest): Promise<GatewayView> {
+  return request<GatewayView>("/api/gateways", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteGateway(gid: string): Promise<{ status: string; note: string }> {
+  return request<{ status: string; note: string }>(`/api/gateways/${encodeURIComponent(gid)}`, {
+    method: "DELETE",
+  });
+}
+
+// putGatewayConfig stores the DESIRED configuration. It never touches a
+// running container — a container's published port and mounts are fixed at
+// creation — so applying a change is provisionGateway's job.
+export function putGatewayConfig(gid: string, config: GatewayConfig): Promise<GatewayView> {
+  return request<GatewayView>(`/api/gateways/${encodeURIComponent(gid)}/config`, {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(config),
+  });
+}
+
+export function gatewayAction(
+  gid: string,
+  action: ContainerActionKind,
+): Promise<{ status: ContainerStatus }> {
+  return request<{ status: ContainerStatus }>(
+    `/api/gateways/${encodeURIComponent(gid)}/${action}`,
+    { method: "POST" },
+  );
+}
+
+// provisionGateway returns as soon as the run is accepted. Progress arrives
+// on the PLACEMENT machine's setup stream — the same one the node wizard and
+// the devnet use — and the response says which machine that is, so the caller
+// does not have to know the placement rule.
+export function provisionGateway(gid: string): Promise<{ status: string; targetId: string }> {
+  return request<{ status: string; targetId: string }>(
+    `/api/gateways/${encodeURIComponent(gid)}/provision`,
+    { method: "POST" },
+  );
+}
+
+// wipeGateway resolves with the report even on an error status, for the same
+// reason wipeContainer does.
+export async function wipeGateway(gid: string): Promise<WipeResult> {
+  const res = await fetch(`/api/gateways/${encodeURIComponent(gid)}/wipe`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ Confirm: gid }),
+  });
+  const text = await res.text();
+  let body: unknown = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    // Not JSON — fall through to the throw below.
+  }
+  if (body && typeof body === "object" && "report" in body) {
+    return body as WipeResult;
+  }
+  const message =
+    body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+      ? (body as { error: string }).error
+      : res.statusText || `HTTP ${res.status}`;
+  throw new ApiError(res.status, message);
+}
+
+// ---------------------------------------------------------------------
+// chainlist: public endpoint discovery (internal/chainlist)
+// ---------------------------------------------------------------------
+
+export interface ChainlistEndpoint {
+  url: string;
+  kind: "http" | "ws";
+  status: "live" | "unprobed" | "rejected";
+  chainId?: number;
+  latencyMs?: number;
+  reason?: string;
+}
+
+export interface ChainlistResult {
+  chainId: number;
+  // source is "vendored" when the live feed was unreachable and the built-in
+  // snapshot stood in — not a failure, but the operator should know.
+  source: "feed" | "vendored";
+  fetchError?: string;
+  endpoints: ChainlistEndpoint[] | null;
+  live: number;
+}
+
+// discoverEndpoints fetches chainid.network, drops the ${API_KEY} provider
+// slots, and probes what is left with eth_chainId — so what comes back is
+// endpoints that are answering for this chain RIGHT NOW, not what a feed
+// claims. Rejected ones come back too, each with its reason.
+export function discoverEndpoints(chainId: number): Promise<ChainlistResult> {
+  return request<ChainlistResult>(`/api/chainlist/${chainId}`);
 }
 
 // ---------------------------------------------------------------------

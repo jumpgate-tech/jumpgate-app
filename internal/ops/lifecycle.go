@@ -154,7 +154,8 @@ type DockerService struct {
 	Create CreateFunc
 }
 
-// ERPCService is the lifecycle descriptor for the eRPC gateway container.
+// ERPCServiceFor is the lifecycle descriptor for ONE eRPC gateway container,
+// identified by the gateway's id.
 //
 // It owns NO volumes: the gateway is stateless by design (docker.go's
 // header) — its config is a read-only bind mount and it keeps nothing else
@@ -163,17 +164,32 @@ type DockerService struct {
 // erpc.yaml path, the resolved platform and the built image, all of which
 // internal/setup's gateway plan owns.
 //
-// Nothing is declared in FrontedBy: the gateway is the thing that fronts
-// others, not the thing fronted. A service the gateway proxies names it in
+// Nothing is declared in FrontedBy: a gateway is the thing that fronts
+// others, not the thing fronted. A service a gateway proxies names it in
 // its own FrontedBy — e.g. DockerService{ID: "devnet", ..., FrontedBy:
-// []DockerService{ops.ERPCService()}} — which is what makes a devnet wipe
-// bounce the gateway.
-func ERPCService() DockerService {
+// []DockerService{ops.ERPCServiceFor("default")}} — which is what makes a
+// devnet wipe bounce the gateways in front of it.
+//
+// The ID carries the gateway id ("erpc:<id>") rather than a bare "erpc":
+// with several gateways possible, a wipe report or an error naming only
+// "erpc" would not say WHICH one was restarted, and the cascade report is
+// the one place that distinction has to survive.
+func ERPCServiceFor(gatewayID string) DockerService {
+	id := strings.TrimSpace(gatewayID)
+	if id == "" {
+		id = DefaultGatewayID
+	}
 	return DockerService{
-		ID:            "erpc",
-		ContainerName: ERPCContainerName,
+		ID:            "erpc:" + id,
+		ContainerName: ERPCContainerNameFor(id),
 	}
 }
+
+// ERPCService is ERPCServiceFor(DefaultGatewayID) — the default gateway, and
+// the historical container name. Retained for callers that genuinely mean
+// "the default gateway"; anything enumerating gateways must use
+// ERPCServiceFor.
+func ERPCService() DockerService { return ERPCServiceFor(DefaultGatewayID) }
 
 // Validate rejects a descriptor that could make a lifecycle call do
 // something other than what it says. It is called at the top of every

@@ -616,7 +616,7 @@ func TestWipeService_CascadesARestartToTheGatewayInFront(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wipe: %v", err)
 	}
-	if !reflect.DeepEqual(rep.Cascaded, []string{"erpc"}) {
+	if !reflect.DeepEqual(rep.Cascaded, []string{"erpc:default"}) {
 		t.Fatalf("Cascaded: got %#v, want the gateway", rep.Cascaded)
 	}
 
@@ -644,7 +644,7 @@ func TestWipeService_CascadeSkipsAGatewayThatIsNotRunning(t *testing.T) {
 	if len(rep.Cascaded) != 0 {
 		t.Errorf("Cascaded: got %#v, want none", rep.Cascaded)
 	}
-	if !reflect.DeepEqual(rep.CascadeSkipped, []string{"erpc"}) {
+	if !reflect.DeepEqual(rep.CascadeSkipped, []string{"erpc:default"}) {
 		t.Errorf("CascadeSkipped: got %#v", rep.CascadeSkipped)
 	}
 	if ranContaining(f, "docker start '"+ERPCContainerName) {

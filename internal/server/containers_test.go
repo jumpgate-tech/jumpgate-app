@@ -79,8 +79,10 @@ func TestContainers_ListReportsRunningServiceWithItsLivePorts(t *testing.T) {
 	if !body.Docker.Present || !body.Docker.Reachable {
 		t.Fatalf("docker reading: got %+v, want present and reachable", body.Docker)
 	}
-	if len(body.Services) != 2 {
-		t.Fatalf("got %d services, want devnet and erpc", len(body.Services))
+	// The gateway is NOT here any more: it is a fleet-wide layer with its own
+	// top-level surface, and a devnet is the only container a machine owns.
+	if len(body.Services) != 1 {
+		t.Fatalf("got %d services, want the devnet only", len(body.Services))
 	}
 
 	devnet := body.Services[0]
@@ -182,7 +184,7 @@ func TestContainers_WipeRequiresTypedConfirmation(t *testing.T) {
 	})
 	addTarget(t, a)
 
-	for _, confirm := range []string{"", "yes", "erpc"} {
+	for _, confirm := range []string{"", "yes", "not-the-devnet"} {
 		res := a.do(t, "POST", "/api/targets/local/containers/devnet/wipe", map[string]string{"Confirm": confirm})
 		if res.StatusCode != http.StatusBadRequest {
 			res.Body.Close()
@@ -201,19 +203,23 @@ func TestContainers_WipeReportsWhatItDid(t *testing.T) {
 	})
 	addTarget(t, a)
 
-	// A gateway serving the devnet's chain is what puts the gateway in the
-	// devnet's FrontedBy, and therefore in the cascade.
-	putConfig(t, a, svcGateway, catalog.GatewayConfig{
-		Port:     4000,
-		Networks: []catalog.GatewayNetwork{{ChainID: catalog.DevnetChainID, Upstreams: []catalog.GatewayUpstream{{ID: "devnet", Endpoint: "http://127.0.0.1:8545", Local: true}}}},
+	// A gateway placed on this machine and pointing at its devnet is what
+	// puts the gateway in the devnet's FrontedBy, and therefore in the
+	// cascade. The gateway is top-level now — it names the machine, the
+	// machine does not own it.
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{
+		Port: 4000,
+		Networks: []catalog.GatewayNetwork{{ChainID: catalog.DevnetChainID, Upstreams: []catalog.GatewayUpstream{
+			{ID: "devnet", Kind: catalog.UpstreamManagedDevnet, TargetID: "local"},
+		}}},
 	})
 
 	res := decode[wipeResponse](t, a.do(t, "POST", "/api/targets/local/containers/devnet/wipe", map[string]string{"Confirm": "devnet"}))
 	if !res.Report.ContainerRemoved {
 		t.Errorf("report says no container was removed, but the fake reported one running")
 	}
-	if len(res.Report.Cascaded) != 1 || res.Report.Cascaded[0] != svcGateway {
-		t.Errorf("cascaded: got %v, want [%s] — a wiped chain leaves its gateway advertising a stale head", res.Report.Cascaded, svcGateway)
+	if len(res.Report.Cascaded) != 1 || res.Report.Cascaded[0] != "erpc:default" {
+		t.Errorf("cascaded: got %v, want [erpc:default] — a wiped chain leaves its gateway advertising a stale head", res.Report.Cascaded)
 	}
 }
 
@@ -225,7 +231,7 @@ func TestContainers_WipeWithoutAFrontDoesNotCascade(t *testing.T) {
 	})
 	addTarget(t, a)
 
-	putConfig(t, a, svcGateway, catalog.GatewayConfig{
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{
 		Port:     4000,
 		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{{ID: "eth", Endpoint: "https://example.invalid"}}}},
 	})
@@ -286,8 +292,6 @@ func TestContainers_ConfigRejectsWhatWouldFailLater(t *testing.T) {
 		"block time that reth cannot parse": {svcDevnet, map[string]any{"BlockTime": "2 seconds"}},
 		"one port for both listeners":       {svcDevnet, map[string]any{"HTTPPort": 8545, "WSPort": 8545}},
 		"a chain id reth cannot serve":      {svcDevnet, map[string]any{"ChainID": 999}},
-		"an upstream with no scheme":        {svcGateway, map[string]any{"Networks": []any{map[string]any{"ChainID": 1337, "Upstreams": []any{map[string]any{"Endpoint": "127.0.0.1:8545"}}}}}},
-		"a chain with no upstream":          {svcGateway, map[string]any{"Networks": []any{map[string]any{"ChainID": 1337}}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			res := a.do(t, "PUT", "/api/targets/local/containers/"+tc.svc+"/config", tc.body)
@@ -299,7 +303,7 @@ func TestContainers_ConfigRejectsWhatWouldFailLater(t *testing.T) {
 	}
 }
 
-// Provisioning an unconfigured gateway fails at PLAN time, with a sentence
+// Provisioning an unconfigured service fails at PLAN time, with a sentence
 // naming what is missing — not after two streamed steps and a render error.
 func TestContainers_ProvisionWithoutAConfigExplainsWhat(t *testing.T) {
 	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) {
@@ -307,7 +311,7 @@ func TestContainers_ProvisionWithoutAConfigExplainsWhat(t *testing.T) {
 	})
 	addTarget(t, a)
 
-	res := a.do(t, "POST", "/api/targets/local/containers/erpc/provision", nil)
+	res := a.do(t, "POST", "/api/targets/local/containers/devnet/provision", nil)
 	body := decode[errorDetail](t, res)
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.StatusCode)

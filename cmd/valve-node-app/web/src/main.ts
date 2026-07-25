@@ -1,5 +1,5 @@
-// Hash-routed SPA shell: #/targets, #/setup/<id>, #/dash/<id>, #/logs/<id>,
-// #/services/<id>, #/settings. No framework — each screen module renders into a shared
+// Hash-routed SPA shell: #/targets, #/rpc, #/setup/<id>, #/dash/<id>,
+// #/logs/<id>, #/services/<id>, #/settings. No framework — each screen module renders into a shared
 // content element and returns a cleanup function (closes any EventSource /
 // timers) that main.ts calls before routing away.
 import "./style.css";
@@ -9,6 +9,7 @@ import { renderDiagnostics } from "./diag";
 import { renderSecurity } from "./security";
 import { renderSettings } from "./settings";
 import { renderShell } from "./ui";
+import { renderRPC } from "./rpc";
 import { renderServices } from "./services";
 import { renderTargets } from "./targets";
 import { renderWizard } from "./wizard";
@@ -110,6 +111,11 @@ function route(): void {
         return;
       }
       currentCleanup = mount((root) => renderServices(root, id));
+      break;
+    case "rpc":
+      // No id: eRPC is a layer over the whole fleet, not a machine's service,
+      // so its screen is not scoped to a target.
+      currentCleanup = mount((root) => renderRPC(root));
       break;
     case "settings":
       currentCleanup = mount((root) => renderSettings(root));

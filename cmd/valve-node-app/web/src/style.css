@@ -1009,3 +1009,208 @@ details.advanced summary {
 .plain-list li {
   margin: 0.2rem 0;
 }
+
+/* --- RPC screen: the three tiers ------------------------------------------
+   The geometry carries the argument. The bar is full width because eRPC
+   fronts everything below it; the chains live INSIDE the bar because "this
+   gateway serves these N networks" is one statement; and the panel under it
+   shows one focused chain's endpoints, not all of them at once.
+
+   Everything here reuses the existing vocabulary — card, badge, dot,
+   card-selectable's accent-border "this one is chosen" idiom — rather than
+   inventing a second visual language. No fonts, no icon sets, no images: the
+   chips are text, and the only mark on them is the same dot the endpoints
+   card already uses. */
+
+.rpc-gateway + .rpc-gateway {
+  margin-top: 1.75rem;
+}
+
+.rpc-bar {
+  background: var(--bg-raised);
+  border: 1px solid var(--accent-dim);
+  /* The left rule is the whole "this sits above everything" cue: the panel
+     below is an ordinary card, and the bar is visibly the thing in front. */
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  padding: 0.8rem 1rem;
+  margin: 0.75rem 0 0;
+}
+
+/* A gateway that is not running must not wear the accent that means "this is
+   serving your traffic". */
+.rpc-bar-down {
+  border-color: var(--border);
+  border-left-color: var(--fg-muted);
+}
+
+.rpc-bar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.rpc-bar-id {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.rpc-bar-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.rpc-bar-actions .btn {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+.rpc-bar-url {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.45rem;
+}
+
+/* --- tier 2: the chain chips, inside the bar ------------------------------ */
+
+.rpc-chiprow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.22rem 0.7rem;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  /* card-selectable sets width:100%, which is right for a card and wrong for
+     a chip; this wins by being the later declaration. */
+  width: auto;
+}
+
+.chip:hover {
+  border-color: var(--fg-muted);
+}
+
+/* Selected follows .card-selectable.selected exactly — the same accent border
+   plus inset ring — so "this one is chosen" reads identically everywhere. */
+.chip.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+/* A chain with no working endpoint is one eRPC will accept and then fail
+   every call on. It must not look like a healthy chain. */
+.chip-bad {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.chip-bad.selected {
+  border-color: var(--bad);
+  box-shadow: 0 0 0 1px var(--bad) inset;
+}
+
+.chip-id {
+  color: var(--fg-muted);
+  font-size: 0.72rem;
+}
+
+.chip-dot {
+  display: inline-flex;
+}
+
+.chip-add {
+  border-style: dashed;
+  color: var(--fg-muted);
+}
+
+.chip-add:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+/* --- tier 3: the focused chain's endpoints -------------------------------- */
+
+.rpc-upstreams {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  margin-top: -1px;
+}
+
+.rpc-upstreams .upstream-row {
+  align-items: center;
+}
+
+.upstream-row-bad {
+  /* The row itself carries the fault, next to the reason, rather than the
+     card carrying one banner for all of them. */
+  background: rgba(224, 138, 111, 0.06);
+}
+
+.upstream-state {
+  display: inline-flex;
+  align-items: center;
+}
+
+.upstream-what {
+  flex: 1;
+  min-width: 12rem;
+}
+
+.upstream-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+/* --- pickers -------------------------------------------------------------- */
+
+.rpc-picker {
+  list-style: none;
+  padding-left: 0;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+.rpc-picker-option {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  text-align: left;
+}
+
+.modal-actions-stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.rpc-rejected summary {
+  cursor: pointer;
+}
+
+.rpc-add-gateway {
+  margin-top: 1.5rem;
+}

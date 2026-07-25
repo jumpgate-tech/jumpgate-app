@@ -53,9 +53,14 @@ func systemdReady() *fakeExecutor {
 		script("eth_chainId", executor.Result{Stdout: chainIDAnswer})
 }
 
+// testGatewayID is the default gateway's id, whose container, unit and
+// config file keep the historical (unsuffixed) names — which is what lets
+// every name assertion in this file stay literal.
+const testGatewayID = ops.DefaultGatewayID
+
 func mustPlanGateway(t *testing.T, g catalog.GatewayConfig, backend string) []Step {
 	t.Helper()
-	steps, err := PlanGateway(g, backend)
+	steps, err := PlanGateway(testGatewayID, g, backend)
 	if err != nil {
 		t.Fatalf("PlanGateway: %v", err)
 	}
@@ -110,8 +115,45 @@ func TestPlanGateway_HasOnlyTheThreeStepsAGatewayNeeds(t *testing.T) {
 	}
 }
 
+// The whole reason a gateway carries an id: two gateways on ONE machine must
+// not contend for a name or a file. A shared container name simply cannot be
+// created twice (docker run --name fails), and a shared erpc.yaml is worse —
+// each provision would silently rewrite the other's chains, and the second
+// gateway would come up serving the first one's config.
+func TestPlanGateway_SecondGatewayGetsItsOwnNamesAndFile(t *testing.T) {
+	e := dockerReady()
+	steps, err := PlanGateway("edge", testGateway(), BackendDocker)
+	if err != nil {
+		t.Fatalf("PlanGateway: %v", err)
+	}
+	if err := stepByID(t, steps, "config").Run(context.Background(), e, &State{}); err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if _, err := e.ReadFile(context.Background(), "/Users/dev/.valve-node-app/erpc-edge.yaml"); err != nil {
+		t.Fatalf("a non-default gateway must write its OWN erpc.yaml: %v", err)
+	}
+	if _, err := e.ReadFile(context.Background(), "/Users/dev/.valve-node-app/erpc.yaml"); err == nil {
+		t.Fatal("a non-default gateway wrote the DEFAULT gateway's erpc.yaml — the two would overwrite each other on every provision")
+	}
+
+	if got := ops.ERPCContainerNameFor("edge"); got != ops.ERPCContainerName+"-edge" {
+		t.Errorf("container name: got %q, want %q", got, ops.ERPCContainerName+"-edge")
+	}
+	if got := erpcUnitNameFor("edge"); got != "valve-node-app-erpc-edge.service" {
+		t.Errorf("unit name: got %q", got)
+	}
+	// The default keeps the historical names, which is what stops an upgrade
+	// from orphaning a gateway container that is already running.
+	if got := ops.ERPCContainerNameFor(ops.DefaultGatewayID); got != ops.ERPCContainerName {
+		t.Errorf("default container name: got %q, want %q", got, ops.ERPCContainerName)
+	}
+	if got := erpcUnitNameFor(ops.DefaultGatewayID); got != erpcUnitName {
+		t.Errorf("default unit name: got %q, want %q", got, erpcUnitName)
+	}
+}
+
 func TestPlanGateway_RejectsAnUnknownBackend(t *testing.T) {
-	_, err := PlanGateway(testGateway(), "kubernetes")
+	_, err := PlanGateway(testGatewayID, testGateway(), "kubernetes")
 	if err == nil {
 		t.Fatal("want an error for an unknown backend")
 	}
@@ -131,7 +173,7 @@ func TestPlanGateway_ValidatesTheConfigUpFront(t *testing.T) {
 	}
 	for name, g := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := PlanGateway(g, BackendDocker); err == nil {
+			if _, err := PlanGateway(testGatewayID, g, BackendDocker); err == nil {
 				t.Fatal("want a plan-time error")
 			}
 		})
