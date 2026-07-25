@@ -80,12 +80,53 @@ type ContainerStatus struct {
 	// StateStopped (137 = SIGKILL/OOM, 0 = a deliberate stop).
 	ExitCode int
 
+	// Platform is the platform of the image this container is ACTUALLY running
+	// ("linux/amd64"), read off the resolved image rather than off whatever was
+	// requested. EnginePlatform is what the engine runs natively.
+	//
+	// Both are empty when they could not be read; that is a reading failure and
+	// never itself a verdict.
+	Platform       string
+	EnginePlatform string
+
+	// Emulated is true when Platform's architecture differs from
+	// EnginePlatform's — the container is running under QEMU translation.
+	//
+	// WHY this is on the status rather than left to a log line: an emulated
+	// container reports State=running like any other, and the app has already
+	// shipped one instance of exactly that lie (a devnet reset picked up
+	// DOCKER_DEFAULT_PLATFORM=linux/amd64 from the environment, created an
+	// amd64 reth on an arm64 machine, reported running, and answered nothing).
+	// A caller that renders State without this field will show that container
+	// as healthy, so the field has to travel WITH the state.
+	Emulated bool
+
 	// Detail carries the engine's own words when State is StateUnknown.
 	Detail string
 }
 
 // Running reports whether this service is up right now.
+//
+// It is deliberately still true for an emulated container: the engine really
+// has it running, and pretending otherwise would make stop/restart unavailable
+// on the very container the operator needs to replace. Healthy is the separate
+// question, and Emulated is how it is answered.
 func (s ContainerStatus) Running() bool { return s.State == StateRunning }
+
+// EmulationWarning is the operator-facing sentence for an emulated container,
+// or "" when there is nothing wrong. Written once here so the several screens
+// that must show it cannot each phrase it differently.
+func (s ContainerStatus) EmulationWarning() string {
+	if !s.Emulated {
+		return ""
+	}
+	return fmt.Sprintf(
+		"This container is running a %s image on a %s engine, so every instruction in it is being translated by QEMU. "+
+			"It will report itself as running whether or not it actually works, and in this app's own testing an emulated "+
+			"node answered no RPC at all. The usual cause is DOCKER_DEFAULT_PLATFORM being set in the environment the "+
+			"container was created from — re-create it to rebuild on %s.",
+		s.Platform, s.EnginePlatform, s.EnginePlatform)
+}
 
 // Exists reports whether the container exists in any state. It is the
 // question "can I start this, or must it be provisioned first?".
@@ -464,7 +505,58 @@ func ServiceStatus(ctx context.Context, e executor.Executor, s DockerService) (C
 	} else {
 		st.State = StateStopped
 	}
+	readEmulation(ctx, e, &st)
 	return st, nil
+}
+
+// readEmulation fills Platform / EnginePlatform / Emulated.
+//
+// It runs only for a container that exists (an absent one has no image to
+// compare) and every failure is swallowed into an empty reading: this is a
+// refinement of a status that must still be returned, and an engine that
+// cannot render one of these templates should not turn "running" into an
+// error. The Emulated verdict is therefore conservative in the right
+// direction — a missing reading says nothing rather than accusing.
+func readEmulation(ctx context.Context, e executor.Executor, st *ContainerStatus) {
+	st.Platform = containerPlatform(ctx, e, st)
+	if st.Platform == "" {
+		return
+	}
+
+	vres, err := e.Run(ctx, enginePlatformProbe, nil)
+	if err != nil || vres.ExitCode != 0 {
+		return
+	}
+	st.EnginePlatform = firstNonEmptyLine(vres.Stdout)
+	st.Emulated = EmulatedPlatform(st.Platform, st.EnginePlatform)
+}
+
+// containerPlatform reads the platform a container actually resolved to,
+// preferring the container's own manifest descriptor and falling back to an
+// image inspect on an engine that has no such field.
+//
+// The order is the whole correctness of this: see containerPlatformFormat for
+// the measured case where the image reading says arm64 about a container that
+// is demonstrably running amd64 code under QEMU.
+func containerPlatform(ctx context.Context, e executor.Executor, st *ContainerStatus) string {
+	if res, err := DockerRun(ctx, e, ContainerPlatformArgs(st.ContainerName)...); err == nil && res.ExitCode == 0 {
+		if p := parseContainerPlatform(res.Stdout); p != "" {
+			return p
+		}
+	}
+
+	ref := st.ImageID
+	if ref == "" {
+		ref = st.Image
+	}
+	if ref == "" {
+		return ""
+	}
+	res, err := DockerRun(ctx, e, ImagePlatformArgs(ref)...)
+	if err != nil || res.ExitCode != 0 {
+		return ""
+	}
+	return firstNonEmptyLine(res.Stdout)
 }
 
 // ---------------------------------------------------------------------

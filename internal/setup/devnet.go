@@ -247,6 +247,16 @@ func (p *devnetPlan) runDocker(ctx context.Context, e executor.Executor, st *Sta
 	d := p.dev
 	d.Platform = ops.EnginePlatform(ctx, e, info)
 
+	// The private network, so a gateway on this machine can reach the devnet by
+	// CONTAINER NAME rather than back out through host.docker.internal to a
+	// published port. Creation is idempotent, so this is a no-op after the
+	// first run. It happens before the container is created because --network
+	// is fixed at creation like every other run flag.
+	d.Network = ops.NetworkName
+	if err := ops.EnsureNetwork(ctx, e, d.Network); err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+
 	// Remove before run, always. A container's published ports, image and
 	// command are all fixed at creation, so applying a changed setting is
 	// necessarily remove + run, never a restart — and an absent container makes

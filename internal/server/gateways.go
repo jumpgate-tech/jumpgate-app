@@ -112,6 +112,45 @@ type networkView struct {
 	Warnings    []string `json:"warnings,omitempty"`
 }
 
+// tlsView is the HTTPS front as the RPC screen needs it.
+//
+// It reports the EFFECTIVE certificate source next to the configured one,
+// because those two differ exactly when something went wrong with a
+// certificate on disk and the app quietly kept serving anyway. A screen that
+// showed only the configured value would be showing a setting, not the truth.
+type tlsView struct {
+	Enabled  bool   `json:"enabled"`
+	Hostname string `json:"hostname,omitempty"`
+	// URL is the https:// base callers dial. Set whenever TLS is configured,
+	// running or not, because it is the thing an operator copies.
+	URL string `json:"url,omitempty"`
+
+	// CertSource is what the operator asked for; EffectiveCertSource is what is
+	// actually being served. They differ only after an auto-fallback.
+	CertSource          string `json:"certSource,omitempty"`
+	EffectiveCertSource string `json:"effectiveCertSource,omitempty"`
+
+	// Fallback is the full operator-facing reason the configured source was not
+	// used, and FallbackReason its stable identifier ("expired",
+	// "hostname-mismatch", ...). Both empty when nothing fell back.
+	Fallback       string `json:"fallback,omitempty"`
+	FallbackReason string `json:"fallbackReason,omitempty"`
+
+	// ContainerName and Status are the Caddy container's, so the front's state
+	// is visible beside the gateway's rather than inferred from it — they can
+	// genuinely disagree, and a running gateway behind a dead front is a dead
+	// endpoint.
+	ContainerName string              `json:"containerName,omitempty"`
+	Status        ops.ContainerStatus `json:"status"`
+
+	// RootCAPath is where the internal CA's root was written on the target.
+	// It is the file the operator installs to stop the browser warning, and
+	// naming it is the difference between a solvable warning and a mystery.
+	RootCAPath string `json:"rootCaPath,omitempty"`
+
+	Error string `json:"error,omitempty"`
+}
+
 // gatewayView is one gateway as the RPC screen needs it: the full-width bar
 // (state, endpoint, actions), the chains it fronts, and each chain's servers.
 type gatewayView struct {
@@ -130,8 +169,15 @@ type gatewayView struct {
 	// them.
 	Docker dockerView `json:"docker"`
 
-	// BaseURL is the gateway's own front door, without a chain path.
+	// BaseURL is the gateway's own front door, without a chain path. It is the
+	// https:// one whenever the gateway is fronted — a fronted gateway
+	// publishes no plaintext port at all, so the http URL is not merely less
+	// good there, it is not listening.
 	BaseURL string `json:"baseUrl"`
+
+	// TLS is the HTTPS front, always present so the UI can render the "off"
+	// state from the same shape as the "on" one.
+	TLS tlsView `json:"tls"`
 
 	Networks []networkView `json:"networks"`
 
@@ -322,27 +368,83 @@ func (s *Server) gatewayViewFor(r *http.Request, cfg config.Config, gw config.Ga
 		v.Error, v.Hint, v.Code = statusErr.Error(), hint, code
 	}
 
+	if w := st.EmulationWarning(); w != "" {
+		v.Warnings = append(v.Warnings, w)
+	}
+
+	v.TLS = s.tlsViewFor(r, ex, gw, resolved)
+	if w := v.TLS.Status.EmulationWarning(); w != "" {
+		v.Warnings = append(v.Warnings, "TLS front: "+w)
+	}
+
+	// A fronted gateway's front door is Caddy's, and its readiness is Caddy's
+	// too: eRPC publishes no host port there, so an http URL would name a port
+	// nothing is bound to.
 	base := fmt.Sprintf("http://%s:%d", endpointHost(resolved.Bind()), resolved.HTTP())
-	if st.State == ops.StateRunning {
+	reachable := st.State == ops.StateRunning
+	if resolved.Fronted() {
+		base = v.TLS.URL
+		reachable = reachable && v.TLS.Status.State == ops.StateRunning
+	} else if st.State == ops.StateRunning {
 		live := s.livePorts(r.Context(), ex, dsvc, st)
 		base = liveURL("http", live, ops.ERPCContainerPort, base)
 		v.Warnings = append(v.Warnings, portDrift(live, ops.ERPCContainerPort, resolved.HTTP(), "gateway")...)
 	}
 	v.BaseURL = base
-	v.Networks = networkViews(cfg, gw, resolved, baseIfRunning(base, st))
+
+	perChain := ""
+	if reachable {
+		perChain = base
+	}
+	v.Networks = networkViews(cfg, gw, resolved, perChain)
 
 	v.Actions, v.Blocked = gatewayActions(v, docker)
 	return v
 }
 
-// baseIfRunning is "" unless the gateway is up. A per-chain URL for a stopped
-// gateway is an invitation to a connection refused, and the RPC screen shows
-// URLs to be copied and pasted.
-func baseIfRunning(base string, st ops.ContainerStatus) string {
-	if st.State == ops.StateRunning {
-		return base
+// tlsViewFor reads the TLS front: its container's state, and — by re-running
+// the same certificate resolution the provisioner uses — whether the
+// certificate the operator configured is the one actually being served.
+//
+// Re-running the resolution on a READ rather than caching what provisioning
+// decided is the point. A certificate expires on a wall clock, not on a
+// provisioning run, so a gateway that was fine when it was created can be
+// serving a fallback certificate weeks later with nothing having happened in
+// between. This screen is where that becomes visible.
+func (s *Server) tlsViewFor(r *http.Request, ex executor.Executor, gw config.Gateway, resolved catalog.GatewayConfig) tlsView {
+	if !resolved.Fronted() {
+		return tlsView{Status: ops.ContainerStatus{State: ops.StateNotCreated}}
 	}
-	return ""
+
+	tls := resolved.TLS
+	v := tlsView{
+		Enabled:             true,
+		Hostname:            tls.Hostname,
+		URL:                 tls.URL(),
+		CertSource:          tls.CertSourceOrDefault(),
+		EffectiveCertSource: tls.CertSourceOrDefault(),
+		ContainerName:       ops.CaddyContainerNameFor(gw.ID),
+	}
+
+	csvc := ops.CaddyServiceKeepingCA(gw.ID)
+	st, err := ops.ServiceStatus(r.Context(), ex, csvc)
+	v.Status = st
+	if err != nil {
+		v.Error = err.Error()
+		return v
+	}
+
+	front, path, err := setup.GatewayTLSState(r.Context(), ex, gw.ID, resolved)
+	if err != nil {
+		v.Error = err.Error()
+		return v
+	}
+	v.EffectiveCertSource = front.CertSource
+	v.Fallback, v.FallbackReason = front.Fallback, front.FallbackReason
+	if front.CertSource == catalog.CertInternal {
+		v.RootCAPath = path
+	}
+	return v
 }
 
 func gatewayLabel(gw config.Gateway) string {
@@ -462,6 +564,27 @@ func resolveUpstream(cfg config.Config, gw config.Gateway, u catalog.GatewayUpst
 			return "", "", fmt.Errorf("machine %q has no devnet configured any more", u.TargetID)
 		}
 		d := resolvedDevnet(t.Devnet)
+		// A devnet on the SAME machine as a container-hosted gateway is reached
+		// by CONTAINER NAME on the shared docker network, not by a published
+		// host port. That is what lets the devnet publish no port at all, and it
+		// removes the host.docker.internal hop for the one case where both ends
+		// are containers we placed ourselves.
+		if sameHostContainers(gw, u.TargetID) {
+			// The WebSocket endpoint, not the HTTP one, and it is not a
+			// preference — it is the only spelling that makes eth_subscribe
+			// work. eRPC infers WebSocket capability from the upstream SCHEME
+			// and has no separate flag, so an http:// upstream makes every
+			// eth_subscribe fail with ErrNoWsUpstreamAvailable ("requires a
+			// WebSocket-capable upstream, none configured"), through a gateway
+			// that is otherwise perfectly healthy.
+			//
+			// MEASURED, both ways, through a real fronted gateway: with an
+			// http:// upstream eth_chainId succeeded and eth_subscribe was
+			// refused; with the ws:// one BOTH succeeded and newHeads arrived.
+			// A ws upstream serves ordinary request/response calls too, so this
+			// costs nothing.
+			return d.ContainerWSEndpoint(), devnetLabel(gw, u.TargetID), nil
+		}
 		e := d.HTTPEndpoint()
 		if err := reachableAcrossMachines(gw, u.TargetID, e); err != nil {
 			return "", "", err
@@ -510,6 +633,25 @@ func reachableAcrossMachines(gw config.Gateway, upstreamTarget, endpoint string)
 	}
 	return fmt.Errorf("it is on machine %q but bound to loopback (%s), which from machine %q means that machine's own loopback — bind its RPC to an address the gateway's machine can reach",
 		upstreamTarget, endpoint, gw.Placement.TargetID)
+}
+
+// sameHostContainers reports whether a gateway and an upstream are BOTH
+// containers this app placed on the SAME machine — the one situation where a
+// container name is a better address than a URL.
+//
+// Both halves of the test are load-bearing. Same machine, because docker's
+// embedded DNS resolves a name only within one engine's network. Container
+// backend, because a systemd-hosted gateway is an ordinary process with no
+// network to resolve names on: handing it "valve-node-app-devnet:8545" would
+// produce a gateway whose every call fails DNS resolution while its config
+// looks perfectly reasonable.
+//
+// A managed NODE is deliberately not covered even on the same machine: a node
+// is a systemd install, not a container, so it has no name on the network and
+// host.docker.internal remains the only way to it. That path does not go away
+// here, it stops being the default.
+func sameHostContainers(gw config.Gateway, upstreamTarget string) bool {
+	return upstreamTarget == gw.Placement.TargetID && gw.Placement.Backend == setup.BackendDocker
 }
 
 func isLoopbackHost(host string) bool {
@@ -761,6 +903,13 @@ func (s *Server) handleGatewayCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Config != nil {
 		gwCfg = *req.Config
 	}
+	// TLS is validated unconditionally, unlike the networks: a gateway with no
+	// chains yet is a legitimate starting state, but a gateway with a malformed
+	// hostname is not one at any stage.
+	if err := gwCfg.TLS.ValidateSettings(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// Only validate a config that has something in it. An empty one is the
 	// intended starting state, and rendering it would fail on "no networks" —
 	// a true statement, but not a reason to refuse to create the gateway.
@@ -809,6 +958,10 @@ func (s *Server) handleGatewayPutConfig(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	if err := gwCfg.TLS.ValidateSettings(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if len(gwCfg.Networks) > 0 {
 		if err := validateGatewayConfig(gwCfg); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -844,6 +997,14 @@ func (s *Server) handleGatewayPutConfig(w http.ResponseWriter, r *http.Request) 
 // is only knowable at provision time. Everything the render CAN check about
 // them is still checked.
 func validateGatewayConfig(g catalog.GatewayConfig) error {
+	// The TLS settings are checked here even though RenderGatewayConfig checks
+	// them too, so that a bad hostname is refused at the moment it is typed
+	// rather than at the moment a provisioning run fails. The certificate FILES
+	// are not checked here: they live on the target, and a save should not
+	// depend on that machine being reachable.
+	if err := g.TLS.ValidateSettings(); err != nil {
+		return err
+	}
 	probe := g
 	probe.Networks = make([]catalog.GatewayNetwork, len(g.Networks))
 	for i, n := range g.Networks {

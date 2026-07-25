@@ -102,6 +102,13 @@ const gatewayHomeDir = ".valve-node-app"
 var (
 	gatewayReadyTimeout = 60 * time.Second
 	gatewayPollInterval = 2 * time.Second
+
+	// caddyRootTimeout/caddyRootPollInterval bound the wait for Caddy to have
+	// written its internal CA. `docker run` returns before Caddy has finished
+	// starting, so the first read legitimately finds nothing; a few seconds is
+	// generous against the observed sub-second startup.
+	caddyRootTimeout      = 15 * time.Second
+	caddyRootPollInterval = 500 * time.Millisecond
 )
 
 // gatewayChainIDCall is the probe body the run step's check posts.
@@ -131,6 +138,14 @@ func PlanGateway(gatewayID string, g catalog.GatewayConfig, backend string) ([]S
 	}
 	if _, err := catalog.RenderGatewayConfig(g); err != nil {
 		return nil, fmt.Errorf("setup: %w", err)
+	}
+	// A TLS front is a CONTAINER. A systemd gateway is not, and standing a
+	// docker container in front of a unit-hosted process would mean the
+	// gateway's two halves had different lifecycles, different failure modes
+	// and different places to look — for a target that, being Linux with root,
+	// already has better tools for this than we would be adding.
+	if g.Fronted() && backend != BackendDocker {
+		return nil, fmt.Errorf("setup: HTTPS for a gateway is provided by a Caddy container, so it needs the %q backend — this gateway is on %q. Put a reverse proxy in front of it yourself, or move it to the container backend.", BackendDocker, backend)
 	}
 
 	p := &gatewayPlan{id: gatewayID, gw: g, backend: backend}
@@ -193,6 +208,16 @@ type gatewayPlan struct {
 	// dockerConfigPath memoizes the path resolved lazily on the target (see
 	// configPath) so every step that needs it agrees on one answer.
 	dockerConfigPath string
+	// tls memoizes the resolved TLS front for the duration of ONE plan run.
+	//
+	// Memoizing is not an optimization, it is a correctness requirement: the
+	// config step's Verify compares the Caddyfile it would render against the
+	// one on disk, and resolveTLSFront reads a certificate whose validity is a
+	// function of the clock. Re-resolving between the write and the check could
+	// have a certificate expire mid-run, rendering a different file and looping
+	// forever on a step that had already succeeded.
+	tls       *tlsFront
+	tlsSolved bool
 	// configPending is set by the config step whenever it (re)writes
 	// erpc.yaml and cleared by the run step once the gateway has actually
 	// been restarted onto it.
@@ -261,6 +286,43 @@ func (p *gatewayPlan) configPath(ctx context.Context, e executor.Executor) (stri
 	}
 	p.dockerConfigPath = path.Join(home, gatewayHomeDir, p.configFileName())
 	return p.dockerConfigPath, nil
+}
+
+// caddyfilePath / rootCAPath are the TLS front's two files on the target,
+// kept beside erpc.yaml so one directory holds everything a gateway owns.
+//
+// rootCAPath is the file an operator installs in their trust store. It has to
+// be on the HOST, not left inside the container, or "install this root" means
+// "learn docker cp first".
+func (p *gatewayPlan) caddyfilePath(ctx context.Context, e executor.Executor) (string, error) {
+	return p.siblingPath(ctx, e, p.tlsFileName("Caddyfile", ""))
+}
+
+func (p *gatewayPlan) rootCAPath(ctx context.Context, e executor.Executor) (string, error) {
+	return p.siblingPath(ctx, e, p.tlsFileName("caddy-root", ".crt"))
+}
+
+// siblingPath puts name in the same directory erpc.yaml lives in, whichever
+// backend resolved it, so the two can never end up on different filesystems —
+// which on a desktop engine is the difference between a bind mount the VM can
+// see and one it silently mounts as an empty directory.
+func (p *gatewayPlan) siblingPath(ctx context.Context, e executor.Executor, name string) (string, error) {
+	cfg, err := p.configPath(ctx, e)
+	if err != nil {
+		return "", err
+	}
+	return path.Join(path.Dir(cfg), name), nil
+}
+
+// tlsFileName scopes a TLS file to this gateway, exactly as configFileName
+// scopes erpc.yaml: two gateways on one machine must not share a Caddyfile,
+// because each provision would overwrite the other's hostname.
+func (p *gatewayPlan) tlsFileName(base, ext string) string {
+	id := strings.TrimSpace(p.id)
+	if id == "" || id == ops.DefaultGatewayID {
+		return base + ext
+	}
+	return base + "-" + sanitizeGatewayID(id) + ext
 }
 
 // configFileName is this gateway's erpc.yaml, per gateway id. The default id
@@ -385,13 +447,23 @@ func (p *gatewayPlan) checkPortFree(ctx context.Context, e executor.Executor) er
 	if p.gatewayHoldsPort(ctx, e) {
 		return nil
 	}
+	// A fronted gateway publishes no host port for eRPC at all — Caddy is the
+	// only front door — so the port to check is the TLS one. Checking the eRPC
+	// port there would fail a perfectly good setup whenever something unrelated
+	// happened to hold 4000, for a port nothing is going to bind.
 	port := p.gw.HTTP()
+	what := "gateway"
+	if p.fronted() {
+		port = p.gw.TLS.HTTPS()
+		what = "gateway's HTTPS front"
+	}
+
 	res, err := e.Run(ctx, fmt.Sprintf(listenerProbe, port), nil)
 	if err != nil {
 		return fmt.Errorf("preflight: probe listeners on port %d: %w", port, err)
 	}
 	if res.ExitCode == 0 && strings.TrimSpace(res.Stdout) != "" {
-		return fmt.Errorf("preflight: port %d is already in use by something other than valve-node-app's gateway:\n%s", port, strings.TrimSpace(res.Stdout))
+		return fmt.Errorf("preflight: port %d is already in use by something other than valve-node-app's %s:\n%s", port, what, strings.TrimSpace(res.Stdout))
 	}
 	return nil
 }
@@ -412,9 +484,37 @@ func (p *gatewayPlan) gatewayHoldsPort(ctx context.Context, e executor.Executor)
 	return false
 }
 
-// containerName / unitName are this gateway's names on the target.
+// containerName / caddyName / unitName are this gateway's names on the target.
 func (p *gatewayPlan) containerName() string { return ops.ERPCContainerNameFor(p.id) }
+func (p *gatewayPlan) caddyName() string     { return ops.CaddyContainerNameFor(p.id) }
 func (p *gatewayPlan) unitName() string      { return erpcUnitNameFor(p.id) }
+
+// front resolves this gateway's TLS front once per plan run, or returns nil
+// when there is none. See gatewayPlan.tls for why the answer is memoized.
+//
+// The upstream is the eRPC CONTAINER NAME and its IN-CONTAINER port, never a
+// published host port: both containers are on ops.NetworkName, where docker's
+// embedded DNS resolves the name, and that is precisely what allows eRPC to
+// publish nothing at all.
+func (p *gatewayPlan) front(ctx context.Context, e executor.Executor) (*tlsFront, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.tlsSolved {
+		return p.tls, nil
+	}
+	f, err := resolveTLSFront(ctx, e, p.gw.TLS, p.containerName(), ops.ERPCContainerPort)
+	if err != nil {
+		return nil, err
+	}
+	p.tls, p.tlsSolved = f, true
+	return f, nil
+}
+
+// fronted reports whether this gateway HAS a TLS front, without resolving one.
+// Cheap and I/O-free, for the many places that only need the shape of the plan.
+func (p *gatewayPlan) fronted() bool {
+	return p.backend == BackendDocker && p.gw.Fronted()
+}
 
 // ---------------------------------------------------------------------
 // config
@@ -454,6 +554,9 @@ func (p *gatewayPlan) configStep() Step {
 						catalog.ServiceGroup, dest, res.ExitCode, strings.TrimSpace(res.Stderr))
 				}
 			}
+			if err := p.writeCaddyfile(ctx, e, st); err != nil {
+				return err
+			}
 			p.markConfigPending()
 			return nil
 		},
@@ -464,6 +567,9 @@ func (p *gatewayPlan) configStep() Step {
 			}
 			dest, err := p.configPath(ctx, e)
 			if err != nil {
+				return err
+			}
+			if err := p.verifyCaddyfile(ctx, e); err != nil {
 				return err
 			}
 			got, err := e.ReadFile(ctx, dest)
@@ -482,6 +588,72 @@ func (p *gatewayPlan) configStep() Step {
 			return nil
 		},
 	}
+}
+
+// writeCaddyfile renders and writes the TLS front's configuration, and reports
+// an automatic certificate fallback into the event stream when one happened.
+//
+// The fallback line is emitted at WRITE time and not only at read time because
+// this is the moment the operator is watching: a provisioning run that quietly
+// swapped their certificate for a self-signed one, and only said so on a screen
+// they might visit later, would be the silent behaviour the fallback exists to
+// avoid — just relocated.
+func (p *gatewayPlan) writeCaddyfile(ctx context.Context, e executor.Executor, st *State) error {
+	if !p.fronted() {
+		return nil
+	}
+	front, err := p.front(ctx, e)
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	rendered, err := catalog.RenderCaddyfile(front.Caddy)
+	if err != nil {
+		return fmt.Errorf("config: render Caddyfile: %w", err)
+	}
+	dest, err := p.caddyfilePath(ctx, e)
+	if err != nil {
+		return err
+	}
+	// 0644, matching the container backend's erpc.yaml and for the same
+	// reason: it is bind-mounted read-only into an image whose process is not
+	// the host user, so narrowing it only locks Caddy out of its own config.
+	if err := e.WriteFile(ctx, dest, []byte(rendered), 0644); err != nil {
+		return fmt.Errorf("config: write %s: %w", dest, err)
+	}
+	if front.Fallback != "" {
+		_ = emit(ctx, st, Event{StepID: "config", Line: "certificate fallback: " + front.Fallback})
+	}
+	return nil
+}
+
+// verifyCaddyfile is the Caddyfile's half of the config step's byte
+// comparison. A file that merely exists may be from a run with a different
+// hostname or a different certificate decision, and treating that as verified
+// is what would leave the old TLS front serving while setup reported success.
+func (p *gatewayPlan) verifyCaddyfile(ctx context.Context, e executor.Executor) error {
+	if !p.fronted() {
+		return nil
+	}
+	front, err := p.front(ctx, e)
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	want, err := catalog.RenderCaddyfile(front.Caddy)
+	if err != nil {
+		return fmt.Errorf("config: render Caddyfile: %w", err)
+	}
+	dest, err := p.caddyfilePath(ctx, e)
+	if err != nil {
+		return err
+	}
+	got, err := e.ReadFile(ctx, dest)
+	if err != nil {
+		return fmt.Errorf("config: %s is not written yet: %w", dest, err)
+	}
+	if string(got) != want {
+		return fmt.Errorf("config: %s does not match the desired TLS configuration (the hostname, the certificate source, or which certificate is usable has changed since it was written)", dest)
+	}
+	return nil
 }
 
 // writeModeGatewayConfig is split out only so the two modes are stated once.
@@ -604,12 +776,28 @@ func (p *gatewayPlan) runDocker(ctx context.Context, e executor.Executor, st *St
 		return err
 	}
 
+	// The private network, before anything joins it. Idempotent, so this is a
+	// no-op on every run after the first.
+	if err := ops.EnsureNetwork(ctx, e, ops.NetworkName); err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+
 	// Remove before run, always. A container's published port, mounts and
 	// image are all fixed at creation, so applying a changed config is
 	// necessarily remove + run, never a restart — and an absent container
 	// makes this a no-op rather than an error.
 	if err := ops.RemoveContainer(ctx, e, p.containerName()); err != nil {
 		return fmt.Errorf("run: %w", err)
+	}
+	// A gateway that USED to be fronted and no longer is must lose its front
+	// in the same breath, or the old Caddy keeps serving HTTPS from a Caddyfile
+	// pointing at an eRPC that has just moved back to a published host port.
+	// Removing an absent container is a no-op, so this is unconditional in the
+	// unfronted direction only.
+	if !p.fronted() {
+		if err := ops.RemoveContainer(ctx, e, p.caddyName()); err != nil {
+			return fmt.Errorf("run: %w", err)
+		}
 	}
 
 	args := ops.ERPCRunArgs(ops.ERPCRunSpec{
@@ -619,10 +807,18 @@ func (p *gatewayPlan) runDocker(ctx context.Context, e executor.Executor, st *St
 		HostConfigPath: dest,
 		// A VM-backed engine already provides host.docker.internal; a plain
 		// Linux engine only has it when the container is started with this
-		// mapping, and the rendered config points local upstreams at exactly
-		// that name.
+		// mapping. It is no longer how a same-host CONTAINER is reached — the
+		// network below is — but it remains the only way to reach a
+		// systemd-installed node on the same box, which is not a container and
+		// has no name on any network.
 		AddHostGateway: !info.VMBacked(),
 		Platform:       platform,
+		Network:        ops.NetworkName,
+		// A fronted gateway publishes NOTHING. Caddy is the only front door,
+		// and it reaches eRPC by container name over the network above, so a
+		// published eRPC port would be a second, plaintext, unauthenticated way
+		// in that the operator did not ask for and would not see.
+		NoPublish: p.fronted(),
 	})
 	res, err := ops.DockerRun(ctx, e, args...)
 	if err != nil {
@@ -632,7 +828,97 @@ func (p *gatewayPlan) runDocker(ctx context.Context, e executor.Executor, st *St
 		return fmt.Errorf("run: docker run failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	_ = emit(ctx, st, Event{StepID: "run", Line: strings.TrimSpace(res.Stdout)})
+
+	return p.runCaddy(ctx, e, st, platform)
+}
+
+// runCaddy starts (or replaces) the gateway's TLS front and exports the root
+// of its internal CA.
+//
+// It runs AFTER eRPC, not before, and the order is not cosmetic: Caddy resolves
+// its upstream lazily per request, but starting it first would open an HTTPS
+// port that answers 502 to everything, and the readiness poll below would then
+// be measuring the wrong thing.
+func (p *gatewayPlan) runCaddy(ctx context.Context, e executor.Executor, st *State, platform string) error {
+	if !p.fronted() {
+		// Already removed alongside the eRPC container; see runDocker.
+		return nil
+	}
+
+	front, err := p.front(ctx, e)
+	if err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	caddyfile, err := p.caddyfilePath(ctx, e)
+	if err != nil {
+		return err
+	}
+	if err := ops.RemoveContainer(ctx, e, p.caddyName()); err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+
+	args := ops.CaddyRunArgs(ops.CaddyRunSpec{
+		Image:          front.Caddy.ImageRef,
+		ContainerName:  p.caddyName(),
+		BindAddr:       p.gw.TLS.Bind(),
+		HostPort:       p.gw.TLS.HTTPS(),
+		Platform:       platform,
+		HostConfigPath: caddyfile,
+		Network:        ops.NetworkName,
+		CertFile:       front.Caddy.CertFile,
+		KeyFile:        front.Caddy.KeyFile,
+	})
+	res, err := ops.DockerRun(ctx, e, args...)
+	if err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("run: docker run (TLS front) failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	_ = emit(ctx, st, Event{StepID: "run", Line: strings.TrimSpace(res.Stdout)})
+
+	if front.Caddy.CertSourceOrDefault() == catalog.CertInternal {
+		p.exportRoot(ctx, e, st)
+	}
 	return nil
+}
+
+// exportRoot copies the internal CA's root out to the host, retrying briefly
+// because Caddy writes it during startup and `docker run` returns before that.
+//
+// Failure is reported as a line, never as an error: the gateway serves HTTPS
+// either way, and refusing to finish provisioning over a file that is only
+// needed to make the browser warning go away would be a worse trade than the
+// one this whole feature is built on.
+func (p *gatewayPlan) exportRoot(ctx context.Context, e executor.Executor, st *State) {
+	dest, err := p.rootCAPath(ctx, e)
+	if err != nil {
+		_ = emit(ctx, st, Event{StepID: "run", Line: "could not resolve where to put the internal CA root: " + err.Error()})
+		return
+	}
+	deadline := time.Now().Add(caddyRootTimeout)
+	for {
+		got, err := exportRootCA(ctx, e, p.caddyName(), dest)
+		if got {
+			_ = emit(ctx, st, Event{StepID: "run", Line: "internal CA root written to " + dest +
+				" — install it in your trust store (and on any other device that will call this gateway) to stop the browser warning"})
+			return
+		}
+		if time.Now().After(deadline) {
+			detail := ""
+			if err != nil {
+				detail = ": " + err.Error()
+			}
+			_ = emit(ctx, st, Event{StepID: "run", Line: "the TLS front's internal CA root could not be read yet" + detail +
+				" — HTTPS still works, but this app cannot verify the chain and your browser will warn until you install the root by hand"})
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(caddyRootPollInterval):
+		}
+	}
 }
 
 func (p *gatewayPlan) runSystemd(ctx context.Context, e executor.Executor, st *State) error {
@@ -703,10 +989,10 @@ func (p *gatewayPlan) waitReady(ctx context.Context, e executor.Executor) error 
 // misconfiguration worth failing on rather than a transient upstream fault.
 func (p *gatewayPlan) gatewayCheck(ctx context.Context, e executor.Executor) error {
 	chainID := p.gw.Networks[0].ChainID
-	url := fmt.Sprintf("http://%s:%d%s", probeHost(p.gw.Bind()), p.gw.HTTP(), p.gw.PathFor(chainID))
-
-	cmd := fmt.Sprintf("curl -s -X POST -H 'Content-Type: application/json' --data %s %s",
-		shQuote(gatewayChainIDCall), shQuote(url))
+	url, cmd, err := p.probeCommand(ctx, e, chainID)
+	if err != nil {
+		return err
+	}
 	res, err := e.Run(ctx, cmd, nil)
 	if err != nil {
 		return fmt.Errorf("gateway: eth_chainId probe: %w", err)
@@ -740,6 +1026,67 @@ func (p *gatewayPlan) gatewayCheck(ctx context.Context, e executor.Executor) err
 		return fmt.Errorf("gateway: %s is serving chain %d, but the config routes that path to chain %d", url, got, chainID)
 	}
 	return nil
+}
+
+// probeCommand builds the readiness probe: the URL it targets and the curl
+// invocation that hits it.
+//
+// For an unfronted gateway that is the plain http endpoint on its published
+// port, unchanged. For a fronted one the whole point is to prove the thing the
+// operator will actually use, so the probe goes through HTTPS — which means
+// three deliberate choices:
+//
+//   - --resolve pins the hostname to the published bind address ON THE TARGET
+//     rather than trusting DNS. The probe runs on the target (curl over the
+//     executor), Caddy publishes there, and pinning is what stops a gateway
+//     that works perfectly from failing setup because the operator has not
+//     pointed a name at their machine yet.
+//   - --cacert names the internal CA's exported root, so the CHAIN IS ACTUALLY
+//     VERIFIED. Passing -k here would have made the probe unable to distinguish
+//     a working front from one serving a certificate for the wrong name — the
+//     specific failure this feature introduces.
+//   - a bare curl is appended with || as a second attempt when a CA file is not
+//     available, which is the CertFiles case: a publicly-trusted certificate
+//     (tailscale, localhost.direct) verifies against the system store and needs
+//     no CA file, while a self-signed one verifies against its own certificate
+//     passed as the CA. Trying the specific one first and the system store
+//     second covers both without asking the operator which they have.
+func (p *gatewayPlan) probeCommand(ctx context.Context, e executor.Executor, chainID int) (string, string, error) {
+	body := shQuote(gatewayChainIDCall)
+	const curlBase = "curl -s --max-time 10 -X POST -H 'Content-Type: application/json' --data "
+
+	if !p.fronted() {
+		url := fmt.Sprintf("http://%s:%d%s", probeHost(p.gw.Bind()), p.gw.HTTP(), p.gw.PathFor(chainID))
+		return url, curlBase + body + " " + shQuote(url), nil
+	}
+
+	front, err := p.front(ctx, e)
+	if err != nil {
+		return "", "", err
+	}
+	tls := p.gw.TLS
+	url := front.Caddy.URL() + p.gw.PathFor(chainID)
+	resolve := fmt.Sprintf("--resolve %s", shQuote(fmt.Sprintf("%s:%d:%s", tls.Hostname, tls.HTTPS(), probeHost(tls.Bind()))))
+
+	ca := front.Caddy.CertFile
+	if front.Caddy.CertSourceOrDefault() == catalog.CertInternal {
+		root, err := p.rootCAPath(ctx, e)
+		if err != nil {
+			return "", "", err
+		}
+		ca = root
+	}
+
+	attempt := func(extra string) string {
+		return curlBase + body + " " + resolve + " " + extra + " " + shQuote(url)
+	}
+	cmd := attempt("--cacert " + shQuote(ca))
+	if ca != "" {
+		// Fall through to the system trust store when the CA file is absent or
+		// is a leaf rather than an authority.
+		cmd += " || " + attempt("")
+	}
+	return url, cmd, nil
 }
 
 // probeHost turns the gateway's bind address into something connectable. A

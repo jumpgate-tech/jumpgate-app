@@ -18,6 +18,7 @@ package ops
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -287,10 +288,10 @@ const unameArchProbe = "command -p uname -m"
 // `uname -m`'s (x86_64, aarch64, armv7l) and Go's runtime.GOARCH (amd64,
 // arm64).
 //
-// An empty or unrecognized arch yields "", meaning "emit no --platform and
-// let the engine choose". That is deliberate: a WRONG --platform is strictly
-// worse than none, because it turns an engine's correct multi-arch manifest
-// selection into a hard "no matching manifest" failure.
+// An empty or unrecognized arch yields "", meaning "this reading told us
+// nothing" — NOT "omit the flag". Every caller must fall through to another
+// reading rather than emitting nothing; see EnginePlatform and
+// resolveRunPlatform for why omission is no longer an option.
 func PlatformForArch(arch string) string {
 	switch strings.ToLower(strings.TrimSpace(arch)) {
 	case "x86_64", "x86-64", "amd64":
@@ -304,14 +305,47 @@ func PlatformForArch(arch string) string {
 	}
 }
 
-// DefaultPlatform is the --platform ERPCRunArgs emits when a run spec names
-// none: the architecture valve-node-app ITSELF was built for.
+// DefaultPlatform is the --platform every run/build renderer falls back to
+// when nothing better is known: the architecture valve-node-app ITSELF was
+// built for.
 //
-// That is the right default because the container backend exists for the
+// That is the right last resort because the container backend exists for the
 // operator's own desktop (see this file's header), where the app and the
-// engine are on the same machine — and unlike anything reported by the
-// docker CLI, this reading cannot be distorted by binary translation.
-func DefaultPlatform() string { return PlatformForArch(runtime.GOARCH) }
+// engine are on the same machine — and unlike anything reported by the docker
+// CLI, this reading cannot be distorted by binary translation.
+//
+// It never returns "". An architecture PlatformForArch does not recognize is
+// still rendered as "linux/<GOARCH>", because Go's GOARCH names and docker's
+// platform arch names agree for every architecture either of them supports.
+// See resolveRunPlatform for why an empty answer is not acceptable here.
+func DefaultPlatform() string {
+	if p := PlatformForArch(runtime.GOARCH); p != "" {
+		return p
+	}
+	return "linux/" + runtime.GOARCH
+}
+
+// resolveRunPlatform is the single place that answers "what --platform does
+// this docker command get", and it ALWAYS answers.
+//
+// WHY it can never return "": an omitted --platform does not mean "let the
+// engine choose from the manifest". It means "let DOCKER_DEFAULT_PLATFORM
+// choose", and that environment variable is invisible at the point of use.
+//
+// MEASURED, on an arm64 Mac with DOCKER_DEFAULT_PLATFORM=linux/amd64 exported
+// into the app's environment: a devnet reset through the app created an amd64
+// reth container. The engine reported State=running and the container answered
+// no RPC at all — QEMU user-mode emulation of reth is slow enough that the
+// readiness probe timed out, and every status read afterwards said "running".
+// That is the worst failure shape in this codebase: not an error, a lie. An
+// explicit --platform on both `docker run` and `docker build` is what removes
+// the variable from the decision entirely.
+func resolveRunPlatform(explicit string) string {
+	if p := strings.TrimSpace(explicit); p != "" {
+		return p
+	}
+	return DefaultPlatform()
+}
 
 // EnginePlatform resolves the --platform value to run images as on this
 // target. It exists because `docker info`'s architecture cannot be trusted
@@ -336,23 +370,143 @@ func DefaultPlatform() string { return PlatformForArch(runtime.GOARCH) }
 // The one case this rule gets wrong is a deliberately cross-architecture
 // desktop VM (`colima start --arch x86_64` on an arm64 Mac). Set
 // ERPCRunSpec.Platform explicitly for that; an explicit value always wins.
+//
+// It NEVER returns "". It used to, when neither reading was recognizable, and
+// callers took that as "omit --platform" — which does not hand the choice to
+// the engine's manifest resolution, it hands it to DOCKER_DEFAULT_PLATFORM.
+// The fallback order is therefore engine reading, then host reading, then
+// DefaultPlatform(); see resolveRunPlatform for the measured failure.
 func EnginePlatform(ctx context.Context, e executor.Executor, info DockerInfo) string {
 	engine := PlatformForArch(info.Architecture)
 
-	res, err := e.Run(ctx, unameArchProbe, nil)
-	if err != nil || res.ExitCode != 0 {
-		// Best effort by design: a target without `uname` still deserves the
-		// engine's own reading rather than a failed provisioning run.
-		return engine
+	host := ""
+	// Best effort by design: a target without `uname` still deserves the
+	// engine's own reading rather than a failed provisioning run.
+	if res, err := e.Run(ctx, unameArchProbe, nil); err == nil && res.ExitCode == 0 {
+		host = PlatformForArch(firstNonEmptyLine(res.Stdout))
 	}
-	host := PlatformForArch(firstNonEmptyLine(res.Stdout))
-	if host == "" {
-		return engine
-	}
-	if engine == "" || (host != engine && info.VMBacked()) {
+
+	switch {
+	case engine == "" && host == "":
+		return DefaultPlatform()
+	case engine == "":
 		return host
+	case host == "":
+		return engine
+	case host != engine && info.VMBacked():
+		return host
+	default:
+		return engine
 	}
-	return engine
+}
+
+// ---------------------------------------------------------------------
+// emulation detection
+// ---------------------------------------------------------------------
+
+// containerPlatformFormat asks a CONTAINER what platform it actually resolved
+// to. This is the primary reading and the only one that is reliable on a
+// modern engine.
+//
+// MEASURED, and it is why this is not simply an image inspect: on Docker 29
+// with the containerd image store, `docker inspect -f '{{.Image}}'` of a
+// container created with --platform linux/amd64 returns the MANIFEST LIST's
+// digest, not the amd64 manifest's. Inspecting that id reports the HOST's
+// architecture — arm64 — for a container demonstrably running amd64 code (its
+// own logs said "This is the expected behaviour if you are running under
+// QEMU", and `docker exec … uname -m` said x86_64). An image-only check would
+// therefore have reported every emulated container as native, which is exactly
+// the false negative this whole feature exists to prevent.
+//
+// .ImageManifestDescriptor carries the RESOLVED platform and is correct.
+const containerPlatformFormat = `{{json .ImageManifestDescriptor}}`
+
+// ContainerPlatformArgs renders the argv (without the leading "docker") for
+// that reading. On an engine too old to have the field, docker fails the
+// template with a non-zero exit, which is the caller's signal to fall back to
+// ImagePlatformArgs — where the classic image store makes the image id
+// platform-specific and the old reading is correct.
+func ContainerPlatformArgs(name string) []string {
+	return []string{"inspect", "-f", containerPlatformFormat, name}
+}
+
+// imageManifestDescriptor is the subset of the OCI descriptor that answers
+// "what platform is this really".
+type imageManifestDescriptor struct {
+	Platform *struct {
+		OS           string `json:"os"`
+		Architecture string `json:"architecture"`
+		Variant      string `json:"variant"`
+	} `json:"platform"`
+}
+
+// parseContainerPlatform reads containerPlatformFormat's output into an
+// "os/arch" string, or "" when the engine had nothing to say. Pure, so the
+// several shapes docker can emit here (a descriptor, a JSON null, an empty
+// line) are testable without a daemon.
+func parseContainerPlatform(stdout string) string {
+	line := firstNonEmptyLine(stdout)
+	if line == "" || line == "null" {
+		return ""
+	}
+	var d imageManifestDescriptor
+	if err := json.Unmarshal([]byte(line), &d); err != nil || d.Platform == nil {
+		return ""
+	}
+	if d.Platform.OS == "" || d.Platform.Architecture == "" {
+		return ""
+	}
+	return d.Platform.OS + "/" + d.Platform.Architecture
+}
+
+// imagePlatformFormat renders an image's own platform as docker spells it.
+// The variant is only appended when the image declares one, so an arm64 image
+// reads "linux/arm64" rather than "linux/arm64/", matching what --platform
+// takes.
+const imagePlatformFormat = `{{.Os}}/{{.Architecture}}{{if .Variant}}/{{.Variant}}{{end}}`
+
+// ImagePlatformArgs renders the argv (without the leading "docker") that asks
+// what platform an IMAGE is. It is the FALLBACK reading — correct on the
+// classic image store, where an image id names one platform's manifest, and
+// misleading on the containerd store; see containerPlatformFormat.
+func ImagePlatformArgs(ref string) []string {
+	return []string{"image", "inspect", "-f", imagePlatformFormat, ref}
+}
+
+// enginePlatformProbe asks the ENGINE what it runs natively. `docker version`
+// rather than `docker info` on purpose: it answers the same question and is
+// materially cheaper, and this runs on every status read of a live container.
+const enginePlatformProbe = "docker version --format '{{.Server.Os}}/{{.Server.Arch}}'"
+
+// EmulatedPlatform reports whether an image platform is being run on an engine
+// of a different architecture — i.e. through QEMU rather than natively.
+//
+// The comparison is on ARCHITECTURE ONLY, and deliberately ignores the ARM
+// variant: an arm64 engine runs a linux/arm64/v8 image natively, and treating
+// the variant as a mismatch would flag every ordinary arm64 container. An
+// unknown reading on either side yields false — an unproven suspicion of
+// emulation is not worth showing an operator a warning about.
+func EmulatedPlatform(imagePlatform, engPlatform string) bool {
+	img, eng := platformArch(imagePlatform), platformArch(engPlatform)
+	if img == "" || eng == "" {
+		return false
+	}
+	return img != eng
+}
+
+// platformArch pulls the architecture out of an "os/arch[/variant]" string,
+// normalizing the spellings PlatformForArch accepts so that "x86_64" from one
+// source and "amd64" from another are not read as two architectures.
+func platformArch(platform string) string {
+	parts := strings.Split(strings.TrimSpace(platform), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	if p := PlatformForArch(parts[1]); p != "" {
+		// Reduce back to the arch half so linux/arm/v7 and armv7l agree.
+		return strings.TrimPrefix(p, "linux/")
+	}
+	return strings.ToLower(parts[1])
 }
 
 // ---------------------------------------------------------------------
@@ -501,7 +655,24 @@ type ERPCRunSpec struct {
 	// Required on plain Linux engines whenever the config's local-node
 	// upstream is addressed via DockerHostAlias; harmless (and ignored) on
 	// VM-backed engines that already provide the alias.
+	//
+	// It is no longer the DEFAULT way to reach a same-host service — the
+	// private network is (see Network) — but it does not go away: a node
+	// installed by systemd on the same box is not a container and has no
+	// container name, and neither does anything else the operator points an
+	// upstream at.
 	AddHostGateway bool
+
+	// Network is the docker network to join ("" → none). Joining one is what
+	// lets this container address its same-host neighbours BY CONTAINER NAME,
+	// which in turn is what lets those neighbours publish no host port at all.
+	Network string
+
+	// NoPublish suppresses the -p mapping entirely. It is set when something
+	// else is the front door — a Caddy container terminating TLS — and eRPC is
+	// reached only over Network. A gateway with no published port and no front
+	// is unreachable, so this is never set on its own.
+	NoPublish bool
 }
 
 // ERPCRunArgs renders the argv for `docker run` — WITHOUT the leading
@@ -538,27 +709,29 @@ func ERPCRunArgs(spec ERPCRunSpec) []string {
 	if bind == "" {
 		bind = "127.0.0.1"
 	}
-	platform := spec.Platform
-	if platform == "" {
-		platform = DefaultPlatform()
-	}
 
 	args := []string{
 		"run", "-d",
 		"--name", name,
 		"--restart", "unless-stopped",
-	}
-	// Emitted only when a platform is actually known: PlatformForArch
-	// returns "" for an architecture nobody recognized, and there the
-	// engine's own manifest selection beats a guess.
-	if platform != "" {
-		args = append(args, "--platform", platform)
+		// ALWAYS emitted, never conditionally: an absent --platform is not
+		// "let the engine decide", it is "let DOCKER_DEFAULT_PLATFORM decide".
+		// See resolveRunPlatform.
+		"--platform", resolveRunPlatform(spec.Platform),
 	}
 	if spec.AddHostGateway {
 		args = append(args, "--add-host", DockerHostAlias+":host-gateway")
 	}
+	if net := strings.TrimSpace(spec.Network); net != "" {
+		// --network-alias is not needed: docker's embedded DNS resolves a
+		// container's --name on a user-defined network already, and the name is
+		// what every rendered upstream uses.
+		args = append(args, "--network", net)
+	}
+	if !spec.NoPublish {
+		args = append(args, "-p", publishSpec(bind, hostPort, ERPCContainerPort))
+	}
 	args = append(args,
-		"-p", publishSpec(bind, hostPort, ERPCContainerPort),
 		"-v", spec.HostConfigPath+":"+erpcContainerConfigPath+":ro",
 		image,
 	)
@@ -698,6 +871,229 @@ func isLoopbackAddr(addr string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// ---------------------------------------------------------------------
+// the private network
+// ---------------------------------------------------------------------
+
+// NetworkName is the user-defined bridge network every container this app
+// places on ONE target joins: the devnet, each gateway's eRPC, and each
+// gateway's TLS front.
+//
+// It is a single constant rather than a name derived from the target id, and
+// that already IS "one network per placement target": a target is a docker
+// ENGINE, and each engine has its own namespace of networks. Deriving the name
+// from the id would produce the same one network per engine under a longer
+// name, and would break the moment a target was renamed.
+//
+// WHY a user-defined network at all, rather than the default bridge: docker
+// runs an embedded DNS server on user-defined networks and NOT on the default
+// bridge, so a container's --name resolves to its address only here. That name
+// resolution is the whole mechanism — it is what lets an upstream be written as
+// "valve-node-app-devnet:8545" instead of a published host port reached back
+// through host.docker.internal, and therefore what lets the devnet and eRPC
+// publish nothing at all.
+const NetworkName = "valve-node-app"
+
+// NetworkInspectArgs / NetworkCreateArgs render the two halves of an
+// idempotent network creation, kept pure and separate so the argv is testable
+// without a daemon, matching every other renderer here.
+func NetworkInspectArgs(name string) []string { return []string{"network", "inspect", name} }
+func NetworkCreateArgs(name string) []string  { return []string{"network", "create", name} }
+
+// EnsureNetwork creates the network if it is not already there, and is safe to
+// call on every provision.
+//
+// Inspect-then-create rather than create-and-ignore-the-error because the
+// common path (the network already exists) should not produce an error line in
+// a provisioning log the operator is reading. The "already exists" case is
+// still tolerated on the create, because two provisions racing on one target is
+// possible and losing that race is not a failure.
+func EnsureNetwork(ctx context.Context, e executor.Executor, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("ops: network: name is empty")
+	}
+	res, err := DockerRun(ctx, e, NetworkInspectArgs(name)...)
+	if err != nil {
+		return err
+	}
+	if res.ExitCode == 0 {
+		return nil
+	}
+
+	res, err = DockerRun(ctx, e, NetworkCreateArgs(name)...)
+	if err != nil {
+		return err
+	}
+	if res.ExitCode != 0 && !isNetworkExists(res.Stderr, res.Stdout) {
+		return fmt.Errorf("ops: docker network create %s failed (exit %d): %s",
+			name, res.ExitCode, firstNonEmptyLine(res.Stderr, res.Stdout))
+	}
+	return nil
+}
+
+// isNetworkExists recognizes the engine's "you already made that" complaint,
+// which is the one non-zero exit an idempotent create must treat as success.
+func isNetworkExists(streams ...string) bool {
+	hay := strings.ToLower(strings.Join(streams, "\n"))
+	return strings.Contains(hay, "already exists")
+}
+
+// ---------------------------------------------------------------------
+// the TLS front (Caddy)
+// ---------------------------------------------------------------------
+
+const (
+	// CaddyContainerName is the DEFAULT gateway's TLS front, and the prefix
+	// every other gateway's front is named from — exactly the arrangement
+	// ERPCContainerName documents, and for the same reason: one gateway may
+	// have a TLS front while another does not, and two containers cannot share
+	// a name.
+	CaddyContainerName = "valve-node-app-caddy"
+
+	// caddyContainerConfigPath is where the rendered Caddyfile is mounted. It
+	// is the path the official image's own CMD already points at, so the mount
+	// alone is what makes this work — no command override, which is precisely
+	// the mistake ERPCRunArgs documents at length.
+	caddyContainerConfigPath = "/etc/caddy/Caddyfile"
+
+	// CaddyHTTPSPort is the port Caddy listens on INSIDE the container. Fixed,
+	// like ERPCContainerPort: the container's port namespace is private, and
+	// the operator's choice of port lives on the host side of the -p mapping.
+	CaddyHTTPSPort = 443
+)
+
+// CaddyContainerNameFor is the TLS front's container name for ONE gateway,
+// derived from the gateway id exactly as ERPCContainerNameFor is.
+func CaddyContainerNameFor(gatewayID string) string {
+	id := strings.TrimSpace(gatewayID)
+	if id == "" || id == DefaultGatewayID {
+		return CaddyContainerName
+	}
+	return CaddyContainerName + "-" + sanitizeNameSegment(id)
+}
+
+// CaddyRunSpec is everything the pure Caddy arg renderer needs.
+type CaddyRunSpec struct {
+	// Image is the container image ref ("" → catalog's caddy default).
+	Image string
+	// ContainerName is the container's --name ("" → CaddyContainerName).
+	ContainerName string
+	// BindAddr is the HOST address the published TLS port binds to ("" →
+	// 0.0.0.0). Unlike eRPC's, this one defaults WIDE, and that is the point of
+	// the whole feature: an https:// page cannot call an http:// endpoint, and
+	// a TLS front bound to loopback would serve only the machine it runs on —
+	// which is the one machine that never needed it.
+	BindAddr string
+	// HostPort is the host-side TLS port (0 → CaddyHTTPSPort).
+	HostPort int
+	// Platform is the image platform (""→ DefaultPlatform()), always emitted.
+	Platform string
+	// HostConfigPath is the absolute path to the rendered Caddyfile ON THE
+	// HOST, bind-mounted read-only.
+	HostConfigPath string
+	// Network is the docker network to join. It is effectively mandatory: the
+	// upstream in the rendered Caddyfile is a CONTAINER NAME, which resolves
+	// only on a user-defined network.
+	Network string
+	// DataVolume is the named volume mounted at DataPath ("" →
+	// catalog.CaddyDataVolume). It is not optional — Caddy's internal CA lives
+	// there, and without persistence it is regenerated on every container
+	// recreate, invalidating every trust-store install of the old root. See
+	// catalog.CaddyDataVolume.
+	DataVolume string
+	// CertFile and KeyFile are host paths mounted read-only when the cert
+	// source is "files". Empty otherwise.
+	CertFile string
+	KeyFile  string
+}
+
+// CaddyRunArgs renders the argv for `docker run` — WITHOUT the leading
+// "docker" — for a gateway's TLS front. Pure, like every other renderer here.
+//
+// --restart unless-stopped, matching eRPC: a TLS front is infrastructure, and
+// an https endpoint that silently stops existing after a reboot is worse than
+// one that was never offered.
+func CaddyRunArgs(spec CaddyRunSpec) []string {
+	name := spec.ContainerName
+	if name == "" {
+		name = CaddyContainerName
+	}
+	image := spec.Image
+	if image == "" {
+		image = catalog.DefaultCaddyImage
+	}
+	bind := spec.BindAddr
+	if bind == "" {
+		bind = "0.0.0.0"
+	}
+	hostPort := spec.HostPort
+	if hostPort == 0 {
+		hostPort = CaddyHTTPSPort
+	}
+	volume := spec.DataVolume
+	if volume == "" {
+		volume = catalog.CaddyDataVolume
+	}
+
+	args := []string{
+		"run", "-d",
+		"--name", name,
+		"--restart", "unless-stopped",
+		"--platform", resolveRunPlatform(spec.Platform),
+	}
+	if net := strings.TrimSpace(spec.Network); net != "" {
+		args = append(args, "--network", net)
+	}
+	args = append(args,
+		"-p", publishSpec(bind, hostPort, CaddyHTTPSPort),
+		"-v", spec.HostConfigPath+":"+caddyContainerConfigPath+":ro",
+		// The data volume is unconditional. See catalog.CaddyDataVolume: a
+		// regenerated internal CA breaks HTTPS for every device that trusted
+		// the old root, and the operator has no way to know why.
+		"-v", volume+":"+catalog.CaddyDataPath,
+	)
+	// Cert and key are mounted at the SAME paths inside the container as on
+	// the host, so the Caddyfile can name one path that is true on both sides.
+	if spec.CertFile != "" && spec.KeyFile != "" {
+		args = append(args,
+			"-v", spec.CertFile+":"+spec.CertFile+":ro",
+			"-v", spec.KeyFile+":"+spec.KeyFile+":ro",
+		)
+	}
+	return append(args, image)
+}
+
+// CaddyServiceFor is the lifecycle descriptor for ONE gateway's TLS front.
+//
+// It DOES declare a volume — catalog.CaddyDataVolume — and that is exactly why
+// WipeService must not be pointed at this descriptor casually: wiping it
+// destroys the internal CA, and every browser and trust store that installed
+// the old root then rejects the gateway with no indication of why. The gateway
+// wipe path deliberately uses CaddyServiceKeepingCA instead; this constructor
+// exists for the one case that genuinely means "throw the CA away too".
+func CaddyServiceFor(gatewayID string) DockerService {
+	s := CaddyServiceKeepingCA(gatewayID)
+	s.Volumes = []string{catalog.CaddyDataVolume}
+	return s
+}
+
+// CaddyServiceKeepingCA is the same front WITHOUT its data volume declared, so
+// a wipe removes the container and leaves the certificate authority alone.
+//
+// This is the default the gateway lifecycle uses. Wiping chain data is
+// routine; invalidating every trust-store install on every device the operator
+// owns is not, and the two must not be reachable by the same button.
+func CaddyServiceKeepingCA(gatewayID string) DockerService {
+	id := strings.TrimSpace(gatewayID)
+	if id == "" {
+		id = DefaultGatewayID
+	}
+	return DockerService{
+		ID:            "caddy:" + id,
+		ContainerName: CaddyContainerNameFor(id),
 	}
 }
 
@@ -853,9 +1249,11 @@ type ImageBuildSpec struct {
 	// ("" → ERPCBuildContext()).
 	Context string
 	// Platform is the target platform, e.g. "linux/arm64" ("" →
-	// DefaultPlatform()). Omitted entirely when no architecture is
-	// recognizable, for the same reason ERPCRunArgs omits it: a wrong
-	// --platform turns correct manifest selection into a hard failure.
+	// DefaultPlatform()). It is ALWAYS emitted, for the same reason
+	// ERPCRunArgs always emits it: an omitted --platform on a build inherits
+	// DOCKER_DEFAULT_PLATFORM, which on an arm64 machine with that variable
+	// set to linux/amd64 produces an emulated image that then runs — slowly,
+	// and reporting itself healthy — for the rest of its life.
 	Platform string
 }
 
@@ -870,15 +1268,7 @@ func ImageBuildArgs(spec ImageBuildSpec) []string {
 	if buildCtx == "" {
 		buildCtx = ERPCBuildContext()
 	}
-	platform := spec.Platform
-	if platform == "" {
-		platform = DefaultPlatform()
-	}
-
-	args := []string{"build"}
-	if platform != "" {
-		args = append(args, "--platform", platform)
-	}
+	args := []string{"build", "--platform", resolveRunPlatform(spec.Platform)}
 	// The context goes last: docker treats the first non-flag argument as
 	// the context, so an option appended after it would be read as a second
 	// context and rejected.

@@ -210,6 +210,7 @@ export function renderRPC(root: HTMLElement): () => void {
         ${gw.error ? errorBlock(gw) : ""}
         ${gw.blocked ? `<div class="banner banner-warn">${escapeHtml(gw.blocked)}</div>` : ""}
         ${(gw.warnings ?? []).map((wmsg) => `<div class="banner banner-warn">${escapeHtml(wmsg)}</div>`).join("")}
+        ${tlsBanner(gw)}
         ${actionErr[gw.id] ? `<p class="error small">${escapeHtml(actionErr[gw.id]!)}</p>` : ""}
         ${activityBlock(gw)}
         ${settingsOpen[gw.id] ? settingsBlock(gw) : ""}
@@ -453,11 +454,103 @@ export function renderRPC(root: HTMLElement): () => void {
           Requests are addressed by path: <code>/${escapeHtml(c.ProjectID)}/evm/&lt;chainId&gt;</code>. One port serves every
           network in the bar above, and the same path serves WebSocket with a <code>ws://</code> scheme.
         </p>
+        ${tlsFields(gw)}
         <div class="card-actions">
           <button class="btn" data-action="save-settings" data-gid="${escapeHtml(gw.id)}">Save settings</button>
         </div>
       </div>
     `;
+  }
+
+  // tlsFields is the HTTPS front, edited in the same block as the port and
+  // bind because it IS the port and bind once it is on: a fronted gateway
+  // publishes no plaintext port at all, and the https URL replaces the http
+  // one everywhere.
+  //
+  // Two sources, no ACME. "internal" needs no domain, no network and no
+  // service to run, at the cost of one trust-store install per machine;
+  // "files" is a certificate already on disk (`tailscale cert`, a bundled one,
+  // localhost.direct). ACME is deliberately absent — for a name resolving to
+  // loopback the only usable challenge is DNS-01, which needs zone-write
+  // credentials, and that is worse than the trust-store click it saves.
+  function tlsFields(gw: api.GatewayView): string {
+    const id = escapeHtml(gw.id);
+    const t = gw.config.TLS ?? null;
+    const on = t?.Enabled ?? false;
+    const source = t?.CertSource || "internal";
+    return `
+      <hr />
+      <label class="check">
+        <input type="checkbox" id="gw-${id}-tls" ${on ? "checked" : ""} />
+        Serve HTTPS (a Caddy container in front of eRPC)
+      </label>
+      <p class="muted small">
+        A page served over <code>https://</code> cannot call an <code>http://</code> endpoint. Chrome and Firefox make an
+        exception for <code>http://localhost</code>; Safari does not, and every browser blocks it for any other address —
+        so a gateway on a LAN or Tailscale address is unusable from a browser dApp without this.
+      </p>
+      <label>
+        Hostname <span class="muted">— must resolve to this machine</span>
+        <input type="text" id="gw-${id}-tls-host" value="${escapeHtml(t?.Hostname ?? "")}"
+               placeholder="gateway.example.com" autocomplete="off" spellcheck="false" />
+      </label>
+      <label>
+        HTTPS port
+        <input type="text" inputmode="numeric" id="gw-${id}-tls-port" value="${t?.HTTPSPort || 443}" autocomplete="off" />
+      </label>
+      <label>
+        Certificate
+        <select id="gw-${id}-tls-source">
+          <option value="internal" ${source === "internal" ? "selected" : ""}>Caddy's own authority — works offline, one trust-store install</option>
+          <option value="files" ${source === "files" ? "selected" : ""}>A certificate file on this machine</option>
+        </select>
+      </label>
+      <label>
+        Certificate file <span class="muted">— path on that machine, used only for “a certificate file”</span>
+        <input type="text" id="gw-${id}-tls-cert" value="${escapeHtml(t?.CertFile ?? "")}"
+               placeholder="/var/lib/valve-node-app/tls/cert.pem" autocomplete="off" spellcheck="false" />
+      </label>
+      <label>
+        Private key file
+        <input type="text" id="gw-${id}-tls-key" value="${escapeHtml(t?.KeyFile ?? "")}"
+               placeholder="/var/lib/valve-node-app/tls/key.pem" autocomplete="off" spellcheck="false" />
+      </label>
+      <p class="muted small">
+        If that certificate is missing, unreadable, expired or does not cover the hostname, HTTPS stays on and falls
+        back to Caddy's own authority — with the reason shown above. A dead endpoint is worse than a one-time browser
+        warning, and certificate lifetimes are shrinking every year.
+      </p>
+    `;
+  }
+
+  // tlsBanner is what the front is ACTUALLY doing, as opposed to what was
+  // configured. It is separate from the settings block because it must be
+  // visible without opening anything: a silent fallback would be the failure
+  // the fallback exists to prevent, just relocated.
+  function tlsBanner(gw: api.GatewayView): string {
+    const t = gw.tls;
+    if (!t?.enabled) return "";
+    const parts: string[] = [];
+    if (t.fallback) {
+      parts.push(`<div class="banner banner-warn">${escapeHtml(t.fallback)}</div>`);
+    }
+    if (t.error) {
+      parts.push(`<div class="banner banner-warn">HTTPS front: ${escapeHtml(t.error)}</div>`);
+    } else if (t.status?.State !== "running") {
+      parts.push(
+        `<div class="banner banner-warn">The HTTPS front (<code>${escapeHtml(t.containerName ?? "")}</code>) is
+         ${escapeHtml(t.status?.State ?? "unknown")}, so nothing is answering on
+         <code>${escapeHtml(t.url ?? "")}</code> even if the gateway itself is up.</div>`,
+      );
+    }
+    if (t.rootCaPath && t.effectiveCertSource === "internal") {
+      parts.push(
+        `<p class="muted small">This gateway is served by Caddy's own certificate authority. Install
+         <code>${escapeHtml(t.rootCaPath)}</code> (on ${escapeHtml(gw.placement.targetId)}) into the trust store of every
+         device that will call it, and the browser warning goes away.</p>`,
+      );
+    }
+    return parts.join("");
   }
 
   // --- config editing -----------------------------------------------------
@@ -560,6 +653,7 @@ export function renderRPC(root: HTMLElement): () => void {
       if (Number.isFinite(n)) cfg.Port = n;
     }
     if (bindEl) cfg.BindAddr = bindEl.value.trim();
+    cfg.TLS = readTLS(gid, gw);
 
     const wasRunning = gw.status.State === "running";
     if (await saveConfig(gid, cfg, "Saving settings")) {
@@ -570,6 +664,28 @@ export function renderRPC(root: HTMLElement): () => void {
       }
       render();
     }
+  }
+
+  // readTLS builds the stored TLS block from the form. A DISABLED front is
+  // kept rather than dropped, so turning HTTPS off and on again does not lose
+  // the hostname and cert paths that were typed.
+  function readTLS(gid: string, gw: api.GatewayView): api.GatewayTLS | null {
+    const pick = <T extends HTMLElement>(suffix: string) =>
+      root.querySelector<T>(`#gw-${CSS.escape(gid)}-${suffix}`);
+    const enabledEl = pick<HTMLInputElement>("tls");
+    if (!enabledEl) return gw.config.TLS ?? null;
+
+    const port = Number.parseInt(pick<HTMLInputElement>("tls-port")?.value.trim() ?? "", 10);
+    return {
+      Enabled: enabledEl.checked,
+      Hostname: pick<HTMLInputElement>("tls-host")?.value.trim() ?? "",
+      CertSource: pick<HTMLSelectElement>("tls-source")?.value ?? "internal",
+      CertFile: pick<HTMLInputElement>("tls-cert")?.value.trim() ?? "",
+      KeyFile: pick<HTMLInputElement>("tls-key")?.value.trim() ?? "",
+      HTTPSPort: Number.isFinite(port) ? port : 443,
+      BindAddr: gw.config.TLS?.BindAddr ?? "",
+      ImageRef: gw.config.TLS?.ImageRef ?? "",
+    };
   }
 
   function note(gid: string, text: string): void {

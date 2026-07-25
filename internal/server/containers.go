@@ -430,6 +430,13 @@ func newContainerView(t config.Target, id string, dsvc ops.DockerService, st ops
 		v.Warnings = append(v.Warnings,
 			portDrift(live, catalog.DevnetContainerWSPort, d.WS(), "WebSocket")...)
 	}
+	// An emulated container reports State=running like any other, so this
+	// warning has to be raised wherever a state is displayed — otherwise the
+	// screen shows a healthy service that answers nothing. See
+	// ops.ContainerStatus.Emulated.
+	if w := st.EmulationWarning(); w != "" {
+		v.Warnings = append(v.Warnings, w)
+	}
 	if !v.Configured && st.Exists() {
 		v.Warnings = append(v.Warnings,
 			"This container exists but valve-node-app has no saved configuration for it — it was created somewhere else, or its configuration was removed. Saving one below is what makes re-creating it possible.")
