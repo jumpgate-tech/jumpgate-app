@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -242,6 +243,14 @@ func (sr *setupRun) subscribe() ([]setup.Event, chan setup.Event, func()) {
 func defaultNewExecutor(t config.Target) (executor.Executor, error) {
 	switch t.Mode {
 	case "local":
+		// Local mode drives this machine with POSIX shell commands, so a
+		// control plane without a POSIX shell (Windows) cannot support it.
+		// Refuse here, at construction, so POST /targets answers with an
+		// actionable message instead of the target being persisted and then
+		// failing on every command it ever runs.
+		if err := executor.LocalAvailable(); err != nil {
+			return nil, fmt.Errorf("target %q: %w", t.ID, err)
+		}
 		return executor.NewLocal(), nil
 	case "ssh":
 		if t.SSH == nil {
@@ -557,6 +566,10 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
+			// LOCAL path: known_hosts lives in the operator's own config dir
+			// on the control plane and is read/written with os.ReadFile, so
+			// filepath (host separator) is correct here — unlike the target
+			// paths below, which are always POSIX.
 			t.SSH.HostKeyFile = filepath.Join(dir, "known_hosts")
 		}
 	}
@@ -682,6 +695,23 @@ func validateWirePorts(wire catalog.WireConfig) error {
 // metacharacters).
 var snapshotKeyPattern = regexp.MustCompile(`^vk_[A-Za-z0-9_-]{8,128}$`)
 
+// defaultDataDir and defaultJWTPath name locations on the TARGET, which is
+// always a Linux host — never on the control plane, which may be macOS,
+// Windows, or Linux. Target paths are therefore POSIX and must be built with
+// "path": filepath.Join on a Windows control plane would yield
+// `\var\lib\valve-node-app\369\jwt.hex`, which then gets baked into the
+// systemd units and every remote `mkdir -p`, breaking setup on every target.
+// (Contrast HostKeyFile in handleAddTarget, which IS a control-plane path and
+// correctly uses filepath.) They are split out as functions so the rule is
+// unit-testable on any host OS.
+func defaultDataDir(chainID int) string {
+	return fmt.Sprintf("/var/lib/valve-node-app/%d", chainID)
+}
+
+func defaultJWTPath(dataDir string) string {
+	return path.Join(dataDir, "jwt.hex")
+}
+
 func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -695,10 +725,10 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wire.DataDir == "" {
-		wire.DataDir = fmt.Sprintf("/var/lib/valve-node-app/%d", wire.ChainID)
+		wire.DataDir = defaultDataDir(wire.ChainID)
 	}
 	if wire.JWTPath == "" {
-		wire.JWTPath = filepath.Join(wire.DataDir, "jwt.hex")
+		wire.JWTPath = defaultJWTPath(wire.DataDir)
 	}
 
 	steps, err := setup.Plan(wire)

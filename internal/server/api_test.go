@@ -1417,7 +1417,7 @@ func TestDiagGateCooldownAndSingleflight(t *testing.T) {
 	if got := e.latestDiag(); got == nil || got.Trigger != "journal: engine-auth" {
 		t.Fatalf("endDiag(nil) must keep the previous report, got %+v", got)
 	}
-	if !e.tryBeginDiag(now.Add(1*time.Minute + diagAutoCooldown), true) {
+	if !e.tryBeginDiag(now.Add(1*time.Minute+diagAutoCooldown), true) {
 		t.Fatal("auto begin after the cooldown should succeed")
 	}
 }

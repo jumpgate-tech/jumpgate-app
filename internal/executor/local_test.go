@@ -2,12 +2,96 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestLocalShellError covers the control-plane-OS decision without needing to
+// build for that OS: local mode runs POSIX shell command strings, so it is
+// supported exactly where a POSIX shell is. Windows control planes drive
+// Linux nodes over SSH instead.
+func TestLocalShellError(t *testing.T) {
+	tests := []struct {
+		name          string
+		goos          string
+		wantErr       bool
+		wantSubstring string
+	}{
+		{name: "linux", goos: "linux"},
+		{name: "darwin", goos: "darwin"},
+		{name: "freebsd", goos: "freebsd"},
+		{
+			name:          "windows has no POSIX shell",
+			goos:          "windows",
+			wantErr:       true,
+			wantSubstring: "SSH target",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := localShellError(tt.goos)
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("localShellError(%q) = %v, want nil", tt.goos, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("localShellError(%q) = nil, want an error", tt.goos)
+			}
+			if !errors.Is(err, ErrNoPOSIXShell) {
+				t.Errorf("localShellError(%q) = %v, want it to wrap ErrNoPOSIXShell", tt.goos, err)
+			}
+			if !strings.Contains(err.Error(), tt.wantSubstring) {
+				t.Errorf("localShellError(%q) = %q, want it to mention %q so the operator knows what to do instead", tt.goos, err, tt.wantSubstring)
+			}
+		})
+	}
+}
+
+// TestLocalAvailable_MatchesHost pins LocalAvailable to the host it runs on:
+// it must agree with localShellError for runtime.GOOS, and on this (POSIX)
+// machine that means local mode is available.
+func TestLocalAvailable_MatchesHost(t *testing.T) {
+	got, want := LocalAvailable(), localShellError(runtime.GOOS)
+	if (got == nil) != (want == nil) {
+		t.Fatalf("LocalAvailable() = %v, want %v for GOOS=%s", got, want, runtime.GOOS)
+	}
+	if runtime.GOOS != "windows" && got != nil {
+		t.Errorf("LocalAvailable() = %v on %s, want nil", got, runtime.GOOS)
+	}
+}
+
+// TestLocal_UnsupportedHostFailsEveryCall asserts the refusal is total. A
+// local executor on a shell-less host must not half-work: writing a systemd
+// unit onto the control plane's own C: drive while no command can ever run is
+// worse than an outright error.
+func TestLocal_UnsupportedHostFailsEveryCall(t *testing.T) {
+	e := &local{unsupported: localShellError("windows")}
+
+	if _, err := e.Run(context.Background(), "echo hello", nil); !errors.Is(err, ErrNoPOSIXShell) {
+		t.Errorf("Run error = %v, want ErrNoPOSIXShell", err)
+	}
+	path := filepath.Join(t.TempDir(), "file.txt")
+	if err := e.WriteFile(context.Background(), path, []byte("x"), 0o600); !errors.Is(err, ErrNoPOSIXShell) {
+		t.Errorf("WriteFile error = %v, want ErrNoPOSIXShell", err)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Errorf("WriteFile created %s on an unsupported host; it must not touch the filesystem", path)
+	}
+	if _, err := e.ReadFile(context.Background(), path); !errors.Is(err, ErrNoPOSIXShell) {
+		t.Errorf("ReadFile error = %v, want ErrNoPOSIXShell", err)
+	}
+	if err := e.Close(); err != nil {
+		t.Errorf("Close error = %v, want nil (closing a never-opened executor is a no-op)", err)
+	}
+}
 
 func TestLocal_Run_CapturesStdout(t *testing.T) {
 	e := NewLocal()

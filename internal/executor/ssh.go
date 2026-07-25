@@ -1,5 +1,9 @@
 package executor
 
+// Paths handled in this file are paths on the *remote* target and are always
+// POSIX. That is why this file must not import "path/filepath" — see
+// remotepath.go for the full rationale. Local-filesystem concerns (the
+// known_hosts file, the private key) live in hostkey.go.
 import (
 	"bytes"
 	"context"
@@ -10,7 +14,6 @@ import (
 	"io/fs"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -57,79 +60,6 @@ func NewSSH(cfg SSHConfig) (Executor, error) {
 	}
 
 	return &sshExecutor{client: client}, nil
-}
-
-// tofuHostKeyCallback implements trust-on-first-use host key verification
-// backed by a flat file of "host:port keytype base64key" lines.
-func tofuHostKeyCallback(hostKeyFile string) ssh.HostKeyCallback {
-	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-		known, err := lookupHostKey(hostKeyFile, hostname)
-		if err != nil {
-			return err
-		}
-		if known == nil {
-			return appendHostKey(hostKeyFile, hostname, key)
-		}
-		if !bytes.Equal(known.Marshal(), key.Marshal()) {
-			return fmt.Errorf("host key mismatch for %s: presented %s key does not match the key on record in %s (possible man-in-the-middle attack, or the host was rebuilt)", hostname, key.Type(), hostKeyFile)
-		}
-		return nil
-	}
-}
-
-// lookupHostKey returns the recorded public key for hostname in hostKeyFile,
-// or nil if hostKeyFile doesn't exist or has no entry for hostname.
-func lookupHostKey(hostKeyFile, hostname string) (ssh.PublicKey, error) {
-	data, err := os.ReadFile(hostKeyFile)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read host key file %s: %w", hostKeyFile, err)
-	}
-
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) != 3 || fields[0] != hostname {
-			continue
-		}
-		keyBytes, err := base64.StdEncoding.DecodeString(fields[2])
-		if err != nil {
-			return nil, fmt.Errorf("host key file %s: malformed entry for %s: %w", hostKeyFile, hostname, err)
-		}
-		key, err := ssh.ParsePublicKey(keyBytes)
-		if err != nil {
-			return nil, fmt.Errorf("host key file %s: malformed entry for %s: %w", hostKeyFile, hostname, err)
-		}
-		return key, nil
-	}
-	return nil, nil
-}
-
-// appendHostKey records key for hostname in hostKeyFile, creating the file
-// with mode 0600 if it doesn't already exist.
-func appendHostKey(hostKeyFile, hostname string, key ssh.PublicKey) error {
-	if dir := filepath.Dir(hostKeyFile); dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("create host key file dir: %w", err)
-		}
-	}
-
-	f, err := os.OpenFile(hostKeyFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("open host key file %s: %w", hostKeyFile, err)
-	}
-	defer f.Close()
-
-	line := fmt.Sprintf("%s %s %s\n", hostname, key.Type(), base64.StdEncoding.EncodeToString(key.Marshal()))
-	if _, err := f.WriteString(line); err != nil {
-		return fmt.Errorf("write host key file %s: %w", hostKeyFile, err)
-	}
-	return nil
 }
 
 func (s *sshExecutor) Run(ctx context.Context, cmd string, opts *RunOpts) (Result, error) {
@@ -211,16 +141,7 @@ func (s *sshExecutor) Run(ctx context.Context, cmd string, opts *RunOpts) (Resul
 // base64-encoded copy through the remote `base64 -d` and setting mode with
 // `chmod`. No SFTP subsystem is required.
 func (s *sshExecutor) WriteFile(ctx context.Context, path string, content []byte, mode fs.FileMode) error {
-	encoded := base64.StdEncoding.EncodeToString(content)
-	cmd := fmt.Sprintf(
-		"mkdir -p %s && printf %%s %s | base64 -d > %s && chmod %o %s",
-		shQuote(filepath.Dir(path)),
-		shQuote(encoded),
-		shQuote(path),
-		mode.Perm(),
-		shQuote(path),
-	)
-	res, err := s.Run(ctx, cmd, nil)
+	res, err := s.Run(ctx, writeFileCmd(path, content, mode), nil)
 	if err != nil {
 		return err
 	}
@@ -230,10 +151,27 @@ func (s *sshExecutor) WriteFile(ctx context.Context, path string, content []byte
 	return nil
 }
 
+// writeFileCmd builds the single POSIX shell line that WriteFile ships to the
+// target. It is a pure function of its inputs — no client, no context — so the
+// remote path construction can be asserted directly in tests, on any host OS.
+// remoteDir (not filepath.Dir) is what keeps this correct when the control
+// plane is Windows: filepath.Dir would emit `\var\lib\...` into the mkdir -p,
+// breaking every unit/config/jwt write against every Linux target.
+func writeFileCmd(remotePath string, content []byte, mode fs.FileMode) string {
+	encoded := base64.StdEncoding.EncodeToString(content)
+	return fmt.Sprintf(
+		"mkdir -p %s && printf %%s %s | base64 -d > %s && chmod %o %s",
+		shQuote(remoteDir(remotePath)),
+		shQuote(encoded),
+		shQuote(remotePath),
+		mode.Perm(),
+		shQuote(remotePath),
+	)
+}
+
 // ReadFile reads path from the remote host via `base64 < path` over Run.
 func (s *sshExecutor) ReadFile(ctx context.Context, path string) ([]byte, error) {
-	cmd := fmt.Sprintf("base64 < %s", shQuote(path))
-	res, err := s.Run(ctx, cmd, nil)
+	res, err := s.Run(ctx, readFileCmd(path), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +183,13 @@ func (s *sshExecutor) ReadFile(ctx context.Context, path string) ([]byte, error)
 		return nil, fmt.Errorf("decode remote file %s: %w", path, err)
 	}
 	return decoded, nil
+}
+
+// readFileCmd builds the POSIX shell line ReadFile ships to the target. Pure,
+// for the same testability reason as writeFileCmd; it takes the remote path
+// verbatim, so there is no separator hazard here — only quoting.
+func readFileCmd(remotePath string) string {
+	return fmt.Sprintf("base64 < %s", shQuote(remotePath))
 }
 
 func (s *sshExecutor) Close() error {
