@@ -1,10 +1,8 @@
 package catalog
 
 import (
-	"bytes"
 	"fmt"
 	"path"
-	"text/template"
 )
 
 // defaultERPCPort is eRPC's default HTTP listen port (matching eRPC's own
@@ -35,81 +33,20 @@ func (w WireConfig) ERPCConfigPath() string {
 	return path.Join(w.DataDir, "erpc.yaml")
 }
 
-// erpcConfigTemplate renders erpc.yaml. Hand-rendered (no YAML dep, matching
-// the systemd unit template) — the structure is fixed; only the fallback
-// upstream list is dynamic. Upstream[0] is always the local node: it serves
-// recent state (latestBlockMinus:128) when the node is a full/pruned node,
-// or unbounded history (lower: null) when it's an archive. Each fallback is
-// deprioritized (tier:fallback + scoreMultipliers overall 0.2) so it's used
-// only when the local node can't serve a request (historical state) or is
-// down.
-const erpcConfigTemplate = `logLevel: warn
-server:
-  httpHostV4: "{{.Host}}"
-  httpPortV4: {{.Port}}
-projects:
-  - id: main
-    upstreams:
-      - id: local-node
-        endpoint: {{.LocalEndpoint}}
-        evm:
-          chainId: {{.ChainID}}
-          blockAvailability:
-            lower:{{if .LocalRecentOnly}}
-              latestBlockMinus: 128{{else}} null{{end}}
-{{- range .Fallbacks}}
-      - id: {{.ID}}
-        endpoint: {{.Endpoint}}
-        evm:
-          chainId: {{$.ChainID}}
-        tags:
-          - tier:fallback
-        routing:
-          scoreMultipliers:
-            - overall: 0.2
-{{- end}}
-`
-
-var erpcConfigTmpl = template.Must(template.New("erpc").Parse(erpcConfigTemplate))
-
-type erpcFallback struct {
-	ID       string
-	Endpoint string
-}
-
-type erpcVars struct {
-	Host            string
-	Port            int
-	ChainID         int
-	LocalEndpoint   string
-	LocalRecentOnly bool
-	Fallbacks       []erpcFallback
-}
-
-// RenderERPCConfig renders the erpc.yaml for w. Pure string rendering; the
-// caller (setup's wire step) writes it. Assumes ERPCEnabled — callers gate
-// on that.
+// RenderERPCConfig renders the erpc.yaml for a node's own gateway: the node as
+// the preferred upstream, with ERPCUpstreams behind it as fallbacks. Pure
+// string rendering; the caller (setup's wire step) writes it. Assumes
+// ERPCEnabled — callers gate on that.
+//
+// This is the single-chain case of RenderGatewayConfig, and delegates to it so
+// there is one template rather than two that can drift. Unlike the general
+// gateway, the chain must be one this app knows how to run a node on — the
+// upstream being configured is that node.
 func RenderERPCConfig(w WireConfig) (string, error) {
 	if _, ok := NetworkByChainID(w.ChainID); !ok {
 		return "", fmt.Errorf("catalog: erpc: unknown chain id %d", w.ChainID)
 	}
-	fallbacks := make([]erpcFallback, 0, len(w.ERPCUpstreams))
-	for i, url := range w.ERPCUpstreams {
-		fallbacks = append(fallbacks, erpcFallback{ID: fmt.Sprintf("fallback-%d", i+1), Endpoint: url})
-	}
-	vars := erpcVars{
-		Host:            w.ERPCBind(),
-		Port:            w.ERPCHTTP(),
-		ChainID:         w.ChainID,
-		LocalEndpoint:   fmt.Sprintf("http://%s:%d", w.RPCBind(), w.ExecHTTP()),
-		LocalRecentOnly: !w.Archive,
-		Fallbacks:       fallbacks,
-	}
-	var buf bytes.Buffer
-	if err := erpcConfigTmpl.Execute(&buf, vars); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
+	return RenderGatewayConfig(GatewayForWire(w))
 }
 
 // RenderERPCUnit renders the systemd unit for the eRPC gateway, reusing the
