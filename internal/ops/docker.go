@@ -360,11 +360,24 @@ func EnginePlatform(ctx context.Context, e executor.Executor, info DockerInfo) s
 // ---------------------------------------------------------------------
 
 const (
-	// ERPCContainerName is the stable name the gateway container always
-	// carries. Stability is the whole mechanism: it is how exists/running/
-	// stop/remove find the container across app restarts, and how a re-run
-	// of provisioning is idempotent instead of spawning a second gateway.
+	// ERPCContainerName is the name the DEFAULT gateway's container carries,
+	// and the prefix every other gateway's name is built from. Stability is
+	// the whole mechanism: it is how exists/running/stop/remove find the
+	// container across app restarts, and how a re-run of provisioning is
+	// idempotent instead of spawning a second gateway.
+	//
+	// It is no longer THE gateway container name — see ERPCContainerNameFor.
+	// A gateway is a fleet-wide layer and there can be several, so anything
+	// that addresses "the" gateway container by this constant is assuming a
+	// single gateway and is wrong.
 	ERPCContainerName = "valve-node-app-erpc"
+
+	// DefaultGatewayID is the gateway id whose container keeps the historical
+	// bare name. It matches config.DefaultGatewayID (ops cannot import config)
+	// and exists so an operator whose gateway predates multi-gateway support
+	// keeps the container they already have running instead of acquiring a
+	// second one beside it.
+	DefaultGatewayID = "default"
 
 	// ERPCSourceRepo and ERPCSourceRef pin the gateway's source. The image is
 	// BUILT ON THE TARGET from this ref rather than pulled, for three
@@ -416,6 +429,46 @@ const (
 	// mapping ERPCRunSpec.AddHostGateway emits.
 	DockerHostAlias = "host.docker.internal"
 )
+
+// ERPCContainerNameFor is the container name for ONE gateway, derived from
+// its id so that N gateways can coexist on one machine.
+//
+// The default id (and the empty one, which only a caller that has not been
+// told about ids can produce) maps to the bare historical name. Everything
+// else gets "valve-node-app-erpc-<id>". Two gateways can therefore never
+// collide on a name, which is the concrete thing that made the old
+// single-constant model unable to host more than one: `docker run --name`
+// fails on a duplicate, so a second gateway did not merely misbehave, it
+// could not be created.
+//
+// The id is sanitized rather than trusted: it lands in a docker --name, and
+// docker's name grammar is [a-zA-Z0-9][a-zA-Z0-9_.-]*. Anything outside it
+// becomes '-', so a hostile or merely sloppy id cannot smuggle a flag or a
+// shell metacharacter into a command line. The API validates ids on the way
+// in as well; this is the second lock on the same door, at the point where
+// the value is actually used.
+func ERPCContainerNameFor(gatewayID string) string {
+	id := strings.TrimSpace(gatewayID)
+	if id == "" || id == DefaultGatewayID {
+		return ERPCContainerName
+	}
+	return ERPCContainerName + "-" + sanitizeNameSegment(id)
+}
+
+// sanitizeNameSegment maps an arbitrary string onto docker's name grammar.
+func sanitizeNameSegment(s string) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '_', r == '.', r == '-':
+			out = append(out, r)
+		default:
+			out = append(out, '-')
+		}
+	}
+	return string(out)
+}
 
 // ERPCRunSpec is everything the pure arg renderer needs. Zero values
 // resolve to the same defaults catalog.WireConfig's ERPC* accessors use, so

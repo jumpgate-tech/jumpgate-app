@@ -1,6 +1,12 @@
-// #/services/<id> — the two container-backed services a machine can host: a
-// local devnet and the eRPC gateway in front of it. Status, start/stop/
-// restart, create/re-create, wipe, and their configuration, in one screen.
+// #/services/<id> — the container-backed service a machine hosts: its local
+// devnet. Status, start/stop/restart, create/re-create, reset, wipe, and its
+// configuration, in one screen.
+//
+// The eRPC gateway used to share this screen and deliberately no longer does.
+// A devnet is a chain running in a container on THIS box and can be nowhere
+// else, so it belongs to the machine. A gateway fronts chains all over the
+// fleet, so the machine it runs on is one field of it — it lives on the
+// top-level RPC screen (#/rpc).
 //
 // Three rules shape this file, all of them learned the hard way elsewhere in
 // this app:
@@ -43,8 +49,6 @@ const FINAL_STEP = "run";
 const SERVICE_BLURB: Record<api.ContainerServiceID, string> = {
   devnet:
     "A throwaway chain that runs entirely on this machine: reth in --dev mode, sealing a block on a timer from its own genesis. Nothing to sync, nothing on disk outside the container.",
-  erpc:
-    "One eRPC instance in front of however many chains you list. It addresses a chain by URL path, so a single port serves all of them — and the same path serves WebSocket.",
 };
 
 interface ActionButton {
@@ -84,22 +88,21 @@ export function renderServices(root: HTMLElement, targetId: string): () => void 
   // busy holds the in-flight action per service, so its card can show a
   // spinner and disable the rest of its buttons. State always comes from a
   // re-read afterwards, never from the action's own response.
-  const busy: Record<string, string | null> = { devnet: null, erpc: null };
-  const actionErr: Record<string, string | null> = { devnet: null, erpc: null };
+  const busy: Record<string, string | null> = { devnet: null };
+  const actionErr: Record<string, string | null> = { devnet: null };
 
   // Provisioning progress, per service. Kept here rather than in the DOM so a
   // re-render (triggered by any other card) does not lose it.
-  const activity: Record<string, string[]> = { devnet: [], erpc: [] };
+  const activity: Record<string, string[]> = { devnet: [] };
   let streamStop: (() => void) | null = null;
 
   // Draft configs. They exist only while an editor is open, and are the
   // single source of truth for it: structural edits (add/remove an upstream)
   // re-render the form, so anything typed is read back into the draft first.
-  const open: Record<string, boolean> = { devnet: false, erpc: false };
+  const open: Record<string, boolean> = { devnet: false };
   let devnetDraft: api.DevnetConfig | null = null;
-  let gatewayDraft: api.GatewayConfig | null = null;
-  const saveErr: Record<string, string | null> = { devnet: null, erpc: null };
-  const saveNote: Record<string, string | null> = { devnet: null, erpc: null };
+  const saveErr: Record<string, string | null> = { devnet: null };
+  const saveNote: Record<string, string | null> = { devnet: null };
 
   root.innerHTML = `
     <div class="page-head">
@@ -107,8 +110,10 @@ export function renderServices(root: HTMLElement, targetId: string): () => void 
       <button class="btn btn-ghost" data-action="refresh">Refresh</button>
     </div>
     <p class="muted">
-      Containers this machine hosts. They are independent of any node setup —
-      a machine can run a devnet, a gateway, both, or neither.
+      The throwaway chain this machine can host. It is independent of any node
+      setup — a machine can run a devnet, a node, both, or neither. The RPC
+      gateway in front of it lives on the <a href="#/rpc">RPC</a> screen, because
+      it fronts chains across every machine rather than belonging to this one.
     </p>
     <div id="services-body"><p class="muted">Loading…</p></div>
     ${footer()}
@@ -296,7 +301,7 @@ export function renderServices(root: HTMLElement, targetId: string): () => void 
 
   function configSection(v: api.ContainerView): string {
     const isOpen = open[v.id];
-    const summary = v.id === "devnet" ? devnetSummary(v) : gatewaySummary(v);
+    const summary = devnetSummary(v);
     return `
       <div class="config-block">
         <div class="service-head">
@@ -318,20 +323,8 @@ export function renderServices(root: HTMLElement, targetId: string): () => void 
     return `Chain ${d.ChainID} · a block every ${escapeHtml(d.BlockTime)} · JSON-RPC on ${escapeHtml(d.BindAddr)}:${d.HTTPPort} · WebSocket on ${escapeHtml(d.BindAddr)}:${d.WSPort}`;
   }
 
-  function gatewaySummary(v: api.ContainerView): string {
-    const g = v.gateway;
-    if (!g) return "—";
-    const nets = g.Networks ?? [];
-    if (nets.length === 0) {
-      return `Listening on ${escapeHtml(g.BindAddr)}:${g.Port} · no chains yet`;
-    }
-    return `Listening on ${escapeHtml(g.BindAddr)}:${g.Port} · ${nets
-      .map((n) => `chain ${n.ChainID} (${n.Upstreams.length} upstream${n.Upstreams.length === 1 ? "" : "s"})`)
-      .join(", ")}`;
-  }
-
-  function editorFor(v: api.ContainerView): string {
-    return v.id === "devnet" ? devnetForm() : gatewayForm();
+  function editorFor(_v: api.ContainerView): string {
+    return devnetForm();
   }
 
   function devnetForm(): string {
@@ -364,79 +357,6 @@ export function renderServices(root: HTMLElement, targetId: string): () => void 
     `;
   }
 
-  function gatewayForm(): string {
-    const g = gatewayDraft;
-    if (!g) return "";
-    const nets = g.Networks ?? [];
-    const devnet = viewOf("devnet")?.devnet;
-    return `
-      <label>
-        Listen port
-        <input type="text" inputmode="numeric" id="gw-port" value="${g.Port}" autocomplete="off" />
-      </label>
-      <label>
-        Bind address
-        <input type="text" id="gw-bind" value="${escapeHtml(g.BindAddr)}" autocomplete="off" spellcheck="false" />
-      </label>
-      <p class="muted small">
-        Requests are addressed by path: <code>/${escapeHtml(g.ProjectID)}/evm/&lt;chainId&gt;</code>. One port serves every
-        chain below, and the same path serves WebSocket with a <code>ws://</code> scheme.
-      </p>
-      ${nets.map(networkBlock).join("")}
-      ${nets.length === 0 ? `<p class="muted small">No chains yet. A gateway with no chain has nothing to serve, so it cannot be created until you add one.</p>` : ""}
-      <div class="card-actions">
-        <button class="btn btn-ghost" data-action="add-network">Add a chain</button>
-        ${
-          devnet
-            ? `<button class="btn btn-ghost" data-action="front-devnet" title="Add this machine's devnet as chain ${devnet.ChainID}'s upstream">Front the local devnet</button>`
-            : ""
-        }
-        <button class="btn" data-action="save-config" data-svc="erpc">Save configuration</button>
-      </div>
-    `;
-  }
-
-  function networkBlock(n: api.GatewayNetwork, i: number): string {
-    return `
-      <div class="config-block">
-        <div class="service-head">
-          <label class="inline-label">
-            Chain id
-            <input type="text" inputmode="numeric" id="gw-net-${i}-chain" value="${n.ChainID}" autocomplete="off" />
-          </label>
-          <button class="btn btn-ghost" data-action="remove-network" data-net="${i}">Remove chain</button>
-        </div>
-        ${n.Upstreams.map((u, j) => upstreamRow(u, i, j)).join("")}
-        ${n.Upstreams.length === 0 ? `<p class="muted small">This chain has no upstream, so the gateway has nowhere to send its calls.</p>` : ""}
-        <button class="btn btn-ghost" data-action="add-upstream" data-net="${i}">Add an upstream</button>
-      </div>
-    `;
-  }
-
-  function upstreamRow(u: api.GatewayUpstream, i: number, j: number): string {
-    return `
-      <div class="upstream-row">
-        <label class="inline-label">
-          Name
-          <input type="text" id="gw-up-${i}-${j}-id" value="${escapeHtml(u.ID)}" autocomplete="off" spellcheck="false" />
-        </label>
-        <label class="inline-label grow">
-          Endpoint
-          <input type="text" id="gw-up-${i}-${j}-endpoint" value="${escapeHtml(u.Endpoint)}" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8545" />
-        </label>
-        <label class="radio">
-          <input type="checkbox" id="gw-up-${i}-${j}-local" ${u.Local ? "checked" : ""} />
-          Mine — prefer it
-        </label>
-        <label class="radio">
-          <input type="checkbox" id="gw-up-${i}-${j}-recent" ${u.RecentOnly ? "checked" : ""} />
-          Recent blocks only
-        </label>
-        <button class="btn btn-ghost" data-action="remove-upstream" data-net="${i}" data-up="${j}">Remove</button>
-      </div>
-    `;
-  }
-
   // readDrafts pulls whatever is currently typed into the open editors back
   // into the draft objects. Every structural edit calls it first, so adding
   // an upstream never discards the port you just changed.
@@ -446,20 +366,6 @@ export function renderServices(root: HTMLElement, targetId: string): () => void 
       devnetDraft.HTTPPort = int("#dev-http", devnetDraft.HTTPPort);
       devnetDraft.WSPort = int("#dev-ws", devnetDraft.WSPort);
       devnetDraft.BindAddr = text("#dev-bind", devnetDraft.BindAddr);
-    }
-    if (open.erpc && gatewayDraft) {
-      gatewayDraft.Port = int("#gw-port", gatewayDraft.Port);
-      gatewayDraft.BindAddr = text("#gw-bind", gatewayDraft.BindAddr);
-      const nets = gatewayDraft.Networks ?? [];
-      nets.forEach((n, i) => {
-        n.ChainID = int(`#gw-net-${i}-chain`, n.ChainID);
-        n.Upstreams.forEach((u, j) => {
-          u.ID = text(`#gw-up-${i}-${j}-id`, u.ID);
-          u.Endpoint = text(`#gw-up-${i}-${j}-endpoint`, u.Endpoint);
-          u.Local = checked(`#gw-up-${i}-${j}-local`, u.Local);
-          u.RecentOnly = checked(`#gw-up-${i}-${j}-recent`, u.RecentOnly);
-        });
-      });
     }
   }
 
@@ -473,11 +379,6 @@ export function renderServices(root: HTMLElement, targetId: string): () => void 
     if (!el) return fallback;
     const n = Number.parseInt(el.value.trim(), 10);
     return Number.isFinite(n) ? n : fallback;
-  }
-
-  function checked(selector: string, fallback: boolean): boolean {
-    const el = root.querySelector<HTMLInputElement>(selector);
-    return el ? el.checked : fallback;
   }
 
   // --- actions ------------------------------------------------------------
@@ -508,13 +409,6 @@ export function renderServices(root: HTMLElement, targetId: string): () => void 
         return;
       case "save-config":
         await saveConfig(svc);
-        return;
-      case "add-network":
-      case "remove-network":
-      case "add-upstream":
-      case "remove-upstream":
-      case "front-devnet":
-        editGateway(action, el);
         return;
       default:
         return;
@@ -583,70 +477,8 @@ export function renderServices(root: HTMLElement, targetId: string): () => void 
       const v = viewOf(svc);
       // Deep-copied from the view so an abandoned edit cannot leak into what
       // the cards display.
-      if (svc === "devnet" && v?.devnet) devnetDraft = { ...v.devnet };
-      if (svc === "erpc" && v?.gateway) {
-        gatewayDraft = {
-          ...v.gateway,
-          Networks: (v.gateway.Networks ?? []).map((n) => ({
-            ChainID: n.ChainID,
-            Upstreams: n.Upstreams.map((u) => ({ ...u })),
-          })),
-        };
-      }
+      if (v?.devnet) devnetDraft = { ...v.devnet };
     }
-    render();
-  }
-
-  // editGateway applies one structural change to the gateway draft. Every
-  // branch reads the current inputs first (readDrafts), because the re-render
-  // that follows rebuilds every field from the draft.
-  function editGateway(action: string, el: HTMLElement): void {
-    if (!gatewayDraft) return;
-    readDrafts();
-    const nets = gatewayDraft.Networks ?? [];
-    const netIdx = Number.parseInt(el.dataset.net ?? "", 10);
-    const upIdx = Number.parseInt(el.dataset.up ?? "", 10);
-
-    switch (action) {
-      case "add-network":
-        nets.push({ ChainID: 1, Upstreams: [{ ID: "", Endpoint: "", Local: false, RecentOnly: false }] });
-        break;
-      case "remove-network":
-        if (Number.isFinite(netIdx)) nets.splice(netIdx, 1);
-        break;
-      case "add-upstream":
-        if (Number.isFinite(netIdx) && nets[netIdx]) {
-          nets[netIdx].Upstreams.push({ ID: "", Endpoint: "", Local: false, RecentOnly: false });
-        }
-        break;
-      case "remove-upstream":
-        if (Number.isFinite(netIdx) && Number.isFinite(upIdx) && nets[netIdx]) {
-          nets[netIdx].Upstreams.splice(upIdx, 1);
-        }
-        break;
-      case "front-devnet": {
-        // Mirrors catalog.GatewayForDevnet: the devnet as the preferred
-        // (local) upstream for its own chain, and no fallback — nothing on
-        // the public internet serves this chain, so a fallback could only
-        // answer for a different one.
-        const d = viewOf("devnet")?.devnet;
-        if (!d) break;
-        const endpoint = `http://${d.BindAddr === "0.0.0.0" ? "127.0.0.1" : d.BindAddr}:${d.HTTPPort}`;
-        const existing = nets.find((n) => n.ChainID === d.ChainID);
-        if (existing) {
-          existing.Upstreams = [{ ID: "devnet", Endpoint: endpoint, Local: true, RecentOnly: false }];
-        } else {
-          nets.push({
-            ChainID: d.ChainID,
-            Upstreams: [{ ID: "devnet", Endpoint: endpoint, Local: true, RecentOnly: false }],
-          });
-        }
-        break;
-      }
-      default:
-        return;
-    }
-    gatewayDraft.Networks = nets;
     render();
   }
 
@@ -655,13 +487,13 @@ export function renderServices(root: HTMLElement, targetId: string): () => void 
     saveErr[svc] = null;
     saveNote[svc] = null;
 
-    const config = svc === "devnet" ? devnetDraft : gatewayDraft;
+    const config = devnetDraft;
     if (!config) return;
 
-    if (svc === "devnet" && devnetDraft) {
+    {
       // Checked here only to answer instantly; the server validates the same
       // things and its verdict is the one that counts.
-      if (devnetDraft.HTTPPort === devnetDraft.WSPort) {
+      if (config.HTTPPort === config.WSPort) {
         saveErr[svc] = "JSON-RPC and WebSocket cannot share a port — docker would accept both mappings and then fail to start the container.";
         render();
         return;

@@ -29,15 +29,59 @@ const defaultProjectID = "main"
 // failing against a pruned node.
 const recentBlockWindow = 128
 
+// The kinds of thing an upstream can BE. The distinction exists because two
+// of them are not addresses at all — they are references to something this
+// app manages, whose address is derived when the config is rendered.
+//
+// WHY that indirection is not over-engineering: a managed node's RPC address
+// is a property of the node, and the operator can change it (RPCBindAddr, a
+// devnet's HTTPPort) on the screen that owns the node. Storing a copy of the
+// URL in the gateway means the gateway silently keeps pointing at the old
+// address — the gateway stays "healthy" (its container runs, its path
+// resolves) while every call goes to a port nothing is listening on. Storing
+// the REFERENCE means the address is re-derived on every render and cannot
+// go stale.
+const (
+	// UpstreamManagedNode is a chain client valve-node-app set up on one of
+	// its targets (config.Target.Wire). TargetID names the machine.
+	UpstreamManagedNode = "managed-node"
+	// UpstreamManagedDevnet is a devnet container valve-node-app runs on one
+	// of its targets (config.Target.Devnet). TargetID names the machine.
+	UpstreamManagedDevnet = "managed-devnet"
+	// UpstreamExternal is a URL nobody here manages: a public mainnet or
+	// testnet endpoint, a chainlist-discovered one, a provider. Endpoint is
+	// the whole of it.
+	UpstreamExternal = "external"
+)
+
 // GatewayUpstream is a single RPC endpoint the gateway can route to.
 type GatewayUpstream struct {
 	// ID is unique across the whole config. Left empty, a stable id is
 	// generated from the chain and position.
 	ID string
+
+	// Kind is one of the Upstream* constants ("" → UpstreamExternal, which is
+	// what every config written before upstreams had identity meant).
+	Kind string
+
+	// TargetID names the managed machine, for the two managed kinds. It is
+	// ignored for UpstreamExternal.
+	TargetID string
+
 	// Endpoint is an http(s):// or ws(s):// URL. eRPC infers WebSocket
 	// capability from the scheme — there is no separate flag — and a ws
 	// upstream also serves ordinary request/response calls.
+	//
+	// For UpstreamExternal this is the operator's own value and is stored as
+	// given. For the managed kinds it is DERIVED — the resolver fills it in
+	// from the referenced target immediately before rendering, and whatever
+	// is stored is overwritten. catalog cannot do that resolution itself (it
+	// would have to import config, which imports catalog), so it is the
+	// caller's job; RenderGatewayConfig simply refuses an upstream that
+	// arrives with no endpoint, which is what makes a missed resolution a
+	// loud failure rather than a gateway that renders and serves nothing.
 	Endpoint string
+
 	// Local marks an upstream the operator runs. Local upstreams are
 	// preferred; every other upstream is deprioritised so it is used only
 	// when the local one cannot serve a request or is down.
@@ -45,6 +89,21 @@ type GatewayUpstream struct {
 	// RecentOnly bounds this upstream to recent history, for a full/pruned
 	// node that cannot answer historical state.
 	RecentOnly bool
+}
+
+// KindOrDefault resolves the kind ("" → UpstreamExternal).
+func (u GatewayUpstream) KindOrDefault() string {
+	if u.Kind == "" {
+		return UpstreamExternal
+	}
+	return u.Kind
+}
+
+// Managed reports whether this upstream's endpoint has to be derived from a
+// target rather than read from Endpoint.
+func (u GatewayUpstream) Managed() bool {
+	k := u.KindOrDefault()
+	return k == UpstreamManagedNode || k == UpstreamManagedDevnet
 }
 
 // GatewayNetwork is one chain served by the gateway.

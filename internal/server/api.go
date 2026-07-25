@@ -444,8 +444,12 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/targets/{id}/diagnostics", s.handleDiagnostics)
 	mux.HandleFunc("GET /api/targets/{id}/diagnostics/latest", s.handleDiagnosticsLatest)
 
-	// The docker-backed services (devnet, eRPC gateway) — see containers.go.
+	// The devnet, which belongs to a machine — see containers.go.
 	s.registerContainerRoutes(mux)
+
+	// The eRPC gateways, which do NOT belong to a machine: they are a layer
+	// over the whole fleet and are addressed top-level — see gateways.go.
+	s.registerGatewayRoutes(mux)
 
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)

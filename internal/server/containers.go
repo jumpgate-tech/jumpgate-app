@@ -1,11 +1,18 @@
 package server
 
-// The HTTP surface for the two DOCKER-BACKED services a target can host: a
-// local devnet and the eRPC gateway. Everything here is a thin adapter — the
-// lifecycle itself is ops.ServiceStatus / ContainerAction / WipeService, the
-// provisioning is setup.PlanDevnet / PlanGateway driven through the same
-// setup-run + SSE machinery the node wizard uses, and the configs are
-// catalog.DevnetConfig / catalog.GatewayConfig persisted on the target.
+// The HTTP surface for the DOCKER-BACKED service a target can host: a local
+// devnet. Everything here is a thin adapter — the lifecycle itself is
+// ops.ServiceStatus / ContainerAction / WipeService, the provisioning is
+// setup.PlanDevnet driven through the same setup-run + SSE machinery the node
+// wizard uses, and the config is a catalog.DevnetConfig persisted on the
+// target.
+//
+// A devnet genuinely BELONGS to a machine — it is a chain running in a
+// container on that box, and it cannot be anywhere else — which is why it is
+// addressed under its target. The eRPC gateway used to live here too and no
+// longer does: a gateway fronts N chains across M endpoints scattered over
+// the whole fleet, so the machine it happens to run on is one field of it,
+// not its owner. It has its own top-level surface in gateways.go.
 //
 // Two things this file does that a pure passthrough would not, both because
 // the UI must not have to re-derive them and then drift from what ops will
@@ -40,12 +47,10 @@ import (
 )
 
 // The {svc} path values. They are the ops.DockerService IDs, not display
-// names: "erpc" is what ops.ERPCService() calls itself, and one identifier
-// across the API, the errors and the reports is what makes a wipe report
-// legible next to the status it came from.
+// names: one identifier across the API, the errors and the reports is what
+// makes a wipe report legible next to the status it came from.
 const (
-	svcDevnet  = "devnet"
-	svcGateway = "erpc"
+	svcDevnet = "devnet"
 )
 
 // The actions a container-backed service can be offered, as stable
@@ -121,12 +126,10 @@ type containerView struct {
 	// devnet running beside it.
 	Warnings []string `json:"warnings,omitempty"`
 
-	// Devnet/Gateway carry this service's RESOLVED config (defaults filled
-	// in), so the editor opens showing the values that would actually be
-	// used rather than a form full of blanks meaning "whatever the server
-	// decides".
-	Devnet  *catalog.DevnetConfig  `json:"devnet,omitempty"`
-	Gateway *catalog.GatewayConfig `json:"gateway,omitempty"`
+	// Devnet carries this service's RESOLVED config (defaults filled in), so
+	// the editor opens showing the values that would actually be used rather
+	// than a form full of blanks meaning "whatever the server decides".
+	Devnet *catalog.DevnetConfig `json:"devnet,omitempty"`
 
 	// Error and Hint report a per-service read failure inside a list
 	// response, where one unreadable service must not blank the whole
@@ -177,12 +180,11 @@ type wipeResponse struct {
 }
 
 // containerConfigResponse is the read/write shape for a service's stored
-// configuration. Exactly one of Devnet/Gateway is ever set.
+// configuration.
 type containerConfigResponse struct {
-	ID         string                 `json:"id"`
-	Configured bool                   `json:"configured"`
-	Devnet     *catalog.DevnetConfig  `json:"devnet,omitempty"`
-	Gateway    *catalog.GatewayConfig `json:"gateway,omitempty"`
+	ID         string                `json:"id"`
+	Configured bool                  `json:"configured"`
+	Devnet     *catalog.DevnetConfig `json:"devnet,omitempty"`
 }
 
 // errorDetail is writeError's body plus the two fields a container failure
@@ -247,36 +249,46 @@ func (s *Server) registerContainerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/targets/{id}/containers/{svc}/config", s.handleContainerGetConfig)
 	mux.HandleFunc("PUT /api/targets/{id}/containers/{svc}/config", s.handleContainerPutConfig)
 	mux.HandleFunc("POST /api/targets/{id}/containers/{svc}/wipe", s.handleContainerWipe)
+	mux.HandleFunc("POST /api/targets/{id}/containers/{svc}/reset", s.handleContainerReset)
 	mux.HandleFunc("POST /api/targets/{id}/containers/{svc}/provision", s.handleContainerProvision)
 	mux.HandleFunc("POST /api/targets/{id}/containers/{svc}/{action}", s.handleContainerAction)
 }
 
-// target resolves id to a Target. Unlike targetWithWire it does NOT require
-// completed node setup: a machine can host a devnet or a gateway and never
-// run a node at all, so demanding a WireConfig here would gate the container
-// surface on something unrelated to it.
-func (s *Server) target(w http.ResponseWriter, id string) (config.Target, bool) {
+// configAndTarget resolves id to a Target, returning the whole config with
+// it. The config is needed because a target's devnet no longer knows what
+// sits in front of it — the gateways do (config.Gateways), and the wipe
+// cascade is computed from them.
+//
+// Unlike targetWithWire it does NOT require completed node setup: a machine
+// can host a devnet and never run a node at all, so demanding a WireConfig
+// here would gate the container surface on something unrelated to it.
+func (s *Server) configAndTarget(w http.ResponseWriter, id string) (config.Config, config.Target, bool) {
 	cfg, err := s.loadConfig()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
-		return config.Target{}, false
+		return config.Config{}, config.Target{}, false
 	}
 	t, ok := findTarget(cfg, id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "target not found")
-		return config.Target{}, false
+		return config.Config{}, config.Target{}, false
 	}
-	return t, true
+	return cfg, t, true
+}
+
+func (s *Server) target(w http.ResponseWriter, id string) (config.Target, bool) {
+	_, t, ok := s.configAndTarget(w, id)
+	return t, ok
 }
 
 // resolveService is the shared preamble: target, service id, executor.
 func (s *Server) resolveService(w http.ResponseWriter, r *http.Request) (config.Target, ops.DockerService, executor.Executor, bool) {
-	t, ok := s.target(w, r.PathValue("id"))
+	cfg, t, ok := s.configAndTarget(w, r.PathValue("id"))
 	if !ok {
 		return config.Target{}, ops.DockerService{}, nil, false
 	}
 	svc := r.PathValue("svc")
-	dsvc, err := containerService(t, svc)
+	dsvc, err := containerService(cfg, t, svc)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return config.Target{}, ops.DockerService{}, nil, false
@@ -293,16 +305,15 @@ func (s *Server) resolveService(w http.ResponseWriter, r *http.Request) (config.
 // GET /api/targets/{id}/containers
 // ---------------------------------------------------------------------
 
-// handleContainerList reads both services in one call, plus the engine
-// reading they both depend on.
+// handleContainerList reads this target's container services in one call,
+// plus the engine reading they depend on.
 //
 // A per-service read failure is embedded in that service's view rather than
-// failing the whole response: the gateway being unreadable is not a reason to
-// stop telling the operator about the devnet. An engine that is missing or
-// down is reported once, at the top, and every service then correctly reports
-// no available actions.
+// failing the whole response. An engine that is missing or down is reported
+// once, at the top, and every service then correctly reports no available
+// actions.
 func (s *Server) handleContainerList(w http.ResponseWriter, r *http.Request) {
-	t, ok := s.target(w, r.PathValue("id"))
+	cfg, t, ok := s.configAndTarget(w, r.PathValue("id"))
 	if !ok {
 		return
 	}
@@ -314,9 +325,9 @@ func (s *Server) handleContainerList(w http.ResponseWriter, r *http.Request) {
 
 	docker := probeDockerView(r.Context(), ex)
 
-	views := make([]containerView, 0, 2)
-	for _, id := range []string{svcDevnet, svcGateway} {
-		dsvc, err := containerService(t, id)
+	views := make([]containerView, 0, 1)
+	for _, id := range []string{svcDevnet} {
+		dsvc, err := containerService(cfg, t, id)
 		if err != nil {
 			continue
 		}
@@ -418,29 +429,6 @@ func newContainerView(t config.Target, id string, dsvc ops.DockerService, st ops
 			portDrift(live, catalog.DevnetContainerHTTPPort, d.HTTP(), "JSON-RPC")...)
 		v.Warnings = append(v.Warnings,
 			portDrift(live, catalog.DevnetContainerWSPort, d.WS(), "WebSocket")...)
-	case svcGateway:
-		g := resolvedGateway(t.Gateway)
-		v.Label = "RPC gateway (eRPC)"
-		v.Configured = t.Gateway != nil
-		v.Gateway = &g
-		// The gateway owns no volumes and no host files it may delete: its
-		// erpc.yaml is a read-only bind mount the operator owns, and
-		// ops.WipeService never touches bind mounts.
-		v.WipeDiscards = "the gateway container only. It is stateless — its erpc.yaml is a file on the host and is left untouched — so this is a rebuild, not a data loss."
-		if st.State == ops.StateRunning {
-			base := liveURL("http", live, ops.ERPCContainerPort,
-				fmt.Sprintf("http://%s:%d", endpointHost(g.Bind()), g.HTTP()))
-			for _, n := range g.Networks {
-				v.Endpoints = append(v.Endpoints, serviceEndpoint{
-					// eRPC addresses a chain by URL path, so this — not a
-					// per-chain port — is the whole of what a caller needs.
-					Label: fmt.Sprintf("chain %d", n.ChainID),
-					URL:   base + g.PathFor(n.ChainID),
-				})
-			}
-		}
-		v.Warnings = append(v.Warnings, portDrift(live, ops.ERPCContainerPort, g.HTTP(), "gateway")...)
-		v.Warnings = append(v.Warnings, gatewayWarnings(t, g)...)
 	}
 	if !v.Configured && st.Exists() {
 		v.Warnings = append(v.Warnings,
@@ -508,33 +496,6 @@ func availableActions(v containerView, docker dockerView) ([]string, string) {
 	default:
 		return nil, "The engine did not report a usable state for this container, so no action can be offered."
 	}
-}
-
-// gatewayWarnings surfaces the one config mismatch that is invisible in both
-// halves on its own: a gateway that serves the devnet's chain but does not
-// actually point at the devnet. Everything would look healthy — the container
-// runs, the path resolves — while every call went somewhere else.
-func gatewayWarnings(t config.Target, g catalog.GatewayConfig) []string {
-	if t.Devnet == nil {
-		return nil
-	}
-	d := resolvedDevnet(t.Devnet)
-	chain := d.ChainIDOrDefault()
-	for _, n := range g.Networks {
-		if n.ChainID != chain {
-			continue
-		}
-		for _, u := range n.Upstreams {
-			if strings.EqualFold(strings.TrimSpace(u.Endpoint), d.HTTPEndpoint()) {
-				return nil
-			}
-		}
-		return []string{fmt.Sprintf(
-			"This gateway serves chain %d but none of its upstreams is the devnet on this machine (%s) — calls on that path go somewhere else.",
-			chain, d.HTTPEndpoint())}
-	}
-	return []string{fmt.Sprintf(
-		"There is a devnet on this machine serving chain %d, and this gateway does not front it.", chain)}
 }
 
 // liveURL builds "<scheme>://<host>:<port>" from the container's ACTUAL
@@ -669,6 +630,119 @@ func (s *Server) handleContainerWipe(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------
+// POST /api/targets/{id}/containers/{svc}/reset
+// ---------------------------------------------------------------------
+
+// handleContainerReset is the devnet's routine "give me a fresh chain".
+//
+// It is the SAME operation as wipe — ops.WipeService, so the container and
+// its data go and the gateways in front of it are restarted — with one
+// deliberate difference: no typed confirmation. A devnet is a scratch chain
+// whose entire value is being cheap to throw away, and making the routine
+// case type its own name is friction pretending to be safety. The typed gate
+// stays on /wipe, and on the node's clear-and-resync, where what is destroyed
+// is hundreds of gigabytes and days of resync.
+//
+// It is restricted to the devnet on purpose. There is no equivalent for a
+// chain node here, and adding one would be putting a one-click button on the
+// single most expensive irreversible action in the app.
+//
+// The cascade is the point, not a side effect: a reset chain restarts at a
+// low block while eRPC keeps advertising the old head — its per-network head
+// is monotonic, so it never observes the reset — and the restart is what
+// clears it. Gateways on OTHER machines cannot be reached by ops' cascade
+// (one executor), so they are restarted here and reported in the same list.
+func (s *Server) handleContainerReset(w http.ResponseWriter, r *http.Request) {
+	svc := r.PathValue("svc")
+	if svc != svcDevnet {
+		writeError(w, http.StatusNotFound, fmt.Sprintf(
+			"only the devnet can be reset (%q is not) — resetting a real chain node means discarding its whole dataset, which is the dashboard's clear-and-resync and is deliberately guarded by a typed confirmation", svc))
+		return
+	}
+
+	cfg, t, ok := s.configAndTarget(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	dsvc, err := containerService(cfg, t, svc)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	ex, err := s.getExecutor(t)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	rep, wipeErr := ops.WipeService(r.Context(), ex, dsvc)
+
+	// Gateways elsewhere in the fleet that front this devnet: same stale-head
+	// problem, different machine, so they are bounced with their own target's
+	// executor and folded into the same report.
+	remoteErr := s.restartRemoteFronts(r.Context(), cfg, t, resolvedDevnet(t.Devnet), &rep)
+
+	st, stErr := ops.ServiceStatus(r.Context(), ex, dsvc)
+	if stErr != nil {
+		st = ops.ContainerStatus{ID: dsvc.ID, ContainerName: dsvc.ContainerName, State: ops.StateUnknown, Detail: stErr.Error()}
+	}
+
+	res := wipeResponse{Report: rep, Status: st}
+	switch {
+	case wipeErr != nil:
+		status, hint, code := classifyOpsError(wipeErr)
+		res.Error, res.Hint, res.Code = wipeErr.Error(), hint, code
+		writeJSON(w, status, res)
+	case remoteErr != nil:
+		res.Error = remoteErr.Error()
+		writeJSON(w, http.StatusBadGateway, res)
+	default:
+		writeJSON(w, http.StatusOK, res)
+	}
+}
+
+// restartRemoteFronts restarts gateways on OTHER targets that front this
+// devnet, appending them to the report's Cascaded/CascadeSkipped lists so the
+// operator sees one account of what was bounced rather than two.
+func (s *Server) restartRemoteFronts(ctx context.Context, cfg config.Config, t config.Target, d catalog.DevnetConfig, rep *ops.WipeReport) error {
+	var failures []error
+	for _, gw := range cfg.Gateways {
+		if gw.Placement.TargetID == t.ID || !gatewayFrontsDevnet(gw, t.ID, d) {
+			continue
+		}
+		host, ok := findTarget(cfg, gw.Placement.TargetID)
+		if !ok {
+			failures = append(failures, fmt.Errorf("gateway %q is placed on target %q, which no longer exists", gw.ID, gw.Placement.TargetID))
+			continue
+		}
+		gex, err := s.getExecutor(host)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("gateway %q on %q: %w", gw.ID, host.ID, err))
+			continue
+		}
+		dsvc := setup.GatewayService(gw.ID, gw.Config)
+		st, err := ops.ServiceStatus(ctx, gex, dsvc)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("gateway %q on %q: %w", gw.ID, host.ID, err))
+			continue
+		}
+		if st.State != ops.StateRunning {
+			rep.CascadeSkipped = append(rep.CascadeSkipped, dsvc.ID)
+			continue
+		}
+		if _, err := ops.ContainerAction(ctx, gex, dsvc, "restart"); err != nil {
+			failures = append(failures, fmt.Errorf("gateway %q on %q: %w", gw.ID, host.ID, err))
+			continue
+		}
+		rep.Cascaded = append(rep.Cascaded, dsvc.ID)
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("the devnet was reset, but a gateway on another machine could not be restarted, so it is now serving a head this chain no longer has — restart it by hand: %w", errors.Join(failures...))
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------
 // POST /api/targets/{id}/containers/{svc}/provision
 // ---------------------------------------------------------------------
 
@@ -726,11 +800,6 @@ func containerPlan(t config.Target, svc string) ([]setup.Step, error) {
 			return nil, errors.New("no devnet is configured on this machine — save a devnet configuration first (PUT .../containers/devnet/config)")
 		}
 		return setup.PlanDevnet(*t.Devnet)
-	case svcGateway:
-		if t.Gateway == nil || len(t.Gateway.Networks) == 0 {
-			return nil, errors.New("no gateway is configured on this machine — a gateway needs at least one chain and one upstream before it can be created (PUT .../containers/erpc/config)")
-		}
-		return setup.PlanGateway(*t.Gateway, setup.BackendDocker)
 	default:
 		return nil, fmt.Errorf("unknown service %q", svc)
 	}
@@ -769,7 +838,6 @@ func (s *Server) handleContainerPutConfig(w http.ResponseWriter, r *http.Request
 	}
 
 	var devnet catalog.DevnetConfig
-	var gateway catalog.GatewayConfig
 	switch svc {
 	case svcDevnet:
 		if err := json.NewDecoder(r.Body).Decode(&devnet); err != nil {
@@ -777,19 +845,6 @@ func (s *Server) handleContainerPutConfig(w http.ResponseWriter, r *http.Request
 			return
 		}
 		if err := devnet.Validate(); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	case svcGateway:
-		if err := json.NewDecoder(r.Body).Decode(&gateway); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON body")
-			return
-		}
-		// Rendering IS the validation, exactly as PlanGateway does it: it is
-		// the only check that covers chain ids, duplicate upstream ids and
-		// endpoint schemes, and it is the same code that will later produce
-		// the file.
-		if _, err := catalog.RenderGatewayConfig(gateway); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -803,14 +858,8 @@ func (s *Server) handleContainerPutConfig(w http.ResponseWriter, r *http.Request
 			if c.Targets[i].ID != id {
 				continue
 			}
-			switch svc {
-			case svcDevnet:
-				d := devnet
-				c.Targets[i].Devnet = &d
-			case svcGateway:
-				g := gateway
-				c.Targets[i].Gateway = &g
-			}
+			d := devnet
+			c.Targets[i].Devnet = &d
 			return nil
 		}
 		return fmt.Errorf("target %q disappeared while saving", id)
@@ -837,9 +886,6 @@ func configResponseFor(t config.Target, svc string) (containerConfigResponse, er
 	case svcDevnet:
 		d := resolvedDevnet(t.Devnet)
 		return containerConfigResponse{ID: svc, Configured: t.Devnet != nil, Devnet: &d}, nil
-	case svcGateway:
-		g := resolvedGateway(t.Gateway)
-		return containerConfigResponse{ID: svc, Configured: t.Gateway != nil, Gateway: &g}, nil
 	default:
 		return containerConfigResponse{}, fmt.Errorf("unknown service %q", svc)
 	}
@@ -863,20 +909,6 @@ func resolvedDevnet(d *catalog.DevnetConfig) catalog.DevnetConfig {
 	return out
 }
 
-// resolvedGateway is resolvedDevnet's counterpart. Networks are left exactly
-// as stored: an empty list is the honest representation of a gateway with
-// nothing to serve, and inventing one would be inventing an upstream.
-func resolvedGateway(g *catalog.GatewayConfig) catalog.GatewayConfig {
-	var out catalog.GatewayConfig
-	if g != nil {
-		out = *g
-	}
-	out.ProjectID = out.ProjectIDOrDefault()
-	out.BindAddr = out.Bind()
-	out.Port = out.HTTP()
-	return out
-}
-
 // ---------------------------------------------------------------------
 // service descriptors
 // ---------------------------------------------------------------------
@@ -889,31 +921,60 @@ func resolvedGateway(g *catalog.GatewayConfig) catalog.GatewayConfig {
 // report on it would hide a running container from the only screen that could
 // stop it.
 //
-// The devnet's FrontedBy is populated only when this target's gateway
-// actually serves the devnet's chain. That precision matters in both
-// directions: a gateway that fronts the devnet MUST be restarted after a wipe
-// (ops.WipeService documents the stale-head failure), and a gateway that does
-// not must not be bounced for someone else's chain reset.
-func containerService(t config.Target, svc string) (ops.DockerService, error) {
+// The devnet's FrontedBy is the gateways that actually front THIS devnet —
+// see devnetFronts. That precision matters in both directions: a gateway
+// fronting the devnet MUST be restarted after a wipe (ops.WipeService
+// documents the stale-head failure), and one that does not must not be
+// bounced for someone else's chain reset.
+func containerService(cfg config.Config, t config.Target, svc string) (ops.DockerService, error) {
 	switch svc {
 	case svcDevnet:
 		d := resolvedDevnet(t.Devnet)
-		var fronts []ops.DockerService
-		if t.Gateway != nil && gatewayServesChain(*t.Gateway, d.ChainIDOrDefault()) {
-			fronts = append(fronts, setup.GatewayService(resolvedGateway(t.Gateway)))
-		}
-		return setup.DevnetService(d, fronts...), nil
-	case svcGateway:
-		return setup.GatewayService(resolvedGateway(t.Gateway)), nil
+		return setup.DevnetService(d, devnetFronts(cfg, t, d)...), nil
 	default:
-		return ops.DockerService{}, fmt.Errorf("unknown service %q (want %q or %q)", svc, svcDevnet, svcGateway)
+		return ops.DockerService{}, fmt.Errorf("unknown service %q (want %q)", svc, svcDevnet)
 	}
 }
 
-func gatewayServesChain(g catalog.GatewayConfig, chainID int) bool {
-	for _, n := range g.Networks {
-		if n.ChainID == chainID {
-			return true
+// devnetFronts returns the gateway lifecycle descriptors that sit in front of
+// this target's devnet, for ops.WipeService to cascade a restart to.
+//
+// Only gateways PLACED ON THE SAME TARGET are returned, and that limit is
+// real rather than an oversight: the cascade runs through the one executor
+// the wipe was issued on, so a gateway on another machine cannot be restarted
+// from here. A cross-machine gateway pointing at this devnet is instead
+// reported by handleContainerReset, which can reach the other target's
+// executor — hiding it would recreate the exact silent-staleness bug the
+// cascade exists to prevent, one machine over.
+func devnetFronts(cfg config.Config, t config.Target, d catalog.DevnetConfig) []ops.DockerService {
+	var out []ops.DockerService
+	for _, gw := range cfg.GatewaysOn(t.ID) {
+		if gatewayFrontsDevnet(gw, t.ID, d) {
+			out = append(out, setup.GatewayService(gw.ID, gw.Config))
+		}
+	}
+	return out
+}
+
+// gatewayFrontsDevnet reports whether gw routes a chain to this devnet.
+//
+// A managed-devnet upstream naming the target is the unambiguous answer. The
+// endpoint comparison after it is for an upstream typed in by hand before
+// upstreams had identity: it is the same devnet at the same URL, and treating
+// it as unrelated would skip a restart that is required.
+func gatewayFrontsDevnet(gw config.Gateway, targetID string, d catalog.DevnetConfig) bool {
+	chain := d.ChainIDOrDefault()
+	for _, n := range gw.Config.Networks {
+		if n.ChainID != chain {
+			continue
+		}
+		for _, u := range n.Upstreams {
+			if u.KindOrDefault() == catalog.UpstreamManagedDevnet && u.TargetID == targetID {
+				return true
+			}
+			if strings.EqualFold(strings.TrimSpace(u.Endpoint), d.HTTPEndpoint()) {
+				return true
+			}
 		}
 	}
 	return false
