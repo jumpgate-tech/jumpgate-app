@@ -6,13 +6,13 @@ import (
 )
 
 // The rendered shape here was verified by running it: Caddy served
-// https://localhost.valaxy.black, proxied to an eRPC container reached BY NAME
+// https://default-1a2b3c.localhost-valaxy.com, proxied to an eRPC container reached BY NAME
 // on a private docker network with no published ports, and carried both
 // JSON-RPC and eth_subscribe over wss.
 
 func TestRenderCaddyfile_Internal(t *testing.T) {
 	got, err := RenderCaddyfile(CaddyConfig{
-		Hostname:     "localhost.valaxy.black",
+		Hostname:     "default-1a2b3c.localhost-valaxy.com",
 		UpstreamHost: "valve-node-app-erpc",
 		UpstreamPort: 4000,
 	})
@@ -20,7 +20,7 @@ func TestRenderCaddyfile_Internal(t *testing.T) {
 		t.Fatalf("RenderCaddyfile: %v", err)
 	}
 	for _, want := range []string{
-		"localhost.valaxy.black {",
+		"default-1a2b3c.localhost-valaxy.com {",
 		"tls internal",
 		"reverse_proxy valve-node-app-erpc:4000",
 		// Without this Caddy also binds :80 purely to redirect, colliding
@@ -117,5 +117,38 @@ func TestRenderCaddyfile_Rejects(t *testing.T) {
 				t.Errorf("error = %q, want it to contain %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// The default hostname has to be usable without the operator owning anything:
+// a name under a wildcard that already resolves to loopback, valid as a DNS
+// name, stable for one install and different across installs.
+func TestDefaultTLSHostname(t *testing.T) {
+	got := DefaultTLSHostname("default", "machine-a")
+	if !strings.HasSuffix(got, "."+DefaultTLSDomain) {
+		t.Fatalf("hostname %q is not under %s", got, DefaultTLSDomain)
+	}
+	if !strings.HasPrefix(got, "default-") {
+		t.Errorf("hostname %q should start with the gateway id", got)
+	}
+	// One label under the wildcard, so a single *.<domain> record covers it.
+	if label := strings.TrimSuffix(got, "."+DefaultTLSDomain); strings.Contains(label, ".") {
+		t.Errorf("hostname %q uses more than one label under the wildcard", got)
+	}
+	if again := DefaultTLSHostname("default", "machine-a"); again != got {
+		t.Errorf("not stable for one install: %q then %q", got, again)
+	}
+	if other := DefaultTLSHostname("default", "machine-b"); other == got {
+		t.Errorf("two installs got the same name %q — two machines would serve different certificates for it", got)
+	}
+
+	// A gateway id may contain dots and underscores; a DNS label may not.
+	if got := DefaultTLSHostname("edge_1.eu", "seed"); strings.Contains(strings.TrimSuffix(got, "."+DefaultTLSDomain), ".") ||
+		strings.Contains(got, "_") {
+		t.Errorf("id was not reduced to a DNS label: %q", got)
+	}
+	// And an id with nothing usable in it still yields a name.
+	if got := DefaultTLSHostname("...", "seed"); !strings.HasPrefix(got, "gateway-") {
+		t.Errorf("want a fallback label, got %q", got)
 	}
 }

@@ -2,6 +2,8 @@ package catalog
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"text/template"
@@ -47,6 +49,60 @@ const (
 // is: an operator's TLS front should not change version under them on a
 // restart.
 const DefaultCaddyImage = "caddy:2-alpine"
+
+// DefaultTLSDomain is the domain a new gateway's hostname is built under.
+//
+// WHY a real, owned domain rather than a made-up name: the hostname has to
+// RESOLVE on the machine the browser is on, and a name that does not is
+// indistinguishable — from the browser, from curl, from this app's own probe —
+// from a gateway that is down. This zone's wildcard is published as
+// *.localhost-valaxy.com → 127.0.0.1 (and ::1), so any name under it resolves
+// to the caller's own machine from any network, with no hosts-file edit and
+// nothing to install. Verified live through two public resolvers, including
+// multi-level names.
+//
+// It changes NOTHING about the certificate: the cert source stays "internal"
+// (Caddy's own CA), because a name resolving to loopback cannot be validated
+// by any public CA without DNS-01 credentials, and shipping zone-write
+// credentials to every install would be far worse than one trust-store click.
+// The domain buys resolution, not trust.
+const DefaultTLSDomain = "localhost-valaxy.com"
+
+// DefaultTLSHostname is the name a gateway serves by default: the gateway's
+// own id, a short per-install tag, and DefaultTLSDomain.
+//
+// The per-install tag is what stops two machines serving different
+// certificates for the SAME name — which is only ever noticed as a browser
+// that trusts one laptop's gateway and refuses another's, with no visible
+// cause. The wildcard covers every such name at no cost, so uniqueness is free
+// here in a way it almost never is.
+//
+// seed identifies the install; it is hashed, so nothing about the machine
+// appears in the name.
+func DefaultTLSHostname(gatewayID, seed string) string {
+	id := sanitizeDNSLabel(gatewayID)
+	if id == "" {
+		id = "gateway"
+	}
+	sum := sha256.Sum256([]byte(seed))
+	return fmt.Sprintf("%s-%s.%s", id, hex.EncodeToString(sum[:3]), DefaultTLSDomain)
+}
+
+// sanitizeDNSLabel reduces a gateway id to what a DNS label may contain. A
+// gateway id already allows dots and underscores, and both would either split
+// the label or make it invalid.
+func sanitizeDNSLabel(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-', r == '.', r == '_':
+			b.WriteRune('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
 
 // CaddyDataVolume is the named volume mounted at CaddyDataPath, and it is NOT
 // optional.

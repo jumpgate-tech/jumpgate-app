@@ -967,6 +967,32 @@ details.advanced summary {
   color: var(--bad);
 }
 
+/* banner-ok is the affirmative one. It exists because a verification that
+   passed has to be said in the same shape as one that failed — an answer that
+   only appears when something is wrong trains people to ignore the space. */
+.banner-ok {
+  background: rgba(111, 224, 138, 0.1);
+  border: 1px solid var(--ok);
+  color: var(--ok);
+}
+
+/* The HTTPS verification's per-assertion list: one row per claim, verdict
+   first, so the four that hold cannot hide the one that does not. */
+.verify-list {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+}
+
+.verify-list li {
+  padding: 0.4rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.verify-list li:first-child {
+  border-top: none;
+}
+
 .upstream-row {
   display: flex;
   align-items: flex-end;

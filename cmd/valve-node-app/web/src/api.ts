@@ -735,7 +735,56 @@ export interface TlsView {
   // warning. Naming it is the difference between a solvable warning and a
   // mystery.
   rootCaPath?: string;
+  // suggestedHostname is a name under a domain whose wildcard already resolves
+  // to loopback, so HTTPS can be turned on without owning a domain first.
+  suggestedHostname?: string;
+  // verification is the LAST live check (verifyGatewayTls), not a fresh one:
+  // it opens real connections and waits for a block, so it is never run on a
+  // poll. `at` says how old it is.
+  verification?: TlsVerification | null;
   error?: string;
+}
+
+// TlsAssertionStatus: "unavailable" is not a fourth spelling of "fail". A
+// gateway whose upstream is http:// serves HTTPS perfectly and cannot serve
+// subscriptions — a missing capability, reported as missing.
+export type TlsAssertionStatus = "pass" | "fail" | "skip" | "unavailable";
+
+export interface TlsAssertion {
+  id: string;
+  title: string;
+  // why says what this assertion catches that the others do not.
+  why: string;
+  status: TlsAssertionStatus;
+  detail: string;
+}
+
+// TlsVerification is one live "is HTTPS actually serving?" run: a handshake,
+// the name on the certificate, the chain against the expected root, an RPC
+// call through it, and a subscription over wss.
+export interface TlsVerification {
+  at: string;
+  url: string;
+  hostname: string;
+  // address is what was actually dialed — the name is pinned to it, so DNS is
+  // not what is under test.
+  address: string;
+  chainId?: number;
+  path?: string;
+  certSource?: string;
+  trustSource?: string;
+  subject?: string;
+  issuer?: string;
+  notBefore?: string;
+  notAfter?: string;
+  expiresIn?: string;
+  // expiryWarning is set only when the expiry is something to act on — an
+  // internal-CA leaf lives 12 hours by design and is renewed in process.
+  expiryWarning?: string;
+  assertions: TlsAssertion[] | null;
+  ok: boolean;
+  subscriptionsOk: boolean;
+  summary: string;
 }
 
 export interface GatewayView {
@@ -810,6 +859,13 @@ export function createGateway(body: CreateGatewayRequest): Promise<GatewayView> 
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
   });
+}
+
+// verifyGatewayTls runs the live HTTPS check against a gateway's front and
+// returns the evidence. It is a GET because it writes nothing, and it is slow
+// by design — it waits for a real block on a real subscription.
+export function verifyGatewayTls(gid: string): Promise<TlsVerification> {
+  return request<TlsVerification>(`/api/gateways/${encodeURIComponent(gid)}/tls/verify`);
 }
 
 export function deleteGateway(gid: string): Promise<{ status: string; note: string }> {
