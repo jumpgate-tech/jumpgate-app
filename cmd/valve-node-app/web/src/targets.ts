@@ -1,7 +1,7 @@
 // #/targets — the local-machine card, the list of SSH targets, and the
 // "add server over SSH" form.
 import * as api from "./api";
-import { badge, escapeHtml, footer, onAction } from "./ui";
+import { badge, confirmModal, escapeHtml, footer, onAction } from "./ui";
 
 const LOCAL_TARGET_ID = "local";
 
@@ -55,45 +55,70 @@ export function renderTargets(root: HTMLElement): () => void {
     const ordered = [...targets].sort((a, b) => (a.mode === "local" ? -1 : 0) - (b.mode === "local" ? -1 : 0));
     const list = ordered.length
       ? `<div class="card-grid">${ordered.map((t) => targetCard(t, catalog)).join("")}</div>`
-      : `
-        <div class="card empty-state">
-          <p>No machines yet.</p>
-          <p class="muted small">
-            ${
-              localViable
-                ? "Add this machine to run a node here, or add a remote Linux server over SSH."
-                : "valve-node-app is running here as your <strong>controller</strong> — add a Linux server over SSH to run a node, or add this machine to walk the setup (it will need a Linux host to finish)."
-            }
-          </p>
-        </div>
-      `;
-
-    // "Add this machine" is always offered; primary on a Linux host,
-    // secondary (ghost) with a caveat on a controller.
-    const localBtn = localViable
-      ? `<button class="btn" data-action="add-local">Add this machine</button>`
-      : `<button class="btn btn-ghost" data-action="add-local" title="Setup needs a Linux host — this machine can drive remote nodes; local setup won't complete here">Add this machine</button>`;
-
-    const addActions = `
-      <div class="add-actions">
-        ${localBtn}
-        <button class="btn${localViable ? " btn-ghost" : ""}" data-action="toggle-ssh">
-          ${showSSHForm ? "Cancel" : "Add a server (SSH)"}
-        </button>
-      </div>
-    `;
+      : `<div class="card empty-state"><p class="muted">No machines yet — pick an option below.</p></div>`;
 
     body.innerHTML = `
       <section class="section">
-        <div class="section-head">
-          <h2>Your machines</h2>
-          ${addActions}
-        </div>
-        ${!localViable && hostOS ? `<p class="muted small">This machine (${escapeHtml(hostOS)}) runs valve-node-app as a <strong>controller</strong>. Node hosts must be Linux — "Add this machine" is available to walk the flow, but setup only completes on a Linux host.</p>` : ""}
-        ${showSSHForm ? sshFormMarkup() : ""}
+        <div class="section-head"><h2>Your machines</h2></div>
         ${list}
       </section>
+      <section class="section">
+        <div class="section-head"><h2>Add a machine</h2></div>
+        ${addOptions(localViable)}
+        ${showSSHForm ? sshFormMarkup() : ""}
+      </section>
     `;
+  }
+
+  // addOptions renders the ways to add a machine as options that each carry
+  // their own availability and the reason behind it.
+  //
+  // This used to be two bare buttons whose caveat was repeated in a paragraph,
+  // a tooltip, and a confirm() dialog — so the only place the constraint was
+  // stated up front was a modal that interrupted you to say what the screen
+  // already said, after you had committed to the action. Availability belongs
+  // on the option itself, visible before you choose.
+  function addOptions(localViable: boolean): string {
+    const ssh = `
+      <div class="card">
+        <h3>A server over SSH ${badge("Available", "ok")}</h3>
+        <p class="muted small">
+          Run a node on a remote Linux server.${localViable ? "" : " The only option that can finish setup from here."}
+        </p>
+        <div class="card-actions">
+          <button class="btn${localViable ? " btn-ghost" : ""}" data-action="toggle-ssh">
+            ${showSSHForm ? "Cancel" : "Add a server"}
+          </button>
+        </div>
+      </div>
+    `;
+
+    const local = localViable
+      ? `
+        <div class="card">
+          <h3>This machine ${badge("Available", "ok")}</h3>
+          <p class="muted small">Run a node here, on the Linux host valve-node-app is running on.</p>
+          <div class="card-actions">
+            <button class="btn" data-action="add-local">Add this machine</button>
+          </div>
+        </div>
+      `
+      : `
+        <div class="card card-warn">
+          <h3>This machine${hostOS ? ` (${escapeHtml(hostOS)})` : ""} ${badge("Can't run a node", "warn")}</h3>
+          <p class="muted small">
+            Setup installs systemd units, uses apt, and needs root, so it only completes on a
+            Linux host. valve-node-app runs here as your <strong>controller</strong>, driving
+            nodes on other machines.
+          </p>
+          <div class="card-actions">
+            <button class="btn btn-ghost" data-action="add-local">Add anyway — preview the wizard</button>
+          </div>
+        </div>
+      `;
+
+    // Lead with whichever option can actually complete setup.
+    return `<div class="card-grid">${localViable ? local + ssh : ssh + local}</div>`;
   }
 
   async function handleAction(action: string, el: HTMLElement): Promise<void> {
@@ -104,9 +129,13 @@ export function renderTargets(root: HTMLElement): () => void {
     if (action === "delete-target") {
       const id = el.dataset.id;
       if (!id) return;
-      if (!confirm(`Remove target "${id}"? This does not touch anything already running on it.`)) {
-        return;
-      }
+      const ok = await confirmModal({
+        title: "Remove machine",
+        body: `Remove "${id}"? This only removes it from valve-node-app — anything already running on the machine keeps running, and its data is left alone.`,
+        confirmLabel: "Remove",
+        danger: true,
+      });
+      if (!ok) return;
       await deleteTarget(id);
       return;
     }
@@ -122,21 +151,11 @@ export function renderTargets(root: HTMLElement): () => void {
     }
   }
 
+  // No confirm() here: the option card states the constraint before you
+  // click, and its button is explicitly labelled "Add anyway — preview the
+  // wizard", so a modal would only interrupt to repeat what you just read.
   async function addLocal(): Promise<void> {
     clearFormError();
-    if (hostOS !== "linux") {
-      // Node setup needs systemd/apt/root, so it stops at preflight on a
-      // non-Linux host. Saying only that leaves the user stuck, so name the
-      // path that does work — an SSH target — rather than dead-ending them.
-      const proceed = confirm(
-        "This machine (" +
-          hostOS +
-          ") isn't a Linux host, so node setup can't complete here — it's only useful for previewing the setup wizard.\n\n" +
-          "To actually run a node, add a Linux server instead — use “Add a server (SSH)”.\n\n" +
-          "Add this machine anyway?",
-      );
-      if (!proceed) return;
-    }
     try {
       await api.addTarget({ id: LOCAL_TARGET_ID, mode: "local" });
       await load();
