@@ -814,12 +814,72 @@ func TestProbePerProbeTimeout(t *testing.T) {
 // TestProbeAllIsConcurrentAndBounded asserts observed parallelism rather than
 // wall-clock, and that the bound is honoured.
 func TestProbeAllIsConcurrentAndBounded(t *testing.T) {
-	c := &counter{}
-	srv := rpcServer(t, script{}, c)
-
 	const limit = 4
+	c := &counter{}
+
+	// Concurrency is FORCED here rather than observed, and that is the whole
+	// point of the barrier below. Asserting overlap by timing alone is flaky:
+	// on a small CI runner each fake request finishes before the next one
+	// starts, so a perfectly concurrent prober still shows a peak of 1 and the
+	// test fails for a reason that has nothing to do with the code. It did
+	// exactly that on the first push.
+	//
+	// Instead, every endpoint's FIRST request (eth_chainId, the reachability
+	// probe) is held until `limit` of them are in flight together. A concurrent
+	// prober fills the barrier and all of them are released; a serial one never
+	// fills it, waits out the grace period, and leaves the peak at 1 — which is
+	// the failure the assertion is actually about.
+	var mu sync.Mutex
+	inflight := 0
+	released := make(chan struct{})
+	var once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c.enter()
+		defer c.leave()
+
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read", http.StatusBadRequest)
+			return
+		}
+		key := "batch"
+		if bytes.HasPrefix(bytes.TrimSpace(raw), []byte("{")) {
+			var req struct {
+				Method string `json:"method"`
+			}
+			if err := json.Unmarshal(raw, &req); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			key = req.Method
+		}
+
+		if key == "eth_chainId" {
+			mu.Lock()
+			inflight++
+			n := inflight
+			mu.Unlock()
+			if n >= limit {
+				once.Do(func() { close(released) })
+			}
+			select {
+			case <-released:
+			case <-time.After(2 * time.Second): // serial prober: proceed, peak stays 1
+			case <-r.Context().Done():
+				return
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, defaultReply(key).body)
+	}))
+	t.Cleanup(srv.Close)
+
 	p := testProber()
 	p.Concurrency = limit
+	// Room for the barrier wait without tripping the per-probe deadline.
+	p.ProbeTimeout = 10 * time.Second
 
 	targets := make([]Target, 6)
 	for i := range targets {
