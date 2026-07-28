@@ -253,6 +253,11 @@ type gatewaysResponse struct {
 	Targets  []targetSummary  `json:"targets"`
 	Sources  []upstreamSource `json:"sources"`
 	Presets  []networkPreset  `json:"presets"`
+
+	// Orphans are containers a merge stopped managing but did NOT stop — see
+	// config.Config.Orphans. Surfaced here so a merged-away gateway does not
+	// keep serving stale config with nothing on any screen pointing at it.
+	Orphans []config.OrphanedContainer `json:"orphans,omitempty"`
 }
 
 // ---------------------------------------------------------------------
@@ -289,6 +294,12 @@ func (s *Server) registerGatewayRoutes(mux *http.ServeMux) {
 	// traffic and for the same reason. See analytics.go.
 	mux.HandleFunc("GET /api/gateways/{gid}/analytics", s.handleGatewayAnalytics)
 	mux.HandleFunc("POST /api/gateways/{gid}/{action}", s.handleGatewayAction)
+
+	// A leftover container a merge stopped managing but did not stop — see
+	// config.Config.Orphans. Dismissing it forgets the RECORD only; the
+	// container is untouched, for the same reason handleGatewayDelete leaves
+	// one running: this app never stops a container it did not just start.
+	mux.HandleFunc("DELETE /api/orphans/{name}", s.handleOrphanDismiss)
 
 	// Public-endpoint discovery. It is NOT under /api/gateways/{gid} because
 	// it is a question about a chain, not about any one gateway — the answer
@@ -346,6 +357,7 @@ func (s *Server) handleGatewayList(w http.ResponseWriter, r *http.Request) {
 		Targets:  targetSummaries(cfg),
 		Sources:  upstreamSources(cfg),
 		Presets:  networkPresets(),
+		Orphans:  cfg.Orphans,
 	})
 }
 
@@ -1143,6 +1155,30 @@ func (s *Server) handleGatewayDelete(w http.ResponseWriter, r *http.Request) {
 		"note": fmt.Sprintf("valve-node-app has forgotten this gateway. Its container %q on machine %q was NOT touched — stop or wipe it before removing it if you wanted it gone.",
 			ops.ERPCContainerNameFor(removed.ID), removed.Placement.TargetID),
 	})
+}
+
+// ---------------------------------------------------------------------
+// DELETE /api/orphans/{name}
+// ---------------------------------------------------------------------
+
+// handleOrphanDismiss forgets a leftover container record. It does NOT stop the
+// container: this app does not stop containers it did not start, and the
+// operator dismisses the record once they have wiped it themselves.
+func (s *Server) handleOrphanDismiss(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if _, err := s.updateConfig(func(c *config.Config) error {
+		for i := range c.Orphans {
+			if c.Orphans[i].ContainerName == name {
+				c.Orphans = append(c.Orphans[:i], c.Orphans[i+1:]...)
+				return nil
+			}
+		}
+		return fmt.Errorf("no leftover container %q", name)
+	}); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
 }
 
 // ---------------------------------------------------------------------
