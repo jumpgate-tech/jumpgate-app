@@ -4,6 +4,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -68,6 +69,31 @@ type NetworkAnalytics struct {
 
 	Methods   []MethodLatency
 	Endpoints []EndpointLatency
+
+	// Cached is the latency of requests this chain answered WITHOUT calling
+	// any endpoint — eRPC's own response cache, which labels them
+	// upstream="n/a" on the very same histogram the endpoints are cut from.
+	//
+	// It is a field of its own rather than a row in Endpoints because "n/a" is
+	// not a server: rendered as one it is a phantom endpoint carrying real
+	// traffic under a name no configuration contains, which is exactly what
+	// NetworkTraffic.Unattributed exists to prevent one family over. Nor is it
+	// dropped — FOUND BY RUNNING IT against a live gateway, cache hits were 12
+	// of 22 requests and the fastest ones at that (28ms against the endpoint's
+	// 150ms), so hiding them would make endpoint latency look like the whole
+	// story.
+	Cached Latency
+
+	// FailedLatency is how long the requests that ended in an ERROR took —
+	// eRPC labels those upstream="<error>" on the very same histogram.
+	//
+	// Its own field for the same reason Cached is: "<error>" is not a server,
+	// and FOUND BY RUNNING IT it rendered as one, three requests at 291ms,
+	// sorted above the real endpoint. Kept rather than dropped because how
+	// long a failure takes is a real diagnosis — failing fast and timing out
+	// after thirty seconds are different problems, and the counts alone cannot
+	// tell them apart.
+	FailedLatency Latency
 }
 
 // Latency is one histogram: how many requests, how long in total, and how they
@@ -147,8 +173,18 @@ type EndpointHealth struct {
 	// and method, largest first.
 	Errors []ErrorClass
 
+	// Scored says eRPC has published selection state for this endpoint at all.
+	//
+	// It exists because Position 0 means "currently preferred" and the zero
+	// value of a float is also 0. FOUND BY RUNNING IT: a devnet that was
+	// completely unreachable — 61 transport failures, nothing else — read as
+	// "preferred", because eRPC had never scored it and the absence of a
+	// metric became the best possible verdict. An endpoint nobody has an
+	// opinion about must not be indistinguishable from the one being chosen.
+	Scored bool
 	// Score and Position are eRPC's own selection state: why it routes the way
-	// it does. Position 0 is the endpoint currently being preferred.
+	// it does. Position 0 is the endpoint currently being preferred. Both are
+	// meaningless unless Scored.
 	Score    float64
 	Position float64
 	// PrimarySwitches counts erpc_selection_primary_switch_total landing ON
@@ -207,6 +243,26 @@ const (
 	// upstream="n/a" would have made on the share bars (see
 	// NetworkTraffic.Unattributed).
 	rollupUpstream = "*"
+
+	// errorUpstream is eRPC's label for a request that ended in an error with
+	// no upstream having answered it. See NetworkAnalytics.FailedLatency.
+	errorUpstream = "<error>"
+
+	// sentinelPrefix is the shape eRPC gives its placeholder label values:
+	// "<error>", and whatever it adds next. Rejecting the SHAPE rather than an
+	// enumerated list is deliberate — a sentinel this code has never seen must
+	// not become an endpoint the first time eRPC introduces one, and no
+	// upstream id can collide with it (catalog ids are plain identifiers).
+	sentinelPrefix = "<"
+
+	// cachedKey and failedKey are the map keys the cache-answered and
+	// error-ended requests are collected under while folding, before they are
+	// lifted into NetworkAnalytics.Cached and .FailedLatency. Neither can
+	// collide with a real upstream id: catalog.GeneratedUpstreamID and the
+	// operator's own ids are both plain identifiers, and a leading NUL is not
+	// one.
+	cachedKey = "\x00cached"
+	failedKey = "\x00failed"
 )
 
 // AnalyticsFromSamples turns a gateway's Prometheus samples into Analytics.
@@ -261,10 +317,31 @@ func AnalyticsFromSamples(samples []Sample, project string) Analytics {
 			networks[network] = true
 			method := s.Labels[labelCategory]
 
+			// The endpoint cut takes only real endpoints. upstream="n/a" here
+			// is a request answered from eRPC's cache with no endpoint
+			// involved at all; it is collected under the cachedKey sentinel
+			// and lifted into NetworkAnalytics.Cached below, never into a row
+			// of its own. The method cut takes it either way — a cached
+			// eth_chainId is still an eth_chainId a client asked for.
+			// The endpoint cut takes only real endpoints; the two label
+			// values that are not endpoints go to their own buckets, and any
+			// OTHER sentinel is left out of this cut entirely rather than
+			// guessed at.
+			endpointKey := upstream
+			switch {
+			case isRealUpstream(upstream):
+			case upstream == noNetwork:
+				endpointKey = cachedKey
+			case upstream == errorUpstream:
+				endpointKey = failedKey
+			default:
+				endpointKey = ""
+			}
+
 			for _, target := range []struct {
 				into map[string]map[string]*Latency
 				key  string
-			}{{byMethod, method}, {byEndpoint, upstream}} {
+			}{{byMethod, method}, {byEndpoint, endpointKey}} {
 				if target.key == "" {
 					continue
 				}
@@ -329,12 +406,14 @@ func AnalyticsFromSamples(samples []Sample, project string) Analytics {
 			if isRealUpstream(upstream) {
 				e := endpoint(upstream)
 				note(e, network)
+				e.Scored = true
 				e.Score = s.Value
 			}
 		case metricSelectionPosition:
 			if isRealUpstream(upstream) {
 				e := endpoint(upstream)
 				note(e, network)
+				e.Scored = true
 				e.Position = s.Value
 			}
 		case metricSelectionExcluded:
@@ -363,6 +442,14 @@ func AnalyticsFromSamples(samples []Sample, project string) Analytics {
 		}
 		sort.Slice(n.Methods, func(i, j int) bool { return n.Methods[i].Method < n.Methods[j].Method })
 		for up, l := range byEndpoint[network] {
+			switch up {
+			case cachedKey:
+				n.Cached = finish(l)
+				continue
+			case failedKey:
+				n.FailedLatency = finish(l)
+				continue
+			}
 			n.Endpoints = append(n.Endpoints, EndpointLatency{Upstream: up, Latency: finish(l)})
 		}
 		sort.Slice(n.Endpoints, func(i, j int) bool { return n.Endpoints[i].Upstream < n.Endpoints[j].Upstream })
@@ -397,12 +484,16 @@ func AnalyticsFromSamples(samples []Sample, project string) Analytics {
 	return a
 }
 
-// isRealUpstream rejects the two label values that name something other than
-// an endpoint: eRPC's per-network rollup ("*") and its no-upstream sentinel
-// ("n/a"). Either one, taken literally, renders as an endpoint nobody
-// configured.
+// isRealUpstream rejects every label value that names something other than an
+// endpoint: eRPC's per-network rollup ("*"), its no-upstream sentinel ("n/a"),
+// and its angle-bracketed placeholders ("<error>", and whatever it adds next).
+// Any of them, taken literally, renders as an endpoint nobody configured —
+// which has now happened twice, with two different values, on a live gateway.
 func isRealUpstream(upstream string) bool {
-	return upstream != "" && upstream != rollupUpstream && upstream != noNetwork
+	return upstream != "" &&
+		upstream != rollupUpstream &&
+		upstream != noNetwork &&
+		!strings.HasPrefix(upstream, sentinelPrefix)
 }
 
 // addSample folds one _count/_sum/_bucket line into a histogram.

@@ -304,6 +304,8 @@ export function renderRPC(root: HTMLElement): () => void {
           </div>
           <div class="rpc-bar-actions">
             ${(gw.actions ?? []).map((a) => actionButton(gw, a)).join("")}
+            <a class="btn btn-ghost" href="#/analytics/${encodeURIComponent(gw.id)}"
+               title="Latency, failures and why eRPC is routing the way it is. This screen tells you something is off; that one tells you what.">Analytics</a>
             <button class="btn btn-ghost" data-action="toggle-settings" data-gid="${escapeHtml(gw.id)}">
               ${settingsOpen[gw.id] ? "Close" : "Settings"}
             </button>

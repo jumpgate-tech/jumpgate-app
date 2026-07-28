@@ -83,6 +83,16 @@ type networkAnalyticsView struct {
 
 	Methods   []methodLatencyView   `json:"methods"`
 	Endpoints []endpointLatencyView `json:"endpoints"`
+	// Cached is how long the cache-answered requests took. Its own field, not
+	// an endpoint row: a cache hit called no endpoint, and giving it one would
+	// put a server on the screen that does not exist. See
+	// metrics.NetworkAnalytics.Cached.
+	Cached latencyView `json:"cached"`
+	// FailedLatency is how long the requests that failed took. Failing fast and
+	// timing out after thirty seconds are different problems, and the Failed
+	// count alone cannot tell them apart. Not an endpoint row, for the same
+	// reason Cached is not: see metrics.NetworkAnalytics.FailedLatency.
+	FailedLatency latencyView `json:"failedLatency"`
 }
 
 // errorClassView is one class of error one endpoint has returned.
@@ -110,6 +120,11 @@ type endpointHealthView struct {
 	Requests float64          `json:"requests"`
 	Errors   []errorClassView `json:"errors"`
 
+	// Scored says eRPC has an opinion about this endpoint at all. Without it,
+	// position 0 — which means "currently preferred" — is indistinguishable
+	// from a float that was never set, and an endpoint nothing has ever
+	// managed to reach renders as the chosen one.
+	Scored          bool    `json:"scored"`
 	Score           float64 `json:"score"`
 	Position        float64 `json:"position"`
 	PrimarySwitches float64 `json:"primarySwitches"`
@@ -218,9 +233,11 @@ func networkAnalyticsViews(g catalog.GatewayConfig, t metrics.Traffic, a metrics
 			// microsecond before its success lands can make the sum exceed it
 			// by one — and a negative failure count is a number that cannot be
 			// true, which costs more trust than the rounding it exposes.
-			Failed:    math.Max(0, nt.Received-answered-nt.Unattributed),
-			Methods:   []methodLatencyView{},
-			Endpoints: []endpointLatencyView{},
+			Failed:        math.Max(0, nt.Received-answered-nt.Unattributed),
+			Methods:       []methodLatencyView{},
+			Endpoints:     []endpointLatencyView{},
+			Cached:        latencyOf(la.Cached),
+			FailedLatency: latencyOf(la.FailedLatency),
 		}
 		for _, m := range la.Methods {
 			nv.Methods = append(nv.Methods, methodLatencyView{Method: m.Method, latencyView: latencyOf(m.Latency)})
@@ -249,6 +266,7 @@ func endpointHealthViews(g catalog.GatewayConfig, a metrics.Analytics) []endpoin
 			Upstream:        e.Upstream,
 			ChainID:         e.ChainID,
 			Configured:      configured[e.Upstream],
+			Scored:          e.Scored,
 			Requests:        e.Requests,
 			Errors:          []errorClassView{},
 			Score:           e.Score,

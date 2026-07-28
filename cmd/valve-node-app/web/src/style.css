@@ -1409,3 +1409,180 @@ tr.ep-bad td {
 .rpc-add-gateway {
   margin-top: 1.5rem;
 }
+
+/* --- #/analytics: diagnosis ---------------------------------------------- */
+
+.an-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.an-head-right {
+  text-align: right;
+  padding-top: 0.4rem;
+}
+
+.an-section {
+  margin-top: 2rem;
+}
+
+.an-section h2 {
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.2rem;
+}
+
+.an-chain-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+
+.an-rate {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.82rem;
+}
+
+/* The four volume numbers, sized so the counts read first and their labels
+   second — the question is "how many failed", not "what is the failed row
+   called". */
+.an-stats {
+  display: flex;
+  gap: 1.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.an-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.an-stat-n {
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.an-stat-l {
+  font-size: 0.7rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.an-stat-bad .an-stat-n {
+  color: var(--bad);
+}
+
+.an-spark {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.an-spark svg {
+  width: 15rem;
+  height: 1.75rem;
+  flex: none;
+}
+
+.an-spark polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.an-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+td.an-num.bad {
+  color: var(--bad);
+}
+
+table.an-latency {
+  margin-bottom: 0.5rem;
+}
+
+/* The distribution is a proportional band bar: one segment per histogram
+   bucket, widths in the ratio of the counts. No axis and no percentile —
+   eRPC's bucket bounds are an order of magnitude apart, so an interpolated
+   p95 would be a number this page invented. */
+.an-dist {
+  display: inline-flex;
+  width: 8rem;
+  height: 8px;
+  border-radius: 1px;
+  overflow: hidden;
+  background: var(--border);
+  vertical-align: middle;
+  margin-right: 0.5rem;
+}
+
+.an-band {
+  height: 100%;
+}
+
+.an-band-0 {
+  background: var(--ok);
+}
+
+.an-band-1 {
+  background: var(--accent-dim);
+}
+
+.an-band-2 {
+  background: var(--warn);
+}
+
+.an-band-3,
+.an-band-4 {
+  background: var(--bad);
+}
+
+.an-selection {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+tr.an-endpoint.expandable {
+  cursor: pointer;
+}
+
+tr.an-endpoint td code {
+  margin-right: 0.4rem;
+}
+
+/* The error breakdown is hidden until its endpoint row is clicked: an
+   endpoint's error COUNT belongs on the row, and which classes they were is
+   the follow-up question. */
+tr.an-error-detail {
+  display: none;
+}
+
+tr.an-endpoint.expanded + tr.an-error-detail {
+  display: table-row;
+}
+
+table.an-errors {
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+table.an-errors td {
+  padding: 0.15rem 0.6rem 0.15rem 0;
+  border: none;
+}
