@@ -1,6 +1,7 @@
 package server
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -43,17 +44,20 @@ func gatewayServer(t *testing.T) *apiTestServer {
 // placement and identity
 // ---------------------------------------------------------------------
 
-// The crux of the whole model: a gateway NAMES its host, the host does not
-// own it — and two gateways can therefore coexist, on the same machine or on
-// different ones, with distinct containers.
+// Distinct container names still matter — docker run --name refuses a
+// duplicate — but two gateways now mean two MACHINES. The same-machine case is
+// covered by TestGateways_RefuseASecondGatewayOnOneMachine below.
 func TestGateways_TwoGatewaysCoexistWithDistinctContainers(t *testing.T) {
 	a := gatewayServer(t)
+
+	res := a.do(t, "POST", "/api/targets", map[string]any{"id": "second", "mode": "local"})
+	res.Body.Close()
 
 	net := []catalog.GatewayNetwork{{ChainID: 369, Upstreams: []catalog.GatewayUpstream{
 		{ID: "public", Endpoint: "https://rpc.pulsechain.com"},
 	}}}
 	first := addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100, Networks: net})
-	second := addGateway(t, a, "edge", "local", catalog.GatewayConfig{Port: 4200, Networks: net})
+	second := addGateway(t, a, "edge", "second", catalog.GatewayConfig{Port: 4200, Networks: net})
 
 	if first.ContainerName == second.ContainerName {
 		t.Fatalf("two gateways share the container name %q — docker run --name would refuse the second one outright", first.ContainerName)
@@ -68,6 +72,28 @@ func TestGateways_TwoGatewaysCoexistWithDistinctContainers(t *testing.T) {
 	body := decode[gatewaysResponse](t, a.do(t, "GET", "/api/gateways", nil))
 	if len(body.Gateways) != 2 {
 		t.Fatalf("got %d gateways, want 2", len(body.Gateways))
+	}
+}
+
+// A gateway NAMES the machine it runs on, so a second one on that machine is a
+// second managed eRPC container: overlapping chains, two state pollers against
+// one node, and only one of them reachable through the reverse proxy.
+func TestGateways_RefuseASecondGatewayOnOneMachine(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+
+	res := a.do(t, "POST", "/api/gateways", map[string]any{
+		"id":        "edge",
+		"placement": map[string]string{"targetId": "local", "backend": "docker"},
+	})
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", res.StatusCode)
+	}
+	b, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(b), "default") {
+		t.Errorf("the error must name the gateway already on that machine: %s", b)
 	}
 }
 
