@@ -999,6 +999,18 @@ func (s *Server) handleGatewayCreate(w http.ResponseWriter, r *http.Request) {
 		if _, ok := findTarget(*c, req.Placement.TargetID); !ok {
 			return fmt.Errorf("machine %q is not registered — a gateway has to be placed on a machine this app manages", req.Placement.TargetID)
 		}
+		// One managed eRPC per device. The gateway's Placement names its
+		// machine, so a second gateway on that machine is a second container
+		// fighting over the same chains — and only one of them can be behind
+		// the reverse proxy.
+		targetID := strings.TrimSpace(req.Placement.TargetID)
+		for _, g := range c.Gateways {
+			if g.Placement.TargetID == targetID {
+				return fmt.Errorf(
+					"machine %q already runs gateway %q — a machine hosts one managed eRPC, so add the chains to that gateway instead of creating a second one",
+					targetID, g.ID)
+			}
+		}
 		c.Gateways = append(c.Gateways, config.Gateway{
 			ID:        id,
 			Placement: config.GatewayPlacement{TargetID: req.Placement.TargetID, Backend: backend},

@@ -1871,10 +1871,21 @@ export function renderRPC(root: HTMLElement): () => void {
 
   // --- add a gateway ------------------------------------------------------
 
+  // canAddGatewayOn reports whether a machine has no gateway on it yet. A
+  // machine hosts one managed eRPC, so the create-a-gateway picker must not
+  // offer a target that already appears as a placement.targetId — that
+  // combination is refused server-side with a 400, and a control whose only
+  // outcome is a 400 should not be offered in the first place.
+  function canAddGatewayOn(targetId: string, gateways: api.GatewayView[]): boolean {
+    return !gateways.some((g) => g.placement?.targetId === targetId);
+  }
+
   function openAddGatewayModal(): void {
-    const targets = data?.targets ?? [];
-    const existing = new Set((data?.gateways ?? []).map((g) => g.id));
-    if (targets.length === 0) {
+    const allTargets = data?.targets ?? [];
+    const gateways = data?.gateways ?? [];
+    const targets = allTargets.filter((t) => canAddGatewayOn(t.id, gateways));
+    const existing = new Set(gateways.map((g) => g.id));
+    if (allTargets.length === 0) {
       openModal(
         `
           <h2>No machines yet</h2>
@@ -1882,6 +1893,19 @@ export function renderRPC(root: HTMLElement): () => void {
           <div class="modal-actions">
             <button class="btn btn-ghost" data-modal-action="cancel">Cancel</button>
             <a class="btn" href="#/targets" data-modal-action="cancel">Go to Machines</a>
+          </div>
+        `,
+        () => closeModal(),
+      );
+      return;
+    }
+    if (targets.length === 0) {
+      openModal(
+        `
+          <h2>Every machine already has a gateway</h2>
+          <p class="muted small">This machine already runs a gateway. Add chains to it rather than creating a second one.</p>
+          <div class="modal-actions">
+            <button class="btn" data-modal-action="cancel">Close</button>
           </div>
         `,
         () => closeModal(),

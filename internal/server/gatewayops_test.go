@@ -46,8 +46,10 @@ func TestGatewayAction_ActsOnThatGatewaysOwnContainer(t *testing.T) {
 			f := newFleet()
 			a := newAPITestServerWithExecutor(t, f.factory)
 			addTarget(t, a)
+			res2 := a.do(t, "POST", "/api/targets", map[string]any{"id": "second", "mode": "local"})
+			res2.Body.Close()
 			addGateway(t, a, "default", "local", pulsechainOnly(4100))
-			addGateway(t, a, "edge", "local", pulsechainOnly(4200))
+			addGateway(t, a, "edge", "second", pulsechainOnly(4200))
 
 			res := a.do(t, "POST", "/api/gateways/edge/"+action, nil)
 			body := decode[actionResponse](t, res)
@@ -57,8 +59,8 @@ func TestGatewayAction_ActsOnThatGatewaysOwnContainer(t *testing.T) {
 			if body.Status.ContainerName != "valve-node-app-erpc-edge" {
 				t.Errorf("status names %q, want the edge gateway's container", body.Status.ContainerName)
 			}
-			if !f.ran(t, "local", "'"+action+"'", "'valve-node-app-erpc-edge'") {
-				t.Errorf("no %s reached the edge container; ran: %q", action, f.commands(t, "local"))
+			if !f.ran(t, "second", "'"+action+"'", "'valve-node-app-erpc-edge'") {
+				t.Errorf("no %s reached the edge container; ran: %q", action, f.commands(t, "second"))
 			}
 			// The default gateway is a bystander and must not be touched.
 			if f.ran(t, "local", "'"+action+"'", "'valve-node-app-erpc'") {
@@ -164,23 +166,27 @@ func TestGatewayWipe_TheTypedIDDestroysThatGatewaysContainer(t *testing.T) {
 
 // Confirming with ANOTHER gateway's id must not wipe either of them. The gate
 // is per-gateway, so a stale confirmation dialog cannot destroy the one that
-// happens to be open now.
+// happens to be open now. The two gateways are on two machines — one managed
+// eRPC per device — so the mismatch is checked across machines too.
 func TestGatewayWipe_AnotherGatewaysIDIsNotAConfirmation(t *testing.T) {
 	f := newFleet()
 	a := newAPITestServerWithExecutor(t, f.factory)
 	addTarget(t, a)
+	res2 := a.do(t, "POST", "/api/targets", map[string]any{"id": "second", "mode": "local"})
+	res2.Body.Close()
 	addGateway(t, a, "default", "local", pulsechainOnly(4100))
-	addGateway(t, a, "edge", "local", pulsechainOnly(4200))
+	addGateway(t, a, "edge", "second", pulsechainOnly(4200))
 
 	res := a.do(t, "POST", "/api/gateways/edge/wipe", map[string]string{"Confirm": "default"})
 	res.Body.Close()
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.StatusCode)
 	}
-	for _, name := range []string{"'valve-node-app-erpc-edge'", "'valve-node-app-erpc'"} {
-		if f.ran(t, "local", "'rm'", name) {
-			t.Errorf("a mismatched confirmation still removed %s", name)
-		}
+	if f.ran(t, "second", "'rm'", "'valve-node-app-erpc-edge'") {
+		t.Error("a mismatched confirmation still removed the edge gateway's container")
+	}
+	if f.ran(t, "local", "'rm'", "'valve-node-app-erpc'") {
+		t.Error("a mismatched confirmation still removed the default gateway's container")
 	}
 }
 
@@ -269,11 +275,11 @@ func (g *gatedExecutor) awaitInFlight(t *testing.T) {
 	}
 }
 
-// Two plans driving one executor against one box is how a container gets
-// created against a config being rewritten underneath it. The second caller is
-// refused rather than queued, because the honest answer is "something else is
-// already changing this machine".
-func TestGatewayProvision_RefusesASecondRunOnTheSameMachine(t *testing.T) {
+// A machine hosts one gateway now, so a second provision run on that machine
+// can only be a double-submitted provision of the SAME gateway — not a second
+// one, which the create-time guard already refuses. Keep the gated-executor
+// setup: the slot still matters, and this is what now exercises it.
+func TestGatewayProvision_RefusesASecondRunWhileOneIsInFlight(t *testing.T) {
 	gate := make(chan struct{})
 	// Released before the httptest server is torn down (cleanups run in
 	// reverse order of registration), so the blocked run finishes rather than
@@ -286,7 +292,6 @@ func TestGatewayProvision_RefusesASecondRunOnTheSameMachine(t *testing.T) {
 	})
 	addTarget(t, a)
 	addGateway(t, a, "default", "local", pulsechainOnly(4100))
-	addGateway(t, a, "edge", "local", pulsechainOnly(4200))
 
 	first := a.do(t, "POST", "/api/gateways/default/provision", nil)
 	first.Body.Close()
@@ -295,10 +300,13 @@ func TestGatewayProvision_RefusesASecondRunOnTheSameMachine(t *testing.T) {
 	}
 	gx.awaitInFlight(t)
 
-	second := a.do(t, "POST", "/api/gateways/edge/provision", nil)
+	// A machine hosts one gateway, so a second run on that machine is the same
+	// gateway again — a double-submitted provision, which the slot must still
+	// refuse rather than running twice over one container.
+	second := a.do(t, "POST", "/api/gateways/default/provision", nil)
 	second.Body.Close()
 	if second.StatusCode != http.StatusConflict {
-		t.Fatalf("second provision on the same machine: got %d, want 409 — the first run still holds the slot", second.StatusCode)
+		t.Fatalf("second provision of the same gateway: got %d, want 409 — the first run still holds the slot", second.StatusCode)
 	}
 }
 
