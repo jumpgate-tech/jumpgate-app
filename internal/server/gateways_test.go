@@ -111,6 +111,9 @@ func TestGateways_PlacementMustNameARegisteredMachine(t *testing.T) {
 // is what makes it the case where "does the reference follow the port" is a
 // question with an observable answer. The container-backend answer is a
 // container name, and is asserted separately below.
+//
+// The published port it follows is the WS one, for the reason spelled out on
+// resolveUpstream: a devnet upstream is always addressed by ws:// scheme.
 func TestGateways_ManagedUpstreamFollowsTheDevnetsPort(t *testing.T) {
 	a := gatewayServer(t)
 	putConfig(t, a, svcDevnet, catalog.DevnetConfig{HTTPPort: 8600, WSPort: 8601})
@@ -123,8 +126,8 @@ func TestGateways_ManagedUpstreamFollowsTheDevnetsPort(t *testing.T) {
 	})
 
 	got := decode[gatewayView](t, a.do(t, "GET", "/api/gateways/default", nil))
-	if u := got.Networks[0].Upstreams[0]; u.Endpoint != "http://127.0.0.1:8600" {
-		t.Fatalf("endpoint: got %q, want it derived from the devnet's stored port", u.Endpoint)
+	if u := got.Networks[0].Upstreams[0]; u.Endpoint != "ws://127.0.0.1:8601" {
+		t.Fatalf("endpoint: got %q, want it derived from the devnet's stored WS port", u.Endpoint)
 	}
 
 	// Move the devnet. Nothing about the gateway is touched.
@@ -132,8 +135,8 @@ func TestGateways_ManagedUpstreamFollowsTheDevnetsPort(t *testing.T) {
 
 	got = decode[gatewayView](t, a.do(t, "GET", "/api/gateways/default", nil))
 	u := got.Networks[0].Upstreams[0]
-	if u.Endpoint != "http://127.0.0.1:9600" {
-		t.Fatalf("endpoint after the devnet moved: got %q, want http://127.0.0.1:9600 — a stored URL is exactly what goes stale here", u.Endpoint)
+	if u.Endpoint != "ws://127.0.0.1:9601" {
+		t.Fatalf("endpoint after the devnet moved: got %q, want ws://127.0.0.1:9601 — a stored URL is exactly what goes stale here", u.Endpoint)
 	}
 	// The stored config still holds the reference, not the derived URL:
 	// writing the URL back would freeze it and undo the whole mechanism.
@@ -246,6 +249,64 @@ func TestGateways_CrossMachineLoopbackUpstreamIsRefusedWithAReason(t *testing.T)
 	// The message has to name the machine and say what to do, because the fix
 	// is on the NODE's screen, not here.
 	for _, want := range []string{"boxa", "loopback", "bind its RPC"} {
+		if !strings.Contains(problems[0], want) {
+			t.Errorf("problem %q does not mention %q", problems[0], want)
+		}
+	}
+}
+
+// A devnet on ANOTHER machine used to be the one managed-devnet path that
+// resolved to http://, which meant eth_subscribe failed through it while the
+// identical devnet beside the gateway subscribed fine. The scheme decides the
+// capability in eRPC, so that difference was a feature appearing and
+// disappearing with placement — the kind of thing an operator hits and cannot
+// explain. Every managed devnet is a ws:// upstream now, whatever machine it
+// is on; only the ADDRESS changes with placement.
+func TestGateways_CrossMachineDevnetIsAWebSocketUpstream(t *testing.T) {
+	cfg := config.Config{Targets: []config.Target{
+		{ID: "here", Mode: "local"},
+		{ID: "boxa", Mode: "ssh", Devnet: &catalog.DevnetConfig{BindAddr: "100.64.0.7", HTTPPort: 8600, WSPort: 8601}},
+	}}
+	gw := config.Gateway{
+		ID:        "default",
+		Placement: config.GatewayPlacement{TargetID: "here", Backend: "docker"},
+		Config: catalog.GatewayConfig{Networks: []catalog.GatewayNetwork{{ChainID: catalog.DevnetChainID, Upstreams: []catalog.GatewayUpstream{
+			{ID: "devnet", Kind: catalog.UpstreamManagedDevnet, TargetID: "boxa"},
+		}}}},
+	}
+
+	resolved, problems := resolveGateway(cfg, gw)
+	if len(problems) != 0 {
+		t.Fatalf("problems: %v — a routable devnet on another machine is perfectly usable", problems)
+	}
+	// The PUBLISHED ws port (8601), not the in-container one: nothing on
+	// another machine is on this devnet's docker network.
+	if got := resolved.Networks[0].Upstreams[0].Endpoint; got != "ws://100.64.0.7:8601" {
+		t.Errorf("endpoint: got %q, want ws://100.64.0.7:8601", got)
+	}
+}
+
+// Switching that derivation to ws:// must not lose the loopback check with it:
+// a devnet on another machine bound to loopback is still unreachable, and the
+// URL it is unreachable at is now the ws one.
+func TestGateways_CrossMachineLoopbackDevnetIsStillRefused(t *testing.T) {
+	cfg := config.Config{Targets: []config.Target{
+		{ID: "here", Mode: "local"},
+		{ID: "boxa", Mode: "ssh", Devnet: &catalog.DevnetConfig{HTTPPort: 8600, WSPort: 8601}},
+	}}
+	gw := config.Gateway{
+		ID:        "default",
+		Placement: config.GatewayPlacement{TargetID: "here", Backend: "docker"},
+		Config: catalog.GatewayConfig{Networks: []catalog.GatewayNetwork{{ChainID: catalog.DevnetChainID, Upstreams: []catalog.GatewayUpstream{
+			{ID: "devnet", Kind: catalog.UpstreamManagedDevnet, TargetID: "boxa"},
+		}}}},
+	}
+
+	_, problems := resolveGateway(cfg, gw)
+	if len(problems) == 0 {
+		t.Fatal("a loopback-bound devnet on another machine must be refused, not dialed into this machine's own loopback")
+	}
+	for _, want := range []string{"boxa", "ws://127.0.0.1:8601"} {
 		if !strings.Contains(problems[0], want) {
 			t.Errorf("problem %q does not mention %q", problems[0], want)
 		}

@@ -602,28 +602,37 @@ func resolveUpstream(cfg config.Config, gw config.Gateway, u catalog.GatewayUpst
 			return "", "", fmt.Errorf("machine %q has no devnet configured any more", u.TargetID)
 		}
 		d := resolvedDevnet(t.Devnet)
+		// A devnet is ALWAYS a ws:// upstream, and it is not a preference — it
+		// is the only spelling that makes eth_subscribe work. eRPC infers
+		// WebSocket capability from the upstream SCHEME and has no separate
+		// flag, so an http:// upstream makes every eth_subscribe fail with
+		// ErrNoWsUpstreamAvailable ("requires a WebSocket-capable upstream,
+		// none configured"), through a gateway that is otherwise perfectly
+		// healthy.
+		//
+		// MEASURED, both ways, through a real fronted gateway: with an http://
+		// upstream eth_chainId succeeded and eth_subscribe was refused; with
+		// the ws:// one BOTH succeeded and newHeads arrived. A ws upstream
+		// serves ordinary request/response calls too, so this costs nothing.
+		//
+		// Only the ADDRESS varies with placement, never the scheme. That is
+		// deliberate: this used to be ws:// beside the gateway and http://
+		// anywhere else, which made subscriptions a feature that appeared and
+		// disappeared depending on which machine the devnet happened to be on —
+		// with nothing on any screen to explain the difference.
+		//
 		// A devnet on the SAME machine as a container-hosted gateway is reached
 		// by CONTAINER NAME on the shared docker network, not by a published
 		// host port. That is what lets the devnet publish no port at all, and it
 		// removes the host.docker.internal hop for the one case where both ends
-		// are containers we placed ourselves.
+		// are containers we placed ourselves. Note the two forms carry
+		// different PORTS — in-container 8546 versus whatever the host mapping
+		// publishes — so this is a choice between endpoints, not a choice of
+		// hostname.
 		if sameHostContainers(gw, u.TargetID) {
-			// The WebSocket endpoint, not the HTTP one, and it is not a
-			// preference — it is the only spelling that makes eth_subscribe
-			// work. eRPC infers WebSocket capability from the upstream SCHEME
-			// and has no separate flag, so an http:// upstream makes every
-			// eth_subscribe fail with ErrNoWsUpstreamAvailable ("requires a
-			// WebSocket-capable upstream, none configured"), through a gateway
-			// that is otherwise perfectly healthy.
-			//
-			// MEASURED, both ways, through a real fronted gateway: with an
-			// http:// upstream eth_chainId succeeded and eth_subscribe was
-			// refused; with the ws:// one BOTH succeeded and newHeads arrived.
-			// A ws upstream serves ordinary request/response calls too, so this
-			// costs nothing.
 			return d.ContainerWSEndpoint(), devnetLabel(gw, u.TargetID), nil
 		}
-		e := d.HTTPEndpoint()
+		e := d.WSEndpoint()
 		if err := reachableAcrossMachines(gw, u.TargetID, e); err != nil {
 			return "", "", err
 		}

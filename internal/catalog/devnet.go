@@ -403,10 +403,17 @@ func devnetPublishSpec(bind string, hostPort, containerPort int) string {
 // is an archive node by construction. It starts from its own genesis and has
 // never pruned anything, so bounding it to the last 128 blocks would route
 // historical calls away from the only node that can answer them.
+//
+// The endpoint is the WS one, matching the invariant the fleet-wide resolver
+// holds (internal/server, resolveUpstream): a managed devnet is addressed by
+// ws:// wherever it is, because eRPC decides WebSocket capability from the
+// upstream scheme alone and an http:// devnet is one that refuses every
+// eth_subscribe. Spelling it http:// here would leave a second, quieter way to
+// build the exact upstream that bug lives in.
 func (d DevnetConfig) Upstream() GatewayUpstream {
 	return GatewayUpstream{
 		ID:         "devnet",
-		Endpoint:   d.HTTPEndpoint(),
+		Endpoint:   d.WSEndpoint(),
 		Local:      true,
 		RecentOnly: false,
 	}

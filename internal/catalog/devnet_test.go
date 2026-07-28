@@ -257,7 +257,7 @@ func TestDevnetConfig_ValidateAcceptsTheDefaultAndAnExplicit1337(t *testing.T) {
 // The point of the whole exercise: a devnet must be frontable by the same
 // gateway machinery a real node is, with no special case anywhere.
 func TestGatewayForDevnet_RendersAsAnOrdinaryGateway(t *testing.T) {
-	d := DevnetConfig{HTTPPort: 18545}
+	d := DevnetConfig{HTTPPort: 18545, WSPort: 18546}
 
 	up := d.Upstream()
 	if !up.Local {
@@ -266,7 +266,9 @@ func TestGatewayForDevnet_RendersAsAnOrdinaryGateway(t *testing.T) {
 	if up.RecentOnly {
 		t.Error("a devnet has never pruned anything — bounding it to recent blocks routes historical calls away from the only node that can answer them")
 	}
-	if up.Endpoint != "http://127.0.0.1:18545" {
+	// ws://, and the WS port: an http:// devnet upstream is one eRPC refuses
+	// every eth_subscribe through.
+	if up.Endpoint != "ws://127.0.0.1:18546" {
 		t.Errorf("endpoint = %q", up.Endpoint)
 	}
 
@@ -274,7 +276,7 @@ func TestGatewayForDevnet_RendersAsAnOrdinaryGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a devnet gateway must render like any other: %v", err)
 	}
-	for _, want := range []string{"chainId: 1337", `endpoint: "http://127.0.0.1:18545"`, "architecture: evm"} {
+	for _, want := range []string{"chainId: 1337", `endpoint: "ws://127.0.0.1:18546"`, "architecture: evm"} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("missing %q:\n%s", want, cfg)
 		}
