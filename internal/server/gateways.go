@@ -1028,6 +1028,30 @@ func (s *Server) handleGatewayCreate(w http.ResponseWriter, r *http.Request) {
 			Placement: config.GatewayPlacement{TargetID: req.Placement.TargetID, Backend: backend},
 			Config:    gwCfg,
 		})
+		// A merged-away gateway's id is FREED, so this new gateway may be
+		// re-claiming the very container names an old leftover record still
+		// tells the operator to `docker rm -f`. That advice was correct while
+		// the name belonged to nothing; it is now aimed at a container this
+		// app manages, and on a shared or aliased docker host following it
+		// destroys the gateway just created. Dropping the record here, inside
+		// the same write that appends the gateway, means the banner and the
+		// gateway can never both exist.
+		//
+		// Both derived names go, not just the eRPC one: creating gateway <id>
+		// reserves valve-node-app-caddy-<id> as well, and turning HTTPS on
+		// later is an edit, not a re-creation, so there would be no second
+		// chance to clear it.
+		reclaimed := map[string]bool{
+			ops.ERPCContainerNameFor(id):  true,
+			ops.CaddyContainerNameFor(id): true,
+		}
+		kept := c.Orphans[:0]
+		for _, o := range c.Orphans {
+			if !reclaimed[o.ContainerName] {
+				kept = append(kept, o)
+			}
+		}
+		c.Orphans = kept
 		return nil
 	})
 	if err != nil {

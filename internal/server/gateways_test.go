@@ -606,6 +606,36 @@ func TestGatewayListReportsOrphans(t *testing.T) {
 	}
 }
 
+// A merged-away gateway's id is freed, so a new gateway can re-claim the very
+// container name a stale banner still says to `docker rm -f`. Left standing,
+// that banner points the operator at a container this app now manages.
+func TestGatewayCreateClearsAStaleOrphanRecordForItsOwnContainers(t *testing.T) {
+	a := gatewayServer(t)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.Orphans = []config.OrphanedContainer{
+		{ContainerName: "valve-node-app-erpc-edge", TargetID: "elsewhere", MergedInto: "default"},
+		{ContainerName: "valve-node-app-caddy-edge", TargetID: "elsewhere", MergedInto: "default"},
+		{ContainerName: "valve-node-app-erpc-other", TargetID: "elsewhere", MergedInto: "default"},
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	addGateway(t, a, "edge", "local", catalog.GatewayConfig{Port: 4100})
+
+	body := decode[gatewaysResponse](t, a.do(t, "GET", "/api/gateways", nil))
+	if len(body.Orphans) != 1 {
+		t.Fatalf("only the records for names this gateway re-claimed may go: %+v", body.Orphans)
+	}
+	if body.Orphans[0].ContainerName != "valve-node-app-erpc-other" {
+		t.Errorf("an unrelated leftover must survive: got %+v", body.Orphans[0])
+	}
+}
+
 // Dismissing an orphan forgets the RECORD only. It must never touch the
 // container: this app never stops a container it did not just start, which is
 // the same rule handleGatewayDelete follows for a gateway's own container.

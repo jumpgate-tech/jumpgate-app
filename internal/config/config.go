@@ -195,10 +195,16 @@ func (c *Config) migrate() {
 	// containers, overlapping chains and two pollers against the same node.
 	merged, orphans := mergeGatewaysPerTarget(c.Gateways)
 	c.Gateways = merged
+	// A leftover is identified by its container name AND the machine it is
+	// running on, because a container name is only unique within one docker
+	// engine. Two machines that each merged away a gateway with the same id
+	// have two containers to clear, on two different boxes; keying the dedupe
+	// on the name alone would swallow the second and leave it running with
+	// nothing on any screen naming it.
 	for _, o := range orphans {
 		known := false
 		for _, have := range c.Orphans {
-			if have.ContainerName == o.ContainerName {
+			if have.ContainerName == o.ContainerName && have.TargetID == o.TargetID {
 				known = true
 				break
 			}

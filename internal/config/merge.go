@@ -74,6 +74,24 @@ func mergeGatewaysPerTarget(gws []Gateway) ([]Gateway, []OrphanedContainer) {
 				TargetID:      t,
 				MergedInto:    survivor.ID,
 			})
+			// A fronted loser leaves TWO containers behind, not one. Its Caddy
+			// is still bound to its HTTPS port and still proxying to the eRPC
+			// container above, so reporting only the eRPC one tells the
+			// operator to clear half of what is actually live — and the half
+			// still listening on 443 is the half a browser reaches.
+			//
+			// This record is also the only trace of the loser's TLS block. The
+			// merge keeps the SURVIVOR's door (hostname, certificate source,
+			// HTTPS port) and drops the loser's, which is the one irreversible
+			// thing the merge does; naming the container that was serving it
+			// is what lets the operator find that door again.
+			if gws[i].Config.Fronted() {
+				orphans = append(orphans, OrphanedContainer{
+					ContainerName: ops.CaddyContainerNameFor(gws[i].ID),
+					TargetID:      t,
+					MergedInto:    survivor.ID,
+				})
+			}
 		}
 		out = append(out, survivor)
 	}

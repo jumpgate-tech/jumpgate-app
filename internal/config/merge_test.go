@@ -66,6 +66,20 @@ func TestMergeGatewaysPerTarget(t *testing.T) {
 			wantOrphans: []string{"valve-node-app-erpc-beta"},
 		},
 		{
+			// survivorIndex keeps the FIRST fronted gateway, so a second
+			// fronted one loses — and a fronted loser is two live containers:
+			// its Caddy is still bound to its HTTPS port and still proxying to
+			// its eRPC. Reporting only the eRPC one under-reports what is
+			// serving, and the unreported half is the one a browser reaches.
+			name: "a fronted loser leaves its front behind too, and both are reported",
+			in: []Gateway{
+				gw("default", "local", true),
+				gw("edge", "local", true),
+			},
+			wantIDs:     []string{"default"},
+			wantOrphans: []string{"valve-node-app-erpc-edge", "valve-node-app-caddy-edge"},
+		},
+		{
 			name: "networks are unioned and the survivor keeps its own door",
 			in: []Gateway{
 				gw("default", "local", true, catalog.GatewayNetwork{ChainID: 1337, Upstreams: []catalog.GatewayUpstream{devnetUp("local")}}),
@@ -224,6 +238,50 @@ func TestMigrateDoesNotDuplicateAnExistingOrphanRecord(t *testing.T) {
 
 	if len(c.Orphans) != 1 {
 		t.Fatalf("an already-recorded container must not be recorded twice: %+v", c.Orphans)
+	}
+}
+
+// Both records must name the machine to clear them on and what absorbed them,
+// or the banner sends the operator to a `docker rm -f` on the wrong box.
+func TestMergeRecordsBothContainersOfAFrontedLoser(t *testing.T) {
+	_, orphans := mergeGatewaysPerTarget([]Gateway{
+		gw("default", "local", true),
+		gw("edge", "local", true),
+	})
+
+	if len(orphans) != 2 {
+		t.Fatalf("a fronted loser leaves an eRPC AND a Caddy container: %+v", orphans)
+	}
+	for _, o := range orphans {
+		if o.TargetID != "local" {
+			t.Errorf("%s: target is where the operator must run docker rm -f, got %q", o.ContainerName, o.TargetID)
+		}
+		if o.MergedInto != "default" {
+			t.Errorf("%s: must name what absorbed it, got %q", o.ContainerName, o.MergedInto)
+		}
+	}
+}
+
+// A container name is unique only within ONE docker engine. Two machines can
+// each have a leftover of the same name, and they are two containers to clear.
+func TestMigrateKeepsALeftoverOfTheSameNameOnAnotherMachine(t *testing.T) {
+	c := Config{
+		Gateways: []Gateway{
+			gw("keep", "box-b", true),
+			gw("edge", "box-b", false),
+		},
+		Orphans: []OrphanedContainer{{
+			ContainerName: "valve-node-app-erpc-edge", TargetID: "box-a", MergedInto: "default",
+		}},
+	}
+
+	c.migrate()
+
+	if len(c.Orphans) != 2 {
+		t.Fatalf("a leftover on another machine must not be swallowed by a same-named one: %+v", c.Orphans)
+	}
+	if c.Orphans[1].TargetID != "box-b" || c.Orphans[1].MergedInto != "keep" {
+		t.Errorf("the new record: got %+v", c.Orphans[1])
 	}
 }
 
