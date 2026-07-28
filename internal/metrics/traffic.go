@@ -39,6 +39,17 @@ type NetworkTraffic struct {
 	// network.
 	Received float64
 
+	// Unattributed is the requests this network answered WITHOUT calling any
+	// upstream — eRPC's own response cache being the ordinary cause. They are
+	// successes, so they have to be accounted for somewhere, but they belong
+	// to no endpoint and must never be rendered as one.
+	//
+	// MEASURED against a live gateway: 12 client calls produced 10 samples
+	// labelled with a real upstream and 2 labelled upstream="n/a", the latter
+	// carrying attempt="0" and vendor="n/a" where a genuine dial carries
+	// attempt="1" and a vendor name.
+	Unattributed float64
+
 	Upstreams []UpstreamTraffic
 }
 
@@ -107,6 +118,7 @@ const (
 // Networks with the label value "n/a" are dropped: see noNetwork.
 func FromSamples(samples []Sample, project string) Traffic {
 	received := make(map[string]float64)            // network -> sum
+	unattributed := make(map[string]float64)        // network -> sum, answered with no upstream
 	succeeded := make(map[[2]string]float64)        // [network, upstream] -> sum
 	upstreamsOf := make(map[string]map[string]bool) // network -> set of upstream ids
 	networks := make(map[string]bool)
@@ -144,6 +156,24 @@ func FromSamples(samples []Sample, project string) Traffic {
 				// if a future eRPC version ever omits it.
 				continue
 			}
+			if upstream == noNetwork {
+				// upstream="n/a" is a request eRPC answered WITHOUT calling
+				// any upstream — its companion labels are attempt="0" and
+				// vendor="n/a", where a real dial carries attempt="1" and a
+				// vendor. MEASURED against a live gateway: 12 client calls
+				// produced 10 rows against the upstream and 2 of these.
+				//
+				// It has to be counted, and it must NOT become an upstream.
+				// Made into one it renders as a phantom endpoint carrying
+				// 17% of the traffic, under a name no configuration contains
+				// — which is exactly what this screen exists to make
+				// impossible. Dropped entirely it opens a gap between
+				// received and attributed that reads as failed requests,
+				// which is equally untrue: these requests succeeded.
+				networks[network] = true
+				unattributed[network] += s.Value
+				continue
+			}
 			networks[network] = true
 			succeeded[[2]string{network, upstream}] += s.Value
 			if upstreamsOf[network] == nil {
@@ -156,9 +186,10 @@ func FromSamples(samples []Sample, project string) Traffic {
 	t := Traffic{Since: since}
 	for network := range networks {
 		nt := NetworkTraffic{
-			Network:  network,
-			ChainID:  parseEVMChainID(network),
-			Received: received[network],
+			Network:      network,
+			ChainID:      parseEVMChainID(network),
+			Received:     received[network],
+			Unattributed: unattributed[network],
 		}
 		for upstream := range upstreamsOf[network] {
 			nt.Upstreams = append(nt.Upstreams, UpstreamTraffic{

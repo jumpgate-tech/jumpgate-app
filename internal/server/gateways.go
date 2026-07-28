@@ -274,6 +274,10 @@ func (s *Server) registerGatewayRoutes(mux *http.ServeMux) {
 	// no container and creates nothing — even though it is the one read here
 	// that opens sockets of its own.
 	mux.HandleFunc("GET /api/gateways/{gid}/tls/verify", s.handleGatewayTLSVerify)
+	// Who is actually carrying the load. GET because it reads: it runs one
+	// curl against a loopback port on the gateway's own machine and changes
+	// nothing. Kept off the list response on purpose — see traffic.go.
+	mux.HandleFunc("GET /api/gateways/{gid}/traffic", s.handleGatewayTraffic)
 	mux.HandleFunc("POST /api/gateways/{gid}/{action}", s.handleGatewayAction)
 
 	// Public-endpoint discovery. It is NOT under /api/gateways/{gid} because
