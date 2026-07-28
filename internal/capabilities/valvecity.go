@@ -229,12 +229,21 @@ func (w wireEndpoint) endpoint() Endpoint {
 // a newer status, a truncated response, an empty string — becomes
 // inconclusive. Guessing in either other direction would put a tick or a cross
 // in front of an operator on the strength of a string we do not understand.
+//
+// "inconsistent" is passed through even though valve.city's own prober does
+// not emit it today (it probes each endpoint once, per capabilities.go's
+// package doc); the case is here so that if valve.city ever adopts the same
+// repeated-probe discipline this package's local Prober uses, its verdict
+// arrives as StatusInconsistent rather than being silently flattened to
+// inconclusive by this switch not knowing the word.
 func status(s string) Status {
 	switch Status(s) {
 	case StatusSupported:
 		return StatusSupported
 	case StatusUnsupported:
 		return StatusUnsupported
+	case StatusInconsistent:
+		return StatusInconsistent
 	}
 	return StatusInconclusive
 }

@@ -206,6 +206,160 @@ func (p *Prober) Probe(ctx context.Context, t Target, chainID int) Endpoint {
 	return ep
 }
 
+// ProbeRepeat probes t n times and folds the runs together, so a
+// load-balanced endpoint whose members disagree reports that disagreement
+// rather than whichever answer happened to come back first.
+//
+// n <= 1 behaves exactly like Probe: one run, no folding. Callers probing a
+// managed node pass 1 — a single node cannot disagree with itself, and
+// probing it three times is three times the load on it for no additional
+// information. Repetition is worth paying for only when the URL might resolve
+// to more than one backend, which is precisely the public-endpoint case
+// StatusInconsistent exists for; see its doc comment for the measurement.
+//
+// Runs happen one after another, not concurrently: they are probing the same
+// URL, so running them in parallel would not increase the chance of landing on
+// different load balancer members (a fresh dial per run does that on its own,
+// the same way a browser hitting reload repeatedly does), and it would
+// multiply the concurrency semaphore's per-endpoint load for no benefit.
+//
+// The runs respect ctx cancellation between attempts: if the caller's context
+// ends after run k, the remaining n-k runs are skipped and the fold proceeds
+// on what was gathered. A ProbeRepeat that folded 2 of 5 runs because it was
+// cancelled is honest about having done so; it never reports a verdict as if
+// all 5 had run. The first run always happens regardless of ctx, the same way
+// a single Probe always makes its attempt and lets the transport report the
+// cancellation — see reason() and TestProbeCancelledContext.
+func (p *Prober) ProbeRepeat(ctx context.Context, t Target, chainID, n int) Endpoint {
+	if n <= 1 {
+		return p.Probe(ctx, t, chainID)
+	}
+
+	runs := make([]Endpoint, 0, n)
+	runs = append(runs, p.Probe(ctx, t, chainID))
+	for i := 1; i < n; i++ {
+		if ctx.Err() != nil {
+			break
+		}
+		runs = append(runs, p.Probe(ctx, t, chainID))
+	}
+	return foldRuns(runs)
+}
+
+// foldRuns combines however many Probe runs ProbeRepeat managed to complete
+// against one target into a single Endpoint.
+//
+// Endpoint-level reachability (Reachable, ChainOK, ChainID, ReachDetail,
+// Origin) is taken from the LAST run that reached the endpoint, not folded
+// capability-by-capability the way the Capabilities map is: reachability is
+// one fact about one moment, and the same "first-hand and current" preference
+// Merge applies between valve.city and a local probe applies here between an
+// older run and a newer one from the same prober. If no run reached the
+// endpoint, the final run's failure is reported, matching what a single Probe
+// would have said.
+func foldRuns(runs []Endpoint) Endpoint {
+	last := runs[len(runs)-1]
+	out := Endpoint{URL: last.URL, Label: last.Label, Source: last.Source}
+
+	reachable := -1
+	for i := len(runs) - 1; i >= 0; i-- {
+		if runs[i].Reachable {
+			reachable = i
+			break
+		}
+	}
+	if reachable == -1 {
+		out.ReachDetail = last.ReachDetail
+		out.Origin = last.Origin
+		out.Capabilities = map[string]Result{}
+		return out
+	}
+
+	r := runs[reachable]
+	out.Reachable = true
+	out.ChainOK = r.ChainOK
+	out.ChainID = r.ChainID
+	out.ReachDetail = r.ReachDetail
+	out.Origin = r.Origin
+
+	// A run that never reached the endpoint contributed no capability entries
+	// at all (Probe returns early with an empty map — see TestProbeReachability's
+	// "unreachable endpoint carried 0 capability results" assertion), so the
+	// union of keys across runs is exactly the keys any reachable run answered.
+	keys := make(map[string]bool)
+	for _, run := range runs {
+		for k := range run.Capabilities {
+			keys[k] = true
+		}
+	}
+	out.Capabilities = make(map[string]Result, len(keys))
+	for key := range keys {
+		out.Capabilities[key] = foldCapability(key, runs)
+	}
+	return out
+}
+
+// foldCapability applies the disagreement rules to one capability key across
+// every run: agreement passes the verdict through unchanged, a genuine
+// supported/unsupported split becomes StatusInconsistent with the counts in
+// Detail, and inconclusive runs are evidence-free so they are ignored in
+// favour of any run that did produce a real verdict.
+func foldCapability(key string, runs []Endpoint) Result {
+	var supported, unsupported, inconclusive []Result
+	for _, run := range runs {
+		res, ok := run.Cap(key)
+		if !ok {
+			continue // this run never reached the endpoint, or predates it
+		}
+		switch res.Status {
+		case StatusSupported:
+			supported = append(supported, res)
+		case StatusUnsupported:
+			unsupported = append(unsupported, res)
+		default:
+			// StatusInconclusive (or any status this build does not know
+			// about yet) is absence of evidence, not evidence of absence —
+			// the same principle that keeps a single probe's timeout from
+			// being read as a refusal, applied across runs instead of within
+			// one.
+			inconclusive = append(inconclusive, res)
+		}
+	}
+
+	switch {
+	case len(supported) > 0 && len(unsupported) > 0:
+		// The one case that is genuinely a new state: the fleet disagrees
+		// with itself. Counts go in Detail because "3 of 5 runs said yes" is
+		// the actionable form of this finding and a bare "inconsistent" is
+		// not — see the ProbeRepeat and StatusInconsistent doc comments.
+		method := supported[0].Method
+		total := len(supported) + len(unsupported) + len(inconclusive)
+		detail := fmt.Sprintf("%s → inconsistent across %d runs: %d supported, %d unsupported",
+			method, total, len(supported), len(unsupported))
+		if n := len(inconclusive); n > 0 {
+			detail += fmt.Sprintf(", %d inconclusive", n)
+		}
+		return Result{Status: StatusInconsistent, Method: method, Detail: detail, Origin: OriginLocal}
+	case len(supported) > 0:
+		// Every run that produced evidence agreed. Passed through unchanged,
+		// per the folding rule: agreement is not a new finding.
+		return supported[0]
+	case len(unsupported) > 0:
+		return unsupported[0]
+	case len(inconclusive) > 0:
+		// Every run that answered this key was inconclusive. That is a real,
+		// if unhelpful, agreement — none of them saw evidence either way —
+		// and StatusInconclusive already says exactly that, unchanged.
+		return inconclusive[0]
+	default:
+		// No run answered this key at all. Should not happen for a key any
+		// reachable run produced (probeCapabilities answers every key), but
+		// there is nothing here to fold, so say so plainly rather than
+		// panicking on an index into an empty slice.
+		return Result{Status: StatusInconclusive, Method: key, Detail: key + ": no run produced a verdict", Origin: OriginLocal}
+	}
+}
+
 // probeCapabilities runs every capability probe for one endpoint concurrently.
 // They are independent single calls, so serialising them would multiply the
 // worst case by eleven for no benefit; the global semaphore still bounds the
