@@ -284,6 +284,10 @@ func (s *Server) registerGatewayRoutes(mux *http.ServeMux) {
 	// upstream rather than one front. Cached for ten minutes for that reason;
 	// ?refresh=1 forces a fresh probe. See capabilities.go.
 	mux.HandleFunc("GET /api/gateways/{gid}/capabilities", s.handleGatewayCapabilities)
+	// How is it doing, and why — latency, failures, error classes, lag and
+	// eRPC's own selection state. One scrape folded twice, uncached like
+	// traffic and for the same reason. See analytics.go.
+	mux.HandleFunc("GET /api/gateways/{gid}/analytics", s.handleGatewayAnalytics)
 	mux.HandleFunc("POST /api/gateways/{gid}/{action}", s.handleGatewayAction)
 
 	// Public-endpoint discovery. It is NOT under /api/gateways/{gid} because
