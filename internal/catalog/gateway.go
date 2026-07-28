@@ -254,7 +254,6 @@ type gatewayVars struct {
 	Port              int
 	ProjectID         string
 	RecentBlockWindow int
-	Fronted           bool
 	MetricsEnabled    bool
 	MetricsHost       string
 	MetricsPort       int
@@ -345,7 +344,6 @@ func RenderGatewayConfig(g GatewayConfig) (string, error) {
 		Port:              g.HTTP(),
 		ProjectID:         g.ProjectIDOrDefault(),
 		RecentBlockWindow: recentBlockWindow,
-		Fronted:           g.Fronted(),
 		MetricsEnabled:    g.MetricsEnabled(),
 		MetricsHost:       strconv.Quote(g.MetricsBind()),
 		MetricsPort:       g.MetricsHTTP(),
