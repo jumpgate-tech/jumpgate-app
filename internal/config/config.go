@@ -100,6 +100,12 @@ type Config struct {
 	// Gateways are the eRPC instances, each naming the target it runs on.
 	Gateways []Gateway `json:"gateways,omitempty"`
 
+	// Orphans are containers a merge stopped managing but did NOT stop. They
+	// are stored rather than recomputed: migrate() runs in memory and is only
+	// written back by the next Save, so a derived notice would vanish on the
+	// first save while the container kept serving.
+	Orphans []OrphanedContainer `json:"orphanedContainers,omitempty"`
+
 	AIProvider string `json:"aiProvider"` // ""|gemini|groq|ollama
 	AIKey      string `json:"aiKey"`
 	RefRPCBase string `json:"refRpcBase"` // default: defaultRefRPCBase
@@ -183,6 +189,23 @@ func (c *Config) migrate() {
 			Placement: GatewayPlacement{TargetID: c.Targets[i].ID, Backend: "docker"},
 			Config:    gwCfg,
 		})
+	}
+
+	// One managed eRPC per device. Two gateways on one target mean two
+	// containers, overlapping chains and two pollers against the same node.
+	merged, orphans := mergeGatewaysPerTarget(c.Gateways)
+	c.Gateways = merged
+	for _, o := range orphans {
+		known := false
+		for _, have := range c.Orphans {
+			if have.ContainerName == o.ContainerName {
+				known = true
+				break
+			}
+		}
+		if !known {
+			c.Orphans = append(c.Orphans, o)
+		}
 	}
 }
 

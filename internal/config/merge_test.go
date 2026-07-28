@@ -173,3 +173,34 @@ func TestMergeDoesNotMutateItsInput(t *testing.T) {
 		t.Errorf("merging rewrote the caller's input: upstreams went %d -> %d", before, got)
 	}
 }
+
+// migrate must record the leftover container, and must not record it twice
+// when the config is loaded again after a save.
+func TestMigrateRecordsOrphansIdempotently(t *testing.T) {
+	c := Config{Gateways: []Gateway{
+		gw("edge", "local", false),
+		gw("default", "local", true),
+	}}
+
+	c.migrate()
+
+	if len(c.Gateways) != 1 || c.Gateways[0].ID != "default" {
+		t.Fatalf("want a single surviving gateway 'default', got %+v", c.Gateways)
+	}
+	if len(c.Orphans) != 1 {
+		t.Fatalf("the leftover container must be recorded, got %+v", c.Orphans)
+	}
+	if c.Orphans[0].ContainerName != "valve-node-app-erpc-edge" {
+		t.Errorf("orphan name: got %q", c.Orphans[0].ContainerName)
+	}
+	if c.Orphans[0].MergedInto != "default" {
+		t.Errorf("orphan must name what absorbed it: got %q", c.Orphans[0].MergedInto)
+	}
+
+	// Second load of the already-merged config: nothing left to merge, and the
+	// existing record must survive rather than being duplicated or dropped.
+	c.migrate()
+	if len(c.Orphans) != 1 {
+		t.Fatalf("migrate must be idempotent, got %+v", c.Orphans)
+	}
+}

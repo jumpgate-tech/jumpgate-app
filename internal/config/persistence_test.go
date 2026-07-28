@@ -307,8 +307,15 @@ func TestMigrate_LegacyGatewaysGetDistinctIDs(t *testing.T) {
 
 	c := Config{
 		// The default id is already spoken for, and so is the fallback that
-		// would be derived from the first target's own id.
-		Gateways: []Gateway{{ID: DefaultGatewayID}, {ID: "box"}},
+		// would be derived from the first target's own id. Each pre-existing
+		// gateway is placed on its own machine, distinct from "box" and
+		// "other" below — migrate() now also folds gateways sharing a
+		// Placement.TargetID into one (the one-erpc-per-device invariant),
+		// and this test is about id collision, not that merge.
+		Gateways: []Gateway{
+			{ID: DefaultGatewayID, Placement: GatewayPlacement{TargetID: "existing-a"}},
+			{ID: "box", Placement: GatewayPlacement{TargetID: "existing-b"}},
+		},
 		Targets: []Target{
 			{ID: "box", Mode: "local", LegacyGateway: legacy()},
 			{ID: "other", Mode: "local", LegacyGateway: legacy()},
