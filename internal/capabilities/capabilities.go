@@ -62,19 +62,34 @@ import (
 	"strings"
 )
 
-// Status is the three-state verdict for one capability on one endpoint.
+// Status is the four-state verdict for one capability on one endpoint.
 //
 // StatusInconclusive is a real answer and must never be collapsed into one of
 // the other two. A timeout is not a refusal: a rate-limited endpoint, a probe
 // killed by a deadline, and a node that genuinely lacks debug_traceTransaction
 // are three different situations, and only the last one justifies telling an
 // operator "this node cannot do that".
+//
+// StatusInconsistent is the same discipline applied to a different failure of
+// a single verdict: a load-balanced public endpoint whose members disagree.
+// MEASURED 2026-07-25: msgboard_status on rpc.pulsechain.com returned 5
+// supported and 10 × -32601 across 15 probes to the same DNS name — the name
+// resolves to several backends and only some of them run the message board.
+// That disagreement is reported as its own state rather than majority-voted
+// away: collapsing it to supported would promise a capability that fails two
+// calls in three, and collapsing it to unsupported would hide a capability a
+// third of the fleet actually has. Only ProbeRepeat, which runs the probe
+// more than once against the same target, can produce this state — a single
+// Probe never disagrees with itself.
 type Status string
 
 const (
 	StatusSupported    Status = "supported"
 	StatusUnsupported  Status = "unsupported"
 	StatusInconclusive Status = "inconclusive"
+	// StatusInconsistent means repeated probes of the same target disagreed —
+	// see the type doc. It is produced only by ProbeRepeat.
+	StatusInconsistent Status = "inconsistent"
 )
 
 // Origin records who formed an opinion, so the UI can attribute every cell.
@@ -273,7 +288,11 @@ func (m Matrix) Endpoint(rawURL string) (Endpoint, bool) {
 //     operator's own endpoint above the public ones.
 //   - For an endpoint both sources saw, the local probe wins per capability —
 //     it is first-hand and current, where valve.city's answer was formed
-//     elsewhere and may be up to ten minutes stale.
+//     elsewhere and may be up to ten minutes stale. This holds even when the
+//     local verdict is StatusInconsistent: a local ProbeRepeat that caught a
+//     load balancer disagreeing with itself is still first-hand evidence of a
+//     real property of the endpoint, and it must not lose to a valve.city
+//     verdict that never noticed the disagreement.
 //   - Unless the local probe could not reach it. Then our silence says
 //     something about our network, not about the endpoint, and valve.city's
 //     answer is kept rather than overwritten with our ignorance.
@@ -338,6 +357,10 @@ func mergeEndpoint(remote, local Endpoint) Endpoint {
 			// valve.city has an opinion and we have nothing better; keep theirs.
 			continue
 		}
+		// res is copied whatever its Status is, including StatusInconsistent —
+		// this function does not read Status at all, only Reachable, so a
+		// local "the fleet disagrees" verdict is never downgraded on its way
+		// into the merged row. See the Merge doc comment above.
 		ep.Capabilities[key] = res
 	}
 	return ep
