@@ -18,6 +18,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -26,9 +27,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/valve-tech/valve-node-app/internal/wsrpc"
 )
 
-const verifyHost = "gw.verify.test"
+const (
+	verifyHost = "gw.verify.test"
+	// verifyPath is the gateway path the probe is pointed at. The stub routes
+	// on it, so a probe that drops the path is caught rather than tolerated.
+	verifyPath = "/main/evm/1337"
+)
 
 // gatewayStub is a stand-in for Caddy-in-front-of-eRPC: it answers
 // eth_chainId over HTTPS and speaks enough WebSocket to accept or refuse an
@@ -53,12 +61,27 @@ func (g gatewayStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g gatewayStub) serveWS(w http.ResponseWriter, r *http.Request) {
+	// Caddy routes on the Host header and the path, and answers 404 when
+	// neither matches a site block. The stub does the same, so that sending the
+	// pinned ADDRESS instead of the name — or dropping the path — fails here
+	// rather than silently passing against a stub that answers anything.
+	// This is the measured production failure mode: a verified certificate, a
+	// working gateway, and a 404 because the upgrade asked for the wrong name.
+	if host, _, err := net.SplitHostPort(r.Host); err != nil || host != verifyHost {
+		http.Error(w, "no site block for Host "+r.Host, http.StatusNotFound)
+		return
+	}
+	if r.URL.Path != verifyPath {
+		http.Error(w, "no route for path "+r.URL.Path, http.StatusNotFound)
+		return
+	}
+
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "no hijacker", http.StatusInternalServerError)
 		return
 	}
-	sum := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + wsGUID))
+	sum := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + wsrpc.GUID))
 	conn, brw, err := hj.Hijack()
 	if err != nil {
 		return
@@ -68,7 +91,7 @@ func (g gatewayStub) serveWS(w http.ResponseWriter, r *http.Request) {
 		base64.StdEncoding.EncodeToString(sum[:]) + "\r\n\r\n")
 	brw.Flush()
 
-	if _, err := wsReadMessage(brw.Reader); err != nil {
+	if _, err := readClientFrame(brw.Reader); err != nil {
 		return
 	}
 	if g.subscribeErr != "" {
@@ -102,6 +125,46 @@ func writeServerFrame(w io.Writer, payload string) {
 	}
 	frame = append(frame, payload...)
 	w.Write(frame)
+}
+
+// readClientFrame reads one masked text frame, which is what a client sends.
+// It is the server half of the exchange and belongs to this test, not to
+// internal/wsrpc: wsrpc is a client, and a stub server written against its
+// internals would stop being an independent check of it.
+func readClientFrame(br *bufio.Reader) ([]byte, error) {
+	var hdr [2]byte
+	if _, err := io.ReadFull(br, hdr[:]); err != nil {
+		return nil, err
+	}
+	length := int(hdr[1] & 0x7f)
+	switch length {
+	case 126:
+		var ext [2]byte
+		if _, err := io.ReadFull(br, ext[:]); err != nil {
+			return nil, err
+		}
+		length = int(ext[0])<<8 | int(ext[1])
+	case 127:
+		return nil, errors.New("this stub does not expect a 64-bit length")
+	}
+	var mask [4]byte
+	masked := hdr[1]&0x80 != 0
+	if masked {
+		if _, err := io.ReadFull(br, mask[:]); err != nil {
+			return nil, err
+		}
+	}
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(br, payload); err != nil {
+		return nil, err
+	}
+	if !masked {
+		return nil, errors.New("the client sent an unmasked frame, which RFC 6455 §5.3 forbids")
+	}
+	for i := range payload {
+		payload[i] ^= mask[i%4]
+	}
+	return payload, nil
 }
 
 func hexQuantity(n int) string { return "0x" + big.NewInt(int64(n)).Text(16) }
@@ -175,7 +238,7 @@ func startStub(t *testing.T, g gatewayStub, cert tls.Certificate, roots *x509.Ce
 		Address:     addr,
 		Roots:       roots,
 		TrustSource: "the test CA",
-		Path:        "/main/evm/1337",
+		Path:        verifyPath,
 		ChainID:     g.chainID,
 		CertSource:  "internal",
 	}
@@ -373,25 +436,6 @@ func TestVerifyTLSEndpointNothingListening(t *testing.T) {
 	wantStatus(t, v, TLSAssertChain, TLSStatusSkip)
 	if v.OK {
 		t.Error("a dead endpoint must not be OK")
-	}
-}
-
-// The hand-rolled WebSocket framing is round-tripped on its own: the client
-// masks (as a client must) and the reader reassembles what comes back.
-func TestWebSocketFramingRoundTrip(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-
-	payload := strings.Repeat("x", 300) // forces the 16-bit length form
-	go func() { wsWriteText(client, []byte(payload)) }()
-
-	got, err := wsReadMessage(bufio.NewReader(server))
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if string(got) != payload {
-		t.Errorf("round trip lost the payload: %d bytes back, %d sent", len(got), len(payload))
 	}
 }
 

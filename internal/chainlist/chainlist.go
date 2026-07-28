@@ -29,25 +29,17 @@
 // Everything is context-aware and both the HTTP client and the feed URL are
 // injectable, so the tests in this package never touch the network.
 //
-// WebSocket endpoints are probed too, using a small RFC 6455 client built on
-// the standard library only (see probeWS). WebSocket upstreams matter to us —
-// eRPC uses them for subscriptions — and they are worth more than the ~150
-// lines of framing code they cost, which is still cheaper than taking on a
-// WebSocket dependency for one handshake and one frame. Callers that want to
-// skip WebSocket probing entirely (say, a network that blocks Upgrade) can
-// set Discoverer.ProbeWS to false; those endpoints then come back as
-// StatusUnprobed rather than being dropped or wrongly marked live.
+// WebSocket endpoints are probed too, through internal/wsrpc. WebSocket
+// upstreams matter to us — eRPC uses them for subscriptions — and an endpoint
+// that advertises wss:// without being able to speak it is common enough to be
+// worth the round trip. Callers that want to skip WebSocket probing entirely
+// (say, a network that blocks Upgrade) can set Discoverer.ProbeWS to false;
+// those endpoints then come back as StatusUnprobed rather than being dropped
+// or wrongly marked live.
 package chainlist
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha1"
-	"crypto/tls"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,6 +51,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/valve-tech/valve-node-app/internal/wsrpc"
 )
 
 // FeedURL is the canonical ethereum-lists/chains feed. ~1.1 MB, ~2660 chains
@@ -76,8 +70,11 @@ const (
 	// maxFeedBytes caps the feed read so a hostile or misconfigured mirror
 	// cannot balloon memory on a small node. The real feed is ~1.1 MB.
 	maxFeedBytes = 32 << 20
-	// maxProbeBytes caps a probe response body. An eth_chainId answer is a
-	// few dozen bytes.
+	// maxProbeBytes caps an HTTP probe response body. An eth_chainId answer is
+	// a few dozen bytes. The WebSocket side is capped separately, by
+	// wsrpc.DefaultMaxMessageBytes — this number used to serve both, and being
+	// two orders of magnitude apart from the other two copies of that reader is
+	// what made the duplication worth ending.
 	maxProbeBytes = 64 << 10
 )
 
@@ -547,224 +544,19 @@ func parseChainID(body []byte) (int, error) {
 }
 
 // ---------------------------------------------------------------------------
-// WebSocket probing — a minimal RFC 6455 client on the standard library only.
+// WebSocket probing
 //
-// Scope is exactly one request/response: open, handshake, send one masked
-// text frame, read one frame, close. No continuation frames on send (the
-// payload is ~60 bytes), no compression, no subprotocols. Anything more and
-// this should become a dependency instead.
+// The RFC 6455 client used to live here, in a copy it shared with
+// internal/capabilities and internal/setup. It is internal/wsrpc now.
 // ---------------------------------------------------------------------------
 
-// wsGUID is the RFC 6455 §1.3 magic value the server mixes into the
-// Sec-WebSocket-Accept digest.
-const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
+// probeWS asks eth_chainId over a WebSocket. A refusal and a silence are both
+// just errors to a discoverer that only wants to know whether the endpoint
+// works — wsrpc distinguishes them for callers that report the difference.
 func (d *Discoverer) probeWS(ctx context.Context, rawURL string) (int, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return 0, fmt.Errorf("bad URL: %w", err)
-	}
-	secure := strings.EqualFold(u.Scheme, "wss")
-
-	addr := u.Host
-	if u.Port() == "" {
-		if secure {
-			addr = net.JoinHostPort(u.Hostname(), "443")
-		} else {
-			addr = net.JoinHostPort(u.Hostname(), "80")
-		}
-	}
-
-	conn, err := d.dialer().DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return 0, probeErr(ctx, err)
-	}
-	defer conn.Close()
-
-	// The context governs the whole exchange: a deadline pushes it onto the
-	// socket, and a cancellation slams the connection shut so a blocked read
-	// unblocks.
-	if dl, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(dl)
-	}
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = conn.Close()
-		case <-done:
-		}
-	}()
-
-	if secure {
-		tconn := tls.Client(conn, &tls.Config{ServerName: u.Hostname()})
-		if err := tconn.HandshakeContext(ctx); err != nil {
-			return 0, probeErr(ctx, err)
-		}
-		conn = tconn
-	}
-
-	br := bufio.NewReader(conn)
-	if err := wsHandshake(conn, br, u); err != nil {
-		return 0, probeErr(ctx, err)
-	}
-	if err := wsWriteFrame(conn, []byte(chainIDRequest)); err != nil {
-		return 0, probeErr(ctx, err)
-	}
-	payload, err := wsReadMessage(br)
+	payload, err := wsrpc.RoundTrip(ctx, rawURL, []byte(chainIDRequest), &wsrpc.Options{Dialer: d.dialer()})
 	if err != nil {
 		return 0, probeErr(ctx, err)
 	}
 	return parseChainID(payload)
-}
-
-// wsHandshake performs the opening HTTP Upgrade and verifies the server's
-// accept digest — without that check we would happily "talk WebSocket" to a
-// plain HTTP server that echoed a 101 by accident.
-func wsHandshake(conn net.Conn, br *bufio.Reader, u *url.URL) error {
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return fmt.Errorf("websocket: nonce: %w", err)
-	}
-	key := base64.StdEncoding.EncodeToString(nonce[:])
-
-	path := u.RequestURI()
-	if path == "" {
-		path = "/"
-	}
-	var req bytes.Buffer
-	fmt.Fprintf(&req, "GET %s HTTP/1.1\r\n", path)
-	fmt.Fprintf(&req, "Host: %s\r\n", u.Host)
-	req.WriteString("Upgrade: websocket\r\n")
-	req.WriteString("Connection: Upgrade\r\n")
-	fmt.Fprintf(&req, "Sec-WebSocket-Key: %s\r\n", key)
-	req.WriteString("Sec-WebSocket-Version: 13\r\n\r\n")
-	if _, err := conn.Write(req.Bytes()); err != nil {
-		return err
-	}
-
-	// http.ReadResponse understands the 101 and leaves the frame stream
-	// untouched in br, which is exactly the split we need.
-	resp, err := http.ReadResponse(br, &http.Request{Method: http.MethodGet})
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		return fmt.Errorf("websocket upgrade refused: HTTP %s", resp.Status)
-	}
-	if !strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") {
-		return errors.New("websocket upgrade refused: missing Upgrade: websocket")
-	}
-	sum := sha1.Sum([]byte(key + wsGUID))
-	if want := base64.StdEncoding.EncodeToString(sum[:]); resp.Header.Get("Sec-WebSocket-Accept") != want {
-		return errors.New("websocket handshake failed: bad Sec-WebSocket-Accept")
-	}
-	return nil
-}
-
-// wsWriteFrame writes payload as a single masked text frame. Clients must
-// mask (RFC 6455 §5.3); servers reject unmasked client frames.
-func wsWriteFrame(w io.Writer, payload []byte) error {
-	var mask [4]byte
-	if _, err := rand.Read(mask[:]); err != nil {
-		return fmt.Errorf("websocket: mask: %w", err)
-	}
-
-	var buf bytes.Buffer
-	buf.WriteByte(0x81) // FIN | opcode 1 (text)
-	switch n := len(payload); {
-	case n < 126:
-		buf.WriteByte(0x80 | byte(n))
-	case n <= 0xFFFF:
-		buf.WriteByte(0x80 | 126)
-		_ = binary.Write(&buf, binary.BigEndian, uint16(n))
-	default:
-		buf.WriteByte(0x80 | 127)
-		_ = binary.Write(&buf, binary.BigEndian, uint64(n))
-	}
-	buf.Write(mask[:])
-	for i, b := range payload {
-		buf.WriteByte(b ^ mask[i%4])
-	}
-	_, err := w.Write(buf.Bytes())
-	return err
-}
-
-// wsReadMessage reads frames until a complete data message arrives, skipping
-// the control frames a server may interleave (a ping before the answer is
-// normal on endpoints with an idle timer). Fragmented messages are
-// reassembled.
-func wsReadMessage(br *bufio.Reader) ([]byte, error) {
-	var msg []byte
-	for {
-		fin, opcode, payload, err := wsReadFrame(br)
-		if err != nil {
-			return nil, err
-		}
-		switch opcode {
-		case 0x0, 0x1, 0x2: // continuation, text, binary
-			msg = append(msg, payload...)
-			if fin {
-				return msg, nil
-			}
-		case 0x8: // close
-			return nil, errors.New("websocket closed before answering")
-		case 0x9, 0xA: // ping, pong — nothing to do for a single round trip
-		default:
-			return nil, fmt.Errorf("websocket: unexpected opcode %#x", opcode)
-		}
-	}
-}
-
-// wsReadFrame reads one frame header and its payload, unmasking if the peer
-// masked it (servers must not, but be liberal).
-func wsReadFrame(br *bufio.Reader) (fin bool, opcode byte, payload []byte, err error) {
-	var hdr [2]byte
-	if _, err = io.ReadFull(br, hdr[:]); err != nil {
-		return false, 0, nil, err
-	}
-	fin = hdr[0]&0x80 != 0
-	opcode = hdr[0] & 0x0F
-	masked := hdr[1]&0x80 != 0
-
-	length := uint64(hdr[1] & 0x7F)
-	switch length {
-	case 126:
-		var ext [2]byte
-		if _, err = io.ReadFull(br, ext[:]); err != nil {
-			return false, 0, nil, err
-		}
-		length = uint64(binary.BigEndian.Uint16(ext[:]))
-	case 127:
-		var ext [8]byte
-		if _, err = io.ReadFull(br, ext[:]); err != nil {
-			return false, 0, nil, err
-		}
-		length = binary.BigEndian.Uint64(ext[:])
-	}
-	if length > maxProbeBytes {
-		// An eth_chainId answer is tiny; a peer claiming otherwise is either
-		// broken or hostile, and we will not allocate for it.
-		return false, 0, nil, fmt.Errorf("websocket: oversized frame (%d bytes)", length)
-	}
-
-	var mask [4]byte
-	if masked {
-		if _, err = io.ReadFull(br, mask[:]); err != nil {
-			return false, 0, nil, err
-		}
-	}
-	payload = make([]byte, length)
-	if _, err = io.ReadFull(br, payload); err != nil {
-		return false, 0, nil, err
-	}
-	if masked {
-		for i := range payload {
-			payload[i] ^= mask[i%4]
-		}
-	}
-	return fin, opcode, payload, nil
 }

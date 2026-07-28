@@ -41,13 +41,9 @@ package setup
 // port must not serve RPC.
 
 import (
-	"bufio"
 	"context"
-	"crypto/rand"
-	"crypto/sha1"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,6 +55,7 @@ import (
 
 	"github.com/valve-tech/valve-node-app/internal/catalog"
 	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/valve-node-app/internal/wsrpc"
 )
 
 // The assertion ids, stable so a UI can branch on them without matching prose.
@@ -664,17 +661,23 @@ func (p tlsProbe) subscribe(ctx context.Context) (status, detail string) {
 		return TLSStatusFail, fmt.Sprintf("the wss:// connection to %s could not be opened: %v", p.Address, err)
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(tlsVerifyDialTimeout))
 
-	br := bufio.NewReader(conn)
-	if err := wsHandshake(conn, br, p.hostHeader(), p.Path); err != nil {
+	// The handshake, the request and the first answer share one deadline, as
+	// they did when this dialled and framed by hand. wsrpc.Handshake puts the
+	// context's deadline onto the socket, so the bound is stated once, here,
+	// instead of as a SetDeadline sitting apart from the thing it bounds.
+	hctx, cancel := context.WithTimeout(ctx, tlsVerifyDialTimeout)
+	defer cancel()
+
+	ws, err := wsrpc.Handshake(hctx, conn, p.hostHeader(), p.Path, nil)
+	if err != nil {
 		return TLSStatusUnavailable, fmt.Sprintf("the WebSocket upgrade on %s was refused: %v", p.url("wss"), err)
 	}
-	if err := wsWriteText(conn, []byte(gatewaySubscribeCall)); err != nil {
+	if err := ws.WriteText([]byte(gatewaySubscribeCall)); err != nil {
 		return TLSStatusFail, fmt.Sprintf("the subscription request could not be sent: %v", err)
 	}
 
-	payload, err := wsReadMessage(br)
+	payload, err := ws.ReadMessage()
 	if err != nil {
 		return TLSStatusFail, fmt.Sprintf("no answer to eth_subscribe on %s: %v", p.url("wss"), err)
 	}
@@ -699,9 +702,9 @@ func (p tlsProbe) subscribe(ctx context.Context) (status, detail string) {
 	// A subscription id already proves the upstream is WS-capable. Waiting for
 	// a head is the stronger claim, so it is made only when one arrives, and
 	// its absence is reported as what it is: the chain not producing a block.
-	_ = conn.SetDeadline(time.Now().Add(tlsSubscribeWait))
+	_ = ws.SetDeadline(time.Now().Add(tlsSubscribeWait))
 	for {
-		msg, err := wsReadMessage(br)
+		msg, err := ws.ReadMessage()
 		if err != nil {
 			return TLSStatusPass, fmt.Sprintf("eth_subscribe was accepted on %s (subscription %s), but no newHeads arrived within %s — the subscription is live, the chain simply produced no block",
 				p.url("wss"), reply.Result, tlsSubscribeWait)
@@ -722,141 +725,6 @@ func (p tlsProbe) hostHeader() string {
 		return p.Hostname
 	}
 	return fmt.Sprintf("%s:%d", p.Hostname, p.Port)
-}
-
-const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
-// wsHandshake performs the RFC 6455 opening handshake and checks the accept
-// token, so a 200 from something that merely tolerated the request cannot be
-// mistaken for a WebSocket.
-func wsHandshake(w io.Writer, br *bufio.Reader, host, path string) error {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return err
-	}
-	key := base64.StdEncoding.EncodeToString(raw[:])
-	if path == "" {
-		path = "/"
-	}
-
-	req := "GET " + path + " HTTP/1.1\r\n" +
-		"Host: " + host + "\r\n" +
-		"Upgrade: websocket\r\n" +
-		"Connection: Upgrade\r\n" +
-		"Sec-WebSocket-Key: " + key + "\r\n" +
-		"Sec-WebSocket-Version: 13\r\n\r\n"
-	if _, err := io.WriteString(w, req); err != nil {
-		return err
-	}
-
-	resp, err := http.ReadResponse(br, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return fmt.Errorf("HTTP %d instead of 101 Switching Protocols: %s", resp.StatusCode, truncate(strings.TrimSpace(string(body)), 200))
-	}
-	sum := sha1.Sum([]byte(key + wsGUID)) //nolint:gosec — the accept token is defined as SHA-1 by RFC 6455
-	if want := base64.StdEncoding.EncodeToString(sum[:]); resp.Header.Get("Sec-WebSocket-Accept") != want {
-		return errors.New("the server answered 101 with a wrong Sec-WebSocket-Accept, so it is not a WebSocket endpoint")
-	}
-	return nil
-}
-
-// wsWriteText writes one masked text frame. A client frame MUST be masked;
-// an unmasked one is a protocol error the server is required to close on.
-func wsWriteText(w io.Writer, payload []byte) error {
-	frame := []byte{0x81}
-	n := len(payload)
-	switch {
-	case n < 126:
-		frame = append(frame, byte(0x80|n))
-	case n < 1<<16:
-		frame = append(frame, 0x80|126, byte(n>>8), byte(n))
-	default:
-		frame = append(frame, 0x80|127, 0, 0, 0, 0, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
-	}
-	var mask [4]byte
-	if _, err := rand.Read(mask[:]); err != nil {
-		return err
-	}
-	frame = append(frame, mask[:]...)
-	for i, b := range payload {
-		frame = append(frame, b^mask[i%4])
-	}
-	_, err := w.Write(frame)
-	return err
-}
-
-// wsReadMessage returns the next complete data message, reassembling
-// continuation frames and skipping control frames.
-func wsReadMessage(br *bufio.Reader) ([]byte, error) {
-	var msg []byte
-	for {
-		h0, err := br.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-		h1, err := br.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-		fin, opcode := h0&0x80 != 0, h0&0x0f
-		masked, length := h1&0x80 != 0, int64(h1&0x7f)
-
-		switch length {
-		case 126:
-			var ext [2]byte
-			if _, err := io.ReadFull(br, ext[:]); err != nil {
-				return nil, err
-			}
-			length = int64(ext[0])<<8 | int64(ext[1])
-		case 127:
-			var ext [8]byte
-			if _, err := io.ReadFull(br, ext[:]); err != nil {
-				return nil, err
-			}
-			length = 0
-			for _, b := range ext {
-				length = length<<8 | int64(b)
-			}
-		}
-		if length < 0 || length > 8<<20 {
-			return nil, fmt.Errorf("websocket frame of %d bytes is implausible", length)
-		}
-
-		var mask [4]byte
-		if masked {
-			if _, err := io.ReadFull(br, mask[:]); err != nil {
-				return nil, err
-			}
-		}
-		payload := make([]byte, length)
-		if _, err := io.ReadFull(br, payload); err != nil {
-			return nil, err
-		}
-		if masked {
-			for i := range payload {
-				payload[i] ^= mask[i%4]
-			}
-		}
-
-		switch opcode {
-		case 0x8:
-			return nil, errors.New("the server closed the WebSocket")
-		case 0x9, 0xA: // ping / pong — not our message
-			continue
-		case 0x0, 0x1, 0x2:
-			msg = append(msg, payload...)
-			if fin {
-				return msg, nil
-			}
-		default:
-			return nil, fmt.Errorf("unexpected websocket opcode 0x%x", opcode)
-		}
-	}
 }
 
 // ---------------------------------------------------------------------
