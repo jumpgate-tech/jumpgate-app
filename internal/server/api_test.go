@@ -195,13 +195,21 @@ func newAPITestServer(t *testing.T) *apiTestServer {
 // specific probe reading, not just "the fake didn't error").
 func newAPITestServerWithExecutor(t *testing.T, newExec func(config.Target) (executor.Executor, error)) *apiTestServer {
 	t.Helper()
+	return newAPITestServerCfg(t, newExec, nil)
+}
+
+// newAPITestServerCfg is newAPITestServerWithExecutor with the rest of the
+// Config open for override, for the routes whose real implementation talks to
+// the public internet (the chains.json feed, the live TLS check).
+func newAPITestServerCfg(t *testing.T, newExec func(config.Target) (executor.Executor, error), mutate func(*Config)) *apiTestServer {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	token := NewSessionToken()
 	fake := &fakeAIProvider{text: "canned explanation"}
 
-	s := New(Config{
+	cfg := Config{
 		Token: token,
 		UI: fstest.MapFS{
 			"index.html": &fstest.MapFile{Data: []byte("<html>ui</html>")},
@@ -211,7 +219,11 @@ func newAPITestServerWithExecutor(t *testing.T, newExec func(config.Target) (exe
 			fake.id = id
 			return fake, nil
 		},
-	})
+	}
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	s := New(cfg)
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
