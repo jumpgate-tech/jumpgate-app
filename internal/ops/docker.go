@@ -576,6 +576,13 @@ const (
 	// mapping instead.
 	ERPCContainerPort = 4000
 
+	// ERPCContainerMetricsPort is the port eRPC serves its Prometheus counters
+	// on INSIDE the container, fixed at eRPC's own default for the same reason
+	// ERPCContainerPort is: the container's port namespace is private, so there
+	// is nothing to avoid colliding with, and the operator's choice is expressed
+	// on the host side of the -p mapping.
+	ERPCContainerMetricsPort = 4001
+
 	// DockerHostAlias is the DNS name that resolves to the container's host
 	// from inside a container. It is built in on Docker Desktop, OrbStack,
 	// colima and Rancher Desktop; on plain Linux engines it only exists
@@ -668,11 +675,35 @@ type ERPCRunSpec struct {
 	// which in turn is what lets those neighbours publish no host port at all.
 	Network string
 
-	// NoPublish suppresses the -p mapping entirely. It is set when something
+	// NoPublish suppresses the RPC -p mapping entirely. It is set when something
 	// else is the front door — a Caddy container terminating TLS — and eRPC is
 	// reached only over Network. A gateway with no published port and no front
 	// is unreachable, so this is never set on its own.
+	//
+	// It does NOT suppress MetricsPort; see there for why.
 	NoPublish bool
+
+	// MetricsPort is the HOST port the gateway's Prometheus counters are
+	// published on (0 → not published at all, which is what a gateway with
+	// metrics turned off gets).
+	//
+	// Two things about it differ deliberately from the RPC port, and both are
+	// the reason it is a separate field rather than a second use of BindAddr:
+	//
+	//   - It is ALWAYS pinned to 127.0.0.1, whatever BindAddr says. BindAddr
+	//     exists so an operator can expose the gateway on a Tailscale IP or a
+	//     LAN address, which is a thing they choose for a front door. A request
+	//     counter is not a front door, and nothing outside the machine has any
+	//     business reading it, so the widening knob simply does not apply here.
+	//
+	//   - It is published even when NoPublish is set. A fronted gateway
+	//     publishes nothing for RPC on purpose, because a plaintext,
+	//     unauthenticated RPC port alongside the HTTPS one would be a second way
+	//     in that the operator did not ask for. A read-only counter endpoint on
+	//     loopback is a far smaller door, and without it the recommended
+	//     configuration — HTTPS on — would be the one configuration that could
+	//     never show where its traffic is going.
+	MetricsPort int
 }
 
 // ERPCRunArgs renders the argv for `docker run` — WITHOUT the leading
@@ -730,6 +761,10 @@ func ERPCRunArgs(spec ERPCRunSpec) []string {
 	}
 	if !spec.NoPublish {
 		args = append(args, "-p", publishSpec(bind, hostPort, ERPCContainerPort))
+	}
+	// Loopback literally, not `bind`. See ERPCRunSpec.MetricsPort.
+	if spec.MetricsPort > 0 {
+		args = append(args, "-p", publishSpec("127.0.0.1", spec.MetricsPort, ERPCContainerMetricsPort))
 	}
 	args = append(args,
 		"-v", spec.HostConfigPath+":"+erpcContainerConfigPath+":ro",
@@ -829,6 +864,14 @@ func GatewayContainerConfig(g catalog.GatewayConfig, hostAlias string) catalog.G
 	out := g
 	out.BindAddr = "0.0.0.0"
 	out.Port = ERPCContainerPort
+	// The metrics listener is widened for exactly the same reason the RPC one
+	// is, and only that reason: a container's port namespace is private, so a
+	// listener bound to the container's loopback is unreachable even from the
+	// -p mapping pointed at it. What decides who can actually read the counters
+	// is the HOST side of that mapping, which ERPCRunSpec.MetricsPort pins to
+	// 127.0.0.1 unconditionally.
+	out.MetricsBindAddr = "0.0.0.0"
+	out.MetricsPort = ERPCContainerMetricsPort
 
 	out.Networks = make([]catalog.GatewayNetwork, len(g.Networks))
 	for i, n := range g.Networks {

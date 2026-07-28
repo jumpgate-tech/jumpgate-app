@@ -309,3 +309,99 @@ func TestGatewayTLS_ValidateSettings(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------
+// metrics
+// ---------------------------------------------------------------------
+
+// oneChain is the smallest renderable gateway, so a metrics assertion is not
+// buried in unrelated upstream setup.
+func oneChain() GatewayConfig {
+	return GatewayConfig{Networks: []GatewayNetwork{{ChainID: 369, Upstreams: []GatewayUpstream{
+		{Endpoint: "https://rpc.pulsechain.com"},
+	}}}}
+}
+
+// The block is rendered in BOTH states, and that is the whole point of it.
+//
+// eRPC's own default is metrics.enabled = true, so a config that says nothing
+// still serves counters — measured on this machine's two gateways, both of
+// which had been exposing Prometheus on 4001 since they were created while
+// this app rendered no metrics block at all. Rendering only the "off" case
+// would leave the file unable to say what it is doing, and rendering neither
+// would give the operator's off switch nothing to write.
+func TestRenderGatewayConfig_MetricsBlockIsAlwaysRendered(t *testing.T) {
+	on, err := RenderGatewayConfig(oneChain())
+	if err != nil {
+		t.Fatalf("RenderGatewayConfig: %v", err)
+	}
+	for _, want := range []string{"metrics:", "enabled: true", `hostV4: "127.0.0.1"`, "port: 4001"} {
+		if !strings.Contains(on, want) {
+			t.Errorf("metrics default missing %q:\n%s", want, on)
+		}
+	}
+
+	g := oneChain()
+	g.MetricsOff = true
+	off, err := RenderGatewayConfig(g)
+	if err != nil {
+		t.Fatalf("RenderGatewayConfig(off): %v", err)
+	}
+	if !strings.Contains(off, "enabled: false") {
+		t.Errorf("turning metrics off must WRITE enabled: false, not omit the block:\n%s", off)
+	}
+}
+
+// The counters bind loopback by default while the RPC listener does not. The
+// asymmetry is deliberate — one is a front door, the other is not — so it is
+// asserted rather than left to the reader.
+func TestGatewayConfig_MetricsBindDefaultsToLoopbackIndependentlyOfRPCBind(t *testing.T) {
+	g := oneChain()
+	g.BindAddr = "0.0.0.0"
+	if got := g.MetricsBind(); got != "127.0.0.1" {
+		t.Errorf("MetricsBind = %q, want 127.0.0.1 even with a wide RPC bind", got)
+	}
+	cfg, err := RenderGatewayConfig(g)
+	if err != nil {
+		t.Fatalf("RenderGatewayConfig: %v", err)
+	}
+	if !strings.Contains(cfg, `hostV4: "127.0.0.1"`) || !strings.Contains(cfg, `httpHostV4: "0.0.0.0"`) {
+		t.Errorf("a wide RPC bind must not widen the metrics bind:\n%s", cfg)
+	}
+}
+
+func TestGatewayConfig_MetricsAccessors(t *testing.T) {
+	var zero GatewayConfig
+	if !zero.MetricsEnabled() {
+		t.Error("the zero value must mean metrics ON — anything else silently disables them for every config already on disk")
+	}
+	if got := zero.MetricsHTTP(); got != 4001 {
+		t.Errorf("MetricsHTTP = %d, want 4001", got)
+	}
+	g := GatewayConfig{MetricsPort: 9101, MetricsOff: true}
+	if g.MetricsEnabled() {
+		t.Error("MetricsOff must disable")
+	}
+	if got := g.MetricsHTTP(); got != 9101 {
+		t.Errorf("MetricsHTTP = %d, want the explicit 9101", got)
+	}
+}
+
+// Two listeners cannot share a port. eRPC would bind whichever started first
+// and fail the other, leaving a gateway serving either RPC or counters with
+// nothing to say which.
+func TestRenderGatewayConfig_RejectsMetricsPortCollision(t *testing.T) {
+	g := oneChain()
+	g.Port = 4001
+	if _, err := RenderGatewayConfig(g); err == nil {
+		t.Fatal("want an error when the RPC port collides with the default metrics port")
+	} else if !strings.Contains(err.Error(), "cannot share one port") {
+		t.Errorf("error should name the collision, got: %v", err)
+	}
+
+	// Turning metrics off resolves it: there is no second listener to collide.
+	g.MetricsOff = true
+	if _, err := RenderGatewayConfig(g); err != nil {
+		t.Errorf("with metrics off there is no second listener, so 4001 is free: %v", err)
+	}
+}

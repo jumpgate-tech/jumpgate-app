@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -258,10 +259,26 @@ func TestGatewayRun_FrontedGatewayPublishesOnlyCaddy(t *testing.T) {
 	if erpcRun == "" || caddyRun == "" {
 		t.Fatalf("want both containers created: %#v", e.callLog())
 	}
-	// Only Caddy publishes. A published eRPC port would be a second,
-	// plaintext, unauthenticated way in that the operator did not ask for.
-	if strings.Contains(erpcRun, "'-p'") {
-		t.Errorf("a fronted eRPC must publish nothing: %s", erpcRun)
+	// Caddy is the only RPC front door. A published eRPC port would be a
+	// second, plaintext, unauthenticated way in that the operator did not ask
+	// for — so the invariant is that no mapping reaches eRPC's RPC port, NOT
+	// that eRPC publishes nothing at all.
+	//
+	// The one mapping it does get is the metrics port, pinned to loopback. That
+	// is a deliberate narrowing of the older "publishes nothing" rule rather
+	// than an erosion of it: without it, the recommended configuration (HTTPS
+	// on) would be the single configuration whose traffic share could never be
+	// read. Both halves are asserted, because a regression that widened this to
+	// 0.0.0.0 or pointed it at 4000 would otherwise still pass.
+	if strings.Contains(erpcRun, ":"+strconv.Itoa(ops.ERPCContainerPort)+"'") {
+		t.Errorf("a fronted eRPC must publish no RPC port: %s", erpcRun)
+	}
+	wantMetrics := "'-p' '127.0.0.1:4001:" + strconv.Itoa(ops.ERPCContainerMetricsPort) + "'"
+	if !strings.Contains(erpcRun, wantMetrics) {
+		t.Errorf("a fronted eRPC must still publish its counters on loopback (%s): %s", wantMetrics, erpcRun)
+	}
+	if strings.Contains(erpcRun, "'-p' '0.0.0.0:4001") {
+		t.Errorf("the metrics port must never be widened past loopback: %s", erpcRun)
 	}
 	if !strings.Contains(caddyRun, "'-p' '0.0.0.0:8443:443'") {
 		t.Errorf("want the TLS front published on the configured port: %s", caddyRun)
