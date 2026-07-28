@@ -390,23 +390,3 @@ func RenderCaddyfile(c CaddyConfig) (string, error) {
 	}
 	return buf.String(), nil
 }
-
-// MustDisableGzipBehindProxy records a measured constraint that the gateway
-// renderer has to honour once a gateway is fronted: erpc.yaml must set
-// `server.enableGzip: false`.
-//
-// eRPC's WebSocket upgrade FAILS when the client advertises gzip. The upgrade
-// needs http.Hijacker and eRPC's gzip response-writer wrapper does not
-// implement it, so the handshake returns HTTP 500 with "websocket: response
-// does not implement http.Hijacker". Every reverse proxy adds Accept-Encoding:
-// gzip to proxied requests, so this breaks WebSocket behind ANY proxy, not
-// just Caddy. Measured directly against the image built from ERPCSourceRef: an
-// identical upgrade succeeds bare and fails with the header present, and
-// setting enableGzip:false fixes both the direct and the proxied case.
-//
-// It is a workaround and it costs response compression for ordinary RPC. The
-// real fix belongs in eRPC — skip the gzip wrapper on upgrade requests, or
-// make the wrapper implement Hijacker — and is worth reporting upstream.
-// Until then a fronted gateway must not offer gzip: silently losing
-// eth_subscribe is far worse than losing compression.
-const MustDisableGzipBehindProxy = true

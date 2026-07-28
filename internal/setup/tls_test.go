@@ -316,13 +316,14 @@ func TestGatewayConfigStep_WritesTheCaddyfile(t *testing.T) {
 		t.Fatalf("verify after write: %v", err)
 	}
 
-	// erpc.yaml must have gzip off, because Caddy is in front of it.
+	// erpc.yaml must NOT disable gzip: the upgrade-path fix landed in eRPC
+	// a7a53ec2, so compression and eth_subscribe now coexist behind Caddy.
 	cfg, err := e.ReadFile(context.Background(), "/Users/dev/.valve-node-app/erpc.yaml")
 	if err != nil {
 		t.Fatalf("erpc.yaml: %v", err)
 	}
-	if !strings.Contains(string(cfg), "enableGzip: false") {
-		t.Errorf("a fronted gateway must disable gzip or eth_subscribe fails:\n%s", cfg)
+	if strings.Contains(string(cfg), "enableGzip") {
+		t.Errorf("a fronted gateway must no longer disable gzip:\n%s", cfg)
 	}
 }
 

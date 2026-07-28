@@ -207,13 +207,10 @@ func TestGatewayForWire(t *testing.T) {
 // TLS: the gzip constraint
 // ---------------------------------------------------------------------
 
-// MEASURED, and the reason this flag exists at all: eRPC's WebSocket upgrade
-// returns HTTP 500 ("websocket: response does not implement http.Hijacker")
-// whenever the client advertises Accept-Encoding: gzip, and EVERY reverse proxy
-// adds that header to what it forwards. A fronted gateway that still offered
-// gzip would lose eth_subscribe entirely — silently, since ordinary
-// request/response calls keep working.
-func TestRenderGatewayConfig_FrontedGatewayDisablesGzip(t *testing.T) {
+// eRPC a7a53ec2 skips its gzip wrapper on upgrade requests, so a fronted
+// gateway no longer has to disable compression to keep eth_subscribe working.
+// Both fronted and unfronted gateways now render the same way here.
+func TestRenderGatewayConfig_GzipNeverDisabled(t *testing.T) {
 	g := GatewayConfig{
 		Networks: []GatewayNetwork{{ChainID: 1337, Upstreams: []GatewayUpstream{
 			{ID: "devnet", Endpoint: "http://valve-node-app-devnet:8545", Local: true},
@@ -234,8 +231,11 @@ func TestRenderGatewayConfig_FrontedGatewayDisablesGzip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render fronted: %v", err)
 	}
-	if !strings.Contains(fronted, "enableGzip: false") {
-		t.Errorf("a fronted gateway must disable gzip or it loses eth_subscribe:\n%s", fronted)
+	if strings.Contains(fronted, "enableGzip") {
+		// eRPC skips its gzip wrapper on upgrade requests as of a7a53ec2, so a
+		// fronted gateway no longer has to trade away response compression to
+		// keep eth_subscribe working.
+		t.Errorf("a fronted gateway must no longer disable gzip:\n%s", fronted)
 	}
 	if !g.Fronted() {
 		t.Error("Fronted must be derived from the TLS settings, not stored beside them")
