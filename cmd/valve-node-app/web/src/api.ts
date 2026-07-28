@@ -841,15 +841,32 @@ export interface TargetSummary {
   hasNode: boolean;
 }
 
+// OrphanedContainer is a container a merge stopped managing but did NOT
+// stop — see config.Config.Orphans. It keeps serving stale config with
+// nothing pointing at it until the operator wipes it themselves and
+// dismisses the record.
+export interface OrphanedContainer {
+  containerName: string;
+  targetId: string;
+  mergedInto: string;
+}
+
 export interface GatewaysResponse {
   gateways: GatewayView[] | null;
   targets: TargetSummary[] | null;
   sources: UpstreamSource[] | null;
   presets: NetworkPreset[] | null;
+  orphans?: OrphanedContainer[];
 }
 
 export function getGateways(): Promise<GatewaysResponse> {
   return request<GatewaysResponse>("/api/gateways");
+}
+
+// dismissOrphan forgets a leftover-container record only. It never touches
+// the container: this app never stops a container it did not just start.
+export async function dismissOrphan(name: string): Promise<void> {
+  await request(`/api/orphans/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
 export interface CreateGatewayRequest {

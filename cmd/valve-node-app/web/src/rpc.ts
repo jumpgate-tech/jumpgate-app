@@ -124,6 +124,10 @@ export function renderRPC(root: HTMLElement): () => void {
   const verifyResult: Record<string, api.TlsVerification | null> = {};
   const verifyBusy: Record<string, boolean> = {};
   const verifyErr: Record<string, string | null> = {};
+  // Per-container-name state for the orphan banners: an error dismissing one
+  // record must not blank the others, so it is keyed the same way the
+  // gateway state above is.
+  const orphanErr: Record<string, string | null> = {};
   let streamStop: (() => void) | null = null;
 
   root.innerHTML = `
@@ -240,10 +244,33 @@ export function renderRPC(root: HTMLElement): () => void {
     }
     const gateways = data.gateways ?? [];
     body.innerHTML = `
+      ${(data.orphans ?? []).map(orphanBanner).join("")}
       ${gateways.map(gatewayBlock).join("")}
       ${gateways.length === 0 ? emptyState() : ""}
       <div class="card-actions rpc-add-gateway">
         <button class="btn${gateways.length ? " btn-ghost" : ""}" data-action="add-gateway">Add a gateway</button>
+      </div>
+    `;
+  }
+
+  // orphanBanner reports one container a merge stopped managing but did NOT
+  // stop — see config.Config.Orphans. It keeps serving stale config with
+  // nothing on this screen pointing at it until the operator removes it
+  // themselves and dismisses the record; Dismiss forgets the record only,
+  // matching handleGatewayDelete's own rule that this app never stops a
+  // container it did not just start.
+  function orphanBanner(o: api.OrphanedContainer): string {
+    return `
+      <div class="banner banner-warn">
+        <strong>${escapeHtml(o.containerName)}</strong> is still running on
+        ${escapeHtml(o.targetId)}. Its chains were folded into
+        <code>${escapeHtml(o.mergedInto)}</code>, but valve-node-app does not stop
+        containers it did not start. Remove it yourself:
+        <code>docker rm -f ${escapeHtml(o.containerName)}</code>
+        ${orphanErr[o.containerName] ? `<div class="error small">${escapeHtml(orphanErr[o.containerName]!)}</div>` : ""}
+        <div class="card-actions">
+          <button class="btn btn-ghost" data-action="dismiss-orphan" data-name="${escapeHtml(o.containerName)}">Dismiss</button>
+        </div>
       </div>
     `;
   }
@@ -1036,6 +1063,9 @@ export function renderRPC(root: HTMLElement): () => void {
       case "forget-gateway":
         await forgetGateway(gid);
         return;
+      case "dismiss-orphan":
+        await dismissOrphan(el.dataset.name ?? "");
+        return;
       case "add-chain":
         openAddChainModal(gid);
         return;
@@ -1179,6 +1209,23 @@ export function renderRPC(root: HTMLElement): () => void {
       await api.deleteGateway(gid);
     } catch (err) {
       actionErr[gid] = message(err);
+      render();
+      return;
+    }
+    await load();
+  }
+
+  // dismissOrphan forgets the RECORD of a leftover container only. It never
+  // touches the container itself — no confirmation is needed for that reason
+  // alone, unlike forgetGateway, which is giving up a gateway's whole saved
+  // configuration.
+  async function dismissOrphan(name: string): Promise<void> {
+    if (!name) return;
+    orphanErr[name] = null;
+    try {
+      await api.dismissOrphan(name);
+    } catch (err) {
+      orphanErr[name] = message(err);
       render();
       return;
     }

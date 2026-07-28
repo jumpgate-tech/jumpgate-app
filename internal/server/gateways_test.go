@@ -575,3 +575,70 @@ func TestGateways_AnEndpointTheOperatorOwnsIsNotCalledPublic(t *testing.T) {
 		t.Errorf("an endpoint filed in the fallback tier IS a public one here: %q", theirs)
 	}
 }
+
+// ---------------------------------------------------------------------
+// orphaned containers — what a merge left running
+// ---------------------------------------------------------------------
+
+// The operator has to be told what is still running, or a merged-away gateway
+// keeps serving stale config forever with nothing pointing at it.
+func TestGatewayListReportsOrphans(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.Orphans = []config.OrphanedContainer{{
+		ContainerName: "valve-node-app-erpc-edge", TargetID: "local", MergedInto: "default",
+	}}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	body := decode[gatewaysResponse](t, a.do(t, "GET", "/api/gateways", nil))
+	if len(body.Orphans) != 1 || body.Orphans[0].ContainerName != "valve-node-app-erpc-edge" {
+		t.Fatalf("the leftover container must appear in the listing: %+v", body.Orphans)
+	}
+	if body.Orphans[0].TargetID != "local" || body.Orphans[0].MergedInto != "default" {
+		t.Errorf("orphan record: got %+v", body.Orphans[0])
+	}
+}
+
+// Dismissing an orphan forgets the RECORD only. It must never touch the
+// container: this app never stops a container it did not just start, which is
+// the same rule handleGatewayDelete follows for a gateway's own container.
+func TestOrphanDismissForgetsTheRecordOnly(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.Orphans = []config.OrphanedContainer{{
+		ContainerName: "valve-node-app-erpc-edge", TargetID: "local", MergedInto: "default",
+	}}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	res := a.do(t, "DELETE", "/api/orphans/valve-node-app-erpc-edge", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", res.StatusCode)
+	}
+	res.Body.Close()
+
+	body := decode[gatewaysResponse](t, a.do(t, "GET", "/api/gateways", nil))
+	if len(body.Orphans) != 0 {
+		t.Errorf("the record must be gone after dismissal: %+v", body.Orphans)
+	}
+
+	// Dismissing again finds nothing left to forget.
+	res = a.do(t, "DELETE", "/api/orphans/valve-node-app-erpc-edge", nil)
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("dismissing twice: got %d, want 404", res.StatusCode)
+	}
+}
