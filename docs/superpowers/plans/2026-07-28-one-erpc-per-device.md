@@ -490,8 +490,16 @@ git commit -m "feat(config): record the container a merge leaves behind"
 
 **Files:**
 - Modify: `internal/server/gateways.go` (in `handleGatewayCreate`)
-- Modify: `internal/server/gateways_test.go:49-72` (**rewrite** `TestGateways_TwoGatewaysCoexistWithDistinctContainers`, which currently asserts the behaviour this task forbids)
+- Modify: `internal/server/gateways_test.go:49-72` (**rewrite** `TestGateways_TwoGatewaysCoexistWithDistinctContainers`)
+- Modify: `internal/server/gatewayops_test.go:43` (**rewrite** `TestGatewayAction_ActsOnThatGatewaysOwnContainer`)
+- Modify: `internal/server/gatewayops_test.go:276` (**rewrite** `TestGatewayProvision_RefusesASecondRunOnTheSameMachine`)
 - Modify: `cmd/valve-node-app/web/src/rpc.ts` (hide "add gateway" for a device that has one)
+
+**PLAN AMENDMENT (made during execution).** This task originally named only the
+first test. Task 2 landed the merge-on-load and **three** `internal/server` tests
+went red, not one — every one of them builds two gateways on target `local`, which
+is now folded into one at load. All three are this task's to fix, and master is red
+until they are. The third needs judgement, not a mechanical edit: see Step 1c.
 
 **Interfaces:**
 - Consumes: `config.Config.Gateways`, `config.Gateway.Placement.TargetID`. Existing test helpers: `gatewayServer(t) *apiTestServer`, `addGateway(t, a, id, targetID string, cfg catalog.GatewayConfig) gatewayView`, `a.do(t, method, path, body) *http.Response`, `decode[T](t, res) T`, `addTarget(t, a)` (which adds target `"local"`).
@@ -559,6 +567,62 @@ func TestGateways_RefuseASecondGatewayOnOneMachine(t *testing.T) {
 ```
 
 Add `"io"` and `"strings"` to the test file's imports if they are not already there.
+
+- [ ] **Step 1b: Move `TestGatewayAction_ActsOnThatGatewaysOwnContainer` to two machines**
+
+`internal/server/gatewayops_test.go:43` puts `default` and `edge` on `local` and
+asserts an action on `edge` reaches `valve-node-app-erpc-edge` and leaves `default`
+untouched. That subject is still valid — it just needs two machines now. Register a
+second target and place `edge` on it:
+
+```go
+			addTarget(t, a)
+			res2 := a.do(t, "POST", "/api/targets", map[string]any{"id": "second", "mode": "local"})
+			res2.Body.Close()
+			addGateway(t, a, "default", "local", pulsechainOnly(4100))
+			addGateway(t, a, "edge", "second", pulsechainOnly(4200))
+```
+
+The executor assertions keyed to `"local"` must follow `edge` to `"second"` —
+`f.ran(t, "second", "'"+action+"'", "'valve-node-app-erpc-edge'")`, and the
+bystander check stays on `"local"` for `default`. Read the whole test body and move
+each assertion to the machine whose gateway it is about; do not weaken any of them.
+
+- [ ] **Step 1c: Re-aim `TestGatewayProvision_RefusesASecondRunOnTheSameMachine`**
+
+`internal/server/gatewayops_test.go:276` provisions `default` on `local`, then
+provisions `edge` on `local` and requires 409 — the per-machine provision slot. The
+invariant makes its premise impossible: a machine cannot host two gateways, so a
+second provision on one machine can now only be **the same gateway again**.
+
+Do not delete the test — the slot still matters, and a double-submitted provision is
+the case that now exercises it. Keep the gated-executor setup, drop the second
+`addGateway`, and aim the second request at the same gateway:
+
+```go
+	addGateway(t, a, "default", "local", pulsechainOnly(4100))
+
+	first := a.do(t, "POST", "/api/gateways/default/provision", nil)
+	first.Body.Close()
+	if first.StatusCode != http.StatusAccepted {
+		t.Fatalf("first provision: got %d, want 202", first.StatusCode)
+	}
+	gx.awaitInFlight(t)
+
+	// A machine hosts one gateway, so a second run on that machine is the same
+	// gateway again — a double-submitted provision, which the slot must still
+	// refuse rather than running twice over one container.
+	second := a.do(t, "POST", "/api/gateways/default/provision", nil)
+	second.Body.Close()
+	if second.StatusCode != http.StatusConflict {
+		t.Fatalf("second provision of the same gateway: got %d, want 409 — the first run still holds the slot", second.StatusCode)
+	}
+```
+
+Rename it to `TestGatewayProvision_RefusesASecondRunWhileOneIsInFlight` so the name
+matches what it now proves. Leave
+`TestGatewayProvision_ARunOnOneMachineDoesNotBlockAnother` alone — it already uses
+two targets and still passes.
 
 - [ ] **Step 2: Run test to verify it fails**
 
