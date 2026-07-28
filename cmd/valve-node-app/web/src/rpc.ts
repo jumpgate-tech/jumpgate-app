@@ -1607,6 +1607,23 @@ export function renderRPC(root: HTMLElement): () => void {
     await saveConfig(gid, cfg, "Adding the endpoint");
   }
 
+  // Redundancy should be what happens when the operator does the easy thing.
+  // Pre-tick the three fastest live endpoints, except that one slot goes to the
+  // fastest live wss:// candidate when the feed offers one — a chain with only
+  // http upstreams cannot serve eth_subscribe at all. The ws entry replaces the
+  // slowest of the three rather than becoming a fourth, so the pre-ticked count
+  // is always three (or fewer, if fewer than three answered at all).
+  function defaultSelection(live: api.ChainlistEndpoint[]): Set<string> {
+    const byLatency = [...live].sort((a, b) => (a.latencyMs ?? 1e9) - (b.latencyMs ?? 1e9));
+    const picked = byLatency.slice(0, 3);
+    const ws = byLatency.find((e) => e.url.startsWith("wss://") || e.url.startsWith("ws://"));
+    if (ws && !picked.some((e) => e.url === ws.url)) {
+      if (picked.length === 3) picked.pop();
+      picked.push(ws);
+    }
+    return new Set(picked.map((e) => e.url));
+  }
+
   // openDiscoverModal is internal/chainlist put in front of the operator: the
   // canonical chain feed, minus the ${API_KEY} provider slots, with every
   // remaining URL probed for eth_chainId. What is offered is what answered.
@@ -1643,6 +1660,7 @@ export function renderRPC(root: HTMLElement): () => void {
 
     const live = (result.endpoints ?? []).filter((e) => e.status === "live" || e.status === "unprobed");
     const rejected = (result.endpoints ?? []).filter((e) => e.status === "rejected");
+    const preselected = defaultSelection(live);
 
     openModal(
       `
@@ -1655,18 +1673,20 @@ export function renderRPC(root: HTMLElement): () => void {
         }
         ${
           live.length
-            ? `<p class="muted small">${live.length} answered for this chain. Pick one to add it as a fallback upstream.</p>
+            ? `<p class="muted small">${live.length} answered for this chain. The fastest are already ticked — more than one endpoint is what makes a chain survive an outage.</p>
                <ul class="plain-list rpc-picker">
                  ${live
-                   .map(
-                     (e) => `
+                   .map((e) => {
+                     const checked = preselected.has(e.url) ? " checked" : "";
+                     return `
                    <li>
-                     <button class="btn btn-ghost rpc-picker-option" data-modal-action="add:${encodeURIComponent(e.url)}">
+                     <label class="rpc-picker-option">
+                       <input type="checkbox" value="${escapeHtml(e.url)}"${checked}>
                        <span><code>${escapeHtml(e.url)}</code></span>
                        <span class="muted small">${e.status === "live" ? `answered in ${e.latencyMs ?? 0} ms` : "not probed (WebSocket)"}</span>
-                     </button>
-                   </li>`,
-                   )
+                     </label>
+                   </li>`;
+                   })
                    .join("")}
                </ul>`
             : `<p class="error small">Nothing in the feed answered for chain ${chainId} right now.</p>`
@@ -1683,16 +1703,24 @@ export function renderRPC(root: HTMLElement): () => void {
                </details>`
             : ""
         }
-        <div class="modal-actions"><button class="btn btn-ghost" data-modal-action="cancel">Close</button></div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" data-modal-action="cancel">Cancel</button>
+          ${live.length ? `<button class="btn" data-modal-action="add">Add selected</button>` : ""}
+        </div>
       `,
       (action) => {
         if (action === "cancel") {
           closeModal();
           return;
         }
-        if (action.startsWith("add:")) {
+        if (action === "add") {
+          const panel = modalBody();
+          const urls = panel
+            ? Array.from(panel.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')).map((i) => i.value)
+            : [];
           closeModal();
-          void addExternalUpstream(gid, chainId, decodeURIComponent(action.slice("add:".length)));
+          void addExternalUpstreams(gid, chainId, urls);
+          return;
         }
       },
     );
@@ -1738,35 +1766,54 @@ export function renderRPC(root: HTMLElement): () => void {
           return;
         }
         closeModal();
-        void addExternalUpstream(gid, chainId, url, recent?.checked ?? false);
+        void addExternalUpstreams(gid, chainId, [url], recent?.checked ?? false);
       },
     );
     document.getElementById("manual-endpoint")?.focus();
   }
 
-  async function addExternalUpstream(
+  // One save for the whole selection, not one per endpoint: each save is a
+  // config write plus a re-render, and adding three endpoints should not look
+  // like three separate operator decisions. Also used for the manual
+  // single-URL add, which is where recentOnly still matters.
+  async function addExternalUpstreams(
     gid: string,
     chainId: number,
-    url: string,
+    urls: string[],
     recentOnly = false,
   ): Promise<void> {
+    if (!urls.length) return;
     const gw = gatewayOf(gid);
     if (!gw) return;
     const cfg = storedConfig(gw);
     const nets = cfg.Networks ?? [];
-    const existing = nets.find((n) => n.ChainID === chainId);
-    const count = (existing?.Upstreams.length ?? 0) + 1;
-    const upstream: api.GatewayUpstream = {
-      ID: `public-${chainId}-${count}`,
-      Kind: "external",
-      Endpoint: url,
-      Local: false,
-      RecentOnly: recentOnly,
-    };
-    if (existing) existing.Upstreams.push(upstream);
-    else nets.push({ ChainID: chainId, Upstreams: [upstream] });
+    let net = nets.find((n) => n.ChainID === chainId);
+    if (!net) {
+      net = { ChainID: chainId, Upstreams: [] };
+      nets.push(net);
+    }
+
+    // Continue the public-<chain>-<n> scheme from the highest suffix already
+    // present, so ids stay unique and stable across repeated discoveries.
+    let next = 1;
+    for (const u of net.Upstreams) {
+      const m = /^public-\d+-(\d+)$/.exec(u.ID ?? "");
+      if (m) next = Math.max(next, Number(m[1]) + 1);
+    }
+
+    for (const url of urls) {
+      if (net.Upstreams.some((u) => u.Endpoint === url)) continue;
+      net.Upstreams.push({
+        ID: `public-${chainId}-${next++}`,
+        Kind: "external",
+        Endpoint: url,
+        Local: false,
+        RecentOnly: recentOnly,
+      });
+    }
+
     cfg.Networks = nets;
-    await saveConfig(gid, cfg, "Adding the endpoint");
+    await saveConfig(gid, cfg, urls.length === 1 ? "Adding the endpoint" : `Adding ${urls.length} endpoints`);
   }
 
   // --- devnet reset -------------------------------------------------------
