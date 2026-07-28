@@ -1104,110 +1104,279 @@ details.advanced summary {
   margin-top: 0.45rem;
 }
 
-/* --- tier 2: the chain chips, inside the bar ------------------------------ */
+/* --- the Control Surface table -------------------------------------------
 
-.rpc-chiprow {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-wrap: wrap;
-  margin-top: 0.6rem;
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--border);
-}
+   Bands wrap their endpoints, so the routing hierarchy is structural rather
+   than described. This replaced a chip row plus a one-chain panel; the
+   selection model is gone, and with it the .chip rules that served it. */
 
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.22rem 0.7rem;
-  color: var(--fg);
-  font: inherit;
-  font-size: 0.8rem;
-  cursor: pointer;
-  /* card-selectable sets width:100%, which is right for a card and wrong for
-     a chip; this wins by being the later declaration. */
-  width: auto;
-}
-
-.chip:hover {
-  border-color: var(--fg-muted);
-}
-
-/* Selected follows .card-selectable.selected exactly — the same accent border
-   plus inset ring — so "this one is chosen" reads identically everywhere. */
-.chip.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent) inset;
-}
-
-/* A chain with no working endpoint is one eRPC will accept and then fail
-   every call on. It must not look like a healthy chain. */
-.chip-bad {
-  border-color: var(--bad);
-  color: var(--bad);
-}
-
-.chip-bad.selected {
-  border-color: var(--bad);
-  box-shadow: 0 0 0 1px var(--bad) inset;
-}
-
-.chip-id {
-  color: var(--fg-muted);
-  font-size: 0.72rem;
-}
-
-.chip-dot {
-  display: inline-flex;
-}
-
-.chip-add {
-  border-style: dashed;
-  color: var(--fg-muted);
-}
-
-.chip-add:hover {
-  color: var(--fg);
-  border-color: var(--accent);
-}
-
-/* --- tier 3: the focused chain's endpoints -------------------------------- */
-
-.rpc-upstreams {
+.rpc-surface {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
   margin-top: -1px;
 }
 
-.rpc-upstreams .upstream-row {
+.surface-head {
+  display: flex;
   align-items: center;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding-bottom: 0.5rem;
 }
 
-.upstream-row-bad {
-  /* The row itself carries the fault, next to the reason, rather than the
-     card carrying one banner for all of them. */
-  background: rgba(224, 138, 111, 0.06);
+.surface-head .muted {
+  margin-right: auto;
 }
 
-.upstream-state {
-  display: inline-flex;
+/* The table scrolls inside its own box. The page must never scroll
+   sideways — a capability column plus a share column is wide, and a
+   horizontally sliding page loses the gateway bar off the left edge. */
+.surface-scroll {
+  overflow-x: auto;
+}
+
+table.surface {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.85rem;
+}
+
+table.surface th {
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+table.surface td {
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+table.surface tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.col-endpoint {
+  width: 32%;
+  min-width: 14rem;
+}
+
+.col-share {
+  width: 18%;
+  min-width: 9rem;
+}
+
+.col-act {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* --- the band: one chain, wrapping its endpoints -------------------------- */
+
+tr.band td {
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding: 0.4rem 0.6rem;
+}
+
+.band-inner {
+  display: flex;
   align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
-.upstream-what {
-  flex: 1;
-  min-width: 12rem;
+.band-id {
+  font-weight: 700;
+  color: var(--accent);
 }
 
-.upstream-label {
+.band-name {
+  font-weight: 600;
+}
+
+.band-path,
+.ep-url {
+  color: var(--fg-muted);
+  font-size: 0.78rem;
+}
+
+.band-right {
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 0.4rem;
+}
+
+/* A chain eRPC will accept and then fail every call on must not look like a
+   healthy one. */
+tr.band.band-bad .band-id,
+tr.band.band-bad .band-name {
+  color: var(--bad);
+}
+
+.band-warn {
+  color: var(--warn);
+  font-size: 0.78rem;
+  margin-top: 0.3rem;
+}
+
+/* --- endpoint rows -------------------------------------------------------- */
+
+tr.ep:hover td {
+  background: var(--bg-raised);
+}
+
+tr.ep-bad td {
+  /* The row carries the fault, next to its reason, rather than the card
+     carrying one banner for all of them. */
+  background: rgba(224, 138, 111, 0.06);
+}
+
+.ep-what {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ep-label {
+  font-weight: 600;
+}
+
+.ep-url {
+  display: block;
+  word-break: break-all;
+}
+
+.btn-tiny {
+  padding: 0.1rem 0.4rem;
+  font-size: 0.75rem;
+}
+
+/* --- capabilities: the full set always renders ---------------------------- */
+
+.caps {
+  display: inline-flex;
+  gap: 0.2rem;
   flex-wrap: wrap;
+}
+
+.cap {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 0.02rem 0.28rem;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--fg);
+  background: var(--bg);
+  cursor: help;
+}
+
+/* Not offered. Struck through and dimmed, so the ABSENCE is legible without
+   reading — that is the whole reason every key renders. */
+.cap.off {
+  color: var(--fg-muted);
+  border-color: transparent;
+  background: transparent;
+  text-decoration: line-through;
+}
+
+/* The same absence, but nothing else on this chain offers it either, so the
+   gap is breaking the path rather than describing one endpoint. */
+.cap.missing {
+  color: var(--bad);
+  border-color: var(--bad);
+  text-decoration: line-through;
+}
+
+/* Nobody formed an opinion — a timeout, a rate limit, an unreachable
+   endpoint. Deliberately distinct from "cannot": absence of evidence is not
+   evidence of absence, and this app says so everywhere else too. */
+.cap.unknown {
+  color: var(--fg-muted);
+  border-style: dashed;
+}
+
+/* The endpoint answered differently on different probes, which is what a load
+   balancer with disagreeing members looks like. Reported, never averaged. */
+.cap.mixed {
+  color: var(--warn);
+  border-color: var(--warn);
+  border-style: dashed;
+}
+
+.caps-none {
+  color: var(--fg-muted);
+  font-size: 0.78rem;
+  cursor: help;
+  border-bottom: 1px dotted var(--fg-muted);
+}
+
+/* --- share of traffic: actual fill, intended tick ------------------------- */
+
+.share {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.bar {
+  position: relative;
+  display: inline-block;
+  width: 5.5rem;
+  height: 8px;
+  background: var(--border);
+  border-radius: 1px;
+  flex: none;
+}
+
+.bar .fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--fg-muted);
+  border-radius: 1px;
+}
+
+.bar .fill.ok {
+  background: var(--ok);
+}
+
+.bar .fill.warn {
+  background: var(--warn);
+}
+
+/* The tick is where routing INTENDS this endpoint to sit. Full height and
+   overhanging, so it reads as a target line against the fill rather than as
+   part of it. */
+.bar .tick {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--fg);
+}
+
+.share-n {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  min-width: 2.4rem;
+  text-align: right;
+}
+
+.share-n.warn {
+  color: var(--warn);
+  font-weight: 600;
 }
 
 /* --- pickers -------------------------------------------------------------- */
