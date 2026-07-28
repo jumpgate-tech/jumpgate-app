@@ -1047,7 +1047,7 @@ func (s *Server) handleGatewayCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		kept := c.Orphans[:0]
 		for _, o := range c.Orphans {
-			if !reclaimed[o.ContainerName] {
+			if !(reclaimed[o.ContainerName] && o.TargetID == targetID) {
 				kept = append(kept, o)
 			}
 		}
