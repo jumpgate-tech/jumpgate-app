@@ -278,6 +278,12 @@ func (s *Server) registerGatewayRoutes(mux *http.ServeMux) {
 	// curl against a loopback port on the gateway's own machine and changes
 	// nothing. Kept off the list response on purpose — see traffic.go.
 	mux.HandleFunc("GET /api/gateways/{gid}/traffic", s.handleGatewayTraffic)
+	// What each upstream can actually DO (archive, trace, debug, real
+	// WebSocket...). GET because it reads, though — like tls/verify — it is
+	// the one read here that opens sockets of its own, against every
+	// upstream rather than one front. Cached for ten minutes for that reason;
+	// ?refresh=1 forces a fresh probe. See capabilities.go.
+	mux.HandleFunc("GET /api/gateways/{gid}/capabilities", s.handleGatewayCapabilities)
 	mux.HandleFunc("POST /api/gateways/{gid}/{action}", s.handleGatewayAction)
 
 	// Public-endpoint discovery. It is NOT under /api/gateways/{gid} because

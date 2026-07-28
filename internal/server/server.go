@@ -58,6 +58,18 @@ type Server struct {
 	tlsMu     sync.Mutex
 	tlsChecks map[string]setup.TLSVerification
 
+	// capChecks is the last capability probe per gateway id, guarded by capMu.
+	// Unlike tlsChecks (which never expires — see its comment), this one
+	// carries an explicit TTL (capabilitiesTTL, in capabilities.go): a
+	// capability probe dials EVERY upstream on the gateway with roughly a
+	// dozen calls apiece, not one front, so leaving it to go stale forever
+	// would eventually show an operator a years-old verdict with nothing on
+	// screen to say so. Ten minutes bounds the staleness while still keeping
+	// the RPC screen's normal poll cadence from turning into sustained load
+	// against every upstream a gateway fronts.
+	capMu     sync.Mutex
+	capChecks map[string]capabilitiesResponse
+
 	newExecutor   func(config.Target) (executor.Executor, error)
 	newAIProvider func(id, apiKey, baseURL string) (ai.Provider, error)
 }
