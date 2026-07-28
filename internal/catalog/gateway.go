@@ -29,6 +29,18 @@ const defaultProjectID = "main"
 // failing against a pruned node.
 const recentBlockWindow = 128
 
+// defaultERPCMetricsPort is eRPC's own default metrics port, and the one this
+// app publishes on unless told otherwise.
+//
+// MEASURED 2026-07-27, not read from erpc.dist.yaml (which is stale — see the
+// note on gatewayConfigTemplate): both gateways on the development machine were
+// already serving Prometheus here, because eRPC's built-in default is
+// metrics.enabled = true and this app rendered no metrics block at all. That is
+// precisely why the block below is now rendered UNCONDITIONALLY. A file that is
+// silent about metrics does not mean metrics are off, it means the reader
+// cannot tell — and an off switch that writes nothing would turn nothing off.
+const defaultERPCMetricsPort = 4001
+
 // The kinds of thing an upstream can BE. The distinction exists because two
 // of them are not addresses at all — they are references to something this
 // app manages, whose address is derived when the config is rendered.
@@ -125,6 +137,36 @@ type GatewayConfig struct {
 	// rendered config stays stable across runs.
 	Networks []GatewayNetwork
 
+	// MetricsOff turns off the gateway's own request counters.
+	//
+	// It is spelled negatively on purpose. The zero value has to mean ON: that
+	// is eRPC's own default, it is the decision the owner made ("on by default,
+	// the user can disable it in settings"), and it means every configuration
+	// already written to disk keeps behaving exactly as it does today without a
+	// migration. An `Enabled bool` would have silently switched metrics off for
+	// every existing install the first time this struct was reloaded.
+	//
+	// What is being turned off is narrow and local: eRPC counting its own
+	// requests, in its own process, readable only over loopback. Nothing is
+	// transmitted anywhere, which is why this is a checkbox rather than a
+	// consent flow.
+	MetricsOff bool
+
+	// MetricsPort is the port the counters are served on (0 → 4001).
+	MetricsPort int
+
+	// MetricsBindAddr is the address the metrics listener binds to
+	// ("" → loopback).
+	//
+	// Unlike BindAddr this is NOT an operator-facing setting, and the UI does
+	// not offer it. It exists because the container's view of the gateway and
+	// the host's view differ: inside a container the listener must be wide open
+	// on a private namespace for the -p mapping to reach it, while a
+	// systemd-hosted gateway binds loopback directly. ops.GatewayContainerConfig
+	// rewrites this exactly as it rewrites BindAddr, so the two stay symmetric
+	// and neither can be widened by accident.
+	MetricsBindAddr string
+
 	// TLS is the HTTPS front for this gateway, nil when there is none.
 	//
 	// It lives on the gateway config rather than beside it because the rendered
@@ -166,6 +208,13 @@ server:
   # Losing response compression is the cheaper half of that trade.
   enableGzip: false
 {{- end}}
+# The gateway counts its own requests so the app can show which endpoints are
+# carrying the load. The counters stay on this machine — they are served on
+# loopback and nothing is sent anywhere.
+metrics:
+  enabled: {{.MetricsEnabled}}
+  hostV4: {{.MetricsHost}}
+  port: {{.MetricsPort}}
 projects:
   - id: {{.ProjectID}}
     networks:
@@ -216,6 +265,9 @@ type gatewayVars struct {
 	ProjectID         string
 	RecentBlockWindow int
 	Fronted           bool
+	MetricsEnabled    bool
+	MetricsHost       string
+	MetricsPort       int
 	Networks          []gatewayNetworkVars
 	Upstreams         []gatewayUpstreamVars
 }
@@ -244,6 +296,30 @@ func (g GatewayConfig) HTTP() int {
 	return g.Port
 }
 
+// MetricsEnabled reports whether the gateway counts its own requests. Derived
+// from the negative field so every caller asks the positive question.
+func (g GatewayConfig) MetricsEnabled() bool { return !g.MetricsOff }
+
+// MetricsHTTP resolves the metrics port (0 → 4001).
+func (g GatewayConfig) MetricsHTTP() int {
+	if g.MetricsPort == 0 {
+		return defaultERPCMetricsPort
+	}
+	return g.MetricsPort
+}
+
+// MetricsBind resolves the metrics listen host ("" → loopback).
+//
+// Loopback is the default and the RPC bind is not, which is the whole
+// distinction: ERPCBind names a front door meant to be reachable, and this
+// names a counter nobody outside the machine has any business reading.
+func (g GatewayConfig) MetricsBind() string {
+	if g.MetricsBindAddr == "" {
+		return "127.0.0.1"
+	}
+	return g.MetricsBindAddr
+}
+
 // PathFor is the request path for a chain — the URL callers actually use.
 // The same path serves WebSocket with a ws:// or wss:// scheme.
 func (g GatewayConfig) PathFor(chainID int) string {
@@ -266,12 +342,23 @@ func RenderGatewayConfig(g GatewayConfig) (string, error) {
 		return "", err
 	}
 
+	// The two listeners cannot share a port. eRPC would bind whichever it
+	// starts first and fail the second, so the gateway would come up serving
+	// either RPC or counters and nothing would say which — catching it here
+	// makes it a refused configuration instead of a coin toss at startup.
+	if g.MetricsEnabled() && g.MetricsHTTP() == g.HTTP() {
+		return "", fmt.Errorf("catalog: gateway: the metrics port and the RPC port are both %d — they are two listeners and cannot share one port", g.HTTP())
+	}
+
 	vars := gatewayVars{
 		Host:              strconv.Quote(g.Bind()),
 		Port:              g.HTTP(),
 		ProjectID:         g.ProjectIDOrDefault(),
 		RecentBlockWindow: recentBlockWindow,
 		Fronted:           g.Fronted(),
+		MetricsEnabled:    g.MetricsEnabled(),
+		MetricsHost:       strconv.Quote(g.MetricsBind()),
+		MetricsPort:       g.MetricsHTTP(),
 	}
 
 	seenChains := make(map[int]bool, len(g.Networks))
@@ -302,7 +389,7 @@ func RenderGatewayConfig(g GatewayConfig) (string, error) {
 
 			id := u.ID
 			if id == "" {
-				id = generatedUpstreamID(n.ChainID, u.Local, i+1)
+				id = GeneratedUpstreamID(n.ChainID, u.Local, i+1)
 			}
 			// eRPC keys upstreams by id; a duplicate would silently
 			// shadow rather than error, so catch it here.
@@ -338,10 +425,17 @@ func validUpstreamScheme(endpoint string) bool {
 	return false
 }
 
-// generatedUpstreamID builds a stable id for an upstream the caller did not
+// GeneratedUpstreamID builds a stable id for an upstream the caller did not
 // name. Position is included because a chain can carry several upstreams of
 // the same kind.
-func generatedUpstreamID(chainID int, local bool, pos int) string {
+//
+// It is exported because the id it produces is the id eRPC labels its own
+// request counters with. Anything reading those counters back has to arrive at
+// the same string from the same config, and a second implementation of this
+// rule elsewhere would not fail loudly — it would attribute every request to an
+// upstream nobody can see, and draw a traffic bar of zeroes over a gateway that
+// is working perfectly.
+func GeneratedUpstreamID(chainID int, local bool, pos int) string {
 	kind := "fallback"
 	if local {
 		kind = "local"

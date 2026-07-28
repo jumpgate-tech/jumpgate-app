@@ -457,7 +457,26 @@ func (p *gatewayPlan) checkPortFree(ctx context.Context, e executor.Executor) er
 		port = p.gw.TLS.HTTPS()
 		what = "gateway's HTTPS front"
 	}
+	if err := p.probePort(ctx, e, port, what); err != nil {
+		return err
+	}
+	// The metrics port is checked too, and it is not a formality: it defaults
+	// to 4001, which is one above eRPC's default RPC port and therefore exactly
+	// the kind of number something else on a developer's machine has already
+	// taken. Left unchecked, the collision surfaces as `docker run` failing
+	// halfway through the run step with the container already removed.
+	if mp := p.metricsHostPort(); mp > 0 {
+		if err := p.probePort(ctx, e, mp, "gateway's metrics port"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
+// probePort is one port's half of checkPortFree, split out so the two calls
+// cannot drift in how they read the probe's output. The leniencies documented
+// on checkPortFree apply to both.
+func (p *gatewayPlan) probePort(ctx context.Context, e executor.Executor, port int, what string) error {
 	res, err := e.Run(ctx, fmt.Sprintf(listenerProbe, port), nil)
 	if err != nil {
 		return fmt.Errorf("preflight: probe listeners on port %d: %w", port, err)
@@ -514,6 +533,21 @@ func (p *gatewayPlan) front(ctx context.Context, e executor.Executor) (*tlsFront
 // Cheap and I/O-free, for the many places that only need the shape of the plan.
 func (p *gatewayPlan) fronted() bool {
 	return p.backend == BackendDocker && p.gw.Fronted()
+}
+
+// metricsHostPort is the port the counters are readable on FROM THE TARGET's
+// own loopback, or 0 when there is nothing to read.
+//
+// The docker answer is the host side of a -p mapping; the systemd answer is
+// simply where the process binds, because there is no namespace in between. The
+// two backends therefore agree on one thing that matters: whatever this returns,
+// `curl http://127.0.0.1:<it>/metrics` on the target reaches the counters, which
+// is what lets one scrape path serve both.
+func (p *gatewayPlan) metricsHostPort() int {
+	if !p.gw.MetricsEnabled() {
+		return 0
+	}
+	return p.gw.MetricsHTTP()
 }
 
 // ---------------------------------------------------------------------
@@ -819,6 +853,10 @@ func (p *gatewayPlan) runDocker(ctx context.Context, e executor.Executor, st *St
 		// published eRPC port would be a second, plaintext, unauthenticated way
 		// in that the operator did not ask for and would not see.
 		NoPublish: p.fronted(),
+		// Published even for a fronted gateway, and always on loopback. See
+		// ops.ERPCRunSpec.MetricsPort. Zero when the operator turned the
+		// counters off, which publishes nothing.
+		MetricsPort: p.metricsHostPort(),
 	})
 	res, err := ops.DockerRun(ctx, e, args...)
 	if err != nil {

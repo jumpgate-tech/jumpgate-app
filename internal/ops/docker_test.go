@@ -1127,3 +1127,78 @@ func TestEnsureNetwork_IsIdempotent(t *testing.T) {
 		t.Fatalf("losing the creation race is not a failure: %v", err)
 	}
 }
+
+// ---- metrics publishing ----
+
+// The counters are published on loopback whatever the gateway's own bind is.
+// BindAddr exists so an operator can put the RPC front door on a Tailscale or
+// LAN address; a request counter is not a front door and the widening knob
+// does not apply to it.
+func TestERPCRunArgs_MetricsPortIsPinnedToLoopback(t *testing.T) {
+	args := strings.Join(ERPCRunArgs(ERPCRunSpec{
+		BindAddr:       "0.0.0.0",
+		HostPort:       4000,
+		MetricsPort:    4001,
+		HostConfigPath: "/tmp/erpc.yaml",
+	}), " ")
+	if !strings.Contains(args, "-p 127.0.0.1:4001:4001") {
+		t.Errorf("metrics must publish on loopback: %s", args)
+	}
+	if strings.Contains(args, "-p 0.0.0.0:4001") {
+		t.Errorf("a wide RPC bind must never widen the metrics mapping: %s", args)
+	}
+	if !strings.Contains(args, "-p 0.0.0.0:4000:4000") {
+		t.Errorf("the RPC mapping still follows BindAddr: %s", args)
+	}
+}
+
+// A fronted gateway publishes no RPC port and still publishes its counters.
+// Without this, the recommended configuration (HTTPS on) would be the one
+// configuration whose traffic share could never be read.
+func TestERPCRunArgs_NoPublishStillPublishesMetrics(t *testing.T) {
+	args := strings.Join(ERPCRunArgs(ERPCRunSpec{
+		NoPublish:      true,
+		HostPort:       4000,
+		MetricsPort:    4001,
+		HostConfigPath: "/tmp/erpc.yaml",
+	}), " ")
+	if strings.Contains(args, ":4000:") {
+		t.Errorf("NoPublish must suppress the RPC mapping: %s", args)
+	}
+	if !strings.Contains(args, "-p 127.0.0.1:4001:4001") {
+		t.Errorf("NoPublish must NOT suppress the metrics mapping: %s", args)
+	}
+}
+
+// Metrics turned off publishes nothing at all, so the port is not merely
+// unreadable by policy — there is no mapping to reach.
+func TestERPCRunArgs_ZeroMetricsPortPublishesNothing(t *testing.T) {
+	args := strings.Join(ERPCRunArgs(ERPCRunSpec{HostConfigPath: "/tmp/erpc.yaml"}), " ")
+	if strings.Contains(args, "4001") {
+		t.Errorf("a zero MetricsPort must emit no mapping: %s", args)
+	}
+}
+
+// The container's view widens the metrics listener for the same reason it
+// widens the RPC one — a container-loopback listener is unreachable even from
+// the -p mapping aimed at it — and fixes it at the in-container port.
+func TestGatewayContainerConfig_WidensMetricsListener(t *testing.T) {
+	in := catalog.GatewayConfig{
+		BindAddr:    "127.0.0.1",
+		Port:        4200,
+		MetricsPort: 9101,
+		Networks:    []catalog.GatewayNetwork{{ChainID: 369, Upstreams: []catalog.GatewayUpstream{{Endpoint: "https://rpc.pulsechain.com"}}}},
+	}
+	out := GatewayContainerConfig(in, DockerHostAlias)
+	if got := out.MetricsBind(); got != "0.0.0.0" {
+		t.Errorf("in-container metrics bind = %q, want 0.0.0.0", got)
+	}
+	if got := out.MetricsHTTP(); got != ERPCContainerMetricsPort {
+		t.Errorf("in-container metrics port = %d, want %d", got, ERPCContainerMetricsPort)
+	}
+	// The operator's own value is untouched on the way in; only the container's
+	// copy is rewritten.
+	if in.MetricsPort != 9101 {
+		t.Errorf("GatewayContainerConfig must not mutate its argument, got MetricsPort %d", in.MetricsPort)
+	}
+}
