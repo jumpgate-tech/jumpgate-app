@@ -508,3 +508,44 @@ func TestGateways_SourcesEnumerateTheFleet(t *testing.T) {
 		t.Fatalf("the local devnet is missing from the sources: %+v", body.Sources)
 	}
 }
+
+// FOUND BY RUNNING IT: an external endpoint the operator has marked as THEIRS
+// was labelled "public endpoint · 192.168.3.22" on a row whose Role column
+// said "Yours". Both came from the same upstream, and they contradicted each
+// other.
+//
+// This is not a rare shape. An external upstream carrying Local is the ordinary
+// way to front a node valve-node-app does not manage — someone else's box, a
+// node installed by hand — and it is the tier that decides the intended share,
+// so calling it public where the operator can read it undermines the one
+// column that explains why the share bar is amber.
+func TestGateways_AnEndpointTheOperatorOwnsIsNotCalledPublic(t *testing.T) {
+	cfg := config.Config{Targets: []config.Target{{ID: "here", Mode: "local"}}}
+	gw := config.Gateway{
+		ID:        "default",
+		Placement: config.GatewayPlacement{TargetID: "here", Backend: "docker"},
+		Config: catalog.GatewayConfig{Networks: []catalog.GatewayNetwork{{ChainID: 369, Upstreams: []catalog.GatewayUpstream{
+			{ID: "mine", Endpoint: "ws://192.168.3.22:8546", Local: true},
+			{ID: "theirs", Endpoint: "https://rpc.pulsechain.com", Local: false},
+		}}}},
+	}
+
+	_, mine, err := resolveUpstream(cfg, gw, gw.Config.Networks[0].Upstreams[0])
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if strings.Contains(mine, "public") {
+		t.Errorf("label %q calls the operator's own endpoint public", mine)
+	}
+	if !strings.Contains(mine, "192.168.3.22") {
+		t.Errorf("label %q must still name the host — that is what someone recognises", mine)
+	}
+
+	_, theirs, err := resolveUpstream(cfg, gw, gw.Config.Networks[0].Upstreams[1])
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !strings.Contains(theirs, "public endpoint") {
+		t.Errorf("an endpoint filed in the fallback tier IS a public one here: %q", theirs)
+	}
+}

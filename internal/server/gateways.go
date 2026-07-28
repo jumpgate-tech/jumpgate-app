@@ -595,7 +595,7 @@ func resolveUpstream(cfg config.Config, gw config.Gateway, u catalog.GatewayUpst
 		if e == "" {
 			return "", "", errors.New("no endpoint")
 		}
-		return e, publicLabel(e), nil
+		return e, externalLabel(e, u.Local), nil
 
 	case catalog.UpstreamManagedDevnet:
 		t, ok := findTarget(cfg, u.TargetID)
@@ -741,20 +741,34 @@ func nodeLabel(gw config.Gateway, targetID string, w catalog.WireConfig) string 
 	return where + " · " + w.ExecID
 }
 
-// publicLabel names an external endpoint by its host, which is what an
+// externalLabel names an external endpoint by its host, which is what an
 // operator recognizes ("rpc.pulsechain.com"), rather than repeating the whole
 // URL that is already displayed beside it.
 //
-// A loopback endpoint is NOT called public: it is something on the gateway's
-// own machine that this app does not manage, and calling that "public" is
-// both wrong and misleading about where the traffic goes.
-func publicLabel(endpoint string) string {
+// Two endpoints are NOT called public, and both exclusions are about not
+// telling the operator something untrue on the row they are reading:
+//
+//   - A LOOPBACK endpoint is something on the gateway's own machine that this
+//     app does not manage. Calling that public is both wrong and misleading
+//     about where the traffic goes.
+//   - An endpoint the operator marked as THEIRS (local, i.e. eRPC's preferred
+//     tier) is theirs whether or not this app installed it. FOUND BY RUNNING
+//     IT: a node fronted this way was labelled "public endpoint · 192.168.3.22"
+//     on a row whose Role column said "Yours", the two contradicting each other
+//     in the same table. This is the ordinary way to front a node
+//     valve-node-app does not manage — someone else's box, an install done by
+//     hand — and the tier is exactly what decides the intended share, so
+//     mislabelling it undercuts the column that explains an amber bar.
+func externalLabel(endpoint string, mine bool) string {
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Host == "" {
 		return "external endpoint"
 	}
 	if isLoopbackHost(u.Hostname()) {
 		return "unmanaged endpoint on the gateway's own machine"
+	}
+	if mine {
+		return "your endpoint · " + u.Hostname()
 	}
 	return "public endpoint · " + u.Hostname()
 }
