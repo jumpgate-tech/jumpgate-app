@@ -45,8 +45,15 @@ func mergeGatewaysPerTarget(gws []Gateway) ([]Gateway, []OrphanedContainer) {
 
 	for _, t := range order {
 		idx := groups[t]
-		if len(idx) == 1 {
-			out = append(out, gws[idx[0]])
+		// An unplaced gateway (t == "") is already in an error state the UI
+		// reports ("placed on machine ..., which is no longer registered").
+		// Grouping every unplaced gateway as if they shared one machine would
+		// silently discard all but one of them on the next load, turning a
+		// visible error into lost configuration. Pass them through untouched.
+		if len(idx) == 1 || t == "" {
+			for _, i := range idx {
+				out = append(out, gws[i])
+			}
 			continue
 		}
 

@@ -204,3 +204,41 @@ func TestMigrateRecordsOrphansIdempotently(t *testing.T) {
 		t.Fatalf("migrate must be idempotent, got %+v", c.Orphans)
 	}
 }
+
+// The dedupe branch only matters when a record for this container is ALREADY
+// present and the merge produces it again. Testing that by calling migrate()
+// twice does not reach it: the first call removes the duplicate gateway, so
+// the second produces no orphans at all and any stub would pass.
+func TestMigrateDoesNotDuplicateAnExistingOrphanRecord(t *testing.T) {
+	c := Config{
+		Gateways: []Gateway{
+			gw("edge", "local", false),
+			gw("default", "local", true),
+		},
+		Orphans: []OrphanedContainer{{
+			ContainerName: "valve-node-app-erpc-edge", TargetID: "local", MergedInto: "default",
+		}},
+	}
+
+	c.migrate()
+
+	if len(c.Orphans) != 1 {
+		t.Fatalf("an already-recorded container must not be recorded twice: %+v", c.Orphans)
+	}
+}
+
+// An unplaced gateway is already in an error state the UI reports. Treating
+// every unplaced gateway as sharing one machine would silently discard all but
+// one of them, turning a visible error into lost configuration.
+func TestMergeLeavesUnplacedGatewaysAlone(t *testing.T) {
+	in := []Gateway{gw("a", "", false), gw("b", "", false)}
+
+	got, orphans := mergeGatewaysPerTarget(in)
+
+	if len(got) != 2 {
+		t.Errorf("unplaced gateways must not be merged into each other, got %d", len(got))
+	}
+	if len(orphans) != 0 {
+		t.Errorf("nothing was merged, so nothing was orphaned: %+v", orphans)
+	}
+}
