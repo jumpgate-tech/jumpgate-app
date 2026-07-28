@@ -930,6 +930,106 @@ export function getGatewayTraffic(gid: string): Promise<GatewayTraffic> {
   return request<GatewayTraffic>(`/api/gateways/${encodeURIComponent(gid)}/traffic`);
 }
 
+// ---- analytics: how is it doing, and why --------------------------------
+//
+// The share bars answer detection. These answer the question you ask next,
+// and they come in two halves that must never be averaged together: what
+// CLIENTS experienced (networks) and what the GATEWAY sees of its endpoints
+// (endpoints). Only the first is client traffic — every number in the second
+// counts eRPC's own state poller too, because eRPC publishes no label that
+// separates them.
+
+// Bucket is one cumulative histogram bucket: every request that finished
+// within `le` seconds. le is a string because the last one is "+Inf", which
+// JSON cannot carry as a number.
+export interface Bucket {
+  le: string;
+  count: number;
+}
+
+export interface Latency {
+  count: number;
+  // mean is null when nothing has been counted. 0 would be a claim about
+  // speed; "nobody has called this" is not one.
+  mean: number | null;
+  buckets: Bucket[] | null;
+}
+
+export interface MethodLatency extends Latency {
+  method: string;
+}
+
+export interface EndpointLatency extends Latency {
+  upstream: string;
+}
+
+export interface NetworkAnalytics {
+  chainId: number;
+  name: string;
+  // received is what clients asked for; answered is what endpoints returned;
+  // unattributed is what the gateway answered from its own cache. failed is
+  // the remainder, computed server-side so there is one definition of it.
+  received: number;
+  answered: number;
+  unattributed: number;
+  failed: number;
+  methods: MethodLatency[] | null;
+  endpoints: EndpointLatency[] | null;
+  // cached is how long the requests answered from the gateway's own cache
+  // took. It is not an endpoint row because a cache hit called no endpoint —
+  // rendering it as one would put a server on the screen that does not exist.
+  cached: Latency;
+  // failedLatency is how long the failed requests took. Failing fast and
+  // timing out after thirty seconds are different problems, and the failed
+  // count alone cannot tell them apart.
+  failedLatency: Latency;
+}
+
+export interface ErrorClass {
+  class: string;
+  severity: string;
+  method: string;
+  count: number;
+}
+
+// EndpointHealth is the gateway's own view of one endpoint. `requests`
+// includes the state poller and is usually mostly the state poller — it is
+// what the gateway asked of this endpoint, not what your clients did.
+export interface EndpointHealth {
+  upstream: string;
+  chainId: number;
+  configured: boolean;
+  requests: number;
+  errors: ErrorClass[] | null;
+  // scored is false when eRPC has never formed an opinion about this
+  // endpoint. Without it, position 0 ("preferred") is indistinguishable from
+  // an unset number, and an endpoint nothing can reach reads as the chosen
+  // one.
+  scored: boolean;
+  score: number;
+  position: number;
+  primarySwitches: number;
+  excludedSeconds: number;
+  headLag: number;
+  finalizationLag: number;
+  latestBlock: number;
+}
+
+export interface GatewayAnalytics {
+  enabled: boolean;
+  at: string;
+  since: string;
+  networks: NetworkAnalytics[] | null;
+  endpoints: EndpointHealth[] | null;
+  error?: string;
+}
+
+// getGatewayAnalytics reads one gateway's counters and returns both folds of
+// the same scrape. One request, one curl on the gateway's machine.
+export function getGatewayAnalytics(gid: string): Promise<GatewayAnalytics> {
+  return request<GatewayAnalytics>(`/api/gateways/${encodeURIComponent(gid)}/analytics`);
+}
+
 // ---- capabilities: what an endpoint can actually DO ----------------------
 
 export type CapabilityStatus = "supported" | "unsupported" | "inconclusive" | "inconsistent";

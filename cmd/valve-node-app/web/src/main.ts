@@ -1,8 +1,10 @@
-// Hash-routed SPA shell: #/targets, #/rpc, #/setup/<id>, #/dash/<id>,
-// #/logs/<id>, #/services/<id>, #/settings. No framework — each screen module renders into a shared
-// content element and returns a cleanup function (closes any EventSource /
-// timers) that main.ts calls before routing away.
+// Hash-routed SPA shell: #/targets, #/rpc, #/analytics/<gid>, #/setup/<id>,
+// #/dash/<id>, #/logs/<id>, #/services/<id>, #/settings. No framework — each
+// screen module renders into a shared content element and returns a cleanup
+// function (closes any EventSource / timers) that main.ts calls before routing
+// away.
 import "./style.css";
+import { renderAnalytics } from "./analytics";
 import { renderDashboard } from "./dashboard";
 import { renderLogs } from "./logs";
 import { renderDiagnostics } from "./diag";
@@ -37,7 +39,11 @@ function parseHash(): Route {
     screen === "logs" ||
     screen === "security" ||
     screen === "diag" ||
-    screen === "services"
+    screen === "services" ||
+    // analytics is scoped to a GATEWAY, not a machine — the id here is a
+    // gateway id, which is why it lands on #/rpc rather than #/targets when
+    // it is missing.
+    screen === "analytics"
   ) {
     return { screen, id: rawId ? decodeURIComponent(rawId) : undefined };
   }
@@ -111,6 +117,13 @@ function route(): void {
         return;
       }
       currentCleanup = mount((root) => renderServices(root, id));
+      break;
+    case "analytics":
+      if (!id) {
+        location.hash = "#/rpc";
+        return;
+      }
+      currentCleanup = mount((root) => renderAnalytics(root, id));
       break;
     case "rpc":
       // No id: eRPC is a layer over the whole fleet, not a machine's service,
