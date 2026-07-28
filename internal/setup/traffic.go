@@ -50,8 +50,40 @@ const trafficScrapeTimeout = 5
 // host-side port is the operator's, on both backends — for docker it is the host
 // half of the -p mapping, for systemd it is simply where the process bound.
 func ReadGatewayTraffic(ctx context.Context, e executor.Executor, g catalog.GatewayConfig) (metrics.Traffic, error) {
+	samples, err := ReadGatewaySamples(ctx, e, g)
+	if err != nil {
+		return metrics.Traffic{}, err
+	}
+	return metrics.FromSamples(samples, g.ProjectIDOrDefault()), nil
+}
+
+// ReadGatewayAnalytics scrapes one gateway and folds the same dump into the
+// diagnosis view: client-facing latency per chain, and per-endpoint error,
+// lag and selection state.
+//
+// It is a second fold of ONE scrape, not a second scrape. The dump carries
+// every family either view needs, so a caller that wants both — the analytics
+// screen wants share alongside latency — reads once with ReadGatewaySamples
+// and folds twice, rather than curling the gateway twice a poll for two halves
+// of the same reading.
+func ReadGatewayAnalytics(ctx context.Context, e executor.Executor, g catalog.GatewayConfig) (metrics.Analytics, error) {
+	samples, err := ReadGatewaySamples(ctx, e, g)
+	if err != nil {
+		return metrics.Analytics{}, err
+	}
+	return metrics.AnalyticsFromSamples(samples, g.ProjectIDOrDefault()), nil
+}
+
+// ReadGatewaySamples performs the scrape itself: one curl on the gateway's own
+// machine, parsed into samples and handed back unfolded.
+//
+// Every failure wording lives here rather than in each caller, which is the
+// point of the split: "the gateway publishes its counters on loopback only"
+// is the same explanation whichever view the operator was looking at, and two
+// copies of it would drift.
+func ReadGatewaySamples(ctx context.Context, e executor.Executor, g catalog.GatewayConfig) ([]metrics.Sample, error) {
 	if !g.MetricsEnabled() {
-		return metrics.Traffic{}, ErrMetricsOff
+		return nil, ErrMetricsOff
 	}
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/metrics", g.MetricsHTTP())
@@ -59,10 +91,10 @@ func ReadGatewayTraffic(ctx context.Context, e executor.Executor, g catalog.Gate
 
 	res, err := e.Run(ctx, cmd, nil)
 	if err != nil {
-		return metrics.Traffic{}, fmt.Errorf("traffic: scrape %s: %w", url, err)
+		return nil, fmt.Errorf("traffic: scrape %s: %w", url, err)
 	}
 	if res.ExitCode != 0 {
-		return metrics.Traffic{}, fmt.Errorf("traffic: %s did not answer (curl exit %d): %s — the gateway publishes its counters on loopback only, so this is read on the machine it runs on",
+		return nil, fmt.Errorf("traffic: %s did not answer (curl exit %d): %s — the gateway publishes its counters on loopback only, so this is read on the machine it runs on",
 			url, res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 
@@ -72,14 +104,14 @@ func ReadGatewayTraffic(ctx context.Context, e executor.Executor, g catalog.Gate
 		// connection and served nothing looks like. Saying so beats handing a
 		// parser an empty string and reporting "no networks", which reads as a
 		// healthy gateway nobody has called.
-		return metrics.Traffic{}, fmt.Errorf("traffic: %s answered with an empty body — something is listening there, but it is not serving Prometheus metrics", url)
+		return nil, fmt.Errorf("traffic: %s answered with an empty body — something is listening there, but it is not serving Prometheus metrics", url)
 	}
 
 	samples, err := metrics.ParseText(strings.NewReader(body))
 	if err != nil {
-		return metrics.Traffic{}, fmt.Errorf("traffic: %s did not answer with Prometheus text: %w", url, err)
+		return nil, fmt.Errorf("traffic: %s did not answer with Prometheus text: %w", url, err)
 	}
-	return metrics.FromSamples(samples, g.ProjectIDOrDefault()), nil
+	return samples, nil
 }
 
 // IntentsFor derives what the routing configuration says each upstream of one
