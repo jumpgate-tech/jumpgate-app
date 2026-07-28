@@ -1,0 +1,376 @@
+# HELP erpc_network_dynamic_block_time_milliseconds Dynamically computed block time per network in milliseconds.
+# TYPE erpc_network_dynamic_block_time_milliseconds gauge
+erpc_network_dynamic_block_time_milliseconds{network="evm:1",project="main"} 12000
+erpc_network_dynamic_block_time_milliseconds{network="evm:369",project="main"} 10211
+# HELP erpc_network_evm_block_range_requested_total Total requests observed by block-number buckets for heatmap.
+# TYPE erpc_network_evm_block_range_requested_total counter
+erpc_network_evm_block_range_requested_total{bucket="TIP",category="eth_blockNumber",finality="realtime",network="evm:369",project="main",size="0",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 5
+# HELP erpc_network_latest_block_timestamp_distance_seconds Distance in seconds between the latest block timestamp and current time for a network.
+# TYPE erpc_network_latest_block_timestamp_distance_seconds gauge
+erpc_network_latest_block_timestamp_distance_seconds{network="evm:1",origin="evm_state_poller",project="main"} 4.546
+erpc_network_latest_block_timestamp_distance_seconds{network="evm:369",origin="evm_state_poller",project="main"} 5.183
+erpc_network_latest_block_timestamp_distance_seconds{network="n/a",origin="evm_state_poller",project="main"} 10.028
+# HELP erpc_network_request_duration_seconds Duration of requests for a network.
+# TYPE erpc_network_request_duration_seconds histogram
+erpc_network_request_duration_seconds_bucket{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="0.05"} 0
+erpc_network_request_duration_seconds_bucket{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="0.5"} 5
+erpc_network_request_duration_seconds_bucket{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="5"} 5
+erpc_network_request_duration_seconds_bucket{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="30"} 5
+erpc_network_request_duration_seconds_bucket{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="+Inf"} 5
+erpc_network_request_duration_seconds_sum{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 0.834064999
+erpc_network_request_duration_seconds_count{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 5
+# HELP erpc_network_request_received_total Total number of requests received for a network.
+# TYPE erpc_network_request_received_total counter
+erpc_network_request_received_total{agent_name="curl",category="eth_blockNumber",finality="realtime",network="evm:369",project="main",user="n/a"} 5
+# HELP erpc_network_successful_request_total Total number of successful requests for a network.
+# TYPE erpc_network_successful_request_total counter
+erpc_network_successful_request_total{agent_name="curl",attempt="1",category="eth_blockNumber",emptyish="false",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 5
+# HELP erpc_selection_eligible_upstreams Count of upstreams returned by the most recent tick.
+# TYPE erpc_selection_eligible_upstreams gauge
+erpc_selection_eligible_upstreams{method="*",network="evm:1",project="main"} 1
+erpc_selection_eligible_upstreams{method="*",network="evm:369",project="main"} 1
+# HELP erpc_selection_eval_duration_seconds Per-tick eval latency for the selection policy.
+# TYPE erpc_selection_eval_duration_seconds histogram
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:1",project="main",le="0.0005"} 55
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:1",project="main",le="0.001"} 193
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:1",project="main",le="0.002"} 360
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:1",project="main",le="0.005"} 409
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:1",project="main",le="0.01"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:1",project="main",le="0.025"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:1",project="main",le="0.05"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:1",project="main",le="0.1"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:1",project="main",le="0.25"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:1",project="main",le="0.5"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:1",project="main",le="1"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:1",project="main",le="+Inf"} 413
+erpc_selection_eval_duration_seconds_sum{method="*",network="evm:1",project="main"} 0.5124028439999999
+erpc_selection_eval_duration_seconds_count{method="*",network="evm:1",project="main"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:369",project="main",le="0.0005"} 69
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:369",project="main",le="0.001"} 208
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:369",project="main",le="0.002"} 397
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:369",project="main",le="0.005"} 412
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:369",project="main",le="0.01"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:369",project="main",le="0.025"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:369",project="main",le="0.05"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:369",project="main",le="0.1"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:369",project="main",le="0.25"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:369",project="main",le="0.5"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:369",project="main",le="1"} 413
+erpc_selection_eval_duration_seconds_bucket{method="*",network="evm:369",project="main",le="+Inf"} 413
+erpc_selection_eval_duration_seconds_sum{method="*",network="evm:369",project="main"} 0.43396116699999976
+erpc_selection_eval_duration_seconds_count{method="*",network="evm:369",project="main"} 413
+# HELP erpc_selection_excluded_seconds Wall-clock seconds the upstream has been continuously excluded. `0` when in rotation. Alert on `> 600` for `stuck excluded > 10m`.
+# TYPE erpc_selection_excluded_seconds gauge
+erpc_selection_excluded_seconds{method="*",network="evm:1",project="main",upstream="public-1-1"} 0
+erpc_selection_excluded_seconds{method="*",network="evm:369",project="main",upstream="public-369-1"} 0
+# HELP erpc_selection_position Selection-policy output position for an upstream: 0 = primary, 1+ = runner-up, -1 = excluded this tick.
+# TYPE erpc_selection_position gauge
+erpc_selection_position{method="*",network="evm:1",project="main",upstream="public-1-1"} 0
+erpc_selection_position{method="*",network="evm:369",project="main",upstream="public-369-1"} 0
+# HELP erpc_selection_primary_switch_total Primary-upstream changes per (project, network, method, from, to).
+# TYPE erpc_selection_primary_switch_total counter
+erpc_selection_primary_switch_total{from="",method="*",network="evm:1",project="main",to="public-1-1"} 1
+erpc_selection_primary_switch_total{from="",method="*",network="evm:369",project="main",to="public-369-1"} 1
+# HELP erpc_selection_score Per-upstream score produced by `sortByScore`. Lower = better. Missing for upstreams that bypassed scoring (probeExcluded/forceInclude additions and policies without a sortByScore step).
+# TYPE erpc_selection_score gauge
+erpc_selection_score{method="*",network="evm:1",project="main",upstream="public-1-1"} 0.10510024449496153
+erpc_selection_score{method="*",network="evm:369",project="main",upstream="public-369-1"} 0.04708422735343804
+# HELP erpc_upstream_attempt_outcome_total Per-(upstream, method, outcome) attempt count. Outcomes: success/empty/transport_error/server_error/client_error/rate_limited/missing_data/exec_revert/block_unavailable/breaker_open/cancelled/timeout/skipped.
+# TYPE erpc_upstream_attempt_outcome_total counter
+erpc_upstream_attempt_outcome_total{category="eth_blockNumber",finality="realtime",is_hedge="false",is_retry="false",network="evm:369",outcome="success",project="main",upstream="public-369-1"} 5
+erpc_upstream_attempt_outcome_total{category="eth_chainId",finality="unknown",is_hedge="false",is_retry="false",network="n/a",outcome="success",project="main",upstream="public-1-1"} 1
+erpc_upstream_attempt_outcome_total{category="eth_chainId",finality="unknown",is_hedge="false",is_retry="false",network="n/a",outcome="success",project="main",upstream="public-369-1"} 1
+erpc_upstream_attempt_outcome_total{category="eth_chainId",finality="unknown",is_hedge="false",is_retry="false",network="n/a",outcome="transport_error",project="main",upstream="devnet"} 56
+erpc_upstream_attempt_outcome_total{category="eth_getBlockByNumber",finality="unknown",is_hedge="false",is_retry="false",network="n/a",outcome="success",project="main",upstream="public-1-1"} 414
+erpc_upstream_attempt_outcome_total{category="eth_getBlockByNumber",finality="unknown",is_hedge="false",is_retry="false",network="n/a",outcome="success",project="main",upstream="public-369-1"} 414
+erpc_upstream_attempt_outcome_total{category="eth_syncing",finality="unknown",is_hedge="false",is_retry="false",network="n/a",outcome="success",project="main",upstream="public-1-1"} 4
+erpc_upstream_attempt_outcome_total{category="eth_syncing",finality="unknown",is_hedge="false",is_retry="false",network="n/a",outcome="success",project="main",upstream="public-369-1"} 4
+# HELP erpc_upstream_block_head_lag Total number of blocks (head) behind the most up-to-date upstream.
+# TYPE erpc_upstream_block_head_lag gauge
+erpc_upstream_block_head_lag{network="evm:1",project="main",upstream="public-1-1",vendor="drpc"} 0
+erpc_upstream_block_head_lag{network="evm:369",project="main",upstream="public-369-1",vendor="unknown-pulsechain.com"} 0
+erpc_upstream_block_head_lag{network="n/a",project="main",upstream="public-369-1",vendor="unknown-pulsechain.com"} 0
+# HELP erpc_upstream_finalization_lag Total number of finalized blocks behind the most up-to-date upstream.
+# TYPE erpc_upstream_finalization_lag gauge
+erpc_upstream_finalization_lag{network="evm:1",project="main",upstream="public-1-1",vendor="drpc"} 0
+erpc_upstream_finalization_lag{network="evm:369",project="main",upstream="public-369-1",vendor="unknown-pulsechain.com"} 0
+erpc_upstream_finalization_lag{network="n/a",project="main",upstream="public-1-1",vendor="drpc"} 0
+# HELP erpc_upstream_finalized_block_number Finalized block number of upstreams.
+# TYPE erpc_upstream_finalized_block_number gauge
+erpc_upstream_finalized_block_number{network="evm:1",project="main",upstream="*",vendor="*"} 2.5628181e+07
+erpc_upstream_finalized_block_number{network="evm:1",project="main",upstream="public-1-1",vendor="drpc"} 2.5628181e+07
+erpc_upstream_finalized_block_number{network="evm:369",project="main",upstream="*",vendor="*"} 2.7140778e+07
+erpc_upstream_finalized_block_number{network="evm:369",project="main",upstream="public-369-1",vendor="unknown-pulsechain.com"} 2.7140778e+07
+erpc_upstream_finalized_block_number{network="n/a",project="main",upstream="*",vendor="*"} 2.5627671e+07
+erpc_upstream_finalized_block_number{network="n/a",project="main",upstream="public-1-1",vendor="drpc"} 2.5627671e+07
+# HELP erpc_upstream_finalized_block_polled_total Total number of times the finalized block was pro-actively polled from an upstream.
+# TYPE erpc_upstream_finalized_block_polled_total counter
+erpc_upstream_finalized_block_polled_total{network="evm:1",project="main",upstream="public-1-1",vendor="drpc"} 206
+erpc_upstream_finalized_block_polled_total{network="evm:369",project="main",upstream="public-369-1",vendor="unknown-pulsechain.com"} 206
+erpc_upstream_finalized_block_polled_total{network="n/a",project="main",upstream="public-1-1",vendor="drpc"} 1
+erpc_upstream_finalized_block_polled_total{network="n/a",project="main",upstream="public-369-1",vendor="unknown-pulsechain.com"} 1
+# HELP erpc_upstream_latest_block_number Latest block number of upstreams.
+# TYPE erpc_upstream_latest_block_number gauge
+erpc_upstream_latest_block_number{network="evm:1",project="main",upstream="*",vendor="*"} 2.562827e+07
+erpc_upstream_latest_block_number{network="evm:1",project="main",upstream="public-1-1",vendor="drpc"} 2.562827e+07
+erpc_upstream_latest_block_number{network="evm:369",project="main",upstream="*",vendor="*"} 2.7140864e+07
+erpc_upstream_latest_block_number{network="evm:369",project="main",upstream="public-369-1",vendor="unknown-pulsechain.com"} 2.7140864e+07
+erpc_upstream_latest_block_number{network="n/a",project="main",upstream="*",vendor="*"} 2.7140264e+07
+erpc_upstream_latest_block_number{network="n/a",project="main",upstream="public-369-1",vendor="unknown-pulsechain.com"} 2.7140264e+07
+# HELP erpc_upstream_latest_block_polled_total Total number of times the latest block was pro-actively polled from an upstream.
+# TYPE erpc_upstream_latest_block_polled_total counter
+erpc_upstream_latest_block_polled_total{network="evm:1",project="main",upstream="public-1-1",vendor="drpc"} 206
+erpc_upstream_latest_block_polled_total{network="evm:369",project="main",upstream="public-369-1",vendor="unknown-pulsechain.com"} 206
+erpc_upstream_latest_block_polled_total{network="n/a",project="main",upstream="public-1-1",vendor="drpc"} 1
+erpc_upstream_latest_block_polled_total{network="n/a",project="main",upstream="public-369-1",vendor="unknown-pulsechain.com"} 1
+# HELP erpc_upstream_request_duration_seconds Duration of actual requests towards upstreams.
+# TYPE erpc_upstream_request_duration_seconds histogram
+erpc_upstream_request_duration_seconds_bucket{category="eth_blockNumber",composite="none",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="0.05"} 0
+erpc_upstream_request_duration_seconds_bucket{category="eth_blockNumber",composite="none",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="0.5"} 5
+erpc_upstream_request_duration_seconds_bucket{category="eth_blockNumber",composite="none",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="5"} 5
+erpc_upstream_request_duration_seconds_bucket{category="eth_blockNumber",composite="none",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="30"} 5
+erpc_upstream_request_duration_seconds_bucket{category="eth_blockNumber",composite="none",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="+Inf"} 5
+erpc_upstream_request_duration_seconds_sum{category="eth_blockNumber",composite="none",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 0.8325509530000001
+erpc_upstream_request_duration_seconds_count{category="eth_blockNumber",composite="none",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 5
+erpc_upstream_request_duration_seconds_bucket{category="eth_chainId",composite="none",finality="unknown",network="n/a",project="main",upstream="devnet",user="n/a",vendor="unknown-docker.internal",le="0.05"} 56
+erpc_upstream_request_duration_seconds_bucket{category="eth_chainId",composite="none",finality="unknown",network="n/a",project="main",upstream="devnet",user="n/a",vendor="unknown-docker.internal",le="0.5"} 56
+erpc_upstream_request_duration_seconds_bucket{category="eth_chainId",composite="none",finality="unknown",network="n/a",project="main",upstream="devnet",user="n/a",vendor="unknown-docker.internal",le="5"} 56
+erpc_upstream_request_duration_seconds_bucket{category="eth_chainId",composite="none",finality="unknown",network="n/a",project="main",upstream="devnet",user="n/a",vendor="unknown-docker.internal",le="30"} 56
+erpc_upstream_request_duration_seconds_bucket{category="eth_chainId",composite="none",finality="unknown",network="n/a",project="main",upstream="devnet",user="n/a",vendor="unknown-docker.internal",le="+Inf"} 56
+erpc_upstream_request_duration_seconds_sum{category="eth_chainId",composite="none",finality="unknown",network="n/a",project="main",upstream="devnet",user="n/a",vendor="unknown-docker.internal"} 0.15560937699999997
+erpc_upstream_request_duration_seconds_count{category="eth_chainId",composite="none",finality="unknown",network="n/a",project="main",upstream="devnet",user="n/a",vendor="unknown-docker.internal"} 56
+erpc_upstream_request_duration_seconds_bucket{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:1",project="main",upstream="public-1-1",user="n/a",vendor="drpc",le="0.05"} 297
+erpc_upstream_request_duration_seconds_bucket{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:1",project="main",upstream="public-1-1",user="n/a",vendor="drpc",le="0.5"} 411
+erpc_upstream_request_duration_seconds_bucket{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:1",project="main",upstream="public-1-1",user="n/a",vendor="drpc",le="5"} 413
+erpc_upstream_request_duration_seconds_bucket{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:1",project="main",upstream="public-1-1",user="n/a",vendor="drpc",le="30"} 413
+erpc_upstream_request_duration_seconds_bucket{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:1",project="main",upstream="public-1-1",user="n/a",vendor="drpc",le="+Inf"} 413
+erpc_upstream_request_duration_seconds_sum{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:1",project="main",upstream="public-1-1",user="n/a",vendor="drpc"} 19.234984003999994
+erpc_upstream_request_duration_seconds_count{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:1",project="main",upstream="public-1-1",user="n/a",vendor="drpc"} 413
+erpc_upstream_request_duration_seconds_bucket{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="0.05"} 0
+erpc_upstream_request_duration_seconds_bucket{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="0.5"} 409
+erpc_upstream_request_duration_seconds_bucket{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="5"} 413
+erpc_upstream_request_duration_seconds_bucket{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="30"} 413
+erpc_upstream_request_duration_seconds_bucket{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com",le="+Inf"} 413
+erpc_upstream_request_duration_seconds_sum{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 70.13837151700005
+erpc_upstream_request_duration_seconds_count{category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 413
+# HELP erpc_upstream_request_errors_total Total number of errors for actual requests towards upstreams.
+# TYPE erpc_upstream_request_errors_total counter
+erpc_upstream_request_errors_total{agent_name="unknown",category="eth_chainId",composite="none",error="ErrEndpointTransportFailure",finality="unknown",network="n/a",project="main",severity="critical",upstream="devnet",user="n/a",vendor="unknown-docker.internal"} 56
+# HELP erpc_upstream_request_total Total number of actual requests to upstreams.
+# TYPE erpc_upstream_request_total counter
+erpc_upstream_request_total{agent_name="curl",attempt="1",category="eth_blockNumber",composite="none",finality="realtime",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 5
+erpc_upstream_request_total{agent_name="unknown",attempt="1",category="eth_chainId",composite="none",finality="unknown",network="n/a",project="main",upstream="devnet",user="n/a",vendor="unknown-docker.internal"} 56
+erpc_upstream_request_total{agent_name="unknown",attempt="1",category="eth_chainId",composite="none",finality="unknown",network="n/a",project="main",upstream="public-1-1",user="n/a",vendor="drpc"} 1
+erpc_upstream_request_total{agent_name="unknown",attempt="1",category="eth_chainId",composite="none",finality="unknown",network="n/a",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 1
+erpc_upstream_request_total{agent_name="unknown",attempt="1",category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:1",project="main",upstream="public-1-1",user="n/a",vendor="drpc"} 412
+erpc_upstream_request_total{agent_name="unknown",attempt="1",category="eth_getBlockByNumber",composite="none",finality="unknown",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 412
+erpc_upstream_request_total{agent_name="unknown",attempt="1",category="eth_getBlockByNumber",composite="none",finality="unknown",network="n/a",project="main",upstream="public-1-1",user="n/a",vendor="drpc"} 2
+erpc_upstream_request_total{agent_name="unknown",attempt="1",category="eth_getBlockByNumber",composite="none",finality="unknown",network="n/a",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 2
+erpc_upstream_request_total{agent_name="unknown",attempt="1",category="eth_syncing",composite="none",finality="unknown",network="evm:1",project="main",upstream="public-1-1",user="n/a",vendor="drpc"} 3
+erpc_upstream_request_total{agent_name="unknown",attempt="1",category="eth_syncing",composite="none",finality="unknown",network="evm:369",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 3
+erpc_upstream_request_total{agent_name="unknown",attempt="1",category="eth_syncing",composite="none",finality="unknown",network="n/a",project="main",upstream="public-1-1",user="n/a",vendor="drpc"} 1
+erpc_upstream_request_total{agent_name="unknown",attempt="1",category="eth_syncing",composite="none",finality="unknown",network="n/a",project="main",upstream="public-369-1",user="n/a",vendor="unknown-pulsechain.com"} 1
+# HELP erpc_upstream_response_size_bytes Size of the result body of upstream JSON-RPC responses in bytes (decoded post-gzip), per network/method/finality.
+# TYPE erpc_upstream_response_size_bytes histogram
+erpc_upstream_response_size_bytes_bucket{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",le="4096"} 5
+erpc_upstream_response_size_bytes_bucket{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",le="65536"} 5
+erpc_upstream_response_size_bytes_bucket{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",le="1.048576e+06"} 5
+erpc_upstream_response_size_bytes_bucket{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",le="1.6777216e+07"} 5
+erpc_upstream_response_size_bytes_bucket{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",le="1.048576e+08"} 5
+erpc_upstream_response_size_bytes_bucket{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",le="+Inf"} 5
+erpc_upstream_response_size_bytes_sum{category="eth_blockNumber",finality="realtime",network="evm:369",project="main"} 55
+erpc_upstream_response_size_bytes_count{category="eth_blockNumber",finality="realtime",network="evm:369",project="main"} 5
+erpc_upstream_response_size_bytes_bucket{category="eth_chainId",finality="unknown",network="n/a",project="main",le="4096"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_chainId",finality="unknown",network="n/a",project="main",le="65536"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_chainId",finality="unknown",network="n/a",project="main",le="1.048576e+06"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_chainId",finality="unknown",network="n/a",project="main",le="1.6777216e+07"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_chainId",finality="unknown",network="n/a",project="main",le="1.048576e+08"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_chainId",finality="unknown",network="n/a",project="main",le="+Inf"} 2
+erpc_upstream_response_size_bytes_sum{category="eth_chainId",finality="unknown",network="n/a",project="main"} 12
+erpc_upstream_response_size_bytes_count{category="eth_chainId",finality="unknown",network="n/a",project="main"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="evm:1",project="main",le="4096"} 0
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="evm:1",project="main",le="65536"} 413
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="evm:1",project="main",le="1.048576e+06"} 413
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="evm:1",project="main",le="1.6777216e+07"} 413
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="evm:1",project="main",le="1.048576e+08"} 413
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="evm:1",project="main",le="+Inf"} 413
+erpc_upstream_response_size_bytes_sum{category="eth_getBlockByNumber",finality="unknown",network="evm:1",project="main"} 7.793329e+06
+erpc_upstream_response_size_bytes_count{category="eth_getBlockByNumber",finality="unknown",network="evm:1",project="main"} 413
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="evm:369",project="main",le="4096"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="evm:369",project="main",le="65536"} 413
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="evm:369",project="main",le="1.048576e+06"} 413
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="evm:369",project="main",le="1.6777216e+07"} 413
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="evm:369",project="main",le="1.048576e+08"} 413
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="evm:369",project="main",le="+Inf"} 413
+erpc_upstream_response_size_bytes_sum{category="eth_getBlockByNumber",finality="unknown",network="evm:369",project="main"} 2.705809e+06
+erpc_upstream_response_size_bytes_count{category="eth_getBlockByNumber",finality="unknown",network="evm:369",project="main"} 413
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="n/a",project="main",le="4096"} 0
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="n/a",project="main",le="65536"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="n/a",project="main",le="1.048576e+06"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="n/a",project="main",le="1.6777216e+07"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="n/a",project="main",le="1.048576e+08"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_getBlockByNumber",finality="unknown",network="n/a",project="main",le="+Inf"} 2
+erpc_upstream_response_size_bytes_sum{category="eth_getBlockByNumber",finality="unknown",network="n/a",project="main"} 24734
+erpc_upstream_response_size_bytes_count{category="eth_getBlockByNumber",finality="unknown",network="n/a",project="main"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="evm:1",project="main",le="4096"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="evm:1",project="main",le="65536"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="evm:1",project="main",le="1.048576e+06"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="evm:1",project="main",le="1.6777216e+07"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="evm:1",project="main",le="1.048576e+08"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="evm:1",project="main",le="+Inf"} 3
+erpc_upstream_response_size_bytes_sum{category="eth_syncing",finality="unknown",network="evm:1",project="main"} 15
+erpc_upstream_response_size_bytes_count{category="eth_syncing",finality="unknown",network="evm:1",project="main"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="evm:369",project="main",le="4096"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="evm:369",project="main",le="65536"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="evm:369",project="main",le="1.048576e+06"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="evm:369",project="main",le="1.6777216e+07"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="evm:369",project="main",le="1.048576e+08"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="evm:369",project="main",le="+Inf"} 3
+erpc_upstream_response_size_bytes_sum{category="eth_syncing",finality="unknown",network="evm:369",project="main"} 15
+erpc_upstream_response_size_bytes_count{category="eth_syncing",finality="unknown",network="evm:369",project="main"} 3
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="n/a",project="main",le="4096"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="n/a",project="main",le="65536"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="n/a",project="main",le="1.048576e+06"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="n/a",project="main",le="1.6777216e+07"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="n/a",project="main",le="1.048576e+08"} 2
+erpc_upstream_response_size_bytes_bucket{category="eth_syncing",finality="unknown",network="n/a",project="main",le="+Inf"} 2
+erpc_upstream_response_size_bytes_sum{category="eth_syncing",finality="unknown",network="n/a",project="main"} 10
+erpc_upstream_response_size_bytes_count{category="eth_syncing",finality="unknown",network="n/a",project="main"} 2
+# HELP erpc_upstream_selection_total Total upstream selections by reason (primary/retry/hedge/consensus_slot/sweep). One increment per attempt start.
+# TYPE erpc_upstream_selection_total counter
+erpc_upstream_selection_total{category="eth_blockNumber",finality="realtime",network="evm:369",project="main",reason="primary",upstream="public-369-1"} 5
+erpc_upstream_selection_total{category="eth_chainId",finality="unknown",network="n/a",project="main",reason="primary",upstream="devnet"} 56
+erpc_upstream_selection_total{category="eth_chainId",finality="unknown",network="n/a",project="main",reason="primary",upstream="public-1-1"} 1
+erpc_upstream_selection_total{category="eth_chainId",finality="unknown",network="n/a",project="main",reason="primary",upstream="public-369-1"} 1
+erpc_upstream_selection_total{category="eth_getBlockByNumber",finality="unknown",network="n/a",project="main",reason="primary",upstream="public-1-1"} 414
+erpc_upstream_selection_total{category="eth_getBlockByNumber",finality="unknown",network="n/a",project="main",reason="primary",upstream="public-369-1"} 414
+erpc_upstream_selection_total{category="eth_syncing",finality="unknown",network="n/a",project="main",reason="primary",upstream="public-1-1"} 4
+erpc_upstream_selection_total{category="eth_syncing",finality="unknown",network="n/a",project="main",reason="primary",upstream="public-369-1"} 4
+# HELP go_gc_duration_seconds A summary of the wall-time pause (stop-the-world) duration in garbage collection cycles.
+# TYPE go_gc_duration_seconds summary
+go_gc_duration_seconds{quantile="0"} 3.4625e-05
+go_gc_duration_seconds{quantile="0.25"} 0.000259394
+go_gc_duration_seconds{quantile="0.5"} 0.000661872
+go_gc_duration_seconds{quantile="0.75"} 0.001084984
+go_gc_duration_seconds{quantile="1"} 0.001959927
+go_gc_duration_seconds_sum 0.040020046
+go_gc_duration_seconds_count 56
+# HELP go_gc_gogc_percent Heap size target percentage configured by the user, otherwise 100. This value is set by the GOGC environment variable, and the runtime/debug.SetGCPercent function. Sourced from /gc/gogc:percent.
+# TYPE go_gc_gogc_percent gauge
+go_gc_gogc_percent 100
+# HELP go_gc_gomemlimit_bytes Go runtime memory limit configured by the user, otherwise math.MaxInt64. This value is set by the GOMEMLIMIT environment variable, and the runtime/debug.SetMemoryLimit function. Sourced from /gc/gomemlimit:bytes.
+# TYPE go_gc_gomemlimit_bytes gauge
+go_gc_gomemlimit_bytes 9.223372036854776e+18
+# HELP go_goroutines Number of goroutines that currently exist.
+# TYPE go_goroutines gauge
+go_goroutines 46
+# HELP go_info Information about the Go environment.
+# TYPE go_info gauge
+go_info{version="go1.26.0"} 1
+# HELP go_memstats_alloc_bytes Number of bytes allocated in heap and currently in use. Equals to /memory/classes/heap/objects:bytes.
+# TYPE go_memstats_alloc_bytes gauge
+go_memstats_alloc_bytes 2.8115312e+07
+# HELP go_memstats_alloc_bytes_total Total number of bytes allocated in heap until now, even if released already. Equals to /gc/heap/allocs:bytes.
+# TYPE go_memstats_alloc_bytes_total counter
+go_memstats_alloc_bytes_total 3.1651296e+08
+# HELP go_memstats_buck_hash_sys_bytes Number of bytes used by the profiling bucket hash table. Equals to /memory/classes/profiling/buckets:bytes.
+# TYPE go_memstats_buck_hash_sys_bytes gauge
+go_memstats_buck_hash_sys_bytes 1.537425e+06
+# HELP go_memstats_frees_total Total number of heap objects frees. Equals to /gc/heap/frees:objects + /gc/heap/tiny/allocs:objects.
+# TYPE go_memstats_frees_total counter
+go_memstats_frees_total 1.909323e+06
+# HELP go_memstats_gc_sys_bytes Number of bytes used for garbage collection system metadata. Equals to /memory/classes/metadata/other:bytes.
+# TYPE go_memstats_gc_sys_bytes gauge
+go_memstats_gc_sys_bytes 3.999488e+06
+# HELP go_memstats_heap_alloc_bytes Number of heap bytes allocated and currently in use, same as go_memstats_alloc_bytes. Equals to /memory/classes/heap/objects:bytes.
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes 2.8115312e+07
+# HELP go_memstats_heap_idle_bytes Number of heap bytes waiting to be used. Equals to /memory/classes/heap/released:bytes + /memory/classes/heap/free:bytes.
+# TYPE go_memstats_heap_idle_bytes gauge
+go_memstats_heap_idle_bytes 1.2886016e+07
+# HELP go_memstats_heap_inuse_bytes Number of heap bytes that are in use. Equals to /memory/classes/heap/objects:bytes + /memory/classes/heap/unused:bytes
+# TYPE go_memstats_heap_inuse_bytes gauge
+go_memstats_heap_inuse_bytes 3.2202752e+07
+# HELP go_memstats_heap_objects Number of currently allocated objects. Equals to /gc/heap/objects:objects.
+# TYPE go_memstats_heap_objects gauge
+go_memstats_heap_objects 60496
+# HELP go_memstats_heap_released_bytes Number of heap bytes released to OS. Equals to /memory/classes/heap/released:bytes.
+# TYPE go_memstats_heap_released_bytes gauge
+go_memstats_heap_released_bytes 1.159168e+07
+# HELP go_memstats_heap_sys_bytes Number of heap bytes obtained from system. Equals to /memory/classes/heap/objects:bytes + /memory/classes/heap/unused:bytes + /memory/classes/heap/released:bytes + /memory/classes/heap/free:bytes.
+# TYPE go_memstats_heap_sys_bytes gauge
+go_memstats_heap_sys_bytes 4.5088768e+07
+# HELP go_memstats_last_gc_time_seconds Number of seconds since 1970 of last garbage collection.
+# TYPE go_memstats_last_gc_time_seconds gauge
+go_memstats_last_gc_time_seconds 1.7852049468611867e+09
+# HELP go_memstats_mallocs_total Total number of heap objects allocated, both live and gc-ed. Semantically a counter version for go_memstats_heap_objects gauge. Equals to /gc/heap/allocs:objects + /gc/heap/tiny/allocs:objects.
+# TYPE go_memstats_mallocs_total counter
+go_memstats_mallocs_total 1.969819e+06
+# HELP go_memstats_mcache_inuse_bytes Number of bytes in use by mcache structures. Equals to /memory/classes/metadata/mcache/inuse:bytes.
+# TYPE go_memstats_mcache_inuse_bytes gauge
+go_memstats_mcache_inuse_bytes 9184
+# HELP go_memstats_mcache_sys_bytes Number of bytes used for mcache structures obtained from system. Equals to /memory/classes/metadata/mcache/inuse:bytes + /memory/classes/metadata/mcache/free:bytes.
+# TYPE go_memstats_mcache_sys_bytes gauge
+go_memstats_mcache_sys_bytes 16072
+# HELP go_memstats_mspan_inuse_bytes Number of bytes in use by mspan structures. Equals to /memory/classes/metadata/mspan/inuse:bytes.
+# TYPE go_memstats_mspan_inuse_bytes gauge
+go_memstats_mspan_inuse_bytes 252000
+# HELP go_memstats_mspan_sys_bytes Number of bytes used for mspan structures obtained from system. Equals to /memory/classes/metadata/mspan/inuse:bytes + /memory/classes/metadata/mspan/free:bytes.
+# TYPE go_memstats_mspan_sys_bytes gauge
+go_memstats_mspan_sys_bytes 293760
+# HELP go_memstats_next_gc_bytes Number of heap bytes when next garbage collection will take place. Equals to /gc/heap/goal:bytes.
+# TYPE go_memstats_next_gc_bytes gauge
+go_memstats_next_gc_bytes 4.6044026e+07
+# HELP go_memstats_other_sys_bytes Number of bytes used for other system allocations. Equals to /memory/classes/other:bytes.
+# TYPE go_memstats_other_sys_bytes gauge
+go_memstats_other_sys_bytes 897599
+# HELP go_memstats_stack_inuse_bytes Number of bytes obtained from system for stack allocator in non-CGO environments. Equals to /memory/classes/heap/stacks:bytes.
+# TYPE go_memstats_stack_inuse_bytes gauge
+go_memstats_stack_inuse_bytes 1.048576e+06
+# HELP go_memstats_stack_sys_bytes Number of bytes obtained from system for stack allocator. Equals to /memory/classes/heap/stacks:bytes + /memory/classes/os-stacks:bytes.
+# TYPE go_memstats_stack_sys_bytes gauge
+go_memstats_stack_sys_bytes 1.048576e+06
+# HELP go_memstats_sys_bytes Number of bytes obtained from system. Equals to /memory/classes/total:byte.
+# TYPE go_memstats_sys_bytes gauge
+go_memstats_sys_bytes 5.2881688e+07
+# HELP go_sched_gomaxprocs_threads The current runtime.GOMAXPROCS setting, or the number of operating system threads that can execute user-level Go code simultaneously. Sourced from /sched/gomaxprocs:threads.
+# TYPE go_sched_gomaxprocs_threads gauge
+go_sched_gomaxprocs_threads 4
+# HELP go_threads Number of OS threads created.
+# TYPE go_threads gauge
+go_threads 10
+# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total 6.99
+# HELP process_max_fds Maximum number of open file descriptors.
+# TYPE process_max_fds gauge
+process_max_fds 524287
+# HELP process_network_receive_bytes_total Number of bytes received by the process over the network.
+# TYPE process_network_receive_bytes_total counter
+process_network_receive_bytes_total 5.734161e+06
+# HELP process_network_transmit_bytes_total Number of bytes sent by the process over the network.
+# TYPE process_network_transmit_bytes_total counter
+process_network_transmit_bytes_total 525759
+# HELP process_open_fds Number of open file descriptors.
+# TYPE process_open_fds gauge
+process_open_fds 13
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 7.1319552e+07
+# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.78519881873e+09
+# HELP process_virtual_memory_bytes Virtual memory size in bytes.
+# TYPE process_virtual_memory_bytes gauge
+process_virtual_memory_bytes 1.4154752e+09
+# HELP process_virtual_memory_max_bytes Maximum amount of virtual memory available in bytes.
+# TYPE process_virtual_memory_max_bytes gauge
+process_virtual_memory_max_bytes 1.8446744073709552e+19
+# HELP promhttp_metric_handler_requests_in_flight Current number of scrapes being served.
+# TYPE promhttp_metric_handler_requests_in_flight gauge
+promhttp_metric_handler_requests_in_flight 1
+# HELP promhttp_metric_handler_requests_total Total number of scrapes by HTTP status code.
+# TYPE promhttp_metric_handler_requests_total counter
+promhttp_metric_handler_requests_total{code="200"} 2
+promhttp_metric_handler_requests_total{code="500"} 0
+promhttp_metric_handler_requests_total{code="503"} 0
