@@ -18,6 +18,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/valve-tech/valve-node-app/internal/wsrpc"
 )
 
 // ---------------------------------------------------------------------------
@@ -80,7 +82,7 @@ func wsRPCServer(t *testing.T, chainID int, delay time.Duration) *httptest.Serve
 			http.Error(w, "not a websocket upgrade", http.StatusBadRequest)
 			return
 		}
-		sum := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + wsGUID))
+		sum := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + wsrpc.GUID))
 		hj, ok := w.(http.Hijacker)
 		if !ok {
 			t.Errorf("ResponseWriter is not a Hijacker")

@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/valve-tech/valve-node-app/internal/wsrpc"
 )
 
 // ---------------------------------------------------------------------------
@@ -177,7 +179,7 @@ func wsServer(t *testing.T, mode wsMode, chainID int) *httptest.Server {
 			http.Error(w, "websockets not enabled on this endpoint", http.StatusBadRequest)
 			return
 		}
-		sum := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + wsGUID))
+		sum := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + wsrpc.GUID))
 		accept := base64.StdEncoding.EncodeToString(sum[:])
 		if mode == wsBadHash {
 			accept = base64.StdEncoding.EncodeToString([]byte("not the right digest"))

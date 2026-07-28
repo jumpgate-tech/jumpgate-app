@@ -1,14 +1,8 @@
 package capabilities
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha1"
-	"crypto/tls"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/valve-tech/valve-node-app/internal/wsrpc"
 )
 
 // Defaults for a zero-configuration Prober.
@@ -39,9 +35,6 @@ const (
 	// normally empty, but a misconfigured or hostile endpoint must not be able
 	// to balloon memory on a small node.
 	maxReplyBytes = 8 << 20
-	// maxFrameBytes caps a single WebSocket frame. The only thing we ever read
-	// over a socket is an eth_chainId answer, which is a few dozen bytes.
-	maxFrameBytes = 1 << 20
 )
 
 // Probe arguments. The addresses are deliberately the zero address and the zero
@@ -406,13 +399,13 @@ func (p *Prober) probeWS(ctx context.Context, rawURL string, chainID int) Result
 
 	raw, err := p.do(ctx, wsURL, []byte(chainIDRequest))
 	switch {
-	case errors.Is(err, errWSRefused):
+	case errors.Is(err, wsrpc.ErrRefused):
 		return Result{Status: StatusUnsupported, Method: method,
 			Detail: fmt.Sprintf("%s → %s", wsURL, unwrapRefusal(err))}
 	case errors.Is(err, syscall.ECONNREFUSED):
 		return Result{Status: StatusUnsupported, Method: method,
 			Detail: fmt.Sprintf("%s → connection refused (nothing listening for WebSocket)", wsURL)}
-	case errors.Is(err, errWSNoAnswer):
+	case errors.Is(err, wsrpc.ErrNoAnswer):
 		return Result{Status: StatusInconclusive, Method: method,
 			Detail: fmt.Sprintf("%s → handshake succeeded but eth_chainId over the socket did not answer (%s)", wsURL, unwrapRefusal(err))}
 	case err != nil:
@@ -558,7 +551,7 @@ func (p *Prober) do(ctx context.Context, rawURL string, payload []byte) ([]byte,
 	case "http", "https":
 		return p.httpRoundTrip(tctx, rawURL, payload)
 	case "ws", "wss":
-		return p.wsRoundTrip(tctx, u, payload)
+		return p.wsRoundTrip(tctx, rawURL, payload)
 	}
 	return nil, fmt.Errorf("unsupported URL scheme %q", u.Scheme)
 }
@@ -627,244 +620,26 @@ func reason(ctx context.Context, err error) string {
 }
 
 // ---------------------------------------------------------------------------
-// WebSocket transport — a minimal RFC 6455 client on the standard library only.
+// WebSocket transport
 //
-// This mirrors internal/chainlist's probeWS deliberately and reluctantly. That
-// implementation is the right one and this should call it, but its probe
-// helpers are unexported and this package is not allowed to widen them; see the
-// note returned with this work. Scope is one request and one response: open,
-// handshake, send one masked text frame, read one message, close. No
-// compression, no subprotocols, no continuation frames on send.
+// This used to be a copy of internal/chainlist's, carrying a comment saying so
+// and saying it should call that one instead. Both are internal/wsrpc now. What
+// remains here is the part that was ever this package's own: the vocabulary a
+// refusal and a silence are reported in.
 // ---------------------------------------------------------------------------
 
-// wsGUID is the RFC 6455 §1.3 magic value the server mixes into the
-// Sec-WebSocket-Accept digest.
-const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
-// errWSRefused marks a definitive refusal of the upgrade — the server answered
-// and said no. It is the difference between "this endpoint does not do
-// WebSocket" and "we could not tell", so it is a sentinel rather than a string
-// the caller has to pattern-match.
-var errWSRefused = errors.New("websocket upgrade refused")
-
-// errWSNoAnswer marks a handshake that succeeded followed by a socket that did
-// not produce a message. Also load-bearing: an eRPC upstream that infers
-// WebSocket from a URL scheme upgrades happily and then goes quiet.
-var errWSNoAnswer = errors.New("websocket answered nothing")
-
-func (p *Prober) wsRoundTrip(ctx context.Context, u *url.URL, payload []byte) ([]byte, error) {
-	secure := strings.EqualFold(u.Scheme, "wss")
-
-	addr := u.Host
-	if u.Port() == "" {
-		if secure {
-			addr = net.JoinHostPort(u.Hostname(), "443")
-		} else {
-			addr = net.JoinHostPort(u.Hostname(), "80")
-		}
-	}
-
-	conn, err := p.dialer().DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-
-	// The context governs the whole exchange: a deadline goes onto the socket,
-	// and a cancellation slams the connection shut so a blocked read unblocks.
-	if dl, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(dl)
-	}
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = conn.Close()
-		case <-done:
-		}
-	}()
-
-	if secure {
-		tconn := tls.Client(conn, &tls.Config{ServerName: u.Hostname()})
-		if err := tconn.HandshakeContext(ctx); err != nil {
-			return nil, err
-		}
-		conn = tconn
-	}
-
-	br := bufio.NewReader(conn)
-	if err := wsHandshake(conn, br, u); err != nil {
-		return nil, err
-	}
-	if err := wsWriteFrame(conn, payload); err != nil {
-		return nil, fmt.Errorf("%w: %v", errWSNoAnswer, err)
-	}
-	msg, err := wsReadMessage(br)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", errWSNoAnswer, err)
-	}
-	return msg, nil
-}
-
-// wsHandshake performs the opening HTTP Upgrade and verifies the accept digest.
-// Without the digest check we would happily "talk WebSocket" to a plain HTTP
-// server that echoed a 101 by accident — which is precisely the confusion this
-// probe exists to detect.
-func wsHandshake(conn net.Conn, br *bufio.Reader, u *url.URL) error {
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return fmt.Errorf("websocket: nonce: %w", err)
-	}
-	key := base64.StdEncoding.EncodeToString(nonce[:])
-
-	path := u.RequestURI()
-	if path == "" {
-		path = "/"
-	}
-	var req bytes.Buffer
-	fmt.Fprintf(&req, "GET %s HTTP/1.1\r\n", path)
-	fmt.Fprintf(&req, "Host: %s\r\n", u.Host)
-	req.WriteString("Upgrade: websocket\r\n")
-	req.WriteString("Connection: Upgrade\r\n")
-	fmt.Fprintf(&req, "Sec-WebSocket-Key: %s\r\n", key)
-	req.WriteString("Sec-WebSocket-Version: 13\r\n\r\n")
-	if _, err := conn.Write(req.Bytes()); err != nil {
-		return err
-	}
-
-	// http.ReadResponse understands the 101 and leaves the frame stream
-	// untouched in br, which is exactly the split we need.
-	resp, err := http.ReadResponse(br, &http.Request{Method: http.MethodGet})
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		return fmt.Errorf("%w: HTTP %s", errWSRefused, resp.Status)
-	}
-	if !strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") {
-		return fmt.Errorf("%w: 101 without Upgrade: websocket", errWSRefused)
-	}
-	sum := sha1.Sum([]byte(key + wsGUID))
-	if want := base64.StdEncoding.EncodeToString(sum[:]); resp.Header.Get("Sec-WebSocket-Accept") != want {
-		return fmt.Errorf("%w: bad Sec-WebSocket-Accept digest", errWSRefused)
-	}
-	return nil
+func (p *Prober) wsRoundTrip(ctx context.Context, rawURL string, payload []byte) ([]byte, error) {
+	return wsrpc.RoundTrip(ctx, rawURL, payload, &wsrpc.Options{Dialer: p.dialer()})
 }
 
 // unwrapRefusal renders a sentinel-wrapped websocket error without repeating
 // the sentinel's own words in the operator-facing detail.
 func unwrapRefusal(err error) string {
 	msg := err.Error()
-	for _, sentinel := range []error{errWSRefused, errWSNoAnswer} {
+	for _, sentinel := range []error{wsrpc.ErrRefused, wsrpc.ErrNoAnswer} {
 		if prefix := sentinel.Error() + ": "; strings.HasPrefix(msg, prefix) {
 			return strings.TrimPrefix(msg, prefix)
 		}
 	}
 	return msg
-}
-
-// wsWriteFrame writes payload as a single masked text frame. Clients must mask
-// (RFC 6455 §5.3); servers reject unmasked client frames.
-func wsWriteFrame(w io.Writer, payload []byte) error {
-	var mask [4]byte
-	if _, err := rand.Read(mask[:]); err != nil {
-		return fmt.Errorf("websocket: mask: %w", err)
-	}
-
-	var buf bytes.Buffer
-	buf.WriteByte(0x81) // FIN | opcode 1 (text)
-	switch n := len(payload); {
-	case n < 126:
-		buf.WriteByte(0x80 | byte(n))
-	case n <= 0xFFFF:
-		buf.WriteByte(0x80 | 126)
-		_ = binary.Write(&buf, binary.BigEndian, uint16(n))
-	default:
-		buf.WriteByte(0x80 | 127)
-		_ = binary.Write(&buf, binary.BigEndian, uint64(n))
-	}
-	buf.Write(mask[:])
-	for i, b := range payload {
-		buf.WriteByte(b ^ mask[i%4])
-	}
-	_, err := w.Write(buf.Bytes())
-	return err
-}
-
-// wsReadMessage reads frames until a complete data message arrives, skipping
-// the control frames a server may interleave (a ping before the answer is
-// normal on endpoints with an idle timer). Fragmented messages are reassembled.
-func wsReadMessage(br *bufio.Reader) ([]byte, error) {
-	var msg []byte
-	for {
-		fin, opcode, payload, err := wsReadFrame(br)
-		if err != nil {
-			return nil, err
-		}
-		switch opcode {
-		case 0x0, 0x1, 0x2: // continuation, text, binary
-			msg = append(msg, payload...)
-			if fin {
-				return msg, nil
-			}
-		case 0x8: // close
-			return nil, errors.New("closed before answering")
-		case 0x9, 0xA: // ping, pong — nothing to do for a single round trip
-		default:
-			return nil, fmt.Errorf("unexpected opcode %#x", opcode)
-		}
-	}
-}
-
-// wsReadFrame reads one frame header and its payload, unmasking if the peer
-// masked it (servers must not, but be liberal).
-func wsReadFrame(br *bufio.Reader) (fin bool, opcode byte, payload []byte, err error) {
-	var hdr [2]byte
-	if _, err = io.ReadFull(br, hdr[:]); err != nil {
-		return false, 0, nil, err
-	}
-	fin = hdr[0]&0x80 != 0
-	opcode = hdr[0] & 0x0F
-	masked := hdr[1]&0x80 != 0
-
-	length := uint64(hdr[1] & 0x7F)
-	switch length {
-	case 126:
-		var ext [2]byte
-		if _, err = io.ReadFull(br, ext[:]); err != nil {
-			return false, 0, nil, err
-		}
-		length = uint64(binary.BigEndian.Uint16(ext[:]))
-	case 127:
-		var ext [8]byte
-		if _, err = io.ReadFull(br, ext[:]); err != nil {
-			return false, 0, nil, err
-		}
-		length = binary.BigEndian.Uint64(ext[:])
-	}
-	if length > maxFrameBytes {
-		// An eth_chainId answer is tiny; a peer claiming otherwise is either
-		// broken or hostile, and we will not allocate for it.
-		return false, 0, nil, fmt.Errorf("oversized frame (%d bytes)", length)
-	}
-
-	var mask [4]byte
-	if masked {
-		if _, err = io.ReadFull(br, mask[:]); err != nil {
-			return false, 0, nil, err
-		}
-	}
-	payload = make([]byte, length)
-	if _, err = io.ReadFull(br, payload); err != nil {
-		return false, 0, nil, err
-	}
-	if masked {
-		for i := range payload {
-			payload[i] ^= mask[i%4]
-		}
-	}
-	return fin, opcode, payload, nil
 }

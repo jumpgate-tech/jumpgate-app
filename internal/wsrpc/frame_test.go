@@ -1,20 +1,15 @@
-package capabilities
+package wsrpc
 
 // The RFC 6455 frame reader. It is hand-rolled (no gorilla dependency) and it
 // is load-bearing: it is how an endpoint that advertises wss:// but cannot
 // actually speak it gets caught, which is true of rpc.pulsechain.com and of
 // every published chain-943 endpoint.
 //
-// A 1MiB frame is built for the over-cap case, so this file is measurably
-// slower than its chainlist twin. That is the cost of testing the real limit
-// rather than a stand-in for it.
-//
-// It is also duplicated — internal/chainlist and internal/setup each carry
-// their own copy, with THREE different size caps between them (1MB here, 64KB
-// in chainlist, 8MB in setup). These tests are deliberately written to the same
-// shape in all three packages, so whoever finally extracts internal/wsrpc has a
-// behavioural spec to extract against rather than three readings of three
-// implementations.
+// This file was the extraction's spec before it was this package's test. Three
+// near-identical copies of it lived in internal/chainlist, internal/capabilities
+// and internal/setup — written to the same shape on purpose, so that the copies
+// could be replaced by one implementation without anyone having to read three
+// implementations first. It moved here intact; only the cap constant changed.
 
 import (
 	"bufio"
@@ -91,6 +86,14 @@ func wsStream(frames ...wsFrame) *bufio.Reader {
 	return bufio.NewReader(&b)
 }
 
+// readAtDefaultCap reads with the package default, which is the cap every
+// caller in the tree uses. The limit is a parameter rather than a constant
+// precisely because it used to be three constants; the tests exercise the
+// default, and TestReadMessage_HonoursACallerSuppliedCap covers the knob.
+func readAtDefaultCap(br *bufio.Reader) ([]byte, error) {
+	return readMessage(br, DefaultMaxMessageBytes)
+}
+
 const (
 	opText  = 0x1
 	opCont  = 0x0
@@ -104,9 +107,9 @@ const (
 // ---------------------------------------------------------------------
 
 func TestWSReadMessage_SingleTextFrame(t *testing.T) {
-	got, err := wsReadMessage(wsStream(wsFrame{fin: true, opcode: opText, payload: []byte(`{"result":"0x171"}`)}))
+	got, err := readAtDefaultCap(wsStream(wsFrame{fin: true, opcode: opText, payload: []byte(`{"result":"0x171"}`)}))
 	if err != nil {
-		t.Fatalf("wsReadMessage: %v", err)
+		t.Fatalf("readAtDefaultCap: %v", err)
 	}
 	if string(got) != `{"result":"0x171"}` {
 		t.Errorf("got %q", got)
@@ -118,13 +121,13 @@ func TestWSReadMessage_SingleTextFrame(t *testing.T) {
 // truncated JSON, which parses as a failure and reads as "this endpoint is
 // broken" — for an endpoint that is fine.
 func TestWSReadMessage_ReassemblesAFragmentedMessage(t *testing.T) {
-	got, err := wsReadMessage(wsStream(
+	got, err := readAtDefaultCap(wsStream(
 		wsFrame{fin: false, opcode: opText, payload: []byte(`{"resu`)},
 		wsFrame{fin: false, opcode: opCont, payload: []byte(`lt":"0`)},
 		wsFrame{fin: true, opcode: opCont, payload: []byte(`x171"}`)},
 	))
 	if err != nil {
-		t.Fatalf("wsReadMessage: %v", err)
+		t.Fatalf("readAtDefaultCap: %v", err)
 	}
 	if string(got) != `{"result":"0x171"}` {
 		t.Errorf("got %q, want the three fragments joined", got)
@@ -135,13 +138,13 @@ func TestWSReadMessage_ReassemblesAFragmentedMessage(t *testing.T) {
 // mid-exchange is normal. Treating one as the answer would produce an empty
 // body and a bogus "this endpoint answered nothing" verdict.
 func TestWSReadMessage_SkipsControlFramesAndKeepsReading(t *testing.T) {
-	got, err := wsReadMessage(wsStream(
+	got, err := readAtDefaultCap(wsStream(
 		wsFrame{fin: true, opcode: opPing, payload: []byte("keepalive")},
 		wsFrame{fin: true, opcode: opPong, payload: []byte("keepalive")},
 		wsFrame{fin: true, opcode: opText, payload: []byte("answer")},
 	))
 	if err != nil {
-		t.Fatalf("wsReadMessage: %v", err)
+		t.Fatalf("readAtDefaultCap: %v", err)
 	}
 	if string(got) != "answer" {
 		t.Errorf("got %q, want the text frame after the control frames", got)
@@ -152,7 +155,7 @@ func TestWSReadMessage_SkipsControlFramesAndKeepsReading(t *testing.T) {
 // advertises wss:// and cannot serve it. It must be an error, not an empty
 // success — an empty success is what makes a dead endpoint look live.
 func TestWSReadMessage_CloseBeforeAnAnswerIsAnError(t *testing.T) {
-	_, err := wsReadMessage(wsStream(wsFrame{fin: true, opcode: opClose}))
+	_, err := readAtDefaultCap(wsStream(wsFrame{fin: true, opcode: opClose}))
 	if err == nil {
 		t.Fatal("a close frame before any answer reported success")
 	}
@@ -162,7 +165,7 @@ func TestWSReadMessage_CloseBeforeAnAnswerIsAnError(t *testing.T) {
 }
 
 func TestWSReadMessage_UnknownOpcodeIsAnError(t *testing.T) {
-	_, err := wsReadMessage(wsStream(wsFrame{fin: true, opcode: 0xB, payload: []byte("x")}))
+	_, err := readAtDefaultCap(wsStream(wsFrame{fin: true, opcode: 0xB, payload: []byte("x")}))
 	if err == nil {
 		t.Fatal("an undefined opcode was accepted")
 	}
@@ -177,11 +180,11 @@ func TestWSReadMessage_UnknownOpcodeIsAnError(t *testing.T) {
 // error, which is the worst kind of wrong: it would be reported as an endpoint
 // serving a corrupt answer.
 func TestWSReadMessage_UnmasksAMaskedFrame(t *testing.T) {
-	got, err := wsReadMessage(wsStream(wsFrame{
+	got, err := readAtDefaultCap(wsStream(wsFrame{
 		fin: true, opcode: opText, payload: []byte("masked answer"), mask: []byte{0xDE, 0xAD, 0xBE, 0xEF},
 	}))
 	if err != nil {
-		t.Fatalf("wsReadMessage: %v", err)
+		t.Fatalf("readAtDefaultCap: %v", err)
 	}
 	if string(got) != "masked answer" {
 		t.Errorf("got %q, want the unmasked payload", got)
@@ -201,9 +204,9 @@ func TestWSReadMessage_EveryLengthEncoding(t *testing.T) {
 		"empty payload":          {fin: true, opcode: opText},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := wsReadMessage(wsStream(f))
+			got, err := readAtDefaultCap(wsStream(f))
 			if err != nil {
-				t.Fatalf("wsReadMessage: %v", err)
+				t.Fatalf("readAtDefaultCap: %v", err)
 			}
 			if !bytes.Equal(got, f.payload) {
 				t.Errorf("got %d bytes, want %d", len(got), len(f.payload))
@@ -224,7 +227,7 @@ func TestWSReadMessage_EveryLengthEncoding(t *testing.T) {
 // The test would fail by exhausting memory rather than by reporting, which is
 // why the declared length is absurd rather than merely over the cap.
 func TestWSReadMessage_RefusesAnAbsurdDeclaredLengthWithoutAllocating(t *testing.T) {
-	_, err := wsReadMessage(wsStream(wsFrame{
+	_, err := readAtDefaultCap(wsStream(wsFrame{
 		fin: true, opcode: opText, payload: []byte("tiny"), declaredLen: 1 << 40,
 	}))
 	if err == nil {
@@ -241,18 +244,18 @@ func TestWSReadMessage_RefusesAnAbsurdDeclaredLengthWithoutAllocating(t *testing
 // a short payload would pass either way, because the read would fail on the
 // missing bytes rather than on the limit.
 func TestWSReadMessage_RefusesACompleteFrameOverTheCap(t *testing.T) {
-	over := bytes.Repeat([]byte("x"), maxFrameBytes+1)
-	if _, err := wsReadMessage(wsStream(wsFrame{fin: true, opcode: opText, payload: over})); err == nil {
-		t.Fatalf("a complete %d-byte frame was accepted (cap is %d)", len(over), maxFrameBytes)
+	over := bytes.Repeat([]byte("x"), DefaultMaxMessageBytes+1)
+	if _, err := readAtDefaultCap(wsStream(wsFrame{fin: true, opcode: opText, payload: over})); err == nil {
+		t.Fatalf("a complete %d-byte frame was accepted (cap is %d)", len(over), DefaultMaxMessageBytes)
 	}
 
 	// And the largest legal frame still gets through, or the cap is a bug of
 	// its own: an endpoint whose answer sits just under the limit would be
 	// reported dead.
-	atCap := bytes.Repeat([]byte("x"), maxFrameBytes)
-	got, err := wsReadMessage(wsStream(wsFrame{fin: true, opcode: opText, payload: atCap}))
+	atCap := bytes.Repeat([]byte("x"), DefaultMaxMessageBytes)
+	got, err := readAtDefaultCap(wsStream(wsFrame{fin: true, opcode: opText, payload: atCap}))
 	if err != nil {
-		t.Fatalf("a frame exactly at the %d-byte cap was refused: %v", maxFrameBytes, err)
+		t.Fatalf("a frame exactly at the %d-byte cap was refused: %v", DefaultMaxMessageBytes, err)
 	}
 	if len(got) != len(atCap) {
 		t.Errorf("got %d bytes, want %d", len(got), len(atCap))
@@ -276,8 +279,111 @@ func TestWSReadMessage_TruncatedStreamsAreErrors(t *testing.T) {
 		"mask key cut short":       masked[:4],
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := wsReadMessage(bufio.NewReader(bytes.NewReader(raw))); err == nil {
+			if _, err := readAtDefaultCap(bufio.NewReader(bytes.NewReader(raw))); err == nil {
 				t.Fatalf("a truncated stream (%d bytes) was read as a complete message", len(raw))
+			}
+		})
+	}
+}
+
+// The cap is a parameter now, where it used to be three different constants in
+// three packages. A knob nothing exercises is a knob that does not work, so the
+// non-default path is covered even though every caller in the tree currently
+// takes the default.
+func TestReadMessage_HonoursACallerSuppliedCap(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), 2048)
+	frame := wsFrame{fin: true, opcode: opText, payload: payload}
+
+	if _, err := readMessage(wsStream(frame), 1024); err == nil {
+		t.Fatal("a 2048-byte frame was accepted under a 1024-byte cap")
+	}
+	got, err := readMessage(wsStream(frame), 4096)
+	if err != nil {
+		t.Fatalf("a 2048-byte frame was refused under a 4096-byte cap: %v", err)
+	}
+	if len(got) != len(payload) {
+		t.Errorf("got %d bytes, want %d", len(got), len(payload))
+	}
+}
+
+// A fragmented message is capped on the TOTAL, not per frame. Otherwise the
+// guard is trivially bypassed: a peer that wants to exhaust our memory sends
+// the same bytes as a million small continuation frames, every one of them
+// comfortably under the limit.
+func TestReadMessage_CapsTheAssembledMessageNotJustOneFrame(t *testing.T) {
+	chunk := bytes.Repeat([]byte("x"), 400)
+	_, err := readMessage(wsStream(
+		wsFrame{fin: false, opcode: opText, payload: chunk},
+		wsFrame{fin: false, opcode: opCont, payload: chunk},
+		wsFrame{fin: true, opcode: opCont, payload: chunk},
+	), 1024)
+	if err == nil {
+		t.Fatal("three 400-byte fragments (1200 bytes assembled) were accepted under a 1024-byte cap")
+	}
+}
+
+// ---------------------------------------------------------------------
+// the writing half
+// ---------------------------------------------------------------------
+
+// A client frame MUST be masked (RFC 6455 §5.3) and a server is required to
+// close the connection on an unmasked one. Nothing in the three copies this
+// package replaces ever tested that, so the mask bit is asserted directly —
+// reading the frame back is not enough, because the reader unmasks liberally
+// and would accept an unmasked frame just as happily.
+func TestWriteText_MasksTheFrame(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeText(&buf, []byte("hello")); err != nil {
+		t.Fatalf("writeText: %v", err)
+	}
+	raw := buf.Bytes()
+	if raw[0] != 0x81 {
+		t.Errorf("first header byte is %#x, want 0x81 (FIN set, opcode 1 = text)", raw[0])
+	}
+	if raw[1]&0x80 == 0 {
+		t.Fatal("the mask bit is clear — a server is required to close on an unmasked client frame")
+	}
+}
+
+// The masking must actually be applied, not merely announced. A writer that
+// set the bit and sent the plaintext would produce a frame the server unmasks
+// into garbage — and the failure would land on the peer, not here.
+func TestWriteText_MaskIsAppliedNotJustAnnounced(t *testing.T) {
+	payload := bytes.Repeat([]byte("A"), 64)
+	var buf bytes.Buffer
+	if err := writeText(&buf, payload); err != nil {
+		t.Fatalf("writeText: %v", err)
+	}
+	// header(2) + mask(4), then the body
+	if body := buf.Bytes()[6:]; bytes.Equal(body, payload) {
+		t.Fatal("the payload went out in the clear with the mask bit set")
+	}
+}
+
+// Both extended length encodings, on the boundaries. A writer that got the
+// 16-bit case wrong would corrupt every request over 125 bytes — which is
+// every batch call this app makes.
+func TestWriteText_RoundTripsEveryLengthEncoding(t *testing.T) {
+	for name, payload := range map[string][]byte{
+		"7-bit length":         []byte("short"),
+		"boundary at 125":      bytes.Repeat([]byte("y"), 125),
+		"boundary at 126":      bytes.Repeat([]byte("z"), 126),
+		"16-bit length":        bytes.Repeat([]byte("m"), 4000),
+		"boundary at 65535":    bytes.Repeat([]byte("n"), 65535),
+		"64-bit length, 65536": bytes.Repeat([]byte("o"), 65536),
+		"empty":                nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := writeText(&buf, payload); err != nil {
+				t.Fatalf("writeText: %v", err)
+			}
+			got, err := readAtDefaultCap(bufio.NewReader(&buf))
+			if err != nil {
+				t.Fatalf("reading back a %d-byte frame we wrote: %v", len(payload), err)
+			}
+			if !bytes.Equal(got, payload) {
+				t.Errorf("round trip returned %d bytes, want %d", len(got), len(payload))
 			}
 		})
 	}

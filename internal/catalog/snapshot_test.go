@@ -123,8 +123,9 @@ func TestRethDownloadCommand_TheInjectionCanaryActuallyFires(t *testing.T) {
 }
 
 // A chain with no reth --chain name has no snapshot to download. Returning an
-// error rather than an empty --chain is what stops the caller running
-// `reth download --chain ''`, which reth accepts and points at mainnet.
+// error rather than an empty --chain is what stops the caller running reth
+// download with an empty --chain value, which reth accepts and points at
+// mainnet.
 func TestRethDownloadCommand_RefusesAChainRethCannotName(t *testing.T) {
 	for _, chainID := range []int{DevnetChainID, 0, 1337, 999999} {
 		cmd, err := RethDownloadCommand(WireConfig{ChainID: chainID, DataDir: "/data", SnapshotKey: "vk_x"})
