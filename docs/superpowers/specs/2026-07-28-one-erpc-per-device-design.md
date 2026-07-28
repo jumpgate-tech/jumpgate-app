@@ -58,14 +58,23 @@ A gateway names its host via `Placement`. Multiple gateways therefore mean multi
 machines; two gateways on one machine is a violation the app permitted rather than a
 configuration anyone chose.
 
-Enforced in two places:
+Enforcement is on the *creation* path only:
 
 - `POST /api/gateways` refuses a gateway whose `Placement.TargetID` already has one,
   with the existing gateway named in the error.
-- Whole-config validation applies the same rule, so a hand-edited `config.json` is
-  refused where it is loaded rather than producing a second container at provision.
+- The UI stops offering "add gateway" for a device that already has one, rather than
+  rendering a control whose only outcome is a 400.
 
-The UI stops offering "add gateway" for a device that already has one.
+Load-time validation deliberately does **not** refuse. A config that already violates
+the invariant is merged (§2), not rejected — refusing at load would lock an operator
+out of their own app over a state the app itself permitted. So the two paths differ
+on purpose: new violations are impossible, existing ones are repaired.
+
+This also means an existing test has to change rather than merely being extended:
+`TestGateways_TwoGatewaysCoexistWithDistinctContainers` creates two gateways on
+target `local` and asserts they coexist. Its real subject — distinct container names,
+with `default` keeping the historical `valve-node-app-erpc` — stays valid and moves
+to two separate targets.
 
 ## 2. Merging what already exists
 
