@@ -1,24 +1,29 @@
-// #/rpc — eRPC as a LAYER over the whole fleet.
+// #/rpc — eRPC as a LAYER over the whole fleet. The Control Surface.
 //
-// The screen is three tiers, and the geometry is the argument:
+// The geometry IS the argument, and it is one table:
 //
-//   TIER 1  a FULL-WIDTH BAR per gateway. It spans the width because it
-//           fronts everything below it: state, the URL callers dial, the
-//           lifecycle actions — and, inside the bar, the networks it serves
-//           as selectable chips. "eRPC fronts these N networks" is one line.
-//   TIER 2  those chips. Clicking one focuses the area below on it; `+` adds
-//           a network. A chain with no working endpoint is styled apart,
-//           because it is a network eRPC will accept and then fail to serve,
-//           and that must not look identical to a healthy one.
-//   TIER 3  UNDER the bar, the endpoints of the ONE selected chain: what each
-//           one is (this machine's devnet, a node on box-a, a public
-//           endpoint), whether it can be used, and what may be done to it.
+//   THE BAR     a full-width header per gateway. It spans the width because it
+//               fronts everything below it: state, the URL callers dial, the
+//               lifecycle actions.
+//   THE BANDS   one row per chain, spanning every column, wrapping the
+//               endpoints that serve it. The routing hierarchy becomes
+//               STRUCTURAL rather than described — you can see that these
+//               three endpoints are what /main/evm/369 resolves to, because
+//               they are physically underneath it.
+//   THE ROWS    one per endpoint: what it is, whether it can be used, what it
+//               can DO, and what share of the traffic it is actually carrying.
 //
-// Chips rather than a dropdown, up to CHIP_LIMIT: a gateway typically fronts
-// two to five chains, and a row of chips shows the whole answer at a glance
-// where a dropdown would hide all but one. Past that threshold the row stops
-// being legible and it collapses into the existing dropdown control — same
-// selection model, one visible at a time.
+// This replaced a chip row plus a panel showing ONE selected chain. Selection
+// was the problem: a gateway's whole job is fronting several chains, and a
+// screen that shows one at a time cannot answer "which of my chains is
+// misrouting" without clicking through every one of them. Every chain is now
+// visible at once and there is no selection state to get out of step.
+//
+// Two columns are deliberately not here. Latency and request-rate history
+// answer "how is it doing", which is diagnosis; this screen answers the two
+// organisational questions — what can this endpoint do, and is it carrying the
+// share you intended — which is detection. Diagnosis belongs on an analytics
+// page you open once this screen has told you something is off.
 //
 // The rules this file inherits, none of them negotiable:
 //   - no native confirm()/alert(). openModal/confirmModal from ui.ts.
@@ -34,7 +39,6 @@ import {
   confirmModal,
   copyToClipboard,
   dot,
-  dropdown,
   escapeHtml,
   footer,
   modalBody,
@@ -43,9 +47,24 @@ import {
   wireDropdowns,
 } from "./ui";
 
-// CHIP_LIMIT is where a chip row stops being readable and becomes a
-// dropdown. Both forms drive the same single-selection state.
-const CHIP_LIMIT = 6;
+// CAP_ORDER is the capability set every endpoint row renders, in this order,
+// whether or not the endpoint has an opinion about each one.
+//
+// Rendering the FULL set is the point. A struck-through tag is an absence you
+// can see without reading, which is how a chain whose every endpoint lacks
+// WebSocket announces itself at a glance instead of after a support ticket. A
+// short list would make "we asked and it cannot" indistinguishable from "we
+// never asked".
+const CAP_ORDER = ["http", "ws", "archive", "trace"] as const;
+
+// CAP_TAGS are the short forms shown in the table. The API sends a full label
+// per capability, but a table column needs four characters, not "WebSocket".
+const CAP_TAGS: Record<string, string> = {
+  http: "HTTP",
+  ws: "WS",
+  archive: "ARCHIVE",
+  trace: "TRACE",
+};
 
 // FINAL_STEP is the id every gateway plan ends on (preflight, config, run).
 // The setup event stream has no terminal frame, so this is what tells the
@@ -81,9 +100,18 @@ export function renderRPC(root: HTMLElement): () => void {
   let data: api.GatewaysResponse | null = null;
   let loadErr: string | null = null;
 
-  // The focused chain per gateway — tier 2's selection, which is what tier 3
-  // renders. Held here rather than in the DOM so any re-render keeps it.
-  const focus: Record<string, number | null> = {};
+  // Measured traffic and probed capabilities per gateway, both fetched
+  // separately from the gateway list and both allowed to be missing.
+  //
+  // They are separate requests because they have different costs and different
+  // failure modes: traffic is one loopback curl on the gateway's machine,
+  // capabilities opens real sockets to real endpoints. Folding either into the
+  // list would mean a gateway whose counters cannot be read loses its whole
+  // card rather than one column of it — on the exact screen you opened because
+  // something was wrong.
+  const traffic: Record<string, api.GatewayTraffic | null> = {};
+  const caps: Record<string, api.GatewayCapabilities | null> = {};
+  const capsBusy: Record<string, boolean> = {};
   const busy: Record<string, string | null> = {};
   const actionErr: Record<string, string | null> = {};
   const activity: Record<string, string[]> = {};
@@ -117,13 +145,7 @@ export function renderRPC(root: HTMLElement): () => void {
   onAction(root, (action, el) => {
     void handleAction(action, el);
   });
-  wireDropdowns(root, (id, value) => {
-    if (id.startsWith("chain-")) {
-      const gid = id.slice("chain-".length);
-      focus[gid] = Number.parseInt(value, 10);
-      render();
-    }
-  });
+  wireDropdowns(root, () => {});
 
   void load();
 
@@ -135,20 +157,48 @@ export function renderRPC(root: HTMLElement): () => void {
       if (disposed) return;
       data = next;
       loadErr = null;
-      // Focus the first chain of each gateway that has none yet, and drop a
-      // focus whose chain has since been removed.
-      for (const gw of next.gateways ?? []) {
-        const nets = gw.networks ?? [];
-        const current = focus[gw.id];
-        if (current == null || !nets.some((n) => n.chainId === current)) {
-          focus[gw.id] = nets.length ? nets[0].chainId : null;
-        }
-      }
     } catch (err) {
       if (disposed) return;
       data = null;
       loadErr = message(err);
     }
+    render();
+    // After the render, never before it: the table stands up immediately with
+    // its share and capability columns pending, rather than the whole screen
+    // waiting on the slowest endpoint probe in the fleet.
+    for (const gw of data?.gateways ?? []) {
+      void loadTraffic(gw.id);
+      void loadCapabilities(gw.id, false);
+    }
+  }
+
+  // loadTraffic reads one gateway's counters. A failure is stored as null and
+  // rendered as an explained blank column — never as an error banner, because
+  // unreadable counters say nothing about whether the gateway is serving.
+  async function loadTraffic(gid: string): Promise<void> {
+    try {
+      const t = await api.getGatewayTraffic(gid);
+      if (disposed) return;
+      traffic[gid] = t;
+    } catch {
+      if (disposed) return;
+      traffic[gid] = null;
+    }
+    render();
+  }
+
+  async function loadCapabilities(gid: string, refresh: boolean): Promise<void> {
+    capsBusy[gid] = refresh;
+    if (refresh) render();
+    try {
+      const c = await api.getGatewayCapabilities(gid, refresh);
+      if (disposed) return;
+      caps[gid] = c;
+    } catch {
+      if (disposed) return;
+      caps[gid] = null;
+    }
+    capsBusy[gid] = false;
     render();
   }
 
@@ -156,9 +206,24 @@ export function renderRPC(root: HTMLElement): () => void {
     return (data?.gateways ?? []).find((g) => g.id === gid);
   }
 
-  function networkOf(gw: api.GatewayView, chainId: number | null): api.NetworkView | undefined {
-    if (chainId == null) return undefined;
+  // networkOf survives the loss of the selection model because the modals
+  // still act on one NAMED chain — "add an endpoint to 369" — which is a
+  // different thing from the screen having a focused chain.
+  function networkOf(gw: api.GatewayView, chainId: number): api.NetworkView | undefined {
     return (gw.networks ?? []).find((n) => n.chainId === chainId);
+  }
+
+  // shareOf and capsOf join the two side-channel reads back to a row by
+  // upstream id. Both the traffic route and the capabilities route derive that
+  // id from the same configuration by the same rule, which is what makes the
+  // join safe — see catalog.GeneratedUpstreamID.
+  function shareOf(gid: string, chainId: number, upstreamId: string): api.UpstreamShare | undefined {
+    const net = (traffic[gid]?.networks ?? []).find((n) => n.chainId === chainId);
+    return (net?.upstreams ?? []).find((u) => u.upstream === upstreamId);
+  }
+
+  function capsOf(gid: string, chainId: number, upstreamId: string): api.EndpointCapabilities | undefined {
+    return (caps[gid]?.endpoints ?? []).find((e) => e.chainId === chainId && e.upstream === upstreamId);
   }
 
   // --- render -------------------------------------------------------------
@@ -206,10 +271,9 @@ export function renderRPC(root: HTMLElement): () => void {
     `;
   }
 
-  // gatewayBlock is one gateway: the full-width bar (tier 1 + 2) and, under
-  // it, the focused chain's endpoints (tier 3).
+  // gatewayBlock is one gateway: the full-width bar, and under it the table of
+  // every chain it fronts with the endpoints that serve each one.
   function gatewayBlock(gw: api.GatewayView): string {
-    const focused = networkOf(gw, focus[gw.id] ?? null);
     return `
       <section class="rpc-gateway">
         ${gatewayBar(gw)}
@@ -220,7 +284,7 @@ export function renderRPC(root: HTMLElement): () => void {
         ${actionErr[gw.id] ? `<p class="error small">${escapeHtml(actionErr[gw.id]!)}</p>` : ""}
         ${activityBlock(gw)}
         ${settingsOpen[gw.id] ? settingsBlock(gw) : ""}
-        ${upstreamsPanel(gw, focused)}
+        ${networksTable(gw)}
       </section>
     `;
   }
@@ -256,7 +320,6 @@ export function renderRPC(root: HTMLElement): () => void {
               : `<span class="muted small">Not serving — it will answer on <code>${escapeHtml(gw.baseUrl)}</code> once it is running.</span>`
           }
         </div>
-        ${chainRow(gw)}
       </div>
     `;
   }
@@ -315,130 +378,340 @@ export function renderRPC(root: HTMLElement): () => void {
 
   // ---- TIER 2: the chains, inside the bar --------------------------------
 
-  // chainRow renders the networks as selectable chips, or — once there are
-  // more than CHIP_LIMIT — as a dropdown, because a chip row past that width
-  // stops being scannable and starts being a wall.
-  function chainRow(gw: api.GatewayView): string {
+  // ---- the table: bands wrapping their endpoints -------------------------
+
+  // networksTable renders every chain this gateway fronts, each as a band row
+  // spanning the full width with its endpoints beneath it.
+  //
+  // There is no selection and no focused chain. A gateway's job is fronting
+  // several chains, so "which of my chains is misrouting" has to be answerable
+  // by looking, not by clicking through each one in turn.
+  function networksTable(gw: api.GatewayView): string {
     const nets = gw.networks ?? [];
-    const selected = focus[gw.id] ?? null;
-
-    const add = `
-      <button class="chip chip-add" data-action="add-chain" data-gid="${escapeHtml(gw.id)}"
-              title="Add a network for this gateway to front">+ Network</button>
-    `;
-
     if (nets.length === 0) {
       return `
-        <div class="rpc-chiprow">
-          <span class="muted small">No networks yet — eRPC refuses a configuration with none, so add one before creating the gateway.</span>
-          ${add}
-        </div>
-      `;
-    }
-
-    if (nets.length > CHIP_LIMIT) {
-      const options = nets.map((n) => ({
-        value: String(n.chainId),
-        // The dropdown carries the same "this one is broken" signal the chips
-        // do; losing it on the collapse would make the warning depend on how
-        // many chains you happen to have.
-        label: `${n.name} (${n.chainId})${n.serviceable ? "" : " — no working endpoint"}`,
-      }));
-      return `
-        <div class="rpc-chiprow">
-          <span class="muted small">Fronting ${nets.length} networks</span>
-          ${dropdown(`chain-${gw.id}`, options, selected == null ? null : String(selected))}
-          ${add}
-        </div>
-      `;
-    }
-
-    return `
-      <div class="rpc-chiprow">
-        ${nets.map((n) => chip(gw, n, n.chainId === selected)).join("")}
-        ${add}
-      </div>
-    `;
-  }
-
-  function chip(gw: api.GatewayView, n: api.NetworkView, selected: boolean): string {
-    // A chain with no working endpoint is a network eRPC will accept and then
-    // fail every call on. It gets its own state on the chip rather than
-    // looking exactly like a healthy one.
-    const broken = !n.serviceable;
-    return `
-      <button class="chip card-selectable${selected ? " selected" : ""}${broken ? " chip-bad" : ""}"
-              data-action="select-chain" data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}"
-              title="${escapeHtml(broken ? `${n.name}: no endpoint on this chain can be used right now` : `${n.name} · ${n.path}`)}">
-        <span class="chip-dot">${broken ? dot("bad") : dot("ok")}</span>
-        <span class="chip-name">${escapeHtml(n.name)}</span>
-        <span class="chip-id">${n.chainId}</span>
-      </button>
-    `;
-  }
-
-  // ---- TIER 3: the focused chain's endpoints -----------------------------
-
-  function upstreamsPanel(gw: api.GatewayView, n: api.NetworkView | undefined): string {
-    if (!n) {
-      return `<div class="card rpc-upstreams"><p class="muted small">Pick a network above to see the servers behind it.</p></div>`;
-    }
-    const ups = n.upstreams ?? [];
-    return `
-      <div class="card rpc-upstreams">
-        <div class="service-head">
-          <h2>${escapeHtml(n.name)} <span class="muted">· chain ${n.chainId}</span></h2>
+        <div class="card rpc-surface">
+          <p class="muted small">
+            No networks yet. eRPC refuses a configuration with none, so add one before
+            creating the gateway.
+          </p>
           <div class="card-actions">
-            <button class="btn" data-action="add-endpoint" data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">Add an endpoint</button>
-            <button class="btn btn-ghost" data-action="remove-chain" data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">Remove network</button>
+            <button class="btn" data-action="add-chain" data-gid="${escapeHtml(gw.id)}">Add a network</button>
           </div>
         </div>
-        ${
-          n.url
-            ? `<div class="endpoint-row">${dot("ok")}<span class="muted small">callers dial</span>
-                 <code class="endpoint-url">${escapeHtml(n.url)}</code>
-                 <button class="btn btn-ghost" data-action="copy" data-copy="${escapeHtml(n.url)}">Copy</button></div>`
-            : `<p class="muted small">Path <code>${escapeHtml(n.path)}</code> — the full URL appears once the gateway is running.</p>`
-        }
-        ${(n.warnings ?? []).map((wmsg) => `<div class="banner banner-warn">${escapeHtml(wmsg)}</div>`).join("")}
-        ${ups.map((u) => upstreamRow(gw, n, u)).join("")}
-        ${ups.length === 0 ? `<p class="muted small">No endpoint yet, so there is nowhere for calls on this path to go.</p>` : ""}
+      `;
+    }
+    return `
+      <div class="card rpc-surface">
+        ${surfaceHead(gw)}
+        <div class="surface-scroll">
+          <table class="surface">
+            <thead>
+              <tr>
+                <th class="col-endpoint">Endpoint</th>
+                <th>Role</th>
+                <th>State</th>
+                <th>Capabilities</th>
+                <th class="col-share">Share of traffic</th>
+                <th class="col-act"></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${nets.map((n) => networkBand(gw, n) + endpointRows(gw, n)).join("")}
+            </tbody>
+          </table>
+        </div>
+        ${trafficFootnote(gw)}
       </div>
     `;
   }
 
-  // upstreamRow states what the endpoint IS before what it is called, because
-  // "the devnet on this machine" is the fact an operator reasons about and
-  // the URL is the consequence.
-  function upstreamRow(gw: api.GatewayView, n: api.NetworkView, u: api.UpstreamView): string {
+  // surfaceHead carries the one control that acts on the whole table — a
+  // capability re-probe — and says when the probes last ran. A capability
+  // verdict with no timestamp invites being read as live, and it is not: it is
+  // cached precisely because probing opens real sockets.
+  function surfaceHead(gw: api.GatewayView): string {
+    const c = caps[gw.id];
+    const when = c?.at ? `probed ${escapeHtml(shortTime(c.at))}` : "not probed yet";
+    return `
+      <div class="surface-head">
+        <span class="muted small">${when}</span>
+        <button class="btn btn-ghost" data-action="reprobe" data-gid="${escapeHtml(gw.id)}"
+                title="Ask every endpoint what it can do, again. This opens real connections to them."
+                ${capsBusy[gw.id] ? "disabled" : ""}>
+          ${capsBusy[gw.id] ? `<span class="spinner" aria-label="probing"></span>` : "Re-probe"}
+        </button>
+        <button class="btn btn-ghost" data-action="add-chain" data-gid="${escapeHtml(gw.id)}">+ Network</button>
+      </div>
+    `;
+  }
+
+  // networkBand is the row that WRAPS a chain's endpoints. Its pill states the
+  // one thing worth knowing about the chain as a whole, in priority order:
+  // unserviceable beats under-used beats healthy, because a chain that cannot
+  // answer at all makes the traffic split irrelevant.
+  function networkBand(gw: api.GatewayView, n: api.NetworkView): string {
+    const broken = !n.serviceable;
+    return `
+      <tr class="band${broken ? " band-bad" : ""}">
+        <td colspan="6">
+          <div class="band-inner">
+            <span class="band-id">${n.chainId}</span>
+            <span class="band-name">${escapeHtml(n.name)}</span>
+            <code class="band-path">${escapeHtml(n.path)}</code>
+            ${
+              n.url
+                ? `<button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(n.url)}"
+                           title="Copy ${escapeHtml(n.url)}">Copy URL</button>`
+                : ""
+            }
+            <span class="band-right">
+              ${bandPill(gw, n)}
+              <button class="btn btn-ghost btn-tiny" data-action="add-endpoint"
+                      data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">+ Endpoint</button>
+              <button class="btn btn-ghost btn-tiny" data-action="remove-chain"
+                      data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">Remove</button>
+            </span>
+          </div>
+          ${(n.warnings ?? []).map((wmsg) => `<div class="band-warn">${escapeHtml(wmsg)}</div>`).join("")}
+        </td>
+      </tr>
+    `;
+  }
+
+  function bandPill(gw: api.GatewayView, n: api.NetworkView): string {
+    if (!n.serviceable) return badge("no usable endpoint", "bad");
+
+    // "Subscriptions unavailable" is a chain-level fact even though it is
+    // measured per endpoint: eth_subscribe fails on this path when NOTHING
+    // behind it speaks WebSocket, and that is invisible on any single row.
+    const ups = n.upstreams ?? [];
+    const probed = ups
+      .map((u) => capsOf(gw.id, n.chainId, u.id))
+      .filter((e): e is api.EndpointCapabilities => !!e && !e.unprobeable);
+    if (probed.length > 0 && probed.every((e) => statusOf(e, "ws") === "unsupported")) {
+      return badge("subscriptions unavailable", "bad");
+    }
+
+    // Under-used: a preferred endpoint carrying materially less than intended.
+    // Stated on the band because the cause is usually one row down, and the
+    // band is where the eye lands first.
+    const shares = ups.map((u) => shareOf(gw.id, n.chainId, u.id));
+    if (shares.some((s, i) => s && s.diverged && (ups[i]?.local ?? false))) {
+      return badge("your endpoint is under-used", "warn");
+    }
+    return badge(`${ups.length} endpoint${ups.length === 1 ? "" : "s"}`, "ok");
+  }
+
+  // endpointRows renders a chain's servers. It states what each endpoint IS
+  // before what it is called, because "the devnet on this machine" is the fact
+  // an operator reasons about and the URL is the consequence.
+  function endpointRows(gw: api.GatewayView, n: api.NetworkView): string {
+    const ups = n.upstreams ?? [];
+    if (ups.length === 0) {
+      return `
+        <tr class="ep"><td colspan="6" class="muted small">
+          No endpoint yet, so there is nowhere for calls on this path to go.
+        </td></tr>
+      `;
+    }
+    return ups.map((u) => endpointRow(gw, n, u)).join("");
+  }
+
+  function endpointRow(gw: api.GatewayView, n: api.NetworkView, u: api.UpstreamView): string {
     const key = `${gw.id}|${n.chainId}|${u.id}`;
     const actions = u.actions ?? [];
     return `
-      <div class="upstream-row${u.problem ? " upstream-row-bad" : ""}">
-        <span class="upstream-state">${u.problem ? dot("bad") : dot("ok")}</span>
-        <div class="upstream-what">
-          <div class="upstream-label">
-            ${escapeHtml(u.label)}
-            ${u.local ? badge("preferred", "ok") : badge("fallback", "neutral")}
-            ${u.recentOnly ? badge("recent blocks only", "warn") : ""}
+      <tr class="ep${u.problem ? " ep-bad" : ""}">
+        <td class="col-endpoint">
+          <div class="ep-what">
+            ${u.problem ? dot("bad") : dot("ok")}
+            <span class="ep-label">${escapeHtml(u.label)}</span>
           </div>
-          <code class="endpoint-url">${escapeHtml(u.endpoint || "—")}</code>
+          <code class="ep-url">${escapeHtml(u.endpoint || "—")}</code>
           ${u.problem ? `<div class="error small">${escapeHtml(u.problem)}</div>` : ""}
-        </div>
-        <div class="card-actions">
+        </td>
+        <td>${u.local ? "Yours" : "Public"}</td>
+        <td>${epStateBadge(u)}</td>
+        <td>${capCell(gw, n, u)}</td>
+        <td class="col-share">${shareCell(gw, n, u)}</td>
+        <td class="col-act">
           ${
             actions.includes("reset")
-              ? `<button class="btn" data-action="reset-devnet" data-key="${escapeHtml(key)}" data-target="${escapeHtml(u.targetId ?? "")}"
+              ? `<button class="btn btn-ghost btn-tiny" data-action="reset-devnet" data-key="${escapeHtml(key)}"
+                         data-target="${escapeHtml(u.targetId ?? "")}"
                          title="Throw this devnet's chain away and start again from genesis. It is a scratch chain — this is routine."
                          ${busy[gw.id] ? "disabled" : ""}>
                    ${busy[gw.id] === "reset" ? `<span class="spinner" aria-label="working"></span>` : "Reset"}
                  </button>`
               : ""
           }
-          <button class="btn btn-ghost" data-action="remove-endpoint" data-key="${escapeHtml(key)}">Remove</button>
-        </div>
-      </div>
+          <button class="btn btn-ghost btn-tiny" data-action="remove-endpoint" data-key="${escapeHtml(key)}">Remove</button>
+        </td>
+      </tr>
     `;
+  }
+
+  function epStateBadge(u: api.UpstreamView): string {
+    if (u.problem) return badge("unusable", "bad");
+    if (u.recentOnly) return badge("recent blocks", "warn");
+    return u.local ? badge("serving", "ok") : badge("fallback", "neutral");
+  }
+
+  // ---- capabilities ------------------------------------------------------
+
+  // statusOf resolves one capability, including the one that is not in the
+  // capability list at all.
+  //
+  // There is no "http" probe and there should not be: answering JSON-RPC over
+  // HTTP is what REACHABILITY means, and the prober records it as
+  // Endpoint.Reachable rather than as an eleventh method call. Synthesising the
+  // tag from that here is what keeps the column honest — reading the absent key
+  // literally would render HTTP as permanently unknown on every endpoint,
+  // including ones we had just successfully talked to.
+  function statusOf(e: api.EndpointCapabilities | undefined, key: string): api.CapabilityStatus | undefined {
+    if (!e) return undefined;
+    if (key === "http") {
+      if (e.unprobeable) return "inconclusive";
+      return e.reachable ? "supported" : "unsupported";
+    }
+    return (e.capabilities ?? []).find((c) => c.key === key)?.status;
+  }
+
+  // capCell renders the full capability set, always, so an absence is a
+  // visible gap rather than a missing element nobody notices.
+  //
+  // The three off-states are deliberately distinct. "unsupported" is grey and
+  // struck through — the endpoint simply does not offer it. "missing" is red —
+  // the same absence, but on a chain where nothing else offers it either, so it
+  // is actually breaking something. "inconsistent" is its own mark, because a
+  // load-balanced endpoint whose members disagree is a fact worth seeing rather
+  // than a number to average away.
+  function capCell(gw: api.GatewayView, n: api.NetworkView, u: api.UpstreamView): string {
+    const e = capsOf(gw.id, n.chainId, u.id);
+    if (!e) {
+      return `<span class="muted small">${caps[gw.id] === undefined ? "probing…" : "—"}</span>`;
+    }
+    if (e.unprobeable) {
+      // A stated reason, not a blank. "We could not ask from here" is a
+      // different claim from "it cannot do this", and conflating them would
+      // mark a perfectly capable endpoint as lacking everything.
+      return `<span class="caps-none" title="${escapeHtml(e.unprobeable)}">not probeable from here</span>`;
+    }
+    return `<span class="caps">${CAP_ORDER.map((k) => capTag(gw, n, e, k)).join("")}</span>`;
+  }
+
+  function capTag(
+    gw: api.GatewayView,
+    n: api.NetworkView,
+    e: api.EndpointCapabilities,
+    key: string,
+  ): string {
+    const cap = (e.capabilities ?? []).find((c) => c.key === key);
+    const status = statusOf(e, key) ?? "inconclusive";
+    const tag = CAP_TAGS[key] ?? key.toUpperCase();
+
+    let cls = "cap";
+    if (status === "unsupported") {
+      cls = chainLacksEntirely(gw, n, key) ? "cap missing" : "cap off";
+    } else if (status === "inconclusive") {
+      cls = "cap unknown";
+    } else if (status === "inconsistent") {
+      cls = "cap mixed";
+    }
+
+    // The evidence, not just the verdict. HTTP borrows the reachability
+    // detail, which is the sentence that actually explains it.
+    const why = cap?.detail
+      ? `${cap.label}: ${cap.detail}`
+      : key === "http" && e.reachDetail
+        ? `Answers JSON-RPC over HTTP: ${e.reachDetail}`
+        : `${tag}: no verdict`;
+    return `<span class="${cls}" title="${escapeHtml(why)}">${escapeHtml(tag)}</span>`;
+  }
+
+  // chainLacksEntirely is what turns a grey absence red: this capability is
+  // missing from EVERY probed endpoint on the chain, so the gap is not a
+  // property of one endpoint, it is a hole in the path.
+  function chainLacksEntirely(gw: api.GatewayView, n: api.NetworkView, key: string): boolean {
+    const probed = (n.upstreams ?? [])
+      .map((u) => capsOf(gw.id, n.chainId, u.id))
+      .filter((e): e is api.EndpointCapabilities => !!e && !e.unprobeable);
+    return probed.length > 0 && probed.every((e) => statusOf(e, key) === "unsupported");
+  }
+
+  // ---- traffic share -----------------------------------------------------
+
+  // shareCell is the bar: actual as the fill, intended as a tick, the number
+  // beside it. When the two diverge the number goes amber, because that gap is
+  // the symptom worth chasing — a latency chart never tells you that your own
+  // node is being bypassed.
+  function shareCell(gw: api.GatewayView, n: api.NetworkView, u: api.UpstreamView): string {
+    const t = traffic[gw.id];
+    if (t === undefined) return `<span class="muted small">reading…</span>`;
+    if (t === null) return `<span class="muted small" title="The counters could not be read.">—</span>`;
+    if (!t.enabled) {
+      return `<span class="muted small" title="This gateway's request counters are turned off in its settings.">counters off</span>`;
+    }
+
+    const s = shareOf(gw.id, n.chainId, u.id);
+    const net = (t.networks ?? []).find((x) => x.chainId === n.chainId);
+    if (!s || !net || net.attributed === 0) {
+      // No traffic is not a share of zero — there is no denominator. Saying
+      // "no traffic yet" beats drawing an empty bar that reads as "this
+      // endpoint is being starved".
+      return `<span class="muted small">no traffic yet</span>`;
+    }
+
+    const pct = Math.round(s.actual * 100);
+    const tickPct = Math.round(s.intended * 100);
+    const fill = s.diverged ? (u.local ? "warn" : "") : "ok";
+    const title =
+      `${s.succeeded.toLocaleString()} of ${net.attributed.toLocaleString()} answered requests` +
+      ` · routing intends ${tickPct}%` +
+      (s.unconfigured ? " · this endpoint is no longer in the saved configuration" : "");
+
+    return `
+      <span class="share" title="${escapeHtml(title)}">
+        <span class="bar">
+          <span class="fill${fill ? " " + fill : ""}" style="width:${pct}%"></span>
+          <span class="tick" style="left:${tickPct}%"></span>
+        </span>
+        <span class="share-n${s.diverged ? " warn" : ""}">${pct}%</span>
+        ${s.unconfigured ? badge("not in config", "warn") : ""}
+      </span>
+    `;
+  }
+
+  // trafficFootnote says what window the numbers cover and what they cost. A
+  // cumulative counter shown without its start looks like a live rate.
+  function trafficFootnote(gw: api.GatewayView): string {
+    const t = traffic[gw.id];
+    if (!t) return "";
+    if (!t.enabled) {
+      return `<p class="muted small">
+        This gateway is not counting its requests, so there is no traffic share to show.
+        Turn the counters on in Settings — they stay on the machine the gateway runs on
+        and nothing is sent anywhere.
+      </p>`;
+    }
+    if (t.error) {
+      return `<p class="muted small">The request counters could not be read: ${escapeHtml(t.error)}</p>`;
+    }
+    return `<p class="muted small">
+      Share is measured from the gateway's own counters since it started${
+        t.since ? ` (${escapeHtml(shortTime(t.since))})` : ""
+      }. The tick is the share routing intends: your own endpoints carry a chain, public
+      ones are there for when they cannot.
+    </p>`;
+  }
+
+  // shortTime renders an ISO timestamp as a local time, falling back to the
+  // raw string rather than showing "Invalid Date" if the server ever sends
+  // something unexpected.
+  function shortTime(iso: string): string {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
   }
 
   // ---- the bar's settings ------------------------------------------------
@@ -460,11 +733,35 @@ export function renderRPC(root: HTMLElement): () => void {
           Requests are addressed by path: <code>/${escapeHtml(c.ProjectID)}/evm/&lt;chainId&gt;</code>. One port serves every
           network in the bar above, and the same path serves WebSocket with a <code>ws://</code> scheme.
         </p>
+        ${metricsField(gw)}
         ${tlsFields(gw)}
         <div class="card-actions">
           <button class="btn" data-action="save-settings" data-gid="${escapeHtml(gw.id)}">Save settings</button>
         </div>
       </div>
+    `;
+  }
+
+  // metricsField is the counters' off switch.
+  //
+  // It says what the thing IS rather than naming a technology, because
+  // "metrics" is a word that makes people think of telemetry leaving the
+  // machine, and this is the opposite of that: eRPC counting its own requests,
+  // in its own process, on a port bound to loopback. Saying so plainly is what
+  // makes leaving it on an informed choice rather than an unread default.
+  function metricsField(gw: api.GatewayView): string {
+    const on = !gw.config.MetricsOff;
+    return `
+      <label class="check">
+        <input type="checkbox" id="gw-${escapeHtml(gw.id)}-metrics" ${on ? "checked" : ""} />
+        Count this gateway's own requests
+      </label>
+      <p class="muted small">
+        The gateway counts which endpoints answer its requests, so this screen can show
+        where your traffic is actually going. The counters stay on the machine the gateway
+        runs on — they are served on loopback and nothing is sent anywhere. Turn this off
+        and the share column goes blank.
+      </p>
     `;
   }
 
@@ -706,9 +1003,8 @@ export function renderRPC(root: HTMLElement): () => void {
       case "copy":
         if (el.dataset.copy) await copyButton(el, el.dataset.copy);
         return;
-      case "select-chain":
-        focus[gid] = Number.parseInt(el.dataset.chain ?? "", 10);
-        render();
+      case "reprobe":
+        await loadCapabilities(gid, true);
         return;
       case "toggle-settings":
         settingsOpen[gid] = !settingsOpen[gid];
@@ -769,6 +1065,11 @@ export function renderRPC(root: HTMLElement): () => void {
       if (Number.isFinite(n)) cfg.Port = n;
     }
     if (bindEl) cfg.BindAddr = bindEl.value.trim();
+    const metricsEl = root.querySelector<HTMLInputElement>(`#gw-${CSS.escape(gid)}-metrics`);
+    // Stored as the negative, matching the server: the zero value has to mean
+    // ON, so that a config written before this setting existed keeps counting
+    // rather than silently going dark on its next save.
+    if (metricsEl) cfg.MetricsOff = !metricsEl.checked;
     cfg.TLS = readTLS(gid, gw);
 
     const wasRunning = gw.status.State === "running";
@@ -1016,12 +1317,10 @@ export function renderRPC(root: HTMLElement): () => void {
     if (nets.some((n) => n.ChainID === chainId)) return;
     nets.push({ ChainID: chainId, Upstreams: [] });
     cfg.Networks = nets;
-    focus[gid] = chainId;
     // A chain with no upstream cannot be rendered, so it is saved by adding
     // it and letting the server report the network as unserviceable — which
-    // it does, on the chip, before anything is provisioned.
+    // it does, on the band, before anything is provisioned.
     if (await saveConfigTolerantly(gid, cfg)) {
-      focus[gid] = chainId;
       render();
       // Straight into picking an endpoint. A network with none is not saved
       // on the gateway (eRPC refuses it), so leaving the operator on an empty
@@ -1117,7 +1416,6 @@ export function renderRPC(root: HTMLElement): () => void {
     if (existing) existing.Upstreams.push(upstream);
     else nets.push({ ChainID: chainId, Upstreams: [upstream] });
     cfg.Networks = nets;
-    focus[gid] = chainId;
     await saveConfig(gid, cfg, "Adding the devnet");
   }
 
@@ -1134,7 +1432,6 @@ export function renderRPC(root: HTMLElement): () => void {
     if (!ok) return;
     const cfg = storedConfig(gw);
     cfg.Networks = (cfg.Networks ?? []).filter((x) => x.ChainID !== chainId);
-    focus[gid] = null;
     await saveConfig(gid, cfg, "Removing the network");
   }
 

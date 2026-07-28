@@ -681,6 +681,11 @@ export interface GatewayConfig {
   // Networks is null (not []) for a gateway with nothing configured — an
   // untagged Go nil slice.
   Networks: GatewayNetwork[] | null;
+  // MetricsOff is the negative on purpose, mirroring the Go field: absent or
+  // false means the gateway IS counting its requests, which is the default and
+  // what every configuration written before this existed means.
+  MetricsOff?: boolean;
+  MetricsPort?: number;
   TLS?: GatewayTLS | null;
 }
 
@@ -866,6 +871,106 @@ export function createGateway(body: CreateGatewayRequest): Promise<GatewayView> 
 // by design — it waits for a real block on a real subscription.
 export function verifyGatewayTls(gid: string): Promise<TlsVerification> {
   return request<TlsVerification>(`/api/gateways/${encodeURIComponent(gid)}/tls/verify`);
+}
+
+// ---- traffic: who is actually carrying the load -------------------------
+
+// UpstreamShare is one endpoint's measured share of a chain's answered
+// requests, against what the routing configuration intended.
+//
+// Both the fraction and the raw count are here on purpose: 100% of four
+// requests and 100% of four million draw the same bar and are very different
+// facts, so the UI can qualify one and not the other.
+export interface UpstreamShare {
+  upstream: string;
+  succeeded: number;
+  // actual and intended are fractions in 0..1.
+  actual: number;
+  intended: number;
+  diverged: boolean;
+  // unconfigured marks an endpoint eRPC is still counting that this gateway's
+  // saved configuration no longer lists — the state between editing a config
+  // and re-creating the container, which is exactly when someone needs telling
+  // that their change has not been applied yet.
+  unconfigured?: boolean;
+}
+
+export interface NetworkTraffic {
+  chainId: number;
+  // received is what clients asked for; attributed is what some endpoint
+  // answered. The gap is failure, which is what keeps a chain failing every
+  // call from looking identical to one nobody has called.
+  received: number;
+  attributed: number;
+  // unattributed is what the gateway answered from its own cache, without
+  // calling any endpoint. Kept apart from attributed so the received gap
+  // means failures and nothing else.
+  unattributed: number;
+  upstreams: UpstreamShare[] | null;
+}
+
+export interface GatewayTraffic {
+  // enabled is false when the operator turned the counters off. It has to be
+  // distinguishable from "no traffic yet", which looks identical in the
+  // numbers and is fixed by a completely different action.
+  enabled: boolean;
+  at: string;
+  // since is when the gateway process started. These counters are cumulative
+  // from then, and a share with no window on it invites being read as "now".
+  since: string;
+  networks: NetworkTraffic[] | null;
+  error?: string;
+}
+
+// getGatewayTraffic reads one gateway's own request counters. It is a separate
+// call from getGateways deliberately: it runs a command on the gateway's
+// machine, and folding that into the list would put a per-gateway way to hang
+// behind the screen an operator opens precisely when a gateway is misbehaving.
+export function getGatewayTraffic(gid: string): Promise<GatewayTraffic> {
+  return request<GatewayTraffic>(`/api/gateways/${encodeURIComponent(gid)}/traffic`);
+}
+
+// ---- capabilities: what an endpoint can actually DO ----------------------
+
+export type CapabilityStatus = "supported" | "unsupported" | "inconclusive" | "inconsistent";
+
+// Capability is one verdict for one endpoint. detail carries the evidence in
+// words, so an operator can argue with the verdict — which is the point of
+// inferring capability from behaviour rather than from a provider's claims.
+export interface Capability {
+  key: string;
+  label: string;
+  status: CapabilityStatus;
+  detail?: string;
+  method?: string;
+}
+
+export interface EndpointCapabilities {
+  // upstream joins this row to the traffic row of the same id.
+  upstream: string;
+  chainId: number;
+  probedUrl?: string;
+  reachable: boolean;
+  reachDetail?: string;
+  // unprobeable says why this endpoint could not be probed FROM HERE — an
+  // address that only resolves inside a docker network, or a loopback bind on
+  // a machine reached over SSH. A stated reason is a different thing from a
+  // blank cell.
+  unprobeable?: string;
+  capabilities: Capability[] | null;
+}
+
+export interface GatewayCapabilities {
+  at: string;
+  endpoints: EndpointCapabilities[] | null;
+}
+
+// getGatewayCapabilities returns the cached probe results, re-probing only
+// when they have aged out or refresh is asked for. Probing opens real sockets
+// against real endpoints, so it must never ride a screen's poll cadence.
+export function getGatewayCapabilities(gid: string, refresh = false): Promise<GatewayCapabilities> {
+  const q = refresh ? "?refresh=1" : "";
+  return request<GatewayCapabilities>(`/api/gateways/${encodeURIComponent(gid)}/capabilities${q}`);
 }
 
 export function deleteGateway(gid: string): Promise<{ status: string; note: string }> {
