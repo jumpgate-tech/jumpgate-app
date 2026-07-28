@@ -52,6 +52,11 @@ func mergeGatewaysPerTarget(gws []Gateway) ([]Gateway, []OrphanedContainer) {
 
 		keep := survivorIndex(idx, gws)
 		survivor := gws[keep]
+		// survivor is a shallow copy: Config.Networks (and each network's
+		// Upstreams) still share their backing arrays with gws[keep], which is
+		// the caller's input. Cloning here, before any merge write, keeps this
+		// function pure — nothing reachable from gws is mutated.
+		survivor.Config.Networks = cloneNetworks(survivor.Config.Networks)
 		for _, i := range idx {
 			if i == keep {
 				continue
@@ -85,6 +90,21 @@ func survivorIndex(idx []int, gws []Gateway) int {
 		}
 	}
 	return idx[0]
+}
+
+// cloneNetworks deep-copies a network slice down to each network's Upstreams
+// slice, so the result shares no backing array with the input. A plain
+// slice-of-structs copy (or `append([]T(nil), in...)` on the outer slice
+// alone) still leaves every GatewayNetwork.Upstreams pointing at the original
+// array; writing through that shared array is exactly the mutation this
+// exists to prevent.
+func cloneNetworks(nets []catalog.GatewayNetwork) []catalog.GatewayNetwork {
+	out := make([]catalog.GatewayNetwork, len(nets))
+	for i, n := range nets {
+		out[i] = n
+		out[i].Upstreams = append([]catalog.GatewayUpstream(nil), n.Upstreams...)
+	}
+	return out
 }
 
 // upstreamKey identifies an upstream by what actually distinguishes it. Keying
