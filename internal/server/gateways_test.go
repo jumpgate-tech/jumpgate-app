@@ -608,18 +608,26 @@ func TestGatewayListReportsOrphans(t *testing.T) {
 
 // A merged-away gateway's id is freed, so a new gateway can re-claim the very
 // container name a stale banner still says to `docker rm -f`. Left standing,
-// that banner points the operator at a container this app now manages.
+// that banner points the operator at a container this app now manages. But a
+// container name is only unique within ONE docker engine, so clearing a
+// record must also check it is on the SAME machine the new gateway lands on
+// — otherwise creating "edge" on one machine silently erases a legitimate,
+// still-running leftover named "edge" on an unrelated one.
 func TestGatewayCreateClearsAStaleOrphanRecordForItsOwnContainers(t *testing.T) {
 	a := gatewayServer(t)
+
+	res := a.do(t, "POST", "/api/targets", map[string]any{"id": "second", "mode": "local"})
+	res.Body.Close()
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
 	cfg.Orphans = []config.OrphanedContainer{
-		{ContainerName: "valve-node-app-erpc-edge", TargetID: "elsewhere", MergedInto: "default"},
-		{ContainerName: "valve-node-app-caddy-edge", TargetID: "elsewhere", MergedInto: "default"},
-		{ContainerName: "valve-node-app-erpc-other", TargetID: "elsewhere", MergedInto: "default"},
+		{ContainerName: "valve-node-app-erpc-edge", TargetID: "local", MergedInto: "default"},
+		{ContainerName: "valve-node-app-caddy-edge", TargetID: "local", MergedInto: "default"},
+		{ContainerName: "valve-node-app-erpc-other", TargetID: "local", MergedInto: "default"},
+		{ContainerName: "valve-node-app-erpc-edge", TargetID: "second", MergedInto: "default"},
 	}
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("save config: %v", err)
@@ -628,11 +636,18 @@ func TestGatewayCreateClearsAStaleOrphanRecordForItsOwnContainers(t *testing.T) 
 	addGateway(t, a, "edge", "local", catalog.GatewayConfig{Port: 4100})
 
 	body := decode[gatewaysResponse](t, a.do(t, "GET", "/api/gateways", nil))
-	if len(body.Orphans) != 1 {
-		t.Fatalf("only the records for names this gateway re-claimed may go: %+v", body.Orphans)
+	if len(body.Orphans) != 2 {
+		t.Fatalf("only same-machine records for names this gateway re-claimed may go: %+v", body.Orphans)
 	}
-	if body.Orphans[0].ContainerName != "valve-node-app-erpc-other" {
-		t.Errorf("an unrelated leftover must survive: got %+v", body.Orphans[0])
+	byTarget := map[string]string{}
+	for _, o := range body.Orphans {
+		byTarget[o.TargetID] = o.ContainerName
+	}
+	if byTarget["local"] != "valve-node-app-erpc-other" {
+		t.Errorf("an unrelated leftover on the same machine must survive: got %+v", body.Orphans)
+	}
+	if byTarget["second"] != "valve-node-app-erpc-edge" {
+		t.Errorf("a same-named leftover on a DIFFERENT machine must survive — the name is only unique per docker engine: got %+v", body.Orphans)
 	}
 }
 
