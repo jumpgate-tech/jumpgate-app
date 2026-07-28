@@ -541,13 +541,30 @@ const (
 	// native-arch by construction, which sidesteps the missing-arm64-image
 	// problem entirely instead of needing it solved.
 	//
-	// The ref is a full commit SHA, not the branch name. valve-ws is a moving
-	// feature branch based on an open upstream PR, so building from the
-	// branch head would silently change an operator's gateway between runs.
+	// The ref is a full commit SHA, not the branch name. The branch it sits on
+	// is a moving feature branch based on an open upstream PR, so building from
+	// the branch head would silently change an operator's gateway between runs.
 	// This SHA is the exact commit whose WebSocket support was verified end
 	// to end (eth_subscribe newHeads through a real container).
+	//
+	// Now on fix/ws-upgrade-behind-gzip, which is valve-ws plus two fixes the
+	// gateway needs and one gofmt pass. Both were found by putting real traffic
+	// through this stack, and both fail silently rather than loudly:
+	//
+	//   - A WebSocket upgrade answered HTTP 500 whenever the client sent
+	//     Accept-Encoding: gzip. Caddy sends it on every proxied request, so
+	//     eth_subscribe through our own HTTPS front door could never work. The
+	//     gzip wrapper does not implement http.Hijacker and gorilla needs one.
+	//   - A multi-chain BATCH posted to /<project> answered every entry from
+	//     one entry's network, because the batch goroutines shared the resolved
+	//     architecture/chainId. A data race, so which chain won was scheduling.
+	//
+	// Bumping this is what actually ships them: the gateway builds from this
+	// SHA, so leaving it behind keeps building the unfixed source and reports
+	// success either way. See ERPCImageTag — the tag carries the SHA, so a
+	// bump yields a distinct image instead of silently reusing the old one.
 	ERPCSourceRepo = "https://github.com/valve-tech/erpc.git"
-	ERPCSourceRef  = "e909aacb462120e39db8d9a285dff4cde596425f"
+	ERPCSourceRef  = "a7a53ec21a7922c4c6d8582e3466331b1a7cc622"
 
 	// erpcImageRepo is the local tag the built image carries. It is tagged by
 	// source SHA so a rebuild is skippable when the image already exists, and
