@@ -157,3 +157,19 @@ func TestMergeGatewaysPerTarget(t *testing.T) {
 		})
 	}
 }
+
+// The merge is a pure function: callers keep using the slice they passed in,
+// and a survivor that shares a backing array with its input would rewrite that
+// caller's data as a side effect of merging.
+func TestMergeDoesNotMutateItsInput(t *testing.T) {
+	in := []Gateway{
+		gw("default", "local", true, catalog.GatewayNetwork{ChainID: 1, Upstreams: []catalog.GatewayUpstream{extUp("public-1-1", "https://a.example")}}),
+		gw("edge", "local", false, catalog.GatewayNetwork{ChainID: 1, Upstreams: []catalog.GatewayUpstream{extUp("public-1-2", "https://b.example")}}),
+	}
+
+	before := len(in[0].Config.Networks[0].Upstreams)
+	mergeGatewaysPerTarget(in)
+	if got := len(in[0].Config.Networks[0].Upstreams); got != before {
+		t.Errorf("merging rewrote the caller's input: upstreams went %d -> %d", before, got)
+	}
+}
