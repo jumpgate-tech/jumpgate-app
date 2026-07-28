@@ -1340,7 +1340,7 @@ func (s *Server) handleGatewayTLSVerify(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(r.Context(), tlsVerifyTimeout)
 	defer cancel()
 
-	res, err := setup.VerifyGatewayTLS(ctx, ex, gw.ID, resolved, tlsDialHost(host, resolved.TLS))
+	res, err := s.verifyTLS(ctx, ex, gw.ID, resolved, tlsDialHost(host, resolved.TLS))
 	if err != nil {
 		status, hint, code := classifyOpsError(err)
 		writeErrorDetail(w, status, err.Error(), hint, code)

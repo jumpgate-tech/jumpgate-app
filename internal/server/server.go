@@ -15,6 +15,8 @@ import (
 	"sync"
 
 	"github.com/valve-tech/valve-node-app/internal/ai"
+	"github.com/valve-tech/valve-node-app/internal/catalog"
+	"github.com/valve-tech/valve-node-app/internal/chainlist"
 	"github.com/valve-tech/valve-node-app/internal/config"
 	"github.com/valve-tech/valve-node-app/internal/executor"
 	"github.com/valve-tech/valve-node-app/internal/setup"
@@ -39,6 +41,26 @@ type Config struct {
 	// NewAIProvider builds an ai.Provider by id. Injectable for tests; nil
 	// selects ai.New.
 	NewAIProvider func(id, apiKey, baseURL string) (ai.Provider, error)
+
+	// NewChainlist builds the public-endpoint discoverer. Injectable for
+	// tests; nil selects chainlist.New.
+	//
+	// This exists for the same reason NewExecutor does. handleChainlist
+	// fetches a 1.1 MB feed off the public internet and then opens a
+	// connection to every endpoint it lists — so without a seam, the only
+	// honest test of that route is one that talks to the real internet, which
+	// is a test that fails on a plane and passes when a third-party feed
+	// happens to be up.
+	NewChainlist func() *chainlist.Discoverer
+
+	// VerifyTLS runs the live HTTPS check behind GET
+	// /api/gateways/{gid}/tls/verify. Injectable for tests; nil selects
+	// setup.VerifyGatewayTLS.
+	//
+	// The real one dials the front, completes a TLS handshake, opens a
+	// WebSocket and WAITS FOR A BLOCK. That is exactly what makes it worth
+	// having and exactly what makes it untestable in place.
+	VerifyTLS func(ctx context.Context, e executor.Executor, gatewayID string, g catalog.GatewayConfig, dialHost string) (setup.TLSVerification, error)
 }
 
 // Server is the valve-node-app local HTTP server.
@@ -72,6 +94,8 @@ type Server struct {
 
 	newExecutor   func(config.Target) (executor.Executor, error)
 	newAIProvider func(id, apiKey, baseURL string) (ai.Provider, error)
+	newChainlist  func() *chainlist.Discoverer
+	verifyTLS     func(ctx context.Context, e executor.Executor, gatewayID string, g catalog.GatewayConfig, dialHost string) (setup.TLSVerification, error)
 }
 
 // New constructs a Server from the given Config.
@@ -84,6 +108,14 @@ func New(cfg Config) *Server {
 	s.newAIProvider = cfg.NewAIProvider
 	if s.newAIProvider == nil {
 		s.newAIProvider = ai.New
+	}
+	s.newChainlist = cfg.NewChainlist
+	if s.newChainlist == nil {
+		s.newChainlist = chainlist.New
+	}
+	s.verifyTLS = cfg.VerifyTLS
+	if s.verifyTLS == nil {
+		s.verifyTLS = setup.VerifyGatewayTLS
 	}
 	return s
 }

@@ -78,11 +78,15 @@ func (s *Server) handleChainlist(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), chainlistTimeout)
 	defer cancel()
 
-	res, err := chainlist.New().Discover(ctx, chainID)
+	res, err := s.newChainlist().Discover(ctx, chainID)
 	if err != nil {
-		// Only reached when the feed failed AND there is no vendored snapshot
-		// for this chain — i.e. genuinely nothing to offer. 502, because the
-		// failure is upstream of this app rather than in the request.
+		// Only reached when the feed did not yield this chain AND there is no
+		// vendored snapshot for it — i.e. genuinely nothing to offer. That
+		// covers an unreachable feed and a perfectly healthy feed that simply
+		// does not list the chain: chainlist deliberately treats those the
+		// same, because from the operator's seat they have the same remedy.
+		// 502, because the failure is upstream of this app rather than in the
+		// request.
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
