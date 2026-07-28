@@ -402,11 +402,22 @@ func writeSSEEvent(w http.ResponseWriter, v any) {
 	fmt.Fprintf(w, "data: %s\n\n", b)
 }
 
+// sseHeaders opens an event stream and FLUSHES, so the client learns it is
+// connected now rather than when the first event happens.
+//
+// The flush is load-bearing, not tidiness. net/http buffers a response until
+// something flushes it, so without this a browser's EventSource sits in its
+// connecting state — and onerror, not onopen — until the first log line or
+// step event arrives, which on a healthy quiet machine can be a long time.
+// From the UI's side that is indistinguishable from a stream that is broken.
 func sseHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // ---------------------------------------------------------------------
@@ -691,7 +702,12 @@ func validateWirePorts(wire catalog.WireConfig) error {
 		// (vk_ prefix + url-safe chars) at the boundary — no shell
 		// metacharacters can reach command construction.
 		if !snapshotKeyPattern.MatchString(wire.SnapshotKey) {
-			return fmt.Errorf("SnapshotKey: %q is not a valid key (expected vk_ followed by letters, digits, - or _)", wire.SnapshotKey)
+			// The LENGTH is named as well as the character set. A truncated
+			// paste is at least as common as a wrong one, and a message that
+			// lists only the legal characters sends that operator looking for
+			// an illegal character which is not there.
+			return fmt.Errorf("SnapshotKey: %q is not a valid key (expected vk_ followed by %d-%d letters, digits, - or _)",
+				wire.SnapshotKey, snapshotKeyMinLen, snapshotKeyMaxLen)
 		}
 	}
 	return nil
@@ -700,7 +716,18 @@ func validateWirePorts(wire catalog.WireConfig) error {
 // snapshotKeyPattern is the accepted shape for a Valve snapshot key: a "vk_"
 // prefix followed by url-safe characters only (no whitespace or shell
 // metacharacters).
-var snapshotKeyPattern = regexp.MustCompile(`^vk_[A-Za-z0-9_-]{8,128}$`)
+//
+// The bounds are named constants and the pattern is built from them so the
+// rejection message cannot drift from the rule it is describing — which is
+// exactly what had happened: the message listed the character set and never
+// mentioned the length.
+const (
+	snapshotKeyMinLen = 8
+	snapshotKeyMaxLen = 128
+)
+
+var snapshotKeyPattern = regexp.MustCompile(
+	fmt.Sprintf(`^vk_[A-Za-z0-9_-]{%d,%d}$`, snapshotKeyMinLen, snapshotKeyMaxLen))
 
 // defaultDataDir and defaultJWTPath name locations on the TARGET, which is
 // always a Linux host — never on the control plane, which may be macOS,

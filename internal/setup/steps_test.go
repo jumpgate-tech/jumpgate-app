@@ -824,46 +824,7 @@ func TestPlan_InvalidComboErrors(t *testing.T) {
 	}
 }
 
-// ---- snapshot ----
-
-func TestSnapshot_RunIsNoOpWhenExecSnapshotFalse(t *testing.T) {
-	e := newFakeExecutor()
-	step := snapshotStep()
-	st := &State{Wire: testWire(), Events: make(chan Event, 100)} // ExecSnapshot false
-	if err := step.Run(context.Background(), e, st); err != nil {
-		t.Fatalf("Run should be a no-op when ExecSnapshot is false, got %v", err)
-	}
-	for _, c := range e.callLog() {
-		if strings.Contains(c, "reth download") {
-			t.Fatalf("reth download ran even though ExecSnapshot is false; calls = %v", e.callLog())
-		}
-	}
-}
-
-func TestSnapshot_RunIssuesRethDownloadWithManifestURL(t *testing.T) {
-	w := testWire() // reth on chain 369
-	w.ExecSnapshot = true
-	w.SnapshotKey = "vk_test"
-	e := newFakeExecutor()
-	step := snapshotStep()
-	st := &State{Wire: w, Events: make(chan Event, 100)}
-	if err := step.Run(context.Background(), e, st); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	var download string
-	for _, c := range e.callLog() {
-		if strings.Contains(c, "reth download") {
-			download = c
-		}
-	}
-	if download == "" {
-		t.Fatalf("no reth download command issued; calls = %v", e.callLog())
-	}
-	wantURL := "one.valve.city/snapshot/vk_test/evm/369/reth/manifest.json"
-	if !strings.Contains(download, wantURL) {
-		t.Fatalf("reth download command %q does not contain the manifest URL %q", download, wantURL)
-	}
-}
+// ---- snapshot: see snapshot_test.go ----
 
 // ---- account ----
 
