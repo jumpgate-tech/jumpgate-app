@@ -1,29 +1,35 @@
-// #/rpc — eRPC as a LAYER over the whole fleet. The Control Surface.
+// #/rpc — a resilience readout for the chains this machine serves.
 //
-// The geometry IS the argument, and it is one table:
+// The page answers ONE question at a glance: can each chain I serve still be
+// answered if something goes down. Everything on it is arranged to answer that
+// and nothing else:
 //
-//   THE BAR     a full-width header per gateway. It spans the width because it
-//               fronts everything below it: state, the URL callers dial, the
-//               lifecycle actions.
-//   THE BANDS   one row per chain, spanning every column, wrapping the
-//               endpoints that serve it. The routing hierarchy becomes
-//               STRUCTURAL rather than described — you can see that these
-//               three endpoints are what /main/evm/369 resolves to, because
-//               they are physically underneath it.
-//   THE ROWS    one per endpoint: what it is, whether it can be used, what it
-//               can DO, and what share of the traffic it is actually carrying.
+//   THE HEADER  the infrastructure facts, stated quietly once — which machine,
+//               which image, whether HTTPS fronts it, the URL callers dial, and
+//               the lifecycle actions. It is deliberately not a bar competing
+//               with the chains, because the chains are what the page is FOR.
+//               A machine hosts one managed eRPC, so this is a header, not a
+//               list item; when a second MACHINE appears it gets its own
+//               heading rather than list chrome.
+//   THE STRIP   one attention strip per subject, carrying the exact command
+//               where one exists. This replaced five separate banners
+//               (errorBlock, blocked, warnings[], the TLS banner, actionErr)
+//               that a reader had to assemble into a single "what is wrong
+//               here" themselves.
+//   THE CHAINS  one row per chain, leading with redundancy: a segmented bar
+//               whose filled count is the upstreams configured out of four,
+//               the upstreams with what each can actually DO, and ONE sentence
+//               naming the gap and its consequence — derived from the
+//               configuration, never written per chain.
 //
-// This replaced a chip row plus a panel showing ONE selected chain. Selection
-// was the problem: a gateway's whole job is fronting several chains, and a
-// screen that shows one at a time cannot answer "which of my chains is
-// misrouting" without clicking through every one of them. Every chain is now
-// visible at once and there is no selection state to get out of step.
+// Colour means state and nothing else. Teal answering, amber
+// degraded-or-single-path, red down. There is no decorative accent anywhere on
+// this page: on an operations surface a decorative accent is a lie about state.
 //
-// Two columns are deliberately not here. Latency and request-rate history
-// answer "how is it doing", which is diagnosis; this screen answers the two
-// organisational questions — what can this endpoint do, and is it carrying the
-// share you intended — which is detection. Diagnosis belongs on an analytics
-// page you open once this screen has told you something is off.
+// Two things are deliberately not here. Latency and request-rate history answer
+// "how is it doing", which is diagnosis; this screen answers detection. That
+// belongs on the analytics page you open once this one has told you something
+// is off.
 //
 // The rules this file inherits, none of them negotiable:
 //   - no native confirm()/alert(). openModal/confirmModal from ui.ts.
@@ -65,6 +71,36 @@ const CAP_TAGS: Record<string, string> = {
   archive: "ARCHIVE",
   trace: "TRACE",
 };
+
+// SET_SIZE is what the redundancy bar measures a chain AGAINST. It is four
+// because valve's known set is four providers per chain, so a full bar and a
+// full set are the same fact — the hollow segments are exactly the endpoints
+// "Add valve's set…" would fill in.
+const SET_SIZE = 4;
+
+// Tone is the only colour vocabulary this page has. It is state, never
+// decoration: ok = answering, warn = degraded or single-path, bad = down.
+type Tone = "ok" | "warn" | "bad";
+
+// Verdict is a chain's one sentence and the tone that sentence implies. The
+// html is built from literals and numbers only — nothing operator-supplied
+// reaches it — so the <code> in it can be real markup rather than escaped text.
+interface Verdict {
+  tone: Tone;
+  html: string;
+  // why is the evidence behind the sentence, for the one case where the row
+  // underneath it appears to disagree — see chainVerdict.
+  why?: string;
+}
+
+// Attention is one line of the strip: what is wrong, and the exact thing to
+// run or install where such a thing exists. "note" carries no colour, because
+// it is information rather than a state claim.
+interface Attention {
+  tone: Tone | "note";
+  text: string;
+  cmd?: string;
+}
 
 // FINAL_STEP is the id every gateway plan ends on (preflight, config, run).
 // The setup event stream has no terminal frame, so this is what tells the
@@ -136,10 +172,9 @@ export function renderRPC(root: HTMLElement): () => void {
       <button class="btn btn-ghost" data-action="refresh">Refresh</button>
     </div>
     <p class="muted">
-      eRPC sits above everything else here. One gateway fronts as many chains as you
-      list, and each chain can be served by a devnet on this machine, a node on any
-      machine you manage, or a public endpoint — a gateway names the machine it runs
-      on, it does not belong to it.
+      A machine runs one gateway, and that gateway fronts as many chains as you list.
+      Each chain below leads with how many ways it can still be answered: the filled
+      segments are the endpoints it has, the hollow ones are endpoints it could have.
     </p>
     <div id="rpc-body"><p class="muted">Loading…</p></div>
     ${footer()}
@@ -243,13 +278,29 @@ export function renderRPC(root: HTMLElement): () => void {
       return;
     }
     const gateways = data.gateways ?? [];
+    // A machine hosts one managed eRPC, so a gateway is not a list item and
+    // there is no list wrapper. It is still not assumed to be exactly one:
+    // once a remote box becomes a managed target there are two, on two
+    // machines, and the MACHINE is what tells them apart. That is a heading,
+    // not list chrome.
+    const many = gateways.length > 1;
+    // The only route to creating a gateway is a registered machine that has
+    // none. canAddGatewayOn is the same guard the picker uses, so the button
+    // and the modal cannot disagree about whether there is anywhere to put one.
+    const canAdd = (data.targets ?? []).some((t) => canAddGatewayOn(t.id, gateways));
     body.innerHTML = `
       ${(data.orphans ?? []).map(orphanBanner).join("")}
-      ${gateways.map(gatewayBlock).join("")}
+      ${gateways.map((gw) => gatewayBlock(gw, many)).join("")}
       ${gateways.length === 0 ? emptyState() : ""}
-      <div class="card-actions rpc-add-gateway">
-        <button class="btn${gateways.length ? " btn-ghost" : ""}" data-action="add-gateway">Add a gateway</button>
-      </div>
+      ${
+        canAdd
+          ? `<div class="card-actions rpc-add-gateway">
+               <button class="btn${gateways.length ? " btn-ghost" : ""}" data-action="add-gateway">
+                 Add a gateway${gateways.length ? " on another machine" : ""}
+               </button>
+             </div>`
+          : ""
+      }
     `;
   }
 
@@ -259,17 +310,29 @@ export function renderRPC(root: HTMLElement): () => void {
   // themselves and dismisses the record; Dismiss forgets the record only,
   // matching handleGatewayDelete's own rule that this app never stops a
   // container it did not just start.
+  //
+  // It keeps its OWN strip rather than joining the gateway's: a leftover
+  // container is not a property of any chain, it belongs to no gateway by
+  // definition, and it is the one warning that blocks provisioning outright —
+  // a merged-away gateway still publishing its metrics port fails the
+  // survivor's preflight.
   function orphanBanner(o: api.OrphanedContainer): string {
+    const cmd = `docker rm -f ${o.containerName}`;
+    const err = orphanErr[o.containerName];
     return `
-      <div class="banner banner-warn">
-        <strong>${escapeHtml(o.containerName)}</strong> is still running on
-        ${escapeHtml(o.targetId)}. Its chains were folded into
-        <code>${escapeHtml(o.mergedInto)}</code>, but valve-node-app does not stop
-        containers it did not start. Remove it yourself:
-        <code>docker rm -f ${escapeHtml(o.containerName)}</code>
-        ${orphanErr[o.containerName] ? `<div class="error small">${escapeHtml(orphanErr[o.containerName]!)}</div>` : ""}
-        <div class="card-actions">
-          <button class="btn btn-ghost" data-action="dismiss-orphan" data-name="${escapeHtml(o.containerName)}">Dismiss</button>
+      <div class="strip">
+        ${attentionLine({
+          tone: "warn",
+          text:
+            `${o.containerName} is still running on ${o.targetId}. Its chains were folded into ` +
+            `${o.mergedInto}, but valve-node-app does not stop containers it did not start.`,
+          cmd,
+        })}
+        ${err ? attentionLine({ tone: "bad", text: err }) : ""}
+        <div class="strip-line strip-note">
+          <button class="btn btn-ghost btn-tiny" data-action="dismiss-orphan"
+                  data-name="${escapeHtml(o.containerName)}">Dismiss this record</button>
+          <span class="muted small">Forgets the record only — the container is never touched from here.</span>
         </div>
       </div>
     `;
@@ -298,59 +361,155 @@ export function renderRPC(root: HTMLElement): () => void {
     `;
   }
 
-  // gatewayBlock is one gateway: the full-width bar, and under it the table of
-  // every chain it fronts with the endpoints that serve each one.
-  function gatewayBlock(gw: api.GatewayView): string {
+  // gatewayBlock is one machine's gateway: the infrastructure header, one
+  // attention strip, and then the chains — which is the whole reason to be
+  // here. showMachine is set only when a second machine is managed, because a
+  // heading naming a machine you do not have is noise.
+  function gatewayBlock(gw: api.GatewayView, showMachine: boolean): string {
     return `
-      <section class="rpc-gateway">
-        ${gatewayBar(gw)}
-        ${gw.error ? errorBlock(gw) : ""}
-        ${gw.blocked ? `<div class="banner banner-warn">${escapeHtml(gw.blocked)}</div>` : ""}
-        ${(gw.warnings ?? []).map((wmsg) => `<div class="banner banner-warn">${escapeHtml(wmsg)}</div>`).join("")}
-        ${tlsBanner(gw)}
-        ${actionErr[gw.id] ? `<p class="error small">${escapeHtml(actionErr[gw.id]!)}</p>` : ""}
-        ${activityBlock(gw)}
-        ${settingsOpen[gw.id] ? settingsBlock(gw) : ""}
-        ${networksTable(gw)}
-      </section>
+      ${showMachine ? `<h2 class="rpc-machine">${escapeHtml(gw.placement.targetId)}</h2>` : ""}
+      ${gatewayBar(gw)}
+      ${attentionStrip(gw)}
+      ${activityBlock(gw)}
+      ${settingsOpen[gw.id] ? settingsBlock(gw) : ""}
+      ${networksTable(gw)}
     `;
   }
 
-  // ---- TIER 1: the bar ---------------------------------------------------
+  // ---- the header: the infrastructure, stated once and quietly -----------
 
+  // gatewayBar states the facts that are true of the whole page rather than of
+  // any chain: which machine, what image the container was made from, whether
+  // an HTTPS front is in the way, and the URL callers dial.
+  //
+  // It used to be a full-width accented bar. That accent was decoration — it
+  // was on whenever the container was running, which is the least interesting
+  // thing this page knows — and it pulled the eye away from the chains, which
+  // are the answer the reader came for. What is left carries colour in exactly
+  // one place: the state dot and badge.
   function gatewayBar(gw: api.GatewayView): string {
     const running = gw.status.State === "running";
+    const t = gw.tls;
+    const facts: string[] = [`on <strong>${escapeHtml(gw.placement.targetId)}</strong>`];
+    if (gw.status.Image) facts.push(`<code>${escapeHtml(gw.status.Image)}</code>`);
+    facts.push(
+      t?.enabled
+        ? `HTTPS front <code>${escapeHtml(t.containerName || "caddy")}</code>`
+        : "no HTTPS front",
+    );
     return `
-      <div class="rpc-bar${running ? "" : " rpc-bar-down"}">
-        <div class="rpc-bar-head">
-          <div class="rpc-bar-id">
-            ${stateDot(gw)}
-            <strong>${escapeHtml(gw.label)}</strong>
-            ${stateBadge(gw)}
-            <span class="muted small">on ${escapeHtml(gw.placement.targetId)} · ${escapeHtml(gw.placement.backend)}</span>
-          </div>
-          <div class="rpc-bar-actions">
-            ${(gw.actions ?? []).map((a) => actionButton(gw, a)).join("")}
-            <a class="btn btn-ghost" href="#/analytics/${encodeURIComponent(gw.id)}"
-               title="Latency, failures and why eRPC is routing the way it is. This screen tells you something is off; that one tells you what.">Analytics</a>
-            <button class="btn btn-ghost" data-action="toggle-settings" data-gid="${escapeHtml(gw.id)}">
-              ${settingsOpen[gw.id] ? "Close" : "Settings"}
-            </button>
-            <button class="btn btn-ghost" data-action="forget-gateway" data-gid="${escapeHtml(gw.id)}"
-                    title="Remove this gateway from valve-node-app. Its container is left alone.">Forget…</button>
-          </div>
+      <div class="rpc-head">
+        <div class="rpc-head-id">
+          ${stateDot(gw)}
+          <strong>${escapeHtml(gw.label)}</strong>
+          ${stateBadge(gw)}
+          <span class="muted small">${facts.join(" · ")}</span>
         </div>
-        <div class="rpc-bar-url">
+        <div class="rpc-head-actions">
+          ${(gw.actions ?? []).map((a) => actionButton(gw, a)).join("")}
+          <a class="btn btn-ghost" href="#/analytics/${encodeURIComponent(gw.id)}"
+             title="Latency, failures and why eRPC is routing the way it is. This screen tells you something is off; that one tells you what.">Analytics</a>
+          <button class="btn btn-ghost" data-action="toggle-settings" data-gid="${escapeHtml(gw.id)}">
+            ${settingsOpen[gw.id] ? "Close" : "Settings"}
+          </button>
+          <button class="btn btn-ghost" data-action="forget-gateway" data-gid="${escapeHtml(gw.id)}"
+                  title="Remove this gateway from valve-node-app. Its container is left alone.">Forget…</button>
+        </div>
+        <div class="rpc-head-url">
           ${
             running
               ? `<code class="endpoint-url">${escapeHtml(gw.baseUrl)}</code>
-                 <button class="btn btn-ghost" data-action="copy" data-copy="${escapeHtml(gw.baseUrl)}">Copy</button>
-                 <span class="muted small">a chain is addressed by path, e.g. <code>${escapeHtml((gw.networks ?? [])[0]?.path ?? "/main/evm/&lt;chainId&gt;")}</code></span>`
+                 <button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(gw.baseUrl)}">Copy</button>
+                 <span class="muted small">a chain is addressed by path, e.g. <code>${escapeHtml((gw.networks ?? [])[0]?.path ?? "/main/evm/<chainId>")}</code></span>`
               : `<span class="muted small">Not serving — it will answer on <code>${escapeHtml(gw.baseUrl)}</code> once it is running.</span>`
           }
         </div>
       </div>
     `;
+  }
+
+  // ---- the attention strip: one place, one line per thing ----------------
+
+  // attentionStrip is the ONE surface a gateway uses to say what is wrong with
+  // it. It replaced five: errorBlock, blocked, warnings[], the TLS banner and
+  // actionErr, each of which rendered its own full-width box, so a gateway
+  // having a bad day pushed its chains off the screen behind a stack of banners
+  // the reader had to merge in their head.
+  //
+  // Every line carries the exact command where one exists — the orphan
+  // banner's `docker rm -f` was the model, because it is the only one of the
+  // old banners that told the operator precisely what to run.
+  function attentionStrip(gw: api.GatewayView): string {
+    const lines: Attention[] = [];
+    if (gw.error) {
+      lines.push({
+        tone: "bad",
+        text: `This gateway could not be read: ${gw.error}${gw.hint ? ` — ${gw.hint}` : ""}`,
+      });
+    }
+    if (gw.blocked) lines.push({ tone: "warn", text: gw.blocked });
+    for (const wmsg of gw.warnings ?? []) lines.push({ tone: "warn", text: wmsg });
+    lines.push(...tlsAttention(gw));
+    const err = actionErr[gw.id];
+    if (err) lines.push({ tone: "bad", text: err });
+    if (lines.length === 0) return "";
+    return `<div class="strip">${lines.map(attentionLine).join("")}</div>`;
+  }
+
+  function attentionLine(a: Attention): string {
+    return `
+      <div class="strip-line strip-${a.tone}">
+        <span class="strip-text">${escapeHtml(a.text)}</span>
+        ${
+          a.cmd
+            ? `<code class="strip-cmd">${escapeHtml(a.cmd)}</code>
+               <button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(a.cmd)}">Copy</button>`
+            : ""
+        }
+      </div>
+    `;
+  }
+
+  // tlsAttention is what the HTTPS front is ACTUALLY doing, as opposed to what
+  // was configured. It has to be visible without opening Settings: a silent
+  // fallback would be the failure the fallback exists to prevent, relocated.
+  function tlsAttention(gw: api.GatewayView): Attention[] {
+    const t = gw.tls;
+    if (!t?.enabled) return [];
+    const out: Attention[] = [];
+    if (t.fallback) out.push({ tone: "warn", text: t.fallback });
+    if (t.error) {
+      out.push({ tone: "warn", text: `HTTPS front: ${t.error}` });
+    } else if (t.status?.State !== "running") {
+      out.push({
+        tone: "warn",
+        text:
+          `The HTTPS front is ${t.status?.State ?? "unknown"}, so nothing answers on ` +
+          `${t.url ?? "its https URL"} even if the gateway itself is up.`,
+        cmd: t.containerName ? `docker start ${t.containerName}` : undefined,
+      });
+    }
+    // The last live verification, surfaced WITHOUT opening Settings when it
+    // found something. A front that terminates TLS perfectly and refuses every
+    // subscription looks identical to a healthy one from out here.
+    const v = verifyResult[gw.id] ?? t.verification ?? null;
+    if (v && (!v.ok || !v.subscriptionsOk)) {
+      out.push({
+        tone: v.ok ? "warn" : "bad",
+        text: `${v.summary} Checked ${new Date(v.at).toLocaleString()} — open Settings for the full check.`,
+      });
+    }
+    if (v?.expiryWarning) out.push({ tone: "warn", text: v.expiryWarning });
+    if (t.rootCaPath && t.effectiveCertSource === "internal") {
+      // A note, not a warning: nothing is wrong, and colouring it would make
+      // "install this once" indistinguishable from "your front is down".
+      out.push({
+        tone: "note",
+        text: `Served by Caddy's own certificate authority. Install this file (on ${gw.placement.targetId}) into the trust store of every device that will call it and the browser warning goes away:`,
+        cmd: t.rootCaPath,
+      });
+    }
+    return out;
   }
 
   function stateBadge(gw: api.GatewayView): string {
@@ -370,16 +529,6 @@ export function renderRPC(root: HTMLElement): () => void {
     if (gw.status.State === "running") return dot("ok");
     if (gw.status.State === "unknown") return dot("bad");
     return dot("neutral");
-  }
-
-  function errorBlock(gw: api.GatewayView): string {
-    return `
-      <div class="banner banner-bad">
-        <strong>This gateway could not be read.</strong>
-        <div class="small">${escapeHtml(gw.error ?? "")}</div>
-        ${gw.hint ? `<div class="small">${escapeHtml(gw.hint)}</div>` : ""}
-      </div>
-    `;
   }
 
   function actionButton(gw: api.GatewayView, action: string): string {
@@ -405,16 +554,13 @@ export function renderRPC(root: HTMLElement): () => void {
     `;
   }
 
-  // ---- TIER 2: the chains, inside the bar --------------------------------
+  // ---- the chains: one row each, leading with redundancy -----------------
 
-  // ---- the table: bands wrapping their endpoints -------------------------
-
-  // networksTable renders every chain this gateway fronts, each as a band row
-  // spanning the full width with its endpoints beneath it.
-  //
-  // There is no selection and no focused chain. A gateway's job is fronting
-  // several chains, so "which of my chains is misrouting" has to be answerable
-  // by looking, not by clicking through each one in turn.
+  // networksTable renders every chain this gateway fronts, one row each. It
+  // was a table with a Role/State/Capabilities/Share column per endpoint, which
+  // listed the upstreams accurately and left the reader to work out the
+  // consequence — the thing they actually came to find out. The row now leads
+  // with the consequence and keeps the detail underneath it.
   function networksTable(gw: api.GatewayView): string {
     const nets = gw.networks ?? [];
     if (nets.length === 0) {
@@ -433,26 +579,127 @@ export function renderRPC(root: HTMLElement): () => void {
     return `
       <div class="card rpc-surface">
         ${surfaceHead(gw)}
-        <div class="surface-scroll">
-          <table class="surface">
-            <thead>
-              <tr>
-                <th class="col-endpoint">Endpoint</th>
-                <th>Role</th>
-                <th>State</th>
-                <th>Capabilities</th>
-                <th class="col-share">Share of traffic</th>
-                <th class="col-act"></th>
-              </tr>
-            </thead>
-            <tbody>
-              ${nets.map((n) => networkBand(gw, n) + endpointRows(gw, n)).join("")}
-            </tbody>
-          </table>
+        <div class="chains">
+          ${nets.map((n) => chainRow(gw, n)).join("")}
         </div>
         ${trafficFootnote(gw)}
       </div>
     `;
+  }
+
+  // chainRow is the unit of this page: what the chain is, how many ways it can
+  // be answered, what each of those ways can do, and one sentence saying what
+  // that adds up to.
+  function chainRow(gw: api.GatewayView, n: api.NetworkView): string {
+    const ups = n.upstreams ?? [];
+    const v = chainVerdict(n);
+    return `
+      <section class="chain chain-${v.tone}">
+        <div class="chain-head">
+          <span class="chain-name">${escapeHtml(n.name)}</span>
+          <code class="chain-key">evm:${n.chainId}</code>
+          <code class="chain-path">${escapeHtml(n.path)}</code>
+          ${
+            n.url
+              ? `<button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(n.url)}"
+                         title="Copy ${escapeHtml(n.url)}">Copy URL</button>`
+              : ""
+          }
+          <span class="chain-right">
+            ${redundancyBar(ups.length, v.tone)}
+            <button class="btn btn-ghost btn-tiny" data-action="add-endpoint"
+                    data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">+ Endpoint</button>
+            <button class="btn btn-ghost btn-tiny" data-action="remove-chain"
+                    data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">Remove</button>
+          </span>
+        </div>
+        <p class="chain-verdict${v.why ? " chain-verdict-why" : ""}"${v.why ? ` title="${escapeHtml(v.why)}"` : ""}>${v.html}</p>
+        ${endpointRows(gw, n)}
+        ${(n.warnings ?? []).map((wmsg) => `<p class="chain-note">${escapeHtml(wmsg)}</p>`).join("")}
+      </section>
+    `;
+  }
+
+  // redundancyBar is the count made into a mark, because redundancy IS a count
+  // and a count is the one thing a reader can take in without reading. Four
+  // segments: the hollow ones are exactly what "Add valve's set…" would fill.
+  //
+  // The filled segments carry the row's tone rather than a colour of their own,
+  // so a full bar on a chain that cannot serve eth_subscribe never reads green.
+  function redundancyBar(count: number, tone: Tone): string {
+    const filled = Math.min(count, SET_SIZE);
+    let segs = "";
+    for (let i = 0; i < SET_SIZE; i++) {
+      segs += `<span class="seg${i < filled ? ` seg-on seg-${tone}` : ""}"></span>`;
+    }
+    const over = count > SET_SIZE ? `, ${count - SET_SIZE} beyond the set` : "";
+    return `
+      <span class="segs" title="${count} upstream${count === 1 ? "" : "s"} configured${over}. valve's set for a chain is ${SET_SIZE}.">${segs}</span>
+      <span class="segs-n">${count} of ${SET_SIZE}</span>
+    `;
+  }
+
+  // chainVerdict is the one sentence, DERIVED — never written per chain. The
+  // rules are ordered by how completely the gap stops something working, so a
+  // chain that matches several says the worst one:
+  //
+  //   nothing dialable    every call on this path fails
+  //   no ws:// upstream   eth_subscribe fails outright, whatever else works
+  //   one upstream        the chain is one outage from gone
+  //   nothing local       it works, but only while somebody else's box does
+  //
+  // Every one of them is a CONFIGURATION fact, which is what makes them a
+  // resilience readout. Traffic share is deliberately not among them: "your
+  // own endpoint is being bypassed" is a real problem and a measured one, but
+  // it is not an answer to "could this chain survive an outage", and letting it
+  // occupy the row's one sentence would mean a chain with four endpoints and a
+  // node of its own reads as degraded. That signal stays where it is measured —
+  // amber on the endpoint's own share, one line below.
+  //
+  // A chain in good shape gets a sentence too. A surface that only speaks when
+  // something is wrong teaches people to stop reading it, and "this one is
+  // fine" is the answer the page exists to give.
+  function chainVerdict(n: api.NetworkView): Verdict {
+    const ups = n.upstreams ?? [];
+    if (ups.length === 0) {
+      return { tone: "bad", html: "No endpoint yet, so there is nowhere for calls on this path to go." };
+    }
+    if (!n.serviceable) {
+      return { tone: "bad", html: "No upstream here can be dialed, so every call on this path fails." };
+    }
+    if (!ups.some(isWebSocketUpstream)) {
+      return {
+        tone: "warn",
+        html: "No WebSocket upstream, so <code>eth_subscribe</code> fails on this chain.",
+        // The rows underneath can carry an un-struck WS tag and still be
+        // right: the prober asks the HOST whether it will upgrade, and this
+        // asks what eRPC was actually given. An endpoint that speaks WebSocket
+        // perfectly well, configured as https://, is dialed as https:// —
+        // eRPC has no separate flag to say otherwise.
+        why:
+          "eRPC infers WebSocket from the endpoint's scheme and has no separate setting, " +
+          "so a chain configured entirely with http:// or https:// upstreams refuses every " +
+          "eth_subscribe — even where the same host would accept a wss:// connection.",
+      };
+    }
+    if (ups.length === 1) {
+      return { tone: "warn", html: "One endpoint, so this chain stops when it does." };
+    }
+    if (!ups.some((u) => u.local)) {
+      return { tone: "warn", html: "No node of your own serves this chain." };
+    }
+    return {
+      tone: "ok",
+      html: `${ups.length} endpoints, one of them yours, and WebSocket among them — this chain can lose any one and still answer.`,
+    };
+  }
+
+  // isWebSocketUpstream reads the SCHEME, and that is the whole of it: eRPC has
+  // no separate WebSocket setting and infers the capability from the endpoint
+  // it was given, so a chain with no ws:// or wss:// upstream fails every
+  // eth_subscribe with ErrNoWsUpstreamAvailable however healthy it looks.
+  function isWebSocketUpstream(u: api.UpstreamView): boolean {
+    return /^wss?:\/\//i.test((u.endpoint ?? "").trim());
   }
 
   // surfaceHead carries the one control that acts on the whole table — a
@@ -475,96 +722,32 @@ export function renderRPC(root: HTMLElement): () => void {
     `;
   }
 
-  // networkBand is the row that WRAPS a chain's endpoints. Its pill states the
-  // one thing worth knowing about the chain as a whole, in priority order:
-  // unserviceable beats under-used beats healthy, because a chain that cannot
-  // answer at all makes the traffic split irrelevant.
-  function networkBand(gw: api.GatewayView, n: api.NetworkView): string {
-    const broken = !n.serviceable;
-    return `
-      <tr class="band${broken ? " band-bad" : ""}">
-        <td colspan="6">
-          <div class="band-inner">
-            <span class="band-id">${n.chainId}</span>
-            <span class="band-name">${escapeHtml(n.name)}</span>
-            <code class="band-path">${escapeHtml(n.path)}</code>
-            ${
-              n.url
-                ? `<button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(n.url)}"
-                           title="Copy ${escapeHtml(n.url)}">Copy URL</button>`
-                : ""
-            }
-            <span class="band-right">
-              ${bandPill(gw, n)}
-              <button class="btn btn-ghost btn-tiny" data-action="add-endpoint"
-                      data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">+ Endpoint</button>
-              <button class="btn btn-ghost btn-tiny" data-action="remove-chain"
-                      data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">Remove</button>
-            </span>
-          </div>
-          ${(n.warnings ?? []).map((wmsg) => `<div class="band-warn">${escapeHtml(wmsg)}</div>`).join("")}
-        </td>
-      </tr>
-    `;
-  }
-
-  function bandPill(gw: api.GatewayView, n: api.NetworkView): string {
-    if (!n.serviceable) return badge("no usable endpoint", "bad");
-
-    // "Subscriptions unavailable" is a chain-level fact even though it is
-    // measured per endpoint: eth_subscribe fails on this path when NOTHING
-    // behind it speaks WebSocket, and that is invisible on any single row.
-    const ups = n.upstreams ?? [];
-    const probed = ups
-      .map((u) => capsOf(gw.id, n.chainId, u.id))
-      .filter((e): e is api.EndpointCapabilities => !!e && !e.unprobeable);
-    if (probed.length > 0 && probed.every((e) => statusOf(e, "ws") === "unsupported")) {
-      return badge("subscriptions unavailable", "bad");
-    }
-
-    // Under-used: a preferred endpoint carrying materially less than intended.
-    // Stated on the band because the cause is usually one row down, and the
-    // band is where the eye lands first.
-    const shares = ups.map((u) => shareOf(gw.id, n.chainId, u.id));
-    if (shares.some((s, i) => s && s.diverged && (ups[i]?.local ?? false))) {
-      return badge("your endpoint is under-used", "warn");
-    }
-    return badge(`${ups.length} endpoint${ups.length === 1 ? "" : "s"}`, "ok");
-  }
-
   // endpointRows renders a chain's servers. It states what each endpoint IS
   // before what it is called, because "the devnet on this machine" is the fact
   // an operator reasons about and the URL is the consequence.
+  //
+  // The empty case says nothing: the chain's verdict has already said it, and
+  // saying it twice in two places is how a page stops being read.
   function endpointRows(gw: api.GatewayView, n: api.NetworkView): string {
     const ups = n.upstreams ?? [];
-    if (ups.length === 0) {
-      return `
-        <tr class="ep"><td colspan="6" class="muted small">
-          No endpoint yet, so there is nowhere for calls on this path to go.
-        </td></tr>
-      `;
-    }
-    return ups.map((u) => endpointRow(gw, n, u)).join("");
+    if (ups.length === 0) return "";
+    return `<ul class="ups">${ups.map((u) => endpointRow(gw, n, u)).join("")}</ul>`;
   }
 
   function endpointRow(gw: api.GatewayView, n: api.NetworkView, u: api.UpstreamView): string {
     const key = `${gw.id}|${n.chainId}|${u.id}`;
     const actions = u.actions ?? [];
     return `
-      <tr class="ep${u.problem ? " ep-bad" : ""}">
-        <td class="col-endpoint">
-          <div class="ep-what">
-            ${u.problem ? dot("bad") : dot("ok")}
-            <span class="ep-label">${escapeHtml(u.label)}</span>
-          </div>
-          <code class="ep-url">${escapeHtml(u.endpoint || "—")}</code>
-          ${u.problem ? `<div class="error small">${escapeHtml(u.problem)}</div>` : ""}
-        </td>
-        <td>${u.local ? "Yours" : "Public"}</td>
-        <td>${epStateBadge(u)}</td>
-        <td>${capCell(gw, n, u)}</td>
-        <td class="col-share">${shareCell(gw, n, u)}</td>
-        <td class="col-act">
+      <li class="up${u.problem ? " up-bad" : ""}">
+        <div class="up-what">
+          ${u.problem ? dot("bad") : dot("ok")}
+          <span class="up-label">${escapeHtml(u.label)}</span>
+          ${epStateBadge(u)}
+        </div>
+        <code class="up-url">${escapeHtml(u.endpoint || "—")}</code>
+        <div class="up-caps">${capCell(gw, n, u)}</div>
+        <div class="up-share">${shareCell(gw, n, u)}</div>
+        <div class="up-acts">
           ${
             actions.includes("reset")
               ? `<button class="btn btn-ghost btn-tiny" data-action="reset-devnet" data-key="${escapeHtml(key)}"
@@ -576,15 +759,20 @@ export function renderRPC(root: HTMLElement): () => void {
               : ""
           }
           <button class="btn btn-ghost btn-tiny" data-action="remove-endpoint" data-key="${escapeHtml(key)}">Remove</button>
-        </td>
-      </tr>
+        </div>
+        ${u.problem ? `<div class="up-problem error small">${escapeHtml(u.problem)}</div>` : ""}
+      </li>
     `;
   }
 
+  // epStateBadge says what ROLE this endpoint plays, not how it is feeling.
+  // "fallback" is neutral rather than amber: a public endpoint standing behind
+  // your own node is the arrangement working, and colouring it would spend the
+  // page's one amber on something that is not degraded.
   function epStateBadge(u: api.UpstreamView): string {
     if (u.problem) return badge("unusable", "bad");
     if (u.recentOnly) return badge("recent blocks", "warn");
-    return u.local ? badge("serving", "ok") : badge("fallback", "neutral");
+    return u.local ? badge("yours", "ok") : badge("public", "neutral");
   }
 
   // ---- capabilities ------------------------------------------------------
@@ -946,50 +1134,6 @@ export function renderRPC(root: HTMLElement): () => void {
       verifyBusy[gid] = false;
       render();
     }
-  }
-
-  // tlsBanner is what the front is ACTUALLY doing, as opposed to what was
-  // configured. It is separate from the settings block because it must be
-  // visible without opening anything: a silent fallback would be the failure
-  // the fallback exists to prevent, just relocated.
-  function tlsBanner(gw: api.GatewayView): string {
-    const t = gw.tls;
-    if (!t?.enabled) return "";
-    const parts: string[] = [];
-    if (t.fallback) {
-      parts.push(`<div class="banner banner-warn">${escapeHtml(t.fallback)}</div>`);
-    }
-    if (t.error) {
-      parts.push(`<div class="banner banner-warn">HTTPS front: ${escapeHtml(t.error)}</div>`);
-    } else if (t.status?.State !== "running") {
-      parts.push(
-        `<div class="banner banner-warn">The HTTPS front (<code>${escapeHtml(t.containerName ?? "")}</code>) is
-         ${escapeHtml(t.status?.State ?? "unknown")}, so nothing is answering on
-         <code>${escapeHtml(t.url ?? "")}</code> even if the gateway itself is up.</div>`,
-      );
-    }
-    // The last live verification, surfaced WITHOUT opening settings when it
-    // found something. A front that terminates TLS perfectly and refuses every
-    // subscription looks identical to a healthy one from out here, so the one
-    // place that knows says so where the state is shown.
-    const v = verifyResult[gw.id] ?? t.verification ?? null;
-    if (v && (!v.ok || !v.subscriptionsOk)) {
-      parts.push(
-        `<div class="banner ${v.ok ? "banner-warn" : "banner-bad"}">${escapeHtml(v.summary)}
-         <div class="small">Checked ${escapeHtml(new Date(v.at).toLocaleString())} — open Settings for the full check.</div></div>`,
-      );
-    }
-    if (v?.expiryWarning) {
-      parts.push(`<div class="banner banner-warn">${escapeHtml(v.expiryWarning)}</div>`);
-    }
-    if (t.rootCaPath && t.effectiveCertSource === "internal") {
-      parts.push(
-        `<p class="muted small">This gateway is served by Caddy's own certificate authority. Install
-         <code>${escapeHtml(t.rootCaPath)}</code> (on ${escapeHtml(gw.placement.targetId)}) into the trust store of every
-         device that will call it, and the browser warning goes away.</p>`,
-      );
-    }
-    return parts.join("");
   }
 
   // --- config editing -----------------------------------------------------
