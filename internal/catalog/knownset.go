@@ -2,28 +2,42 @@ package catalog
 
 import "fmt"
 
-// DefaultValveKey is the shared demo key, so the set works with no setup at
-// all. It is a shared quota: if it runs dry, valve's endpoints become the least
-// reliable entries in a set that lists them first, which is why the offer says
-// so plainly and why the rest of the set is there.
+// DefaultValveKey is the DEFAULT VALUE for the ${VALVE_API_KEY} placeholder —
+// the value the set resolves to when nothing is configured, so it works with
+// no setup at all. It is a shared quota: if it runs dry, valve's endpoints
+// become the least reliable entries in a set that lists them first, which is
+// why the offer says so plainly and why the rest of the set is there.
 //
-// Config.ValveKeys can hold a key of the operator's own per chain and this
-// package will use it, but NOTHING IN THE APP WRITES ONE — there is no route
-// and no field — so every install is on the shared key until that is built.
-// The offer's copy has to match that, not the intention.
+// Config.ProviderKeys can hold a key of the operator's own, keyed by
+// ValveKeyPlaceholder, and the resolving seam will use it, but NOTHING IN THE
+// APP WRITES ONE — there is no route and no field — so every install is on the
+// shared key until that is built. The offer's copy has to match that, not the
+// intention.
 const DefaultValveKey = "vk_demo"
 
+// ValveKeyPlaceholder is the ${NAME} slot valve's own endpoints carry.
+//
+// This duplicates config.ValveKeyPlaceholder's value rather than importing it:
+// config imports catalog (for GatewayConfig and friends), so the reverse
+// import would be a cycle. Both must name the same placeholder,
+// "VALVE_API_KEY" — a test asserts the two constants stay equal, since nothing
+// in the type system can.
+const ValveKeyPlaceholder = "VALVE_API_KEY"
+
 // valveURLTemplate and valveWSURLTemplate are valve's unified endpoint on each
-// scheme. The key is a PATH segment, not a header, so it has to be substituted
-// per chain rather than set once on a client.
+// scheme, with the key left as an UNRESOLVED ${VALVE_API_KEY} slot — like
+// every other API-key endpoint in this app, resolution happens at the one
+// seam every endpoint crosses (chainlist.Resolve), not inside the set. The key
+// is a PATH segment, not a header, so the slot sits in the path rather than
+// being applied once on a client.
 //
 // There are two because eRPC infers WebSocket capability from the scheme: an
 // https:// upstream can never serve eth_subscribe however well the host speaks
 // WebSocket, so valve contributes two entries on a chain where both were
 // measured, exactly as drpc and publicnode do.
 const (
-	valveURLTemplate   = "https://one.valve.city/rpc/%s/evm/%d"
-	valveWSURLTemplate = "wss://one.valve.city/rpc/%s/evm/%d"
+	valveURLTemplate   = "https://one.valve.city/rpc/${" + ValveKeyPlaceholder + "}/evm/%d"
+	valveWSURLTemplate = "wss://one.valve.city/rpc/${" + ValveKeyPlaceholder + "}/evm/%d"
 )
 
 // KnownEndpoint is one entry in a chain's known set, with the two capabilities
@@ -68,8 +82,10 @@ type KnownEndpoint struct {
 // setting the flag at all: a WebSocket claim on an endpoint nobody dialed is
 // the exact bug the scheme split exists to prevent.
 //
-// The valve entries' URLs are filled in per call, since they carry the key;
-// which scheme each gets follows its WebSocket flag.
+// The valve entries' URLs are filled in per call, as a TEMPLATE rather than a
+// resolved value, since the caller — not this package — decides which key
+// fills the ${VALVE_API_KEY} slot; which scheme each gets follows its
+// WebSocket flag.
 var knownSets = map[int][]KnownEndpoint{
 	1: {
 		{Provider: "valve", Archive: true},
@@ -98,17 +114,18 @@ var knownSets = map[int][]KnownEndpoint{
 	},
 }
 
-// KnownSet returns a chain's set with valve's URL resolved against key, or nil
-// for a chain with no set. The result is FOUR PROVIDERS; a provider offering
-// both schemes contributes two entries, because eRPC reads the capability off
-// the scheme.
-func KnownSet(chainID int, key string) []KnownEndpoint {
+// KnownSet returns a chain's set, or nil for a chain with no set. valve's URL
+// comes back as an UNRESOLVED template embedding ${VALVE_API_KEY} — like every
+// other API-key endpoint in this app, resolving it is the caller's job, done
+// once at the one seam every endpoint crosses (chainlist.Resolve), so the set
+// and the feed cannot drift on how a key gets substituted in.
+//
+// The result is FOUR PROVIDERS; a provider offering both schemes contributes
+// two entries, because eRPC reads the capability off the scheme.
+func KnownSet(chainID int) []KnownEndpoint {
 	src, ok := knownSets[chainID]
 	if !ok {
 		return nil
-	}
-	if key == "" {
-		key = DefaultValveKey
 	}
 	out := make([]KnownEndpoint, 0, len(src))
 	for _, e := range src {
@@ -117,7 +134,7 @@ func KnownSet(chainID int, key string) []KnownEndpoint {
 			if e.WebSocket {
 				tmpl = valveWSURLTemplate
 			}
-			e.URL = fmt.Sprintf(tmpl, key, chainID)
+			e.URL = fmt.Sprintf(tmpl, chainID)
 		}
 		out = append(out, e)
 	}

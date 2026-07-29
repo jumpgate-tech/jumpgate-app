@@ -16,7 +16,7 @@ func TestKnownSetOrderAndContents(t *testing.T) {
 	if got := KnownSetProviders(1); got != 4 {
 		t.Fatalf("evm:1 is four providers, got %d", got)
 	}
-	eth := KnownSet(1, DefaultValveKey)
+	eth := KnownSet(1)
 	var order []string
 	for _, e := range eth {
 		if len(order) == 0 || order[len(order)-1] != e.Provider {
@@ -36,14 +36,14 @@ func TestKnownSetOrderAndContents(t *testing.T) {
 	if got := KnownSetProviders(369); got != 4 {
 		t.Fatalf("evm:369 is four providers, got %d", got)
 	}
-	pls := KnownSet(369, DefaultValveKey)
+	pls := KnownSet(369)
 	// The official endpoint measured 1700ms against 197-274ms for the rest, so
 	// it is kept but never preferred.
 	if pls[len(pls)-1].Provider != "official" {
 		t.Errorf("evm:369 must end on the official endpoint, got %q", pls[len(pls)-1].Provider)
 	}
 
-	if got := KnownSet(999999, DefaultValveKey); got != nil {
+	if got := KnownSet(999999); got != nil {
 		t.Errorf("an unknown chain has no set, got %+v", got)
 	}
 }
@@ -53,7 +53,7 @@ func TestKnownSetOrderAndContents(t *testing.T) {
 // loses a capability outright.
 func TestKnownSetCoversBothCapabilities(t *testing.T) {
 	var ws, archive int
-	for _, e := range KnownSet(1, DefaultValveKey) {
+	for _, e := range KnownSet(1) {
 		if e.WebSocket {
 			ws++
 		}
@@ -77,7 +77,7 @@ func TestKnownSetCoversBothCapabilities(t *testing.T) {
 // invariant on every chain rather than on the one that regressed.
 func TestKnownSetWebSocketFlagMatchesTheScheme(t *testing.T) {
 	for chainID := range knownSets {
-		for _, e := range KnownSet(chainID, DefaultValveKey) {
+		for _, e := range KnownSet(chainID) {
 			ws := strings.HasPrefix(e.URL, "wss://") || strings.HasPrefix(e.URL, "ws://")
 			if ws != e.WebSocket {
 				t.Errorf("evm:%d %s: WebSocket=%v but the URL is %q — eRPC infers the capability from the scheme, so these cannot disagree",
@@ -93,7 +93,7 @@ func TestKnownSetWebSocketFlagMatchesTheScheme(t *testing.T) {
 // means here.
 func TestKnownSetValveHasBothSchemesWhereMeasured(t *testing.T) {
 	for _, chainID := range []int{1, 369, 943} {
-		set := KnownSet(chainID, DefaultValveKey)
+		set := KnownSet(chainID)
 		if set[0].Provider != "valve" || set[1].Provider != "valve" {
 			t.Fatalf("evm:%d must open on valve's two entries, got %q then %q",
 				chainID, set[0].Provider, set[1].Provider)
@@ -116,22 +116,19 @@ func TestKnownSetSizeIsTheEntryCount(t *testing.T) {
 		}
 	}
 	for chainID := range knownSets {
-		if got, want := KnownSetSize(chainID), len(KnownSet(chainID, DefaultValveKey)); got != want {
+		if got, want := KnownSetSize(chainID), len(KnownSet(chainID)); got != want {
 			t.Errorf("evm:%d: KnownSetSize is %d but the set adds %d", chainID, got, want)
 		}
 	}
 }
 
-func TestKnownSetSubstitutesTheValveKey(t *testing.T) {
-	got := KnownSet(1, "vk_mine")[0].URL
-	want := "https://one.valve.city/rpc/vk_mine/evm/1"
+// The set no longer resolves anything. It returns a template like any other
+// API-key endpoint, and resolution happens at the one seam every endpoint
+// crosses — so the set and the feed cannot drift.
+func TestKnownSetReturnsAnUnresolvedTemplate(t *testing.T) {
+	got := KnownSet(1)[0].URL
+	want := "https://one.valve.city/rpc/${" + ValveKeyPlaceholder + "}/evm/1"
 	if got != want {
 		t.Errorf("valve URL: want %q, got %q", want, got)
-	}
-
-	// An empty key must not produce a URL with an empty path segment — that
-	// would 404 on every call while looking configured.
-	if got := KnownSet(1, "")[0].URL; got != "https://one.valve.city/rpc/vk_demo/evm/1" {
-		t.Errorf("an empty key falls back to the demo key, got %q", got)
 	}
 }

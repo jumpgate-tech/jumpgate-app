@@ -10,6 +10,17 @@ import (
 	"github.com/valve-tech/valve-node-app/internal/executor"
 )
 
+// catalog cannot import config (config already imports catalog), so
+// catalog.ValveKeyPlaceholder duplicates this constant's VALUE rather than
+// referencing it. Nothing in the type system keeps the two literals equal —
+// this test is that guard.
+func TestValveKeyPlaceholderMatchesCatalog(t *testing.T) {
+	if catalog.ValveKeyPlaceholder != ValveKeyPlaceholder {
+		t.Errorf("catalog.ValveKeyPlaceholder = %q, config.ValveKeyPlaceholder = %q — the two must name the same placeholder",
+			catalog.ValveKeyPlaceholder, ValveKeyPlaceholder)
+	}
+}
+
 func TestLoadMissingReturnsZeroValueWithDefaultRefRPCBase(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

@@ -406,10 +406,29 @@ func (s *Server) handleKnownSet(w http.ResponseWriter, r *http.Request) {
 	// already folded any per-chain keys an older config held into this one.
 	key := strings.TrimSpace(cfg.ProviderKeys[config.ValveKeyPlaceholder])
 	out := knownSetResponse{UsingDefaultKey: key == "" || key == catalog.DefaultValveKey}
-	for _, e := range catalog.KnownSet(chainID, key) {
+
+	// keys is the same provider-key map discovery resolves and redacts
+	// against — see providerKeys and redactKeys in chainlist.go — so the set
+	// and the feed cannot disagree about which key answers which placeholder.
+	keys := providerKeys(cfg)
+	for _, e := range catalog.KnownSet(chainID) {
+		// AlreadyAdded has to compare against the RESOLVED URL: what is
+		// actually stored on the gateway is the dialable address (see
+		// resolveUpstreamKeys), never a template.
+		url, added := e.URL, have[e.URL]
+		if resolved, ok := chainlist.Resolve(e.URL, keys); ok {
+			added = have[resolved]
+			// Redacted for the same reason handleChainlist redacts: this
+			// entry can carry a key as a path segment, and the browser must
+			// never see it — only whether one is in play (UsingDefaultKey).
+			url = redactKeys(resolved, keys)
+		}
+		// An entry that cannot resolve (no key stored for its placeholder)
+		// comes back with the placeholder still named in its URL rather than
+		// being dropped, so the UI can say which key it wants.
 		out.Endpoints = append(out.Endpoints, knownSetEndpoint{
-			URL: e.URL, Provider: e.Provider, WebSocket: e.WebSocket,
-			Archive: e.Archive, AlreadyAdded: have[e.URL],
+			URL: url, Provider: e.Provider, WebSocket: e.WebSocket,
+			Archive: e.Archive, AlreadyAdded: added,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
