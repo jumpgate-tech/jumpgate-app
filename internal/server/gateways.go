@@ -1116,7 +1116,8 @@ func (s *Server) handleGatewayCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := resolveUpstreamKeys(&gwCfg, providerKeys(keyCfg)); err != nil {
+	keys := providerKeys(keyCfg)
+	if err := resolveUpstreamKeys(&gwCfg, keys); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1124,8 +1125,11 @@ func (s *Server) handleGatewayCreate(w http.ResponseWriter, r *http.Request) {
 	// intended starting state, and rendering it would fail on "no networks" —
 	// a true statement, but not a reason to refuse to create the gateway.
 	if len(gwCfg.Networks) > 0 {
+		// Redacted, because the slots were just filled in: the validation error
+		// for a bad scheme QUOTES the endpoint, and by now that endpoint carries
+		// the real key. See handleGatewayPutConfig for the full reasoning.
 		if err := validateGatewayConfig(gwCfg); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeError(w, http.StatusBadRequest, redactKeys(err.Error(), keys))
 			return
 		}
 	}
@@ -1213,7 +1217,8 @@ func (s *Server) handleGatewayPutConfig(w http.ResponseWriter, r *http.Request) 
 	// Before validation, because an unfilled ${...} slot is not a URL eRPC
 	// could ever dial, and the operator should be told which key is missing
 	// rather than whatever the renderer makes of the literal.
-	if err := resolveUpstreamKeys(&gwCfg, providerKeys(keyCfg)); err != nil {
+	keys := providerKeys(keyCfg)
+	if err := resolveUpstreamKeys(&gwCfg, keys); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1223,8 +1228,14 @@ func (s *Server) handleGatewayPutConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if len(gwCfg.Networks) > 0 {
+		// The validation error is REDACTED, because resolveUpstreamKeys has
+		// already run: a bad-scheme upstream is reported by quoting the endpoint,
+		// and that endpoint now has the operator's real key substituted into it.
+		// Unredacted, posting {"Endpoint":"gopher://x/${INFURA_API_KEY}"} would
+		// read any stored key straight back out of a 400 body — including one
+		// that no upstream uses and no screen shows.
 		if err := validateGatewayConfig(gwCfg); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeError(w, http.StatusBadRequest, redactKeys(err.Error(), keys))
 			return
 		}
 	}
