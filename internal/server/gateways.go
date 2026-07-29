@@ -487,19 +487,25 @@ func (s *Server) handleGatewayGet(w http.ResponseWriter, r *http.Request) {
 // view, not in an error return, for the reason handleGatewayList documents.
 func (s *Server) gatewayViewFor(r *http.Request, cfg config.Config, gw config.Gateway, probed map[string]dockerView) gatewayView {
 	resolved, problems := resolveGateway(cfg, gw)
+	keys := providerKeys(cfg)
 
 	v := gatewayView{
 		ID:            gw.ID,
 		Label:         gatewayLabel(gw),
 		ContainerName: ops.ERPCContainerNameFor(gw.ID),
 		Placement:     gw.Placement,
-		Config:        redactedGatewayConfig(gw.Config, providerKeys(cfg)),
+		Config:        redactedGatewayConfig(gw.Config, keys),
 		Status:        ops.ContainerStatus{ID: "erpc:" + gw.ID, ContainerName: ops.ERPCContainerNameFor(gw.ID), State: ops.StateUnknown},
 		// The gateway owns no volumes and no host files it may delete: its
 		// erpc.yaml is a bind mount the operator owns, and ops.WipeService
 		// never touches bind mounts.
 		WipeDiscards: "the gateway container only. It is stateless — its erpc.yaml is a file on the host and is left untouched — so this is a rebuild, not a loss of data.",
-		Warnings:     problems,
+		// The SAME resolveUpstream errors networkViews redacts into
+		// uv.Problem, wrapped one level up ("chain %d, upstream %q: %s"). They
+		// ride in the same body on the same poll, so redacting the per-row copy
+		// and not this one would apply the argument to one of two strings that
+		// carry identical text.
+		Warnings: redactEach(problems, keys),
 	}
 
 	host, hostOK := findTarget(cfg, gw.Placement.TargetID)
@@ -938,6 +944,20 @@ func redactedGatewayConfig(g catalog.GatewayConfig, keys map[string]string) cata
 	}
 	g.Networks = nets
 	return g
+}
+
+// redactEach is redactKeys over a slice, returning a new one. nil in, nil out,
+// so an empty warnings list stays absent from the wire rather than becoming an
+// empty array.
+func redactEach(ss []string, keys map[string]string) []string {
+	if len(ss) == 0 {
+		return ss
+	}
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = redactKeys(s, keys)
+	}
+	return out
 }
 
 // networkViews renders the chains and their servers. base is "" when the
@@ -1562,7 +1582,10 @@ func (s *Server) handleGatewayProvision(w http.ResponseWriter, r *http.Request) 
 
 	resolved, problems := resolveGateway(cfg, gw)
 	if len(resolved.Networks) == 0 {
-		writeErrorDetail(w, http.StatusBadRequest, gatewayUnprovisionable(gw, problems), "", codeNotConfigured)
+		// Redacted for the reason gatewayViewFor's Warnings are: these are the
+		// same resolveUpstream strings, reaching the same browser.
+		writeErrorDetail(w, http.StatusBadRequest,
+			gatewayUnprovisionable(gw, redactEach(problems, providerKeys(cfg))), "", codeNotConfigured)
 		return
 	}
 
