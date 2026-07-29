@@ -102,10 +102,12 @@ func TestRenderGatewayConfig_NoLocalUpstreams(t *testing.T) {
 // local node serves the chain and wrong when the "fallback" is the only path
 // there is — the gateway would be de-prioritising the one thing that can answer.
 func TestRenderGatewayConfig_PublicOnlyChainIsNotAFallback(t *testing.T) {
+	// 1337 is listed FIRST on purpose: "pub" is a prefix of "pub2", so this
+	// ordering is what makes section's line anchor load-bearing rather than
+	// incidentally correct. Rendered the other way round, an unanchored lookup
+	// for "pub" finds pub2 and both assertions below inspect the wrong block
+	// while still passing.
 	g := GatewayConfig{Port: 4000, Networks: []GatewayNetwork{
-		{ChainID: 1, Upstreams: []GatewayUpstream{
-			{ID: "pub", Kind: UpstreamExternal, Endpoint: "https://eth.example"},
-		}},
 		{ChainID: 1337, Upstreams: []GatewayUpstream{
 			// RenderGatewayConfig requires a resolved endpoint on every
 			// upstream, managed kinds included (see the Endpoint field's
@@ -114,6 +116,9 @@ func TestRenderGatewayConfig_PublicOnlyChainIsNotAFallback(t *testing.T) {
 			// straight from a hand-built GatewayConfig.
 			{ID: "devnet", Kind: UpstreamManagedDevnet, TargetID: "local", Local: true, Endpoint: "http://127.0.0.1:8546"},
 			{ID: "pub2", Kind: UpstreamExternal, Endpoint: "https://backup.example"},
+		}},
+		{ChainID: 1, Upstreams: []GatewayUpstream{
+			{ID: "pub", Kind: UpstreamExternal, Endpoint: "https://eth.example"},
 		}},
 	}}
 
@@ -138,9 +143,14 @@ func TestRenderGatewayConfig_PublicOnlyChainIsNotAFallback(t *testing.T) {
 // "- id: <name>" line through to the next "- id:" line or the end of the
 // string. Used to make assertions about one upstream without them being
 // confused by a sibling upstream's tags.
+//
+// The marker carries the newline that ENDS the id line, because "- id: pub" is
+// also a prefix of "- id: pub2": without it, asking for "pub" returns pub2's
+// block whenever pub2 renders first, and the assertion silently inspects the
+// wrong upstream instead of failing.
 func section(t *testing.T, cfg, id string) string {
 	t.Helper()
-	marker := "- id: " + id
+	marker := "- id: " + id + "\n"
 	start := strings.Index(cfg, marker)
 	if start < 0 {
 		t.Fatalf("no upstream %q in:\n%s", id, cfg)

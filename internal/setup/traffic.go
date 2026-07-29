@@ -117,8 +117,12 @@ func ReadGatewaySamples(ctx context.Context, e executor.Executor, g catalog.Gate
 // IntentsFor derives what the routing configuration says each upstream of one
 // chain SHOULD be carrying.
 //
-// It reads Local, and nothing else, because that is genuinely all eRPC has:
-// upstreams are either preferred or filed in a 0.2-scored fallback tier. The
+// It reads Local, and nothing else, because that is genuinely all eRPC has —
+// but Local is a preference WITHIN a network, not an absolute rank: upstreams
+// are filed in the 0.2-scored fallback tier only on a chain that also has a
+// local upstream, and on a public-only chain every one of them is rendered at
+// full weight. metrics.Shares reproduces both cases from these flags, which is
+// why the whole slice goes over rather than a per-upstream verdict. The
 // multiplier is emphatically not a target percentage — eRPC picks the
 // best-scoring upstream rather than splitting traffic by weight — so
 // normalising 1.0 and 0.2 into "83% / 17%" would be inventing a number and then
