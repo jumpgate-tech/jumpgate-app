@@ -111,6 +111,9 @@ type endpointCapabilitiesView struct {
 	// ProbedURL is the address THIS PROCESS dialed, which is frequently not
 	// the address eRPC itself dials — see probeAddressFor. Empty when
 	// Unprobeable is set, because then nothing was dialed at all.
+	//
+	// REDACTED: a provider key in the path comes back as ${NAME}. The dial
+	// used the real URL; only this report has the slot put back.
 	ProbedURL string `json:"probedUrl,omitempty"`
 
 	Reachable   bool   `json:"reachable"`
@@ -232,6 +235,11 @@ func probeGatewayCapabilities(ctx context.Context, prober *capabilities.Prober, 
 		}
 	}
 
+	// Redaction happens in the VIEW, never in the job: probeURL is the address
+	// this process actually dials, so it must keep the real key right up to the
+	// socket. Only the copy that reaches the browser has the slot put back.
+	keys := providerKeys(cfg)
+
 	// Probed concurrently: the Prober already caps in-flight round trips via
 	// its own Concurrency, so serialising the endpoints here would only add a
 	// second, redundant limit — one that scales with chain count instead of
@@ -242,7 +250,7 @@ func probeGatewayCapabilities(ctx context.Context, prober *capabilities.Prober, 
 		wg.Add(1)
 		go func(i int, j job) {
 			defer wg.Done()
-			views[i] = probeOneUpstream(ctx, prober, j.id, j.chainID, j.probeURL, j.unprobeable, j.repeat)
+			views[i] = probeOneUpstream(ctx, prober, j.id, j.chainID, j.probeURL, j.unprobeable, j.repeat, keys)
 		}(i, j)
 	}
 	wg.Wait()
@@ -251,7 +259,14 @@ func probeGatewayCapabilities(ctx context.Context, prober *capabilities.Prober, 
 }
 
 // probeOneUpstream runs (or skips) one endpoint's probe and renders its row.
-func probeOneUpstream(ctx context.Context, prober *capabilities.Prober, upstream string, chainID int, probeURL, unprobeable string, repeat int) endpointCapabilitiesView {
+//
+// keys is the redaction set: an external upstream's probe URL is its stored
+// endpoint verbatim, key path segment and all, and this row is polled straight
+// onto the RPC screen. The dial above still uses the real URL — only what is
+// reported goes through redactKeys. ReachDetail gets the same treatment
+// because it quotes what a failed round trip said, and a transport error can
+// carry the address it was trying.
+func probeOneUpstream(ctx context.Context, prober *capabilities.Prober, upstream string, chainID int, probeURL, unprobeable string, repeat int, keys map[string]string) endpointCapabilitiesView {
 	v := endpointCapabilitiesView{Upstream: upstream, ChainID: chainID}
 	if unprobeable != "" {
 		// Never dialed, deliberately — see probeAddressFor and the
@@ -261,10 +276,10 @@ func probeOneUpstream(ctx context.Context, prober *capabilities.Prober, upstream
 		return v
 	}
 
-	v.ProbedURL = probeURL
+	v.ProbedURL = redactKeys(probeURL, keys)
 	ep := prober.ProbeRepeat(ctx, capabilities.Target{URL: probeURL}, chainID, repeat)
 	v.Reachable = ep.Reachable
-	v.ReachDetail = ep.ReachDetail
+	v.ReachDetail = redactKeys(ep.ReachDetail, keys)
 	v.Capabilities = capabilityViewsFor(ep)
 	return v
 }

@@ -917,6 +917,191 @@ func TestGatewayPutConfig_FillsAProviderSlotFromTheStoredKey(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------
+// the gateway views never carry a provider key either
+// ---------------------------------------------------------------------
+
+// storeProviderKeys puts keys in the stored config, which is what
+// providerKeys() reads and therefore what redaction matches against.
+func storeProviderKeys(t *testing.T, keys map[string]string) {
+	t.Helper()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.ProviderKeys = keys
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+}
+
+// The stored endpoint of a templated upstream carries the real key — that is
+// resolveUpstreamKeys doing its job — and the RPC screen polls these two
+// routes continuously. Both the per-upstream row and the whole round-trip
+// Config must come back with the ${NAME} slot, and this asserts it against the
+// RAW body rather than one field, because a key that leaks through some other
+// string is leaked just the same.
+func TestGatewayViews_NeverReturnAProviderKey(t *testing.T) {
+	a := gatewayServer(t)
+	storeProviderKeys(t, map[string]string{
+		config.ValveKeyPlaceholder: "vk_operator_secret",
+		"INFURA_API_KEY":           "sk_infura_operator_secret",
+	})
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+			{ID: "valve-1", Kind: catalog.UpstreamExternal, Endpoint: "https://one.valve.city/rpc/${VALVE_API_KEY}/evm/1"},
+			{ID: "infura-1", Kind: catalog.UpstreamExternal, Endpoint: "https://mainnet.infura.io/v3/${INFURA_API_KEY}"},
+		}}},
+	})
+
+	// The key really was stored resolved — otherwise the rest of this test
+	// would be proving redaction of a string that never had a secret in it.
+	stored, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	gw, _ := stored.FindGateway("default")
+	if got := gw.Config.Networks[0].Upstreams[0].Endpoint; got != "https://one.valve.city/rpc/vk_operator_secret/evm/1" {
+		t.Fatalf("stored endpoint = %q, want the resolved URL — nothing here is worth asserting otherwise", got)
+	}
+
+	for _, path := range []string{"/api/gateways", "/api/gateways/default"} {
+		res := a.do(t, "GET", path, nil)
+		raw, err := io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			t.Fatalf("%s: read body: %v", path, err)
+		}
+		for _, secret := range []string{"vk_operator_secret", "sk_infura_operator_secret"} {
+			if strings.Contains(string(raw), secret) {
+				t.Errorf("%s: the stored key %q must not appear anywhere in the response: %s", path, secret, raw)
+			}
+		}
+		if !strings.Contains(string(raw), "${VALVE_API_KEY}") || !strings.Contains(string(raw), "${INFURA_API_KEY}") {
+			t.Errorf("%s: the placeholder form must come back in its place, so the editor can still round-trip it: %s", path, raw)
+		}
+	}
+}
+
+// The hazard the deep copy exists for. gw.Config arrives as a shallow struct
+// copy of loaded configuration: Networks and each network's Upstreams are
+// SLICES, so redacting "the copy" in place would write ${NAME} into the very
+// configuration this process renders from and saves. That is a display concern
+// turned into data loss.
+func TestRedactedGatewayConfig_LeavesTheSourceUntouched(t *testing.T) {
+	keys := map[string]string{"INFURA_API_KEY": "sk_infura_secret"}
+	src := catalog.GatewayConfig{Networks: []catalog.GatewayNetwork{{
+		ChainID: 1,
+		Upstreams: []catalog.GatewayUpstream{
+			{ID: "infura-1", Kind: catalog.UpstreamExternal, Endpoint: "https://mainnet.infura.io/v3/sk_infura_secret"},
+		},
+	}}}
+
+	out := redactedGatewayConfig(src, keys)
+
+	if got := out.Networks[0].Upstreams[0].Endpoint; got != "https://mainnet.infura.io/v3/${INFURA_API_KEY}" {
+		t.Errorf("view endpoint = %q, want the placeholder form", got)
+	}
+	if got := src.Networks[0].Upstreams[0].Endpoint; got != "https://mainnet.infura.io/v3/sk_infura_secret" {
+		t.Fatalf("the SOURCE config was rewritten to %q — the redaction is aliasing the loaded config's backing array", got)
+	}
+
+	// The other direction, so a future copy that shares an array is caught by
+	// this test whichever side writes first.
+	out.Networks[0].Upstreams[0].Endpoint = "https://elsewhere.example/"
+	out.Networks[0].ChainID = 999
+	if src.Networks[0].Upstreams[0].Endpoint != "https://mainnet.infura.io/v3/sk_infura_secret" || src.Networks[0].ChainID != 1 {
+		t.Fatalf("writing through the view changed the source: %+v", src.Networks[0])
+	}
+}
+
+// The same hazard through the real route: a poll of the RPC screen must leave
+// the stored configuration exactly as it found it.
+//
+// This is the outer guard, not the sharp one — loadConfig re-reads from disk
+// per request today, so an aliased write would corrupt only that request's
+// copy and never reach the file. The test above is what catches the aliasing
+// itself; this one is what catches it the day a config is cached in memory.
+func TestGatewayList_DoesNotRedactTheStoredConfig(t *testing.T) {
+	a := gatewayServer(t)
+	storeProviderKeys(t, map[string]string{"INFURA_API_KEY": "sk_infura_operator_secret"})
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+			{ID: "infura-1", Kind: catalog.UpstreamExternal, Endpoint: "https://mainnet.infura.io/v3/${INFURA_API_KEY}"},
+		}}},
+	})
+
+	a.do(t, "GET", "/api/gateways", nil).Body.Close()
+	a.do(t, "GET", "/api/gateways/default", nil).Body.Close()
+
+	stored, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	gw, ok := stored.FindGateway("default")
+	if !ok {
+		t.Fatal("the gateway vanished")
+	}
+	if got := gw.Config.Networks[0].Upstreams[0].Endpoint; got != "https://mainnet.infura.io/v3/sk_infura_operator_secret" {
+		t.Errorf("stored endpoint = %q after two reads — a read must never rewrite the configuration", got)
+	}
+}
+
+// The round trip the RPC page actually performs: read the view, edit its
+// Config, PUT it back. With redaction it now posts ${NAME} where a key used to
+// be, and this proves the save path fills it again — the stored endpoint is
+// still the URL eRPC dials, and the upstream the operator did NOT touch is not
+// quietly degraded into a template.
+func TestGatewayView_ConfigRoundTripsBackToRealURLs(t *testing.T) {
+	a := gatewayServer(t)
+	storeProviderKeys(t, map[string]string{"INFURA_API_KEY": "sk_infura_operator_secret"})
+	view := addGateway(t, a, "default", "local", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+			{ID: "infura-1", Kind: catalog.UpstreamExternal, Endpoint: "https://mainnet.infura.io/v3/${INFURA_API_KEY}"},
+		}}},
+	})
+
+	if got := view.Config.Networks[0].Upstreams[0].Endpoint; got != "https://mainnet.infura.io/v3/${INFURA_API_KEY}" {
+		t.Fatalf("view config endpoint = %q, want the placeholder form the editor round-trips", got)
+	}
+
+	// Exactly what the page does: take the view's config, add an upstream,
+	// post the whole thing back.
+	edited := view.Config
+	edited.Networks[0].Upstreams = append(edited.Networks[0].Upstreams,
+		catalog.GatewayUpstream{ID: "public-1", Kind: catalog.UpstreamExternal, Endpoint: "https://rpc.example.com"})
+
+	res := a.do(t, "PUT", "/api/gateways/default/config", edited)
+	if res.StatusCode != http.StatusOK {
+		defer res.Body.Close()
+		raw, _ := io.ReadAll(res.Body)
+		t.Fatalf("PUT config: got %d, want 200: %s", res.StatusCode, raw)
+	}
+	res.Body.Close()
+
+	stored, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	gw, ok := stored.FindGateway("default")
+	if !ok {
+		t.Fatal("the gateway vanished")
+	}
+	ups := gw.Config.Networks[0].Upstreams
+	if len(ups) != 2 {
+		t.Fatalf("stored %d upstreams, want 2 — the edit did not survive", len(ups))
+	}
+	if got := ups[0].Endpoint; got != "https://mainnet.infura.io/v3/sk_infura_operator_secret" {
+		t.Errorf("stored endpoint = %q, want the real resolved URL — a stored ${...} is an upstream eRPC cannot dial", got)
+	}
+	if got := ups[1].Endpoint; got != "https://rpc.example.com" {
+		t.Errorf("the added upstream = %q, want it stored verbatim", got)
+	}
+}
+
 // A REFUSED save must not read the key back out. Validation runs after the slot
 // has been filled, and the bad-scheme error quotes the endpoint — so an
 // unredacted 400 body would hand back any stored key to anyone who could post a

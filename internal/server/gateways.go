@@ -226,6 +226,11 @@ type gatewayView struct {
 	// which is what an editor must round-trip: writing back a resolved config
 	// would freeze today's URLs into it and undo the whole point of
 	// references.
+	//
+	// It is REDACTED on the way out — see redactedGatewayConfig. The editor
+	// therefore round-trips ${NAME} where a provider key used to be, and
+	// resolveUpstreamKeys fills it again on both save paths, so what is stored
+	// is still the real dialable URL.
 	Config catalog.GatewayConfig `json:"config"`
 
 	Error string `json:"error,omitempty"`
@@ -488,7 +493,7 @@ func (s *Server) gatewayViewFor(r *http.Request, cfg config.Config, gw config.Ga
 		Label:         gatewayLabel(gw),
 		ContainerName: ops.ERPCContainerNameFor(gw.ID),
 		Placement:     gw.Placement,
-		Config:        gw.Config,
+		Config:        redactedGatewayConfig(gw.Config, providerKeys(cfg)),
 		Status:        ops.ContainerStatus{ID: "erpc:" + gw.ID, ContainerName: ops.ERPCContainerNameFor(gw.ID), State: ops.StateUnknown},
 		// The gateway owns no volumes and no host files it may delete: its
 		// erpc.yaml is a bind mount the operator owns, and ops.WipeService
@@ -898,9 +903,52 @@ func externalLabel(endpoint string, mine bool) string {
 // network / upstream views
 // ---------------------------------------------------------------------
 
+// redactedGatewayConfig returns g with every upstream endpoint put back into
+// its ${PLACEHOLDER} form, for sending to the browser.
+//
+// The stored endpoint of a templated upstream carries the operator's provider
+// key as a path segment (https://mainnet.infura.io/v3/<key>), because
+// resolveUpstreamKeys fills the slot on the way IN so that every reader — the
+// renderer, the provisioner, the probe — sees a dialable URL. This whole
+// config is then serialised to the RPC screen on every poll, which would hand
+// that key to any script on the page and to anything that logs a response. The
+// placeholder form is just as useful to the editor: it round-trips, and
+// resolveUpstreamKeys fills it again on save.
+//
+// THE COPY IS THE POINT. g arrives as a shallow struct copy of loaded config,
+// so g.Networks and each network's Upstreams still share their backing arrays
+// with the config this process holds in memory, renders from and saves.
+// Redacting through those aliases would replace real keys with ${NAME} in the
+// live configuration — a display concern turned into data loss. Deep-copy
+// first, exactly as config.cloneNetworks does and for exactly this reason.
+//
+// LIMIT, not solved here: redaction matches by VALUE against the stored keys,
+// so an endpoint whose key is not in ProviderKeys — rotated since it was
+// saved, or hand-typed with an embedded secret that was never stored as a
+// provider key — does not match and stays visible. Nothing in this process
+// can tell that path segment apart from an ordinary one.
+func redactedGatewayConfig(g catalog.GatewayConfig, keys map[string]string) catalog.GatewayConfig {
+	nets := make([]catalog.GatewayNetwork, len(g.Networks))
+	for i, n := range g.Networks {
+		nets[i] = n
+		nets[i].Upstreams = append([]catalog.GatewayUpstream(nil), n.Upstreams...)
+		for j := range nets[i].Upstreams {
+			nets[i].Upstreams[j].Endpoint = redactKeys(nets[i].Upstreams[j].Endpoint, keys)
+		}
+	}
+	g.Networks = nets
+	return g
+}
+
 // networkViews renders the chains and their servers. base is "" when the
 // gateway is not running, which is what suppresses per-chain URLs.
+//
+// Every endpoint and every problem string goes out redacted, for the reason
+// redactedGatewayConfig gives: this is the same URL, on the same screen, on
+// the same poll. Nothing is written back through gw or resolved — the redacted
+// string only ever lands in the view being built.
 func networkViews(cfg config.Config, gw config.Gateway, resolved catalog.GatewayConfig, base string) []networkView {
+	keys := providerKeys(cfg)
 	out := make([]networkView, 0, len(gw.Config.Networks))
 	for _, n := range gw.Config.Networks {
 		nv := networkView{
@@ -918,14 +966,14 @@ func networkViews(cfg config.Config, gw config.Gateway, resolved catalog.Gateway
 				ID:         upstreamName(u),
 				Kind:       u.KindOrDefault(),
 				TargetID:   u.TargetID,
-				Endpoint:   endpoint,
+				Endpoint:   redactKeys(endpoint, keys),
 				Label:      label,
 				Local:      u.Local || u.Managed(),
 				RecentOnly: u.RecentOnly,
 				Actions:    upstreamActions(u),
 			}
 			if err != nil {
-				uv.Problem = err.Error()
+				uv.Problem = redactKeys(err.Error(), keys)
 				uv.Label = unresolvedLabel(u)
 			} else {
 				nv.Serviceable = true
