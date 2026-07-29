@@ -1211,7 +1211,9 @@ export interface KnownSetEndpoint {
 // measured — callers must coalesce with `?? []` rather than assume an array.
 export interface KnownSetResponse {
   endpoints: KnownSetEndpoint[] | null;
-  key: string;
+  // usingDefaultKey says the set resolved with the key that ships with the app
+  // rather than one the operator stored. The key itself is deliberately NOT
+  // here: the UI needs to know which key is in play, never what it is.
   usingDefaultKey: boolean;
 }
 
@@ -1232,6 +1234,11 @@ export interface Settings {
   aiProvider: AIProvider;
   aiKeySet: boolean;
   refRpcBase: string;
+  // providerKeysSet NAMES the ${...} placeholders that have a key stored —
+  // never the values, same rule as aiKeySet. The server promises a non-nil
+  // array; callers still coalesce, because an older binary behind a newer
+  // bundle would send nothing at all.
+  providerKeysSet: string[];
 }
 
 export function getSettings(): Promise<Settings> {
@@ -1244,6 +1251,13 @@ export interface PutSettingsRequest {
   // it. Never send a field the user hasn't touched.
   aiKey?: string;
   refRpcBase?: string;
+  // providerKeys is a PATCH by placeholder name, not a replacement: a name
+  // carrying a value stores it, a name carrying "" forgets it, and a name that
+  // is absent is left alone. Send only what the operator touched — GET never
+  // echoes the values back, so re-sending what was last read would wipe every
+  // key. A name must match ^[A-Za-z0-9_]+$; the server rejects the WHOLE
+  // request on one bad name, so the error has to reach the operator.
+  providerKeys?: Record<string, string>;
 }
 
 export function putSettings(body: PutSettingsRequest): Promise<Settings> {

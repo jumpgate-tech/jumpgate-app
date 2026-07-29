@@ -382,6 +382,41 @@ select:focus {
   color: var(--accent);
 }
 
+/* --- settings: provider keys ---------------------------------------------- */
+
+.pk-section {
+  margin: 1.4rem 0 0.75rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.9rem;
+}
+
+.pk-section h2 {
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.2rem;
+}
+
+.pk-row {
+  margin: 0.9rem 0;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border);
+}
+
+/* The slot name is the label, so it reads at label size rather than as inline
+   code inside a sentence. */
+.pk-row > label > code {
+  color: var(--fg);
+  letter-spacing: 0.03em;
+}
+
+.pk-row > p {
+  margin: 0.25rem 0 0;
+}
+
+.pk-row > .btn {
+  margin-top: 0.5rem;
+}
+
 details.advanced {
   margin: 0.75rem 0;
   border: 1px dashed var(--border);
