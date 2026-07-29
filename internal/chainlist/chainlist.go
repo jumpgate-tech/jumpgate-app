@@ -15,12 +15,13 @@
 //     lists for a popular chain are dead, rate-limited, or serving a
 //     different chain than claimed. Nothing goes into an erpc.yaml without
 //     an eth_chainId round trip proving otherwise.
-//   - Some entries are not endpoints at all. Provider entries carry shell-
+//   - Some entries carry a slot rather than a key. Provider entries use shell-
 //     style placeholders for an API key (https://mainnet.infura.io/v3/${INFURA_API_KEY});
-//     chain 1 has two. Handing one to eRPC produces an upstream that 401s on
-//     every request, so they are filtered before probing rather than being
-//     left to fail the probe — probing them would leak the operator's
-//     intent to a provider that cannot serve them anyway.
+//     chain 1 has two. A slot is RESOLVED from the operator's stored provider
+//     keys and then probed like anything else, because an endpoint the
+//     operator has paid for is the best upstream on offer and the probe is the
+//     only way to know it works. A slot with no key stored is not probed — it
+//     could only 401 — and comes back rejected, naming the key to go and get.
 //   - The operator may be offline. valve-node-app runs on freshly imaged
 //     boxes and air-gapped racks. When the feed is unreachable, a vendored
 //     snapshot (vendored.go) stands in, so upstream discovery degrades to a
