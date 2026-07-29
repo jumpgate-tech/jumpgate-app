@@ -366,6 +366,17 @@ func RenderGatewayConfig(g GatewayConfig) (string, error) {
 		}
 		vars.Networks = append(vars.Networks, gatewayNetworkVars{ChainID: n.ChainID})
 
+		// A public upstream is a fallback only when there is something for it to
+		// fall back TO. On a chain served entirely by public endpoints, marking
+		// them tier:fallback tells eRPC to avoid the only paths that exist.
+		hasLocal := false
+		for _, u := range n.Upstreams {
+			if u.Local {
+				hasLocal = true
+				break
+			}
+		}
+
 		for i, u := range n.Upstreams {
 			endpoint := strings.TrimSpace(u.Endpoint)
 			if endpoint == "" {
@@ -391,7 +402,7 @@ func RenderGatewayConfig(g GatewayConfig) (string, error) {
 				Endpoint:   strconv.Quote(endpoint),
 				ChainID:    n.ChainID,
 				RecentOnly: u.RecentOnly,
-				Fallback:   !u.Local,
+				Fallback:   !u.Local && hasLocal,
 			})
 		}
 	}
