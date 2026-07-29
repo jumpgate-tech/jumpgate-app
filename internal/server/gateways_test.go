@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -722,8 +723,9 @@ func TestKnownSetMarksWhatIsAlreadyConfigured(t *testing.T) {
 	}
 }
 
-// With a key stored for the chain, the set must resolve valve's entry against
-// THAT key rather than the shared demo one, and say so.
+// With a key stored, the set must resolve valve's entry against THAT key rather
+// than the shared demo one, and say so — on EVERY chain, because the key is an
+// account rather than a chain.
 //
 // There is no write endpoint for the key yet — the UI task adds one — so the
 // key is seeded the same way TestGatewayListReportsOrphans seeds Orphans:
@@ -737,7 +739,7 @@ func TestKnownSetUsesAStoredKeyOverTheDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	cfg.ValveKeys = map[int]string{1: "vk_mine"}
+	cfg.ProviderKeys = map[string]string{config.ValveKeyPlaceholder: "vk_mine"}
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
@@ -745,9 +747,6 @@ func TestKnownSetUsesAStoredKeyOverTheDefault(t *testing.T) {
 	body := decode[knownSetResponse](t, a.do(t, "GET", "/api/gateways/default/knownset/1", nil))
 	if body.UsingDefaultKey {
 		t.Error("a stored key must not be reported as the shared demo key")
-	}
-	if body.Key != "vk_mine" {
-		t.Errorf("key: got %q, want the stored one", body.Key)
 	}
 	var found bool
 	for _, e := range body.Endpoints {
@@ -762,10 +761,155 @@ func TestKnownSetUsesAStoredKeyOverTheDefault(t *testing.T) {
 		t.Fatal("chain 1's set must include a valve entry")
 	}
 
-	// A chain with no stored key still falls back to the shared demo key.
+	// One key, every chain: the old per-chain store could say "valve on this
+	// chain but not that one", and that was a misreading of what a key is.
 	body = decode[knownSetResponse](t, a.do(t, "GET", "/api/gateways/default/knownset/369", nil))
-	if !body.UsingDefaultKey || body.Key != catalog.DefaultValveKey {
-		t.Errorf("chain 369 has no stored key: got key %q, usingDefault %v", body.Key, body.UsingDefaultKey)
+	if body.UsingDefaultKey {
+		t.Error("the operator's key applies to chain 369 too — a key is an account, not a chain")
+	}
+}
+
+// A per-chain valve key stored by an older build still resolves the set, having
+// been folded into the one provider key on load. This is the migration seen
+// from the route that consumes it.
+func TestKnownSetHonoursAMigratedPerChainKey(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.ValveKeys = map[int]string{1: "vk_legacy"}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	body := decode[knownSetResponse](t, a.do(t, "GET", "/api/gateways/default/knownset/1", nil))
+	if body.UsingDefaultKey {
+		t.Error("a key an older build stored per chain must survive the upgrade")
+	}
+	for _, e := range body.Endpoints {
+		if e.Provider == "valve" && !strings.Contains(e.URL, "vk_legacy") {
+			t.Errorf("valve's URL must carry the migrated key: %q", e.URL)
+		}
+	}
+}
+
+// The response says WHICH key is in play and never what it is. It used to send
+// the key itself, which put the operator's secret in the browser to answer a
+// question that is a boolean.
+func TestKnownSetNeverReturnsTheKeyItself(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.ProviderKeys = map[string]string{config.ValveKeyPlaceholder: "vk_secret_do_not_send"}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	res := a.do(t, "GET", "/api/gateways/default/knownset/1", nil)
+	defer res.Body.Close()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if _, ok := fields["key"]; ok {
+		t.Errorf("the response still carries a bare key field: %s", raw)
+	}
+	// The valve endpoint URLs legitimately carry it — that is the known
+	// browser-visible-key tension the owner still has to rule on — so this
+	// asserts the field is gone, not that the string is absent everywhere.
+	if _, ok := fields["usingDefaultKey"]; !ok {
+		t.Errorf("usingDefaultKey must survive: it is what the UI actually needs: %s", raw)
+	}
+}
+
+// ---------------------------------------------------------------------
+// the other half of the redaction: filling the slot back in on the way to
+// storage
+// ---------------------------------------------------------------------
+
+// Discovery hands the browser the ${PLACEHOLDER} form of a templated endpoint
+// so the key never leaves this process. That is only honest if the string the
+// browser posts back still WORKS, so the save path fills the slot in again —
+// the stored endpoint is the URL eRPC will dial, exactly as it always was.
+func TestGatewayPutConfig_FillsAProviderSlotFromTheStoredKey(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.ProviderKeys = map[string]string{"INFURA_API_KEY": "sk_infura_secret"}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	res := a.do(t, "PUT", "/api/gateways/default/config", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+			{ID: "public-1-1", Kind: catalog.UpstreamExternal, Endpoint: "https://mainnet.infura.io/v3/${INFURA_API_KEY}"},
+		}}},
+	})
+	if res.StatusCode != http.StatusOK {
+		defer res.Body.Close()
+		raw, _ := io.ReadAll(res.Body)
+		t.Fatalf("PUT config: got %d, want 200: %s", res.StatusCode, raw)
+	}
+	res.Body.Close()
+
+	stored, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	gw, ok := stored.FindGateway("default")
+	if !ok {
+		t.Fatal("the gateway vanished")
+	}
+	got := gw.Config.Networks[0].Upstreams[0].Endpoint
+	if got != "https://mainnet.infura.io/v3/sk_infura_secret" {
+		t.Errorf("stored endpoint = %q, want the slot filled in — eRPC cannot dial a ${...}", got)
+	}
+}
+
+// A slot with no key is REFUSED rather than stored. A URL with a literal ${...}
+// in it looks configured and answers nothing, which is the same failure
+// chainlist.Resolve exists to prevent — and the refusal names the key to go get.
+func TestGatewayPutConfig_RefusesASlotItCannotFill(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+
+	res := a.do(t, "PUT", "/api/gateways/default/config", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+			{ID: "public-1-1", Kind: catalog.UpstreamExternal, Endpoint: "https://mainnet.infura.io/v3/${INFURA_API_KEY}"},
+		}}},
+	})
+	if res.StatusCode != http.StatusBadRequest {
+		defer res.Body.Close()
+		raw, _ := io.ReadAll(res.Body)
+		t.Fatalf("got %d, want 400: %s", res.StatusCode, raw)
+	}
+	body := decode[errorDetail](t, res)
+	if !strings.Contains(body.Error, "INFURA_API_KEY") {
+		t.Errorf("the refusal must name the key to go get: %q", body.Error)
+	}
+
+	stored, _ := config.Load()
+	gw, _ := stored.FindGateway("default")
+	if len(gw.Config.Networks) != 0 {
+		t.Errorf("the unusable upstream was stored anyway: %+v", gw.Config.Networks)
 	}
 }
 

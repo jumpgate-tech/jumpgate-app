@@ -1434,14 +1434,27 @@ type settingsResponse struct {
 	AIProvider string `json:"aiProvider"`
 	AIKeySet   bool   `json:"aiKeySet"`
 	RefRPCBase string `json:"refRpcBase"`
+
+	// ProviderKeysSet names the placeholders that have a key, never the keys.
+	// Same rule as AIKeySet.
+	ProviderKeysSet []string `json:"providerKeysSet"`
 }
 
 func settingsResponseFrom(c config.Config) settingsResponse {
-	return settingsResponse{
+	out := settingsResponse{
 		AIProvider: c.AIProvider,
 		AIKeySet:   c.AIKey != "",
 		RefRPCBase: c.RefRPCBase,
 	}
+	for name, v := range c.ProviderKeys {
+		if strings.TrimSpace(v) != "" {
+			out.ProviderKeysSet = append(out.ProviderKeysSet, name)
+		}
+	}
+	// Sorted, because map order is random and a list that reshuffles on every
+	// poll is a list the UI cannot render without flicker.
+	sort.Strings(out.ProviderKeysSet)
+	return out
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -1461,6 +1474,13 @@ type settingsRequest struct {
 	AIProvider *string `json:"aiProvider"`
 	AIKey      *string `json:"aiKey"`
 	RefRPCBase *string `json:"refRpcBase"`
+
+	// ProviderKeys is a PATCH by placeholder name, not a replacement: a name
+	// with a value sets it, a name with an empty value forgets it, and a name
+	// that is absent is left alone. It has to work that way for the same reason
+	// aiKey is a pointer — GET never echoes the values back, so a client
+	// re-PUTting what it last read would otherwise wipe every key it has.
+	ProviderKeys map[string]string `json:"providerKeys"`
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
@@ -1479,6 +1499,21 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.RefRPCBase != nil {
 			c.RefRPCBase = *req.RefRPCBase
+		}
+		for name, v := range req.ProviderKeys {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			v = strings.TrimSpace(v)
+			if v == "" {
+				delete(c.ProviderKeys, name)
+				continue
+			}
+			if c.ProviderKeys == nil {
+				c.ProviderKeys = map[string]string{}
+			}
+			c.ProviderKeys[name] = v
 		}
 		return nil
 	})
