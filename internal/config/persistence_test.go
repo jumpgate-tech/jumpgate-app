@@ -494,6 +494,23 @@ func TestMigrateCollapseIsIdempotent(t *testing.T) {
 	}
 }
 
+// Notices are PERSISTED and migrate runs on every Load, so recording one is
+// idempotent by message — the same guard the orphan record carries, for the
+// same reason. Clearing ValveKeys makes a repeat unreachable by today's one
+// caller, which is not a property worth relying on where a second would be
+// added.
+func TestNoticeIsRecordedOnce(t *testing.T) {
+	c := Config{}
+
+	c.notice("the same thing happened")
+	c.notice("the same thing happened")
+	c.notice("something else happened")
+
+	if len(c.Notices) != 2 {
+		t.Fatalf("a repeated message must be recorded once: %+v", c.Notices)
+	}
+}
+
 // No devnet on the target means nothing to adopt, and the config is untouched.
 func TestAdoptDevnetReferences_NoDevnetLeavesEverythingAlone(t *testing.T) {
 	g := catalog.GatewayConfig{Networks: []catalog.GatewayNetwork{
