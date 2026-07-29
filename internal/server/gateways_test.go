@@ -687,3 +687,93 @@ func TestOrphanDismissForgetsTheRecordOnly(t *testing.T) {
 		t.Fatalf("dismissing twice: got %d, want 404", res.StatusCode)
 	}
 }
+
+// ---------------------------------------------------------------------
+// the known set — GET /api/gateways/{gid}/knownset/{chainId}
+// ---------------------------------------------------------------------
+
+// The set is offered with what is already configured marked, so the count the
+// operator sees before clicking matches what actually lands.
+func TestKnownSetMarksWhatIsAlreadyConfigured(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+			{ID: "public-1-1", Kind: catalog.UpstreamExternal, Endpoint: "https://eth.drpc.org"},
+		}}},
+	})
+
+	body := decode[knownSetResponse](t, a.do(t, "GET", "/api/gateways/default/knownset/1", nil))
+
+	if len(body.Endpoints) == 0 {
+		t.Fatal("the set must be offered for chain 1")
+	}
+	var marked int
+	for _, e := range body.Endpoints {
+		if e.URL == "https://eth.drpc.org" && e.AlreadyAdded {
+			marked++
+		}
+	}
+	if marked != 1 {
+		t.Errorf("the configured endpoint must come back marked, got %d marks: %+v", marked, body.Endpoints)
+	}
+	if !body.UsingDefaultKey {
+		t.Error("with no key stored, the set must report it is using the shared demo key")
+	}
+}
+
+// With a key stored for the chain, the set must resolve valve's entry against
+// THAT key rather than the shared demo one, and say so.
+//
+// There is no write endpoint for the key yet — the UI task adds one — so the
+// key is seeded the same way TestGatewayListReportsOrphans seeds Orphans:
+// directly through config.Load()/cfg.Save(), the same accessor the server
+// itself uses under s.loadConfig().
+func TestKnownSetUsesAStoredKeyOverTheDefault(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.ValveKeys = map[int]string{1: "vk_mine"}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	body := decode[knownSetResponse](t, a.do(t, "GET", "/api/gateways/default/knownset/1", nil))
+	if body.UsingDefaultKey {
+		t.Error("a stored key must not be reported as the shared demo key")
+	}
+	if body.Key != "vk_mine" {
+		t.Errorf("key: got %q, want the stored one", body.Key)
+	}
+	var found bool
+	for _, e := range body.Endpoints {
+		if e.Provider == "valve" {
+			found = true
+			if !strings.Contains(e.URL, "vk_mine") {
+				t.Errorf("valve's URL must carry the stored key: %q", e.URL)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("chain 1's set must include a valve entry")
+	}
+
+	// A chain with no stored key still falls back to the shared demo key.
+	body = decode[knownSetResponse](t, a.do(t, "GET", "/api/gateways/default/knownset/369", nil))
+	if !body.UsingDefaultKey || body.Key != catalog.DefaultValveKey {
+		t.Errorf("chain 369 has no stored key: got key %q, usingDefault %v", body.Key, body.UsingDefaultKey)
+	}
+}
+
+func TestKnownSetUnknownGatewayIs404(t *testing.T) {
+	a := gatewayServer(t)
+	res := a.do(t, "GET", "/api/gateways/nope/knownset/1", nil)
+	body := decode[errorDetail](t, res)
+	if res.StatusCode != http.StatusNotFound || body.Code != codeGatewayNotFound {
+		t.Fatalf("got %d/%q, want 404/%s", res.StatusCode, body.Code, codeGatewayNotFound)
+	}
+}
