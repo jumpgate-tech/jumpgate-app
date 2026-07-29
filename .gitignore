@@ -21,3 +21,6 @@ cmd/valve-node/web/node_modules/
 # ~14MB blob to history on almost every commit. Leading slash so this
 # matches ONLY the root binary, never the cmd/valve-node-app/ source dir.
 /valve-node-app
+
+# Superpowers scratch: SDD ledgers, briefs, review packages, brainstorm mockups.
+.superpowers/
