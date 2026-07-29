@@ -413,6 +413,70 @@ func TestCapabilities_UnreachableStillCarriesEveryKey(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// the probe report never carries a provider key
+// ---------------------------------------------------------------------
+
+// An external upstream's URL carries the operator's provider key as a PATH
+// SEGMENT, and this route reports the address it dialed on every poll of the
+// capabilities table. The socket must get the real key and the browser must
+// get the ${NAME} slot — so this asserts both halves at once: the server
+// records the path it was actually asked for (proving the real key was
+// dialed), and the serialised response is searched WHOLE for the secret,
+// rather than one field being checked.
+func TestCapabilities_ProbedURLNeverCarriesAProviderKey(t *testing.T) {
+	const key = "sk_infura_never_send_this"
+
+	var mu sync.Mutex
+	var paths []string
+	counter := &chainIDCounter{}
+	inner := capCountingServer(t, counter, 369)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	endpoint := srv.URL + "/v3/" + key
+	cfg := config.Config{ProviderKeys: map[string]string{"INFURA_API_KEY": key}}
+	gw := config.Gateway{
+		ID:        "default",
+		Placement: config.GatewayPlacement{TargetID: "local", Backend: "docker"},
+		Config: catalog.GatewayConfig{Networks: []catalog.GatewayNetwork{{ChainID: 369, Upstreams: []catalog.GatewayUpstream{
+			{ID: "infura", Kind: catalog.UpstreamExternal, Endpoint: endpoint},
+		}}}},
+	}
+
+	res := probeGatewayCapabilities(context.Background(), fastTestProber(), cfg, gw)
+	if len(res.Endpoints) != 1 {
+		t.Fatalf("got %d endpoints, want 1", len(res.Endpoints))
+	}
+
+	raw, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	if strings.Contains(string(raw), key) {
+		t.Errorf("the provider key must not appear anywhere in the capabilities response: %s", raw)
+	}
+	if got := res.Endpoints[0].ProbedURL; !strings.Contains(got, "${INFURA_API_KEY}") {
+		t.Errorf("ProbedURL = %q, want the placeholder form back", got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) == 0 {
+		t.Fatal("the endpoint was never dialed, so this proves nothing about what was dialed")
+	}
+	for _, p := range paths {
+		if !strings.Contains(p, key) {
+			t.Fatalf("dialed %q — the probe must use the REAL key, redaction belongs to the report only", p)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------
 // caching / TTL / refresh
 // ---------------------------------------------------------------------
 
