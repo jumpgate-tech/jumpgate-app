@@ -34,8 +34,8 @@ func Resolve(raw string, keys map[string]string) (string, bool) {
 	}
 	out := raw
 	for _, m := range placeholderRe.FindAllStringSubmatch(raw, -1) {
-		v := keys[m[1]]
-		if strings.TrimSpace(v) == "" {
+		v := strings.TrimSpace(keys[m[1]])
+		if v == "" {
 			return "", false
 		}
 		out = strings.ReplaceAll(out, m[0], v)

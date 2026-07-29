@@ -49,4 +49,20 @@ func TestResolve(t *testing.T) {
 	if _, ok := Resolve("https://x.example/${K}", map[string]string{"K": ""}); ok {
 		t.Error("an empty key must not resolve")
 	}
+
+	// A pasted key often carries a trailing newline. Trimming only for the
+	// emptiness check while substituting the raw value embeds whitespace in the
+	// URL — configured-looking and non-answering, the exact failure the empty
+	// case guards against.
+	if got, ok := Resolve("https://x.example/${K}", map[string]string{"K": " abc123\n"}); !ok || got != "https://x.example/abc123" {
+		t.Errorf("a padded key must be trimmed before substitution: got %q, %v", got, ok)
+	}
+
+	// A URL carrying two slots is unusable unless BOTH are fillable — returning
+	// it half-substituted would be a live-looking URL that fails on the half
+	// nobody filled.
+	two := "https://x.example/${INFURA_API_KEY}/v/${ALCHEMY_API_KEY}"
+	if got, ok := Resolve(two, map[string]string{"INFURA_API_KEY": "abc"}); ok {
+		t.Errorf("want unresolved when any placeholder lacks a key, got %q", got)
+	}
 }
