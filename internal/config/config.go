@@ -128,8 +128,20 @@ type Config struct {
 	ProviderKeys map[string]string `json:"providerKeys,omitempty"`
 
 	// Notices are one-off messages from a migration that the operator needs to
-	// see, e.g. a key discarded when per-chain keys collapsed. Not persisted as
-	// advice — cleared once shown.
+	// see, e.g. a key discarded when per-chain keys collapsed.
+	//
+	// NOT YET SHOWN ANYWHERE. This is a write-only record today: migrate appends
+	// to it, config.json persists it, and no API field or screen reads it back.
+	// The intent was "reported rather than silently dropped", and half of that is
+	// built — the record exists and an operator (or a support request) can find it
+	// in config.json — but the reporting half is not, so a discarded key is in
+	// practice still discarded quietly. Surfacing it means a field on
+	// settingsResponse, somewhere to render it, and a way to acknowledge one so it
+	// stops reappearing; until that exists this comment says what the field IS
+	// rather than what it was meant to be.
+	//
+	// Entries are deduped and PERSIST — migrate runs on every Load, so nothing
+	// here may assume a notice is consumed.
 	//
 	// They are written for a screen, so nothing secret goes in one: a notice
 	// about a discarded key names the chain and a masked fingerprint, never the

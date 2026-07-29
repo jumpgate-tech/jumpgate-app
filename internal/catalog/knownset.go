@@ -4,15 +4,19 @@ import "fmt"
 
 // DefaultValveKey is the DEFAULT VALUE for the ${VALVE_API_KEY} placeholder —
 // the value the set resolves to when nothing is configured, so it works with
-// no setup at all. It is a shared quota: if it runs dry, valve's endpoints
-// become the least reliable entries in a set that lists them first, which is
-// why the offer says so plainly and why the rest of the set is there.
+// no setup at all.
+//
+// It is a PUBLISHED key, not a secret: it ships in this binary and reaches the
+// browser unredacted (see redactKeys in internal/server/chainlist.go, which
+// exempts exactly this value and nothing else). It was once described here and
+// in the UI as a throttled shared quota; that was measured and withdrawn —
+// the endpoint answers x-valve-tier: FULL, sends no rate-limit headers, served
+// 20 of 20 requests, and 401s a bogus key — so nothing in the app claims a
+// quota any more, and neither does this comment.
 //
 // Config.ProviderKeys can hold a key of the operator's own, keyed by
-// ValveKeyPlaceholder, and the resolving seam will use it, but NOTHING IN THE
-// APP WRITES ONE — there is no route and no field — so every install is on the
-// shared key until that is built. The offer's copy has to match that, not the
-// intention.
+// ValveKeyPlaceholder; Settings writes one, and the resolving seam prefers it
+// over this default whenever it is set.
 const DefaultValveKey = "vk_demo"
 
 // ValveKeyPlaceholder is the ${NAME} slot valve's own endpoints carry.
