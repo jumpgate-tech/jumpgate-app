@@ -1553,7 +1553,7 @@ export function renderRPC(root: HTMLElement): () => void {
             : `<p class="muted small">No machine you manage serves chain ${chainId}.</p>`
         }
         <div class="modal-actions modal-actions-stack">
-          <button class="btn btn-ghost" data-modal-action="discover">Find public endpoints…</button>
+          <button class="btn" data-modal-action="known-set">Add valve's set…</button>
           <button class="btn btn-ghost" data-modal-action="manual">Enter a URL by hand…</button>
         </div>
         <div class="modal-actions">
@@ -1565,8 +1565,8 @@ export function renderRPC(root: HTMLElement): () => void {
           closeModal();
           return;
         }
-        if (action === "discover") {
-          void openDiscoverModal(gid, chainId);
+        if (action === "known-set") {
+          void offerKnownSet(gid, chainId);
           return;
         }
         if (action === "manual") {
@@ -1622,6 +1622,73 @@ export function renderRPC(root: HTMLElement): () => void {
       picked.push(ws);
     }
     return new Set(picked.map((e) => e.url));
+  }
+
+  // offerKnownSet is the primary "add an endpoint" path: valve's own vetted,
+  // measured set for this chain, offered before the live chainlist.network
+  // probe. The set is offered before the probed list because it is vetted and
+  // ordered by measured capability; the feed (openDiscoverModal) is the
+  // escape hatch, not the default.
+  async function offerKnownSet(gid: string, chainId: number): Promise<void> {
+    let set: api.KnownSetResponse;
+    try {
+      set = await api.knownSet(gid, chainId);
+    } catch (err) {
+      openModal(
+        `<h2>Endpoints for chain ${chainId}</h2>
+         <p class="error small">Could not read the set: ${escapeHtml(message(err))}</p>
+         <div class="modal-actions"><button class="btn btn-ghost" data-modal-action="cancel">Close</button></div>`,
+        () => closeModal(),
+      );
+      return;
+    }
+    if (disposed) return;
+
+    // eps can be JSON null for a chain valve has not measured — coalesced
+    // rather than assumed to be an array.
+    const eps = set.endpoints ?? [];
+    const toAdd = eps.filter((e) => !e.alreadyAdded).map((e) => e.url);
+    const providers = new Set(eps.map((e) => e.provider)).size;
+
+    const rows = eps
+      .map((e) => {
+        const caps = [
+          e.websocket ? `<span class="t ws">websocket</span>` : "",
+          e.archive ? `<span class="t ar">archive</span>` : "",
+          e.alreadyAdded ? `<span class="t dup">already added</span>` : "",
+        ].join("");
+        return `<li><code>${escapeHtml(e.url)}</code>
+                  <span class="muted small">${escapeHtml(e.provider)}</span> ${caps}</li>`;
+      })
+      .join("");
+
+    openModal(
+      `<h2>Endpoints for chain ${chainId}</h2>
+       ${
+         eps.length
+           ? `<p class="muted small">${providers} providers valve has measured, in the order the gateway
+                should prefer them.</p>
+              <ul class="plain-list">${rows}</ul>`
+           : `<p class="muted small">valve has not measured a set for this chain yet — choose from the full list below.</p>`
+       }
+       ${
+         set.usingDefaultKey
+           ? `<p class="muted small">Using the shared <code>${escapeHtml(set.key)}</code> key, so this
+                works with no setup. A free key of your own removes the shared limit.</p>`
+           : `<p class="muted small">Using your key for this chain.</p>`
+       }
+       <div class="modal-actions">
+         <button class="btn btn-ghost" data-modal-action="cancel">Cancel</button>
+         <button class="btn btn-ghost" data-modal-action="discover">Choose from the full list</button>
+         <button class="btn" data-modal-action="add"${toAdd.length ? "" : " disabled"}>
+           ${toAdd.length ? `Add ${toAdd.length}` : "Nothing to add"}</button>
+       </div>`,
+      (action) => {
+        closeModal();
+        if (action === "add") void addExternalUpstreams(gid, chainId, toAdd);
+        if (action === "discover") void openDiscoverModal(gid, chainId);
+      },
+    );
   }
 
   // openDiscoverModal is internal/chainlist put in front of the operator: the
