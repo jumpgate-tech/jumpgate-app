@@ -74,6 +74,10 @@ func TestRenderGatewayConfig_LocalPreferredFallbackDeprioritised(t *testing.T) {
 
 // A gateway with no local upstreams is the "can't host a node, still want my
 // own RPC" case. It needs no special representation and must render fine.
+//
+// Neither upstream carries tier:fallback: with nothing local on this chain,
+// both public endpoints are the only paths there are, and deprioritising the
+// only paths that exist would be exactly backwards.
 func TestRenderGatewayConfig_NoLocalUpstreams(t *testing.T) {
 	g := GatewayConfig{Networks: []GatewayNetwork{{ChainID: 1, Upstreams: []GatewayUpstream{
 		{Endpoint: "https://ethereum-rpc.publicnode.com"},
@@ -83,8 +87,8 @@ func TestRenderGatewayConfig_NoLocalUpstreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderGatewayConfig: %v", err)
 	}
-	if got := strings.Count(cfg, "tier:fallback"); got != 2 {
-		t.Errorf("every upstream should be a fallback, got %d:\n%s", got, cfg)
+	if got := strings.Count(cfg, "tier:fallback"); got != 0 {
+		t.Errorf("with no local upstream, nothing should be tagged fallback, got %d:\n%s", got, cfg)
 	}
 	// Ids are generated when the caller supplies none, and must be unique.
 	for _, want := range []string{"id: 1-fallback-1", "id: 1-fallback-2"} {
@@ -92,6 +96,60 @@ func TestRenderGatewayConfig_NoLocalUpstreams(t *testing.T) {
 			t.Errorf("missing generated id %q:\n%s", want, cfg)
 		}
 	}
+}
+
+// tier:fallback at 0.2 tells eRPC to avoid an upstream. That is right when a
+// local node serves the chain and wrong when the "fallback" is the only path
+// there is — the gateway would be de-prioritising the one thing that can answer.
+func TestRenderGatewayConfig_PublicOnlyChainIsNotAFallback(t *testing.T) {
+	g := GatewayConfig{Port: 4000, Networks: []GatewayNetwork{
+		{ChainID: 1, Upstreams: []GatewayUpstream{
+			{ID: "pub", Kind: UpstreamExternal, Endpoint: "https://eth.example"},
+		}},
+		{ChainID: 1337, Upstreams: []GatewayUpstream{
+			// RenderGatewayConfig requires a resolved endpoint on every
+			// upstream, managed kinds included (see the Endpoint field's
+			// doc comment) — normally filled in by the caller before
+			// rendering. Supplied here directly since this test renders
+			// straight from a hand-built GatewayConfig.
+			{ID: "devnet", Kind: UpstreamManagedDevnet, TargetID: "local", Local: true, Endpoint: "http://127.0.0.1:8546"},
+			{ID: "pub2", Kind: UpstreamExternal, Endpoint: "https://backup.example"},
+		}},
+	}}
+
+	out, err := RenderGatewayConfig(g)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	// Chain 1 has nothing local, so its only upstream must go in at full weight.
+	pub := section(t, out, "pub")
+	if strings.Contains(pub, "tier:fallback") {
+		t.Errorf("a chain with no local node has no fallback tier:\n%s", pub)
+	}
+	// Chain 1337 does have a local node, so the public one stays a fallback.
+	pub2 := section(t, out, "pub2")
+	if !strings.Contains(pub2, "tier:fallback") {
+		t.Errorf("a public upstream beside a local node is still a fallback:\n%s", pub2)
+	}
+}
+
+// section returns the rendered block for the upstream named id: the
+// "- id: <name>" line through to the next "- id:" line or the end of the
+// string. Used to make assertions about one upstream without them being
+// confused by a sibling upstream's tags.
+func section(t *testing.T, cfg, id string) string {
+	t.Helper()
+	marker := "- id: " + id
+	start := strings.Index(cfg, marker)
+	if start < 0 {
+		t.Fatalf("no upstream %q in:\n%s", id, cfg)
+	}
+	rest := cfg[start+len(marker):]
+	if next := strings.Index(rest, "- id:"); next >= 0 {
+		return cfg[start : start+len(marker)+next]
+	}
+	return cfg[start:]
 }
 
 func TestRenderGatewayConfig_Defaults(t *testing.T) {
