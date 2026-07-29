@@ -17,7 +17,8 @@
 //               that a reader had to assemble into a single "what is wrong
 //               here" themselves.
 //   THE CHAINS  one row per chain, leading with redundancy: a segmented bar
-//               whose filled count is the upstreams configured out of four,
+//               whose filled count is the upstreams configured out of what
+//               valve's set for THAT chain holds (networkView.knownSetSize),
 //               the upstreams with what each can actually DO, and ONE sentence
 //               naming the gap and its consequence — derived from the
 //               configuration, never written per chain.
@@ -71,12 +72,6 @@ const CAP_TAGS: Record<string, string> = {
   archive: "ARCHIVE",
   trace: "TRACE",
 };
-
-// SET_SIZE is what the redundancy bar measures a chain AGAINST. It is four
-// because valve's known set is four providers per chain, so a full bar and a
-// full set are the same fact — the hollow segments are exactly the endpoints
-// "Add valve's set…" would fill in.
-const SET_SIZE = 4;
 
 // Tone is the only colour vocabulary this page has. It is state, never
 // decoration: ok = answering, warn = degraded or single-path, bad = down.
@@ -606,7 +601,7 @@ export function renderRPC(root: HTMLElement): () => void {
               : ""
           }
           <span class="chain-right">
-            ${redundancyBar(ups.length, v.tone)}
+            ${redundancyBar(ups.length, v.tone, n.knownSetSize)}
             <button class="btn btn-ghost btn-tiny" data-action="add-endpoint"
                     data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">+ Endpoint</button>
             <button class="btn btn-ghost btn-tiny" data-action="remove-chain"
@@ -621,27 +616,48 @@ export function renderRPC(root: HTMLElement): () => void {
   }
 
   // redundancyBar is the count made into a mark, because redundancy IS a count
-  // and a count is the one thing a reader can take in without reading. Four
-  // segments: the hollow ones are exactly what "Add valve's set…" would fill.
+  // and a count is the one thing a reader can take in without reading. The
+  // hollow segments are exactly what "Add valve's set…" would fill.
+  //
+  // setSize is per chain and comes from the server (networkView.knownSetSize),
+  // and it counts ENTRIES rather than providers on purpose. The set contributes
+  // an https:// and a wss:// entry for every provider that serves both, so a
+  // chain that takes this page's own primary action ends up with seven
+  // upstreams on evm:1. Measured against a constant four, the happy path landed
+  // in the over-set branch — a branch written for the rare case of an operator
+  // adding extras. The denominator has to be the number the button actually
+  // adds, or the bar is comparing two different units.
+  //
+  // setSize is 0 for a chain valve has never measured. There is no target then,
+  // so the bar states the count alone: "1 of 4" on a chain with no set would be
+  // inventing a goal, and the hollow segments would be promising a button that
+  // has nothing to offer.
   //
   // The filled segments carry the row's tone rather than a colour of their own,
   // so a full bar on a chain that cannot serve eth_subscribe never reads green.
-  function redundancyBar(count: number, tone: Tone): string {
-    const filled = Math.min(count, SET_SIZE);
+  function redundancyBar(count: number, tone: Tone, setSize: number): string {
+    const known = setSize > 0;
+    // With no set to measure against, one segment per configured upstream: the
+    // mark still says "more is better" without drawing an absence it cannot
+    // name.
+    const total = known ? setSize : count;
+    const filled = Math.min(count, total);
     let segs = "";
-    for (let i = 0; i < SET_SIZE; i++) {
+    for (let i = 0; i < total; i++) {
       segs += `<span class="seg${i < filled ? ` seg-on seg-${tone}` : ""}"></span>`;
     }
-    // "5 of 4" reads as an arithmetic bug at a glance, and a reader who has to
+    // "8 of 7" reads as an arithmetic bug at a glance, and a reader who has to
     // hover to find out it is not one has already lost the second the bar was
     // supposed to save. Past the set size the label states the count and says
-    // what the four is, in the open.
-    const over = count > SET_SIZE;
-    const label = over ? `${count} (set is ${SET_SIZE})` : `${count} of ${SET_SIZE}`;
+    // what the set is, in the open.
+    const over = known && count > setSize;
+    const label = !known ? `${count}` : over ? `${count} (set is ${setSize})` : `${count} of ${setSize}`;
+    const ups = `${count} upstream${count === 1 ? "" : "s"} configured`;
+    const title = known
+      ? `${ups}${over ? `, ${count - setSize} beyond the set` : ""}. valve's set for this chain is ${setSize}.`
+      : `${ups}. valve has not measured a set for this chain, so there is nothing to count it against.`;
     return `
-      <span class="segs" title="${count} upstream${count === 1 ? "" : "s"} configured${
-        over ? `, ${count - SET_SIZE} beyond the set` : ""
-      }. valve's set for a chain is ${SET_SIZE}.">${segs}</span>
+      <span class="segs" title="${escapeHtml(title)}">${segs}</span>
       <span class="segs-n">${label}</span>
     `;
   }
@@ -978,8 +994,10 @@ export function renderRPC(root: HTMLElement): () => void {
     return `<p class="muted small">
       Share is measured from the gateway's own counters since it started${
         t.since ? ` (${escapeHtml(shortTime(t.since))})` : ""
-      }. The tick is the share routing intends: your own endpoints carry a chain, public
-      ones are there for when they cannot.
+      }. The tick is the share routing intends: on a chain where you run a node, yours
+      carries it and the public endpoints are there for when it cannot; on a chain served
+      only by public endpoints there is nothing to prefer, so the intent is an even split
+      across all of them.
     </p>`;
   }
 
@@ -1612,6 +1630,13 @@ export function renderRPC(root: HTMLElement): () => void {
               name: (data?.presets ?? []).find((p) => p.chainId === n.ChainID)?.name ?? `Chain ${n.ChainID}`,
               path: `/${gw.config.ProjectID}/evm/${n.ChainID}`,
               upstreams: [],
+              // 0 rather than a guess: the set size is the server's fact and
+              // this network is not saved yet, so there is nothing to read it
+              // from. The bar shows the count alone until the first endpoint
+              // lands and the server echoes the chain back with its real
+              // target — which is the honest rendering of "we do not know",
+              // and this placeholder has no upstreams to count anyway.
+              knownSetSize: 0,
               serviceable: false,
               warnings: ["This network has no endpoint yet, so it is not saved on the gateway until you add one."],
             },
@@ -1871,14 +1896,23 @@ export function renderRPC(root: HTMLElement): () => void {
        ${
          eps.length
            ? `<p class="muted small">${providers} providers valve has measured, in the order the gateway
-                should prefer them.</p>
+                should prefer them — ${eps.length} entries, because a provider that serves both schemes
+                appears twice: eRPC reads WebSocket off the scheme, so an <code>https://</code> upstream
+                never answers <code>eth_subscribe</code> however well the host speaks it.</p>
               <ul class="plain-list">${rows}</ul>`
            : `<p class="muted small">valve has not measured a set for this chain yet — choose from the full list below.</p>`
        }
        ${
+         // No promise of a key field: there is no writer, no route and nothing
+         // on any screen that accepts one, so "a free key of your own removes
+         // the limit" would be pointing at an input that does not exist. What
+         // it says instead is the state the operator is actually in and what
+         // protects them in it — the rest of the set.
          set.usingDefaultKey
-           ? `<p class="muted small">Using the shared <code>${escapeHtml(set.key)}</code> key, so this
-                works with no setup. A free key of your own removes the shared limit.</p>`
+           ? `<p class="muted small">Using the shared <code>${escapeHtml(set.key)}</code> key, so this works with
+                no setup. Its quota is shared by everyone on it: if it runs dry, valve's entries become the
+                least reliable in a set that lists them first, which is what the other providers here are for.
+                There is no way to enter a key of your own from this app yet.</p>`
            : `<p class="muted small">Using your key for this chain.</p>`
        }
        <div class="modal-actions">

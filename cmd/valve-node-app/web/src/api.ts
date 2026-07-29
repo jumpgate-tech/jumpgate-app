@@ -716,6 +716,13 @@ export interface NetworkView {
   url?: string;
   path: string;
   upstreams: UpstreamView[] | null;
+  // knownSetSize is how many upstreams "Add valve's set…" would put on this
+  // chain — the ENTRY count, which is what the redundancy bar's denominator
+  // has to be: its numerator counts configured upstreams, so denominating it
+  // in providers instead would make the page's own primary action overshoot
+  // the target every time. 0 means valve has measured no set for this chain,
+  // and the bar must then show no denominator rather than a target of zero.
+  knownSetSize: number;
   // serviceable is false when nothing on this chain can be dialed — eRPC
   // would accept the config and fail every call on this path.
   serviceable: boolean;

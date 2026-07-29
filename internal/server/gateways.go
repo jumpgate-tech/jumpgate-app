@@ -109,6 +109,18 @@ type networkView struct {
 
 	Upstreams []upstreamView `json:"upstreams"`
 
+	// KnownSetSize is how many upstreams "Add valve's set" would put on this
+	// chain if it had none — the ENTRY count, which is what the redundancy bar
+	// has to measure a configured count against. It rides on the view rather
+	// than being fetched per chain from the knownset route because the bar is
+	// drawn on the first paint of the list: a second request per chain would
+	// buy a denominator that pops in late, for a number that is hardcoded and
+	// cannot change between the two calls.
+	//
+	// Zero means valve has measured no set for this chain, and the bar must
+	// then show no denominator at all rather than implying a target.
+	KnownSetSize int `json:"knownSetSize"`
+
 	// Serviceable is false when this chain has no upstream that can be
 	// dialed. eRPC will accept the config and then fail every call on this
 	// path, so the chip has to look different from a healthy one rather than
@@ -871,9 +883,10 @@ func networkViews(cfg config.Config, gw config.Gateway, resolved catalog.Gateway
 	out := make([]networkView, 0, len(gw.Config.Networks))
 	for _, n := range gw.Config.Networks {
 		nv := networkView{
-			ChainID: n.ChainID,
-			Name:    chainName(n.ChainID),
-			Path:    resolved.PathFor(n.ChainID),
+			ChainID:      n.ChainID,
+			Name:         chainName(n.ChainID),
+			Path:         resolved.PathFor(n.ChainID),
+			KnownSetSize: catalog.KnownSetSize(n.ChainID),
 		}
 		if base != "" {
 			nv.URL = base + nv.Path
