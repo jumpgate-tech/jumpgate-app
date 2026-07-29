@@ -727,10 +727,15 @@ func TestKnownSetMarksWhatIsAlreadyConfigured(t *testing.T) {
 // than the shared demo one, and say so — on EVERY chain, because the key is an
 // account rather than a chain.
 //
-// There is no write endpoint for the key yet — the UI task adds one — so the
-// key is seeded the same way TestGatewayListReportsOrphans seeds Orphans:
-// directly through config.Load()/cfg.Save(), the same accessor the server
-// itself uses under s.loadConfig().
+// The key is seeded through config.Load()/cfg.Save() — the same accessor the
+// server uses under s.loadConfig() — rather than through Settings, because what
+// is under test is the read side.
+//
+// The stored key is SHORT on purpose. A short operator key used to slip past
+// redaction's length gate and be serialised into these URLs; it is a secret at
+// any length, so the assertion is that the URL comes back in placeholder form —
+// which is also proof the operator's key was the one substituted, since the demo
+// default would have been left in the URL literally.
 func TestKnownSetUsesAStoredKeyOverTheDefault(t *testing.T) {
 	a := gatewayServer(t)
 	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
@@ -752,8 +757,11 @@ func TestKnownSetUsesAStoredKeyOverTheDefault(t *testing.T) {
 	for _, e := range body.Endpoints {
 		if e.Provider == "valve" {
 			found = true
-			if !strings.Contains(e.URL, "vk_mine") {
-				t.Errorf("valve's URL must carry the stored key: %q", e.URL)
+			if strings.Contains(e.URL, "vk_mine") {
+				t.Errorf("the operator's key must not reach the browser, short or not: %q", e.URL)
+			}
+			if !strings.Contains(e.URL, "${"+config.ValveKeyPlaceholder+"}") {
+				t.Errorf("valve's URL must come back in placeholder form once a key of the operator's own is stored: %q", e.URL)
 			}
 		}
 	}
@@ -907,6 +915,70 @@ func TestGatewayPutConfig_FillsAProviderSlotFromTheStoredKey(t *testing.T) {
 	if got != "https://mainnet.infura.io/v3/sk_infura_secret" {
 		t.Errorf("stored endpoint = %q, want the slot filled in — eRPC cannot dial a ${...}", got)
 	}
+}
+
+// A REFUSED save must not read the key back out. Validation runs after the slot
+// has been filled, and the bad-scheme error quotes the endpoint — so an
+// unredacted 400 body would hand back any stored key to anyone who could post a
+// deliberately malformed endpoint naming it, including a key that no upstream
+// uses and the gateway view therefore never shows. Both doors are checked, and
+// the whole raw body is searched rather than one field.
+func TestGatewaySave_ARefusedEndpointDoesNotEchoTheKey(t *testing.T) {
+	const secret = "sk_infura_never_echo_this"
+
+	seed := func(t *testing.T) {
+		t.Helper()
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+		cfg.ProviderKeys = map[string]string{"INFURA_API_KEY": secret}
+		if err := cfg.Save(); err != nil {
+			t.Fatalf("save config: %v", err)
+		}
+	}
+
+	bad := catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+			{ID: "public-1-1", Kind: catalog.UpstreamExternal, Endpoint: "gopher://x/${INFURA_API_KEY}"},
+		}}},
+	}
+
+	check := func(t *testing.T, res *http.Response) {
+		t.Helper()
+		defer res.Body.Close()
+		raw, err := io.ReadAll(res.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("got %d, want 400: %s", res.StatusCode, raw)
+		}
+		if strings.Contains(string(raw), secret) {
+			t.Errorf("the stored key came back in the error body: %s", raw)
+		}
+		if !strings.Contains(string(raw), "${INFURA_API_KEY}") {
+			t.Errorf("the error must still name the endpoint it refused, in placeholder form: %s", raw)
+		}
+	}
+
+	t.Run("update", func(t *testing.T) {
+		a := gatewayServer(t)
+		addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+		seed(t)
+		check(t, a.do(t, "PUT", "/api/gateways/default/config", bad))
+	})
+
+	t.Run("create", func(t *testing.T) {
+		a := gatewayServer(t)
+		seed(t)
+		check(t, a.do(t, "POST", "/api/gateways", map[string]any{
+			"id":        "default",
+			"placement": map[string]string{"targetId": "local", "backend": "docker"},
+			"config":    bad,
+		}))
+	})
 }
 
 // Create fills the slot too. It has to: validateGatewayConfig does NOT reject a
