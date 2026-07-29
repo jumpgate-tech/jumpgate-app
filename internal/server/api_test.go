@@ -1300,6 +1300,109 @@ func TestSettingsPutMaskedFieldSemantics(t *testing.T) {
 	}
 }
 
+// A provider key goes in and only its NAME comes back — the same rule aiKeySet
+// follows, for the same reason. providerKeysSet is what lets the UI show "you
+// have an Infura key" without the page ever holding one.
+func TestSettingsProviderKeysReportNamesAndNeverValues(t *testing.T) {
+	a := newAPITestServer(t)
+
+	res := a.do(t, "PUT", "/api/settings", map[string]any{
+		"providerKeys": map[string]string{
+			"INFURA_API_KEY": "sk_infura_secret",
+			"VALVE_API_KEY":  "vk_mine",
+		},
+	})
+	defer res.Body.Close()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if strings.Contains(string(raw), "sk_infura_secret") {
+		t.Fatalf("the PUT echoed the key straight back: %s", raw)
+	}
+
+	get := a.do(t, "GET", "/api/settings", nil)
+	defer get.Body.Close()
+	raw, err = io.ReadAll(get.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if strings.Contains(string(raw), "sk_infura_secret") || strings.Contains(string(raw), "vk_mine") {
+		t.Fatalf("GET /api/settings returned a stored key: %s", raw)
+	}
+
+	var body settingsResponse
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	// Sorted, because map order is random and a list that reshuffles on every
+	// poll cannot be rendered without flicker.
+	want := []string{"INFURA_API_KEY", "VALVE_API_KEY"}
+	if len(body.ProviderKeysSet) != len(want) {
+		t.Fatalf("providerKeysSet = %v, want %v", body.ProviderKeysSet, want)
+	}
+	for i := range want {
+		if body.ProviderKeysSet[i] != want[i] {
+			t.Fatalf("providerKeysSet = %v, want %v in that order", body.ProviderKeysSet, want)
+		}
+	}
+
+	// The values did land, they just do not come back.
+	onDisk, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if onDisk.ProviderKeys["INFURA_API_KEY"] != "sk_infura_secret" {
+		t.Errorf("the key was not stored: %+v", onDisk.ProviderKeys)
+	}
+}
+
+// providerKeys is a PATCH, not a replacement. GET never echoes the values, so a
+// client re-PUTting what it last read would wipe every key it has if an absent
+// name meant "delete".
+func TestSettingsProviderKeysPatchSemantics(t *testing.T) {
+	a := newAPITestServer(t)
+
+	res := a.do(t, "PUT", "/api/settings", map[string]any{
+		"providerKeys": map[string]string{"INFURA_API_KEY": "k1", "VALVE_API_KEY": "k2"},
+	})
+	res.Body.Close()
+
+	// A PUT that does not mention providerKeys at all leaves them alone.
+	res = a.do(t, "PUT", "/api/settings", map[string]any{"aiProvider": "gemini"})
+	res.Body.Close()
+	onDisk, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if len(onDisk.ProviderKeys) != 2 {
+		t.Fatalf("an unrelated PUT changed the keys: %+v", onDisk.ProviderKeys)
+	}
+
+	// Naming one key does not touch the other.
+	res = a.do(t, "PUT", "/api/settings", map[string]any{
+		"providerKeys": map[string]string{"INFURA_API_KEY": "k1-rotated"},
+	})
+	res.Body.Close()
+	onDisk, _ = config.Load()
+	if onDisk.ProviderKeys["INFURA_API_KEY"] != "k1-rotated" || onDisk.ProviderKeys["VALVE_API_KEY"] != "k2" {
+		t.Fatalf("a single-key PUT was treated as a replacement: %+v", onDisk.ProviderKeys)
+	}
+
+	// An explicit empty value forgets that one, and only that one.
+	res = a.do(t, "PUT", "/api/settings", map[string]any{
+		"providerKeys": map[string]string{"INFURA_API_KEY": ""},
+	})
+	res.Body.Close()
+	onDisk, _ = config.Load()
+	if _, ok := onDisk.ProviderKeys["INFURA_API_KEY"]; ok {
+		t.Errorf("an explicit empty value must forget the key: %+v", onDisk.ProviderKeys)
+	}
+	if onDisk.ProviderKeys["VALVE_API_KEY"] != "k2" {
+		t.Errorf("clearing one key took another with it: %+v", onDisk.ProviderKeys)
+	}
+}
+
 // ---------------------------------------------------------------------
 // network diagnostics
 // ---------------------------------------------------------------------

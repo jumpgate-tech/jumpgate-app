@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/valve-tech/valve-node-app/internal/catalog"
 	"github.com/valve-tech/valve-node-app/internal/chainlist"
 	"github.com/valve-tech/valve-node-app/internal/config"
 	"github.com/valve-tech/valve-node-app/internal/executor"
@@ -215,6 +217,140 @@ func TestHandleChainlist_RejectsSomethingThatIsNotAChainID(t *testing.T) {
 		if res.StatusCode != http.StatusBadRequest {
 			t.Errorf("chain id %q: got %d, want 400", bad, res.StatusCode)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------
+// provider keys: resolved for probing, redacted for the wire
+// ---------------------------------------------------------------------
+
+// A stored key turns a provider slot from a rejection into a real candidate —
+// and the key must NOT come back with it.
+//
+// This is the whole hazard of filling templates in: chainlist resolves
+// ${INFURA_API_KEY} by splicing the key into the URL PATH, and this route
+// serialises endpoint URLs straight to the browser. Sending the resolved URL
+// would put the operator's key in the page, in every proxy log between here and
+// it, and in any screenshot of the picker. What goes out is the placeholder
+// form, which is still a precise reference to one endpoint — the client posts
+// it back as-is and the save path fills it in again.
+func TestHandleChainlist_AKeyResolvesTheSlotButNeverReachesTheWire(t *testing.T) {
+	const (
+		chainID = 943
+		secret  = "sk_live_this_must_not_be_serialised"
+	)
+
+	upstream := rpcStub(t, chainID)
+	// The key is a path segment, exactly as the real provider URLs put it.
+	templated := upstream.URL + "/v3/${TEST_API_KEY}"
+
+	feed := feedStub(t, []chainlist.Chain{{ChainID: chainID, Name: "PulseChain Testnet", RPC: []string{templated}}})
+	d := chainlist.New()
+	d.FeedURL = feed.URL
+	d.ProbeWS = false
+	d.ProbeTimeout = 3 * time.Second
+
+	a := chainlistServer(t, d)
+	seedProviderKey(t, "TEST_API_KEY", secret)
+
+	res := a.do(t, "GET", "/api/chainlist/943", nil)
+	defer res.Body.Close()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if strings.Contains(string(raw), secret) {
+		t.Fatalf("the API key was serialised to the browser: %s", raw)
+	}
+
+	var body chainlistResponse
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Live != 1 || len(body.Endpoints) != 1 {
+		t.Fatalf("the slot must resolve and probe live, not be rejected: %+v", body)
+	}
+	if got := body.Endpoints[0].URL; got != templated {
+		t.Errorf("url = %q, want the placeholder form %q — the client posts this back to add it", got, templated)
+	}
+}
+
+// Without the key the same entry is a rejection that NAMES what is missing, so
+// the operator has a next step rather than a dead end.
+func TestHandleChainlist_AnUnknownSlotIsRejectedByName(t *testing.T) {
+	const chainID = 943
+	feed := feedStub(t, []chainlist.Chain{
+		{ChainID: chainID, Name: "PulseChain Testnet", RPC: []string{"https://rpc.example.com/v3/${TEST_API_KEY}"}},
+	})
+	d := chainlist.New()
+	d.FeedURL = feed.URL
+	d.ProbeWS = false
+
+	a := chainlistServer(t, d)
+
+	body := decode[chainlistResponse](t, a.do(t, "GET", "/api/chainlist/943", nil))
+	if len(body.Endpoints) != 1 {
+		t.Fatalf("endpoints: %+v", body.Endpoints)
+	}
+	if body.Endpoints[0].Status != "rejected" {
+		t.Errorf("a slot with no key must not be offered: %+v", body.Endpoints[0])
+	}
+	if !strings.Contains(body.Endpoints[0].Reason, "TEST_API_KEY") {
+		t.Errorf("the reason must name the key to go get: %q", body.Endpoints[0].Reason)
+	}
+}
+
+// valve's own slot resolves on a box where nothing has been set up at all,
+// because VALVE_API_KEY falls back to the shared demo key — the same zero-setup
+// guarantee catalog.KnownSet makes. A default that only applied once an
+// operator had visited Settings would not be a default.
+func TestHandleChainlist_ValveSlotResolvesWithNoSetupAtAll(t *testing.T) {
+	const chainID = 369
+
+	upstream := rpcStub(t, chainID)
+	templated := upstream.URL + "/rpc/${VALVE_API_KEY}/evm/369"
+
+	feed := feedStub(t, []chainlist.Chain{{ChainID: chainID, Name: "PulseChain", RPC: []string{templated}}})
+	d := chainlist.New()
+	d.FeedURL = feed.URL
+	d.ProbeWS = false
+	d.ProbeTimeout = 3 * time.Second
+
+	a := chainlistServer(t, d)
+
+	res := a.do(t, "GET", "/api/chainlist/369", nil)
+	defer res.Body.Close()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if strings.Contains(string(raw), catalog.DefaultValveKey) {
+		t.Errorf("even the demo key is redacted, so one rule covers every slot: %s", raw)
+	}
+
+	var body chainlistResponse
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Live != 1 {
+		t.Fatalf("valve's slot must resolve with no key stored: %+v", body.Endpoints)
+	}
+}
+
+// seedProviderKey stores a provider key the way the app itself stores one,
+// through config.Load()/cfg.Save() under the test's isolated HOME.
+func seedProviderKey(t *testing.T, name, value string) {
+	t.Helper()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.ProviderKeys == nil {
+		cfg.ProviderKeys = map[string]string{}
+	}
+	cfg.ProviderKeys[name] = value
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
 	}
 }
 

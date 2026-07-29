@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/valve-tech/valve-node-app/internal/catalog"
+	"github.com/valve-tech/valve-node-app/internal/chainlist"
 	"github.com/valve-tech/valve-node-app/internal/config"
 	"github.com/valve-tech/valve-node-app/internal/executor"
 	"github.com/valve-tech/valve-node-app/internal/ops"
@@ -359,12 +360,14 @@ type knownSetEndpoint struct {
 
 type knownSetResponse struct {
 	Endpoints []knownSetEndpoint `json:"endpoints"`
-	// Key is the key the set was resolved with — the stored per-chain key, or
-	// catalog.DefaultValveKey when none is stored.
-	Key string `json:"key"`
-	// UsingDefaultKey says Key is the shared demo key, not one of the
-	// operator's own, so the UI can point at the reason valve's entry is the
-	// least reliable one in the set.
+	// UsingDefaultKey says the set was resolved with the shared demo key rather
+	// than one of the operator's own, so the UI can point at the reason valve's
+	// entry is the least reliable one in the set.
+	//
+	// The key ITSELF used to travel here too, and does not any more: the UI
+	// needs to know WHICH key is in play, never what it is. Whether a key is
+	// the operator's own is a boolean; sending the secret to answer a boolean
+	// is how a key ends up in a browser's memory, a proxy log and a screenshot.
 	UsingDefaultKey bool `json:"usingDefaultKey"`
 }
 
@@ -399,11 +402,10 @@ func (s *Server) handleKnownSet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	key := cfg.ValveKeys[chainID]
-	out := knownSetResponse{Key: key, UsingDefaultKey: key == ""}
-	if out.UsingDefaultKey {
-		out.Key = catalog.DefaultValveKey
-	}
+	// One key for every chain: valve's key is an account, and migrate() has
+	// already folded any per-chain keys an older config held into this one.
+	key := strings.TrimSpace(cfg.ProviderKeys[config.ValveKeyPlaceholder])
+	out := knownSetResponse{UsingDefaultKey: key == "" || key == catalog.DefaultValveKey}
 	for _, e := range catalog.KnownSet(chainID, key) {
 		out.Endpoints = append(out.Endpoints, knownSetEndpoint{
 			URL: e.URL, Provider: e.Provider, WebSocket: e.WebSocket,
@@ -1167,6 +1169,20 @@ func (s *Server) handleGatewayPutConfig(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+
+	keyCfg, err := s.loadConfig()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Before validation, because an unfilled ${...} slot is not a URL eRPC
+	// could ever dial, and the operator should be told which key is missing
+	// rather than whatever the renderer makes of the literal.
+	if err := resolveUpstreamKeys(&gwCfg, providerKeys(keyCfg)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	if err := gwCfg.TLS.ValidateSettings(); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1195,6 +1211,43 @@ func (s *Server) handleGatewayPutConfig(w http.ResponseWriter, r *http.Request) 
 
 	gw, _ := cfg.FindGateway(gid)
 	writeJSON(w, http.StatusOK, s.gatewayViewFor(r, cfg, gw, map[string]dockerView{}))
+}
+
+// resolveUpstreamKeys fills the ${PLACEHOLDER} slots in external upstream URLs
+// from the stored provider keys.
+//
+// This is the other half of redactKeys (chainlist.go). Discovery hands the
+// browser the PLACEHOLDER form of a templated endpoint so the key stays in this
+// process; the browser posts that same string back to add it; this is where it
+// becomes the URL eRPC will actually dial. Resolving HERE rather than storing
+// the placeholder is deliberate: the stored endpoint is read by the renderer,
+// the provisioner and the capability probe, and pushing "resolve first" into
+// each of them would be three more places for a key to be forgotten and an
+// upstream to 401 in a way nothing explains.
+//
+// An unresolvable slot is refused rather than stored. A URL with a literal
+// ${...} in it looks configured and answers nothing, which is exactly the
+// failure chainlist.Resolve refuses for the same reason.
+func resolveUpstreamKeys(g *catalog.GatewayConfig, keys map[string]string) error {
+	for i := range g.Networks {
+		for j := range g.Networks[i].Upstreams {
+			u := &g.Networks[i].Upstreams[j]
+			raw := strings.TrimSpace(u.Endpoint)
+			if !strings.Contains(raw, "${") {
+				continue
+			}
+			resolved, ok := chainlist.Resolve(raw, keys)
+			if !ok {
+				name := chainlist.PlaceholderName(raw)
+				if name == "" {
+					return fmt.Errorf("chain %d: upstream %q has a malformed ${...} slot in its endpoint", g.Networks[i].ChainID, u.ID)
+				}
+				return fmt.Errorf("chain %d: upstream %q needs %s — add it in Settings", g.Networks[i].ChainID, u.ID, name)
+			}
+			u.Endpoint = resolved
+		}
+	}
+	return nil
 }
 
 // validateGatewayConfig is the same validation PlanGateway performs, run at
