@@ -1903,17 +1903,16 @@ export function renderRPC(root: HTMLElement): () => void {
            : `<p class="muted small">valve has not measured a set for this chain yet — choose from the full list below.</p>`
        }
        ${
-         // No promise of a key field: there is no writer, no route and nothing
-         // on any screen that accepts one, so "a free key of your own removes
-         // the limit" would be pointing at an input that does not exist. What
-         // it says instead is the state the operator is actually in and what
-         // protects them in it — the rest of the set.
+         // The key itself is not named here, and no longer travels in the
+         // response: which key is in play is a boolean, and answering a boolean
+         // with the secret is how one ends up in a screenshot. Nothing is
+         // claimed about the shipped key's limits either — what is true is that
+         // it ships, and that Settings now takes one of the operator's own.
          set.usingDefaultKey
-           ? `<p class="muted small">Using the shared <code>${escapeHtml(set.key)}</code> key, so this works with
-                no setup. Its quota is shared by everyone on it: if it runs dry, valve's entries become the
-                least reliable in a set that lists them first, which is what the other providers here are for.
-                There is no way to enter a key of your own from this app yet.</p>`
-           : `<p class="muted small">Using your key for this chain.</p>`
+           ? `<p class="muted small">valve's entries here are resolved with the key that ships with the app, so
+                this works with no setup. To use an account of your own instead, put it in Settings under
+                <code>VALVE_API_KEY</code>.</p>`
+           : `<p class="muted small">valve's entries here are resolved with your own <code>VALVE_API_KEY</code>.</p>`
        }
        <div class="modal-actions">
          <button class="btn btn-ghost" data-modal-action="cancel">Cancel</button>
