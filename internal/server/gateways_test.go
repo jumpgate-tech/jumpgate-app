@@ -772,9 +772,21 @@ func TestKnownSetUsesAStoredKeyOverTheDefault(t *testing.T) {
 // A per-chain valve key stored by an older build still resolves the set, having
 // been folded into the one provider key on load. This is the migration seen
 // from the route that consumes it.
+//
+// The migrated key must never appear in the response (see
+// TestKnownSetNeverReturnsTheKeyItself), so this cannot assert "the URL
+// contains vk_legacy" the way it used to. Instead it proves the key was
+// actually USED for resolution the same way AlreadyAdded proves anything:
+// the gateway already has an upstream stored at the URL vk_legacy resolves
+// to, and that only comes back marked if resolution used that exact key.
 func TestKnownSetHonoursAMigratedPerChainKey(t *testing.T) {
 	a := gatewayServer(t)
-	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+			{ID: "valve-1", Kind: catalog.UpstreamExternal, Endpoint: "https://one.valve.city/rpc/vk_legacy/evm/1"},
+		}}},
+	})
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -789,16 +801,29 @@ func TestKnownSetHonoursAMigratedPerChainKey(t *testing.T) {
 	if body.UsingDefaultKey {
 		t.Error("a key an older build stored per chain must survive the upgrade")
 	}
+	var found bool
 	for _, e := range body.Endpoints {
-		if e.Provider == "valve" && !strings.Contains(e.URL, "vk_legacy") {
-			t.Errorf("valve's URL must carry the migrated key: %q", e.URL)
+		if e.Provider != "valve" || e.WebSocket {
+			continue
 		}
+		found = true
+		if strings.Contains(e.URL, "vk_legacy") {
+			t.Errorf("the migrated key must not leak into the response: %q", e.URL)
+		}
+		if !e.AlreadyAdded {
+			t.Errorf("resolving with the migrated key must match the already-configured endpoint, got AlreadyAdded=false for %q", e.URL)
+		}
+	}
+	if !found {
+		t.Fatal("chain 1's set must include a valve http entry")
 	}
 }
 
-// The response says WHICH key is in play and never what it is. It used to send
-// the key itself, which put the operator's secret in the browser to answer a
-// question that is a boolean.
+// The response says WHICH key is in play and never what it is: not as a bare
+// "key" field, and not inside a resolved URL either. It used to send the key
+// itself both ways; now every templated endpoint goes through the same
+// redactKeys seam discovery uses, so this asserts the secret is absent from
+// the raw body outright, not merely from one named field.
 func TestKnownSetNeverReturnsTheKeyItself(t *testing.T) {
 	a := gatewayServer(t)
 	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
@@ -819,6 +844,10 @@ func TestKnownSetNeverReturnsTheKeyItself(t *testing.T) {
 		t.Fatalf("read body: %v", err)
 	}
 
+	if strings.Contains(string(raw), "vk_secret_do_not_send") {
+		t.Errorf("the stored key must not appear anywhere in the response: %s", raw)
+	}
+
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		t.Fatalf("decode body: %v", err)
@@ -826,9 +855,6 @@ func TestKnownSetNeverReturnsTheKeyItself(t *testing.T) {
 	if _, ok := fields["key"]; ok {
 		t.Errorf("the response still carries a bare key field: %s", raw)
 	}
-	// The valve endpoint URLs legitimately carry it — that is the known
-	// browser-visible-key tension the owner still has to rule on — so this
-	// asserts the field is gone, not that the string is absent everywhere.
 	if _, ok := fields["usingDefaultKey"]; !ok {
 		t.Errorf("usingDefaultKey must survive: it is what the UI actually needs: %s", raw)
 	}
