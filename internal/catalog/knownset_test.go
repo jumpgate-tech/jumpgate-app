@@ -1,6 +1,9 @@
 package catalog
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The order is the whole point: eRPC prefers earlier upstreams, so the set is
 // sorted by what each endpoint can do, not by name or by ping. These were
@@ -63,6 +66,59 @@ func TestKnownSetCoversBothCapabilities(t *testing.T) {
 	}
 	if archive < 2 {
 		t.Errorf("evm:1 needs more than one archive source, got %d", archive)
+	}
+}
+
+// The WebSocket flag is a claim about the SCHEME and nothing else, because
+// that is all eRPC reads. An https:// entry flagged WebSocket puts a
+// "websocket" tag in the offer modal on a URL that will never serve
+// eth_subscribe, while the chain row's own scheme check refuses to count it —
+// the same screen saying two different things about one URL. Assert the
+// invariant on every chain rather than on the one that regressed.
+func TestKnownSetWebSocketFlagMatchesTheScheme(t *testing.T) {
+	for chainID := range knownSets {
+		for _, e := range KnownSet(chainID, DefaultValveKey) {
+			ws := strings.HasPrefix(e.URL, "wss://") || strings.HasPrefix(e.URL, "ws://")
+			if ws != e.WebSocket {
+				t.Errorf("evm:%d %s: WebSocket=%v but the URL is %q — eRPC infers the capability from the scheme, so these cannot disagree",
+					chainID, e.Provider, e.WebSocket, e.URL)
+			}
+		}
+	}
+}
+
+// valve contributes both schemes wherever both were measured, exactly as drpc
+// and publicnode do, and stays first in preference order. All three chains
+// were measured on 2026-07-28 — see knownSets' comment for what "measured"
+// means here.
+func TestKnownSetValveHasBothSchemesWhereMeasured(t *testing.T) {
+	for _, chainID := range []int{1, 369, 943} {
+		set := KnownSet(chainID, DefaultValveKey)
+		if set[0].Provider != "valve" || set[1].Provider != "valve" {
+			t.Fatalf("evm:%d must open on valve's two entries, got %q then %q",
+				chainID, set[0].Provider, set[1].Provider)
+		}
+		if set[0].WebSocket {
+			t.Errorf("evm:%d: valve's https entry must not claim WebSocket: %+v", chainID, set[0])
+		}
+		if !set[1].WebSocket || !strings.HasPrefix(set[1].URL, "wss://") {
+			t.Errorf("evm:%d: valve needs a wss:// twin, got %+v", chainID, set[1])
+		}
+	}
+}
+
+// KnownSetSize is what the redundancy bar counts against, so it must be the
+// ENTRY count — what the button actually adds — not the provider count.
+func TestKnownSetSizeIsTheEntryCount(t *testing.T) {
+	for chainID, want := range map[int]int{1: 7, 369: 6, 943: 6, 999999: 0} {
+		if got := KnownSetSize(chainID); got != want {
+			t.Errorf("KnownSetSize(%d) = %d, want %d", chainID, got, want)
+		}
+	}
+	for chainID := range knownSets {
+		if got, want := KnownSetSize(chainID), len(KnownSet(chainID, DefaultValveKey)); got != want {
+			t.Errorf("evm:%d: KnownSetSize is %d but the set adds %d", chainID, got, want)
+		}
 	}
 }
 

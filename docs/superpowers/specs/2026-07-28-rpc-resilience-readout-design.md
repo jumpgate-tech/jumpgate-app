@@ -89,16 +89,27 @@ gateway still publishing `127.0.0.1:4001` fails the survivor's metrics-port pref
 `chainid.network` is unreachable. It is promoted to the primary action — "Add valve's
 set" — with "choose from N discovered" demoted to secondary.
 
-The set is **four providers per chain**, listed in the order eRPC should prefer them:
+The set is **four providers per chain**, listed in the order eRPC should prefer them.
+A provider that serves both schemes contributes **two entries**, an `https://` and a
+`wss://` one, because eRPC infers WebSocket capability from the scheme and has no
+separate flag — so the entry count (what the button adds, and what the redundancy bar
+counts against) is always the larger number:
 
-**evm:1** — valve, drpc, publicnode, merkle.
-Two archive sources and three WebSocket sources, so neither capability rests on one
-provider.
+**evm:1** — valve, drpc, publicnode, merkle. **Seven entries.**
+Archive on three providers (valve, drpc, merkle — five entries, since valve and drpc are
+archive on both schemes) and WebSocket on three (valve, drpc, publicnode — three
+entries, every one `wss://`), so neither capability rests on one provider.
 
-**evm:369** — valve, publicnode, g4mm4, `rpc.pulsechain.com`.
-The official endpoint is last, on measurement.
+**evm:369** — valve, publicnode, g4mm4, `rpc.pulsechain.com`. **Six entries**, WebSocket
+on two providers (valve, publicnode). The official endpoint is last, on measurement.
 
-**evm:943** — valve, plus the existing vendored testnet entries.
+**evm:943** — valve, plus the existing vendored testnet entries. **Six entries**,
+WebSocket on two providers (valve, publicnode).
+
+valve carries a `wss://` entry on all three chains because all three were measured on
+2026-07-28: dialed with `internal/wsrpc`, upgrade completed, `eth_chainId` answering
+`0x1`, `0x171` and `0x3af`. An unmeasured WebSocket claim is precisely what the scheme
+split exists to keep out of the set.
 
 Before it is offered, the set is probed, and the preview shows what will be added versus
 what is already present, so the resulting count is never a surprise. An endpoint already
