@@ -401,6 +401,99 @@ func TestAdoptDevnetReferences_OnlyAnExactMatchIsAdopted(t *testing.T) {
 	}
 }
 
+// valveKeys was per chain because valve's key sits in a URL path. That is wrong
+// as a general rule — a provider key is an account, not a chain — so it
+// collapses to one entry under the placeholder name.
+func TestMigrateCollapsesValveKeysToAProviderKey(t *testing.T) {
+	c := Config{ValveKeys: map[int]string{1: "vk_mine", 369: "vk_mine"}}
+
+	c.migrate()
+
+	if got := c.ProviderKeys[ValveKeyPlaceholder]; got != "vk_mine" {
+		t.Errorf("VALVE_API_KEY = %q, want vk_mine", got)
+	}
+	if c.ValveKeys != nil {
+		t.Errorf("valveKeys must be cleared once migrated, got %+v", c.ValveKeys)
+	}
+	// Every chain agreed, so there is nothing to report.
+	if len(c.Notices) != 0 {
+		t.Errorf("agreeing keys are not news: %+v", c.Notices)
+	}
+
+	// Disagreeing keys: the first by chain id wins and the rest are REPORTED,
+	// never silently dropped — the same stance the orphan record takes.
+	d := Config{ValveKeys: map[int]string{1: "vk_a", 369: "vk_b"}}
+	d.migrate()
+	if d.ProviderKeys[ValveKeyPlaceholder] != "vk_a" {
+		t.Errorf("lowest chain id wins, got %q", d.ProviderKeys[ValveKeyPlaceholder])
+	}
+	if len(d.Notices) == 0 {
+		t.Error("a discarded key must be reported to the operator, not dropped in silence")
+	}
+}
+
+// A notice is written to be shown, so it names the chain and a fingerprint —
+// never the key. Reporting a discarded secret by printing it would put the key
+// on exactly the screen this change exists to keep it off.
+func TestMigrateNoticesNameTheChainAndNotTheKey(t *testing.T) {
+	c := Config{ValveKeys: map[int]string{
+		1:   "vk_kept_0123456789",
+		369: "vk_discarded_0123456789",
+	}}
+
+	c.migrate()
+
+	if len(c.Notices) != 1 {
+		t.Fatalf("one discarded key, one notice: %+v", c.Notices)
+	}
+	n := c.Notices[0]
+	if !strings.Contains(n, "369") {
+		t.Errorf("the notice does not say which chain lost its key: %q", n)
+	}
+	if strings.Contains(n, "vk_discarded_0123456789") {
+		t.Errorf("the notice quotes the key verbatim: %q", n)
+	}
+}
+
+// An already-stored placeholder key is the newer shape, so it survives — and
+// every per-chain value that disagrees with it is reported rather than
+// overwriting it.
+func TestMigrateKeepsAnAlreadyStoredProviderKey(t *testing.T) {
+	c := Config{
+		ProviderKeys: map[string]string{ValveKeyPlaceholder: "vk_current"},
+		ValveKeys:    map[int]string{1: "vk_old"},
+	}
+
+	c.migrate()
+
+	if got := c.ProviderKeys[ValveKeyPlaceholder]; got != "vk_current" {
+		t.Errorf("the stored placeholder key was overwritten by a legacy one: %q", got)
+	}
+	if len(c.Notices) != 1 {
+		t.Errorf("the displaced per-chain key must be reported: %+v", c.Notices)
+	}
+	if c.ValveKeys != nil {
+		t.Errorf("valveKeys must be cleared once migrated, got %+v", c.ValveKeys)
+	}
+}
+
+// migrate runs on every Load, so a second pass must not re-report what the
+// first already collapsed.
+func TestMigrateCollapseIsIdempotent(t *testing.T) {
+	c := Config{ValveKeys: map[int]string{1: "vk_a", 369: "vk_b"}}
+	c.migrate()
+	before := len(c.Notices)
+
+	c.migrate()
+
+	if len(c.Notices) != before {
+		t.Errorf("a second migrate re-reported the same discard: %d then %d notices", before, len(c.Notices))
+	}
+	if c.ProviderKeys[ValveKeyPlaceholder] != "vk_a" {
+		t.Errorf("the collapsed key did not survive a second migrate: %q", c.ProviderKeys[ValveKeyPlaceholder])
+	}
+}
+
 // No devnet on the target means nothing to adopt, and the config is untouched.
 func TestAdoptDevnetReferences_NoDevnetLeavesEverythingAlone(t *testing.T) {
 	g := catalog.GatewayConfig{Networks: []catalog.GatewayNetwork{

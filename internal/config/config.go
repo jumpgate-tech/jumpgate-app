@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/valve-tech/valve-node-app/internal/catalog"
@@ -110,13 +111,36 @@ type Config struct {
 	AIKey      string `json:"aiKey"`
 	RefRPCBase string `json:"refRpcBase"` // default: defaultRefRPCBase
 
-	// ValveKeys is the valve API key per chain id. The key is a PATH segment of
-	// valve's unified endpoint, and a key's entitlements are a per-chain matter,
-	// so one global key could express neither "different keys per chain" nor
-	// "valve on this chain but not that one". Absent, catalog.DefaultValveKey
-	// (the shared demo key) is used.
+	// ValveKeys is the OLD per-chain valve API key store.
+	//
+	// Deprecated: migration input only. A provider key is an account, not a
+	// chain, so it collapses into ProviderKeys[ValveKeyPlaceholder] on load and
+	// is cleared — see collapseValveKeys. Nothing but the migration may read it.
 	ValveKeys map[int]string `json:"valveKeys,omitempty"`
+
+	// ProviderKeys are API keys by PLACEHOLDER NAME — "VALVE_API_KEY",
+	// "INFURA_API_KEY" — matching the ${NAME} slots the chain feed uses. Keyed
+	// by placeholder rather than by chain because a provider key is an account,
+	// not a chain.
+	//
+	// Secrets: stored here, never returned by the API. See settingsResponse,
+	// which reports which placeholders are set and never their values.
+	ProviderKeys map[string]string `json:"providerKeys,omitempty"`
+
+	// Notices are one-off messages from a migration that the operator needs to
+	// see, e.g. a key discarded when per-chain keys collapsed. Not persisted as
+	// advice — cleared once shown.
+	//
+	// They are written for a screen, so nothing secret goes in one: a notice
+	// about a discarded key names the chain and a masked fingerprint, never the
+	// key itself.
+	Notices []string `json:"notices,omitempty"`
 }
+
+// ValveKeyPlaceholder is the ${NAME} slot valve's own endpoints carry, and so
+// the name ProviderKeys stores valve's key under. It is here rather than in
+// catalog because it is the KEY's identity, not the endpoint set's.
+const ValveKeyPlaceholder = "VALVE_API_KEY"
 
 // DefaultGatewayID is the id given to a gateway migrated up from the old
 // per-target Target.Gateway field, and the id the app offers first when
@@ -220,6 +244,87 @@ func (c *Config) migrate() {
 			c.Orphans = append(c.Orphans, o)
 		}
 	}
+
+	c.collapseValveKeys()
+}
+
+// collapseValveKeys folds the old per-chain valve key into the one entry a
+// provider key actually is.
+//
+// valveKeys was keyed by chain because valve's key sits in a URL path and the
+// first cut read that as "a key belongs to a chain". It does not: a key is an
+// account, and the same account answers every chain it is entitled to. Keyed by
+// placeholder, it also lines up with every OTHER provider's key, which is what
+// lets one store fill ${VALVE_API_KEY} and ${INFURA_API_KEY} alike.
+//
+// The lowest chain id wins, because it is the only tie-break that does not
+// depend on map order. Anything else stored is REPORTED rather than dropped in
+// silence — the same stance the orphan record takes, for the same reason: a
+// migration that quietly destroys something an operator typed is indisting-
+// uishable from a bug. The notice carries a masked fingerprint, not the key:
+// notices are written to be shown, and this whole change exists to stop keys
+// reaching a screen.
+func (c *Config) collapseValveKeys() {
+	if len(c.ValveKeys) == 0 {
+		// Nil rather than an empty map, so a re-save does not write back a
+		// deprecated field that is merely empty.
+		c.ValveKeys = nil
+		return
+	}
+
+	ids := make([]int, 0, len(c.ValveKeys))
+	for id := range c.ValveKeys {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+
+	// An already-stored placeholder key wins over anything per-chain: it is the
+	// newer shape, so it is the one the operator most recently meant.
+	kept := strings.TrimSpace(c.ProviderKeys[ValveKeyPlaceholder])
+	keptFrom := 0
+	if kept == "" {
+		for _, id := range ids {
+			if v := strings.TrimSpace(c.ValveKeys[id]); v != "" {
+				kept, keptFrom = v, id
+				break
+			}
+		}
+		if kept != "" {
+			if c.ProviderKeys == nil {
+				c.ProviderKeys = map[string]string{}
+			}
+			c.ProviderKeys[ValveKeyPlaceholder] = kept
+		}
+	}
+
+	for _, id := range ids {
+		v := strings.TrimSpace(c.ValveKeys[id])
+		if v == "" || v == kept {
+			continue
+		}
+		if keptFrom != 0 {
+			c.Notices = append(c.Notices, fmt.Sprintf(
+				"Chain %d had a different valve API key (%s). Keys are per provider now, not per chain, so chain %d's was kept and this one was discarded — re-enter it under %s in Settings if it was the one you wanted.",
+				id, maskSecret(v), keptFrom, ValveKeyPlaceholder))
+			continue
+		}
+		c.Notices = append(c.Notices, fmt.Sprintf(
+			"Chain %d had a different valve API key (%s). Keys are per provider now, not per chain, so the %s you already have was kept and this one was discarded.",
+			id, maskSecret(v), ValveKeyPlaceholder))
+	}
+
+	c.ValveKeys = nil
+}
+
+// maskSecret renders enough of a key to recognise it and not enough to use it.
+// Short values are hidden outright: with only a few characters, "enough to
+// recognise" and "the whole thing" are the same string.
+func maskSecret(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= 8 {
+		return strings.Repeat("•", len(s))
+	}
+	return s[:3] + "…" + s[len(s)-3:]
 }
 
 // adoptDevnetReferences upgrades a frozen URL that IS this target's devnet
