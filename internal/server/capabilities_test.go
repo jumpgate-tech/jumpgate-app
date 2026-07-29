@@ -476,6 +476,66 @@ func TestCapabilities_ProbedURLNeverCarriesAProviderKey(t *testing.T) {
 	}
 }
 
+// The WebSocket cell names the address it dialed — that is the whole value of
+// the cell — and it builds that string out of the URL, key path segment and
+// all (capabilities.probeWS: `fmt.Sprintf("%s → …", wsURL)`). So the row's
+// THIRD field leaks what ProbedURL and ReachDetail no longer do.
+//
+// This test exists because the first one could not see it: fastTestProber sets
+// ProbeWS = false, which makes the ws detail the constant "WebSocket probing
+// disabled" — a whole-body search pointed at a prober that cannot produce the
+// string. This one leaves ProbeWS ON, as NewProber does on the real route, and
+// dials an httptest server that will refuse the upgrade, which is what makes
+// probeWS render the URL into its detail.
+func TestCapabilities_WSDetailNeverCarriesAProviderKey(t *testing.T) {
+	const key = "sk_infura_never_send_this_either"
+
+	counter := &chainIDCounter{}
+	srv := capCountingServer(t, counter, 369)
+	endpoint := srv.URL + "/v3/" + key
+
+	prober := capabilities.NewProber()
+	prober.ProbeTimeout = 3 * time.Second
+	if !prober.ProbeWS {
+		t.Fatal("NewProber no longer probes WebSocket by default — this test is pointed at a prober that cannot produce the leak")
+	}
+
+	cfg := config.Config{ProviderKeys: map[string]string{"INFURA_API_KEY": key}}
+	gw := config.Gateway{
+		ID:        "default",
+		Placement: config.GatewayPlacement{TargetID: "local", Backend: "docker"},
+		Config: catalog.GatewayConfig{Networks: []catalog.GatewayNetwork{{ChainID: 369, Upstreams: []catalog.GatewayUpstream{
+			{ID: "infura", Kind: catalog.UpstreamExternal, Endpoint: endpoint},
+		}}}},
+	}
+
+	res := probeGatewayCapabilities(context.Background(), prober, cfg, gw)
+	if len(res.Endpoints) != 1 {
+		t.Fatalf("got %d endpoints, want 1", len(res.Endpoints))
+	}
+
+	raw, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	if strings.Contains(string(raw), key) {
+		t.Errorf("the provider key must not appear anywhere in the capabilities response: %s", raw)
+	}
+
+	// The cell must have been RENDERED FROM THE URL, or the search above
+	// proves nothing: a "WebSocket probing disabled" detail would pass it for
+	// reasons that have nothing to do with redaction.
+	var ws capabilityView
+	for _, c := range res.Endpoints[0].Capabilities {
+		if c.Key == "ws" {
+			ws = c
+		}
+	}
+	if !strings.Contains(ws.Detail, "${INFURA_API_KEY}") {
+		t.Fatalf("ws detail = %q — this test only means something if the detail is built from the URL", ws.Detail)
+	}
+}
+
 // ---------------------------------------------------------------------
 // caching / TTL / refresh
 // ---------------------------------------------------------------------

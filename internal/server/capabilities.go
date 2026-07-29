@@ -280,7 +280,7 @@ func probeOneUpstream(ctx context.Context, prober *capabilities.Prober, upstream
 	ep := prober.ProbeRepeat(ctx, capabilities.Target{URL: probeURL}, chainID, repeat)
 	v.Reachable = ep.Reachable
 	v.ReachDetail = redactKeys(ep.ReachDetail, keys)
-	v.Capabilities = capabilityViewsFor(ep)
+	v.Capabilities = capabilityViewsFor(ep, keys)
 	return v
 }
 
@@ -290,14 +290,24 @@ func probeOneUpstream(ctx context.Context, prober *capabilities.Prober, upstream
 // it was unreachable (Probe skips the per-capability calls entirely once
 // eth_chainId fails, see capabilities.Probe). A short array here would make
 // "we never asked" and "we asked and it said no" the same shape on the wire.
-func capabilityViewsFor(ep capabilities.Endpoint) []capabilityView {
+//
+// redact is the key set, and Detail needs it as much as ProbedURL does — this
+// is the THIRD field on the same row, and the one that was missed the first
+// time. capabilities.probeWS builds its detail out of the URL itself
+// ("wss://mainnet.infura.io/v3/<key> → connection refused"), because naming
+// the address it dialed is the whole value of that cell; and the archive probe
+// echoes the provider's own error message back, which is a string this process
+// does not author. Redacting the Detail at this boundary covers both without
+// teaching internal/capabilities about provider keys it has no business
+// knowing.
+func capabilityViewsFor(ep capabilities.Endpoint, redact map[string]string) []capabilityView {
 	keys := capabilities.Keys()
 	out := make([]capabilityView, 0, len(keys))
 	for _, key := range keys {
 		if res, ok := ep.Cap(key); ok {
 			out = append(out, capabilityView{
 				Key: key, Label: capabilities.Label(key),
-				Status: string(res.Status), Detail: res.Detail, Method: res.Method,
+				Status: string(res.Status), Detail: redactKeys(res.Detail, redact), Method: res.Method,
 			})
 			continue
 		}
