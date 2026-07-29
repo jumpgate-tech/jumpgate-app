@@ -303,17 +303,35 @@ func (c *Config) collapseValveKeys() {
 			continue
 		}
 		if keptFrom != 0 {
-			c.Notices = append(c.Notices, fmt.Sprintf(
+			c.notice(fmt.Sprintf(
 				"Chain %d had a different valve API key (%s). Keys are per provider now, not per chain, so chain %d's was kept and this one was discarded — re-enter it under %s in Settings if it was the one you wanted.",
 				id, maskSecret(v), keptFrom, ValveKeyPlaceholder))
 			continue
 		}
-		c.Notices = append(c.Notices, fmt.Sprintf(
+		c.notice(fmt.Sprintf(
 			"Chain %d had a different valve API key (%s). Keys are per provider now, not per chain, so the %s you already have was kept and this one was discarded.",
 			id, maskSecret(v), ValveKeyPlaceholder))
 	}
 
 	c.ValveKeys = nil
+}
+
+// notice records a migration message once.
+//
+// The dedupe is the same guard the orphan record carries, for the same reason:
+// migrate runs on every Load and the notices are PERSISTED, so a message
+// appended unconditionally would stack up one copy per read of a config that
+// happens to have kept its old shape. Clearing ValveKeys makes a repeat
+// unreachable by today's one caller — but "unreachable because the only caller
+// happens to clear its input first" is not a property worth relying on in the
+// place a second caller would be added.
+func (c *Config) notice(msg string) {
+	for _, have := range c.Notices {
+		if have == msg {
+			return
+		}
+	}
+	c.Notices = append(c.Notices, msg)
 }
 
 // maskSecret renders enough of a key to recognise it and not enough to use it.

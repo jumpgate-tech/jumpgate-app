@@ -1085,6 +1085,22 @@ func (s *Server) handleGatewayCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// The same slot-filling the update path does, for the same reason and with
+	// one more: validateGatewayConfig does NOT reject a ${...} — url.Parse is
+	// perfectly happy with braces in a path — so a gateway created with an
+	// unfilled slot would store one, and then every later edit would 400 on the
+	// update path's refusal, over an upstream the operator never touched.
+	// Creating a config the app will not let you save again is worse than
+	// refusing it here.
+	keyCfg, err := s.loadConfig()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := resolveUpstreamKeys(&gwCfg, providerKeys(keyCfg)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// Only validate a config that has something in it. An empty one is the
 	// intended starting state, and rendering it would fail on "no networks" —
 	// a true statement, but not a reason to refuse to create the gateway.

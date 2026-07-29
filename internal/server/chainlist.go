@@ -38,6 +38,12 @@ import (
 // would rather wait than retry.
 const chainlistTimeout = 45 * time.Second
 
+// minRedactableKey is the shortest key value redactKeys will substitute back
+// out. Every real provider key clears it comfortably — vk_demo's siblings are
+// 35 characters, an Infura project id is 32 — while a value below it is far
+// likelier to collide with ordinary URL text than to be a secret worth hiding.
+const minRedactableKey = 8
+
 // chainlistEndpoint is one candidate as the UI needs it: the URL, whether it
 // is usable, and — when it is not — why not, in words written for an
 // operator.
@@ -116,7 +122,12 @@ func (s *Server) handleChainlist(w http.ResponseWriter, r *http.Request) {
 
 	out := chainlistResponse{ChainID: res.ChainID, Source: string(res.Source)}
 	if res.FetchErr != nil {
-		out.FetchError = res.FetchErr.Error()
+		// Redacted like the other two string fields. A fetch error quotes the
+		// FEED url, never an endpoint, so there is no key in it today — but
+		// that is a property of chainlist.Fetch, not of this line, and every
+		// URL-bearing field leaving here should be safe structurally rather
+		// than by something else's current behaviour.
+		out.FetchError = redactKeys(res.FetchErr.Error(), keys)
 	}
 	for _, ep := range res.Endpoints {
 		e := chainlistEndpoint{
@@ -176,13 +187,21 @@ func providerKeys(cfg config.Config) map[string]string {
 // Values are replaced longest-first so that one key which happens to contain
 // another cannot leave a fragment behind, and so the result does not depend on
 // map order.
+//
+// Values shorter than minRedactableKey are left alone. Longest-first handles a
+// value that contains another value, but not a value that turns up inside a
+// placeholder NAME already substituted in: with {"X": "API"} in play,
+// "${INFURA_API_KEY}" would come out as "${INFURA_${X}_KEY}", which Resolve
+// then cannot parse, so the URL the client posts back is refused. Nothing that
+// short is a real provider key — the failure it would cause is certain and the
+// leak it would prevent is imaginary.
 func redactKeys(s string, keys map[string]string) string {
 	if s == "" || len(keys) == 0 {
 		return s
 	}
 	names := make([]string, 0, len(keys))
 	for name, v := range keys {
-		if v != "" {
+		if len(v) >= minRedactableKey {
 			names = append(names, name)
 		}
 	}

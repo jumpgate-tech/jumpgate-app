@@ -1403,6 +1403,77 @@ func TestSettingsProviderKeysPatchSemantics(t *testing.T) {
 	}
 }
 
+// A name that is not a ${...} slot is refused on the way in. Storing it would
+// list it in providerKeysSet as though it were usable, and redactKeys would
+// emit "${bad name}" — which Resolve cannot parse, so the URL the client posts
+// back is refused on save, blaming a slot the operator never typed.
+func TestSettingsRefusesAProviderKeyNameThatIsNotAPlaceholder(t *testing.T) {
+	a := newAPITestServer(t)
+
+	for _, bad := range []string{"bad name", "INFURA-API-KEY", "${INFURA_API_KEY}", ""} {
+		res := a.do(t, "PUT", "/api/settings", map[string]any{
+			"providerKeys": map[string]string{bad: "sk_some_real_looking_key"},
+		})
+		if res.StatusCode != http.StatusBadRequest {
+			res.Body.Close()
+			t.Errorf("name %q: got %d, want 400", bad, res.StatusCode)
+			continue
+		}
+		body := decodeJSON[errorDetail](t, res)
+		if !strings.Contains(body.Error, "letters, digits and underscores") {
+			t.Errorf("name %q: the refusal must state the rule: %q", bad, body.Error)
+		}
+	}
+
+	// And nothing was half-applied: a request is checked before it is written.
+	onDisk, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if len(onDisk.ProviderKeys) != 0 {
+		t.Errorf("a refused request still stored something: %+v", onDisk.ProviderKeys)
+	}
+}
+
+// A rejected name must not take a valid one in the same request with it — the
+// check runs over the whole map before anything is written, so the operator
+// retries a request they can reason about rather than a half-applied one.
+func TestSettingsRefusesTheWholeRequestOnOneBadName(t *testing.T) {
+	a := newAPITestServer(t)
+
+	res := a.do(t, "PUT", "/api/settings", map[string]any{
+		"providerKeys": map[string]string{"INFURA_API_KEY": "sk_good", "bad name": "sk_bad"},
+	})
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", res.StatusCode)
+	}
+
+	onDisk, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if len(onDisk.ProviderKeys) != 0 {
+		t.Errorf("the valid half of a refused request was applied: %+v", onDisk.ProviderKeys)
+	}
+}
+
+// providerKeysSet is an array even when empty. A nil slice serialises as JSON
+// null, which the UI would have to guard on every read.
+func TestSettingsProviderKeysSetIsAlwaysAnArray(t *testing.T) {
+	a := newAPITestServer(t)
+
+	res := a.do(t, "GET", "/api/settings", nil)
+	defer res.Body.Close()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(raw), `"providerKeysSet":[]`) {
+		t.Errorf("providerKeysSet must be [] and not null: %s", raw)
+	}
+}
+
 // ---------------------------------------------------------------------
 // network diagnostics
 // ---------------------------------------------------------------------

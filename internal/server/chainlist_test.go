@@ -304,6 +304,11 @@ func TestHandleChainlist_AnUnknownSlotIsRejectedByName(t *testing.T) {
 // because VALVE_API_KEY falls back to the shared demo key — the same zero-setup
 // guarantee catalog.KnownSet makes. A default that only applied once an
 // operator had visited Settings would not be a default.
+//
+// The demo key is BELOW minRedactableKey and is deliberately not redacted: it
+// is a published constant shipped in this binary, not a secret, and redaction
+// exists for secrets. The endpoint still round-trips — the resolved URL the
+// client posts back has no slot left to fill, so the save path stores it as-is.
 func TestHandleChainlist_ValveSlotResolvesWithNoSetupAtAll(t *testing.T) {
 	const chainID = 369
 
@@ -318,22 +323,65 @@ func TestHandleChainlist_ValveSlotResolvesWithNoSetupAtAll(t *testing.T) {
 
 	a := chainlistServer(t, d)
 
+	body := decode[chainlistResponse](t, a.do(t, "GET", "/api/chainlist/369", nil))
+	if body.Live != 1 {
+		t.Fatalf("valve's slot must resolve with no key stored: %+v", body.Endpoints)
+	}
+	if !strings.Contains(body.Endpoints[0].URL, catalog.DefaultValveKey) {
+		t.Errorf("url = %q, want the demo key filled in", body.Endpoints[0].URL)
+	}
+}
+
+// An operator's OWN valve key is long, so it is redacted like any other — the
+// zero-setup default being public does not make a real key public.
+func TestHandleChainlist_AnOperatorsOwnValveKeyIsRedacted(t *testing.T) {
+	const (
+		chainID = 369
+		mine    = "vk_ThisIsAnOperatorsRealValveKey"
+	)
+
+	upstream := rpcStub(t, chainID)
+	templated := upstream.URL + "/rpc/${VALVE_API_KEY}/evm/369"
+
+	feed := feedStub(t, []chainlist.Chain{{ChainID: chainID, Name: "PulseChain", RPC: []string{templated}}})
+	d := chainlist.New()
+	d.FeedURL = feed.URL
+	d.ProbeWS = false
+	d.ProbeTimeout = 3 * time.Second
+
+	a := chainlistServer(t, d)
+	seedProviderKey(t, config.ValveKeyPlaceholder, mine)
+
 	res := a.do(t, "GET", "/api/chainlist/369", nil)
 	defer res.Body.Close()
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
-	if strings.Contains(string(raw), catalog.DefaultValveKey) {
-		t.Errorf("even the demo key is redacted, so one rule covers every slot: %s", raw)
+	if strings.Contains(string(raw), mine) {
+		t.Fatalf("the operator's own valve key was serialised to the browser: %s", raw)
+	}
+}
+
+// redactKeys must not mangle a placeholder it has already emitted. A key value
+// short enough to occur inside a placeholder NAME would turn
+// "${INFURA_API_KEY}" into "${INFURA_${X}_KEY}", which Resolve cannot parse —
+// so the URL the client posts back would be refused on save. Nothing that short
+// is a real key, so short values are left alone.
+func TestRedactKeys_AShortValueDoesNotMangleAPlaceholderItAlreadyEmitted(t *testing.T) {
+	keys := map[string]string{
+		"X":              "API",
+		"INFURA_API_KEY": "sk_infura_a_real_length_key",
 	}
 
-	var body chainlistResponse
-	if err := json.Unmarshal(raw, &body); err != nil {
-		t.Fatalf("decode body: %v", err)
+	got := redactKeys("https://mainnet.infura.io/v3/sk_infura_a_real_length_key", keys)
+
+	if want := "https://mainnet.infura.io/v3/${INFURA_API_KEY}"; got != want {
+		t.Errorf("redactKeys = %q, want %q", got, want)
 	}
-	if body.Live != 1 {
-		t.Fatalf("valve's slot must resolve with no key stored: %+v", body.Endpoints)
+	// And the short one is inert rather than shredding ordinary URL text.
+	if got := redactKeys("https://rpc.example.com/API/v1", keys); got != "https://rpc.example.com/API/v1" {
+		t.Errorf("a short value rewrote ordinary URL text: %q", got)
 	}
 }
 

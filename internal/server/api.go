@@ -1440,11 +1440,20 @@ type settingsResponse struct {
 	ProviderKeysSet []string `json:"providerKeysSet"`
 }
 
+// placeholderNamePattern is the name shape chainlist's ${...} slot accepts. It
+// is duplicated here rather than exported from chainlist because this is an
+// INPUT rule ("what may be stored") and that one is a parsing rule ("what is
+// recognised in a feed URL"); they agree today and are allowed to diverge.
+var placeholderNamePattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
 func settingsResponseFrom(c config.Config) settingsResponse {
 	out := settingsResponse{
 		AIProvider: c.AIProvider,
 		AIKeySet:   c.AIKey != "",
 		RefRPCBase: c.RefRPCBase,
+		// Never nil: a nil slice serialises as JSON null, and the UI should be
+		// able to iterate the field without a guard.
+		ProviderKeysSet: []string{},
 	}
 	for name, v := range c.ProviderKeys {
 		if strings.TrimSpace(v) != "" {
@@ -1490,6 +1499,20 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Names are checked BEFORE anything is written, so a request carrying one
+	// bad name does not half-apply. A name that is not a placeholder is not a
+	// key that merely fails to work: it would be listed in providerKeysSet as
+	// though it were usable, and redactKeys would emit "${bad name}" — which
+	// Resolve then cannot parse, so the URL the client posts back is refused on
+	// save, blaming a slot the operator never typed.
+	for name := range req.ProviderKeys {
+		if !placeholderNamePattern.MatchString(strings.TrimSpace(name)) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf(
+				"%q is not a provider key name — a name matches the ${...} slot the chain feed uses, so it may hold only letters, digits and underscores (for example INFURA_API_KEY)", name))
+			return
+		}
+	}
+
 	cfg, err := s.updateConfig(func(c *config.Config) error {
 		if req.AIProvider != nil {
 			c.AIProvider = *req.AIProvider
@@ -1502,9 +1525,6 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		for name, v := range req.ProviderKeys {
 			name = strings.TrimSpace(name)
-			if name == "" {
-				continue
-			}
 			v = strings.TrimSpace(v)
 			if v == "" {
 				delete(c.ProviderKeys, name)

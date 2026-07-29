@@ -883,6 +883,85 @@ func TestGatewayPutConfig_FillsAProviderSlotFromTheStoredKey(t *testing.T) {
 	}
 }
 
+// Create fills the slot too. It has to: validateGatewayConfig does NOT reject a
+// ${...} — url.Parse is happy with braces in a path — so a gateway created with
+// an unfilled slot would store one, and then EVERY later edit would 400 on the
+// update path's refusal, over an upstream the operator never touched and cannot
+// reach from the UI. A config the app will not let you save again is worse than
+// a refusal at creation.
+func TestGatewayCreate_FillsAProviderSlotFromTheStoredKey(t *testing.T) {
+	a := gatewayServer(t)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.ProviderKeys = map[string]string{"INFURA_API_KEY": "sk_infura_secret"}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+			{ID: "public-1-1", Kind: catalog.UpstreamExternal, Endpoint: "https://mainnet.infura.io/v3/${INFURA_API_KEY}"},
+		}}},
+	})
+
+	stored, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	gw, ok := stored.FindGateway("default")
+	if !ok {
+		t.Fatal("the gateway was not created")
+	}
+	got := gw.Config.Networks[0].Upstreams[0].Endpoint
+	if got != "https://mainnet.infura.io/v3/sk_infura_secret" {
+		t.Fatalf("stored endpoint = %q, want the slot filled in at creation", got)
+	}
+
+	// The gateway it created must still be editable. This is the whole point:
+	// an unfilled slot stored at creation would make every later save 400.
+	res := a.do(t, "PUT", "/api/gateways/default/config", gw.Config)
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(res.Body)
+		t.Fatalf("re-saving a created gateway: got %d, want 200: %s", res.StatusCode, raw)
+	}
+}
+
+// The same refusal on the create path, so an unfillable slot never reaches
+// storage by either door.
+func TestGatewayCreate_RefusesASlotItCannotFill(t *testing.T) {
+	a := gatewayServer(t)
+
+	res := a.do(t, "POST", "/api/gateways", map[string]any{
+		"id":        "default",
+		"placement": map[string]string{"targetId": "local", "backend": "docker"},
+		"config": catalog.GatewayConfig{
+			Port: 4100,
+			Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+				{ID: "public-1-1", Kind: catalog.UpstreamExternal, Endpoint: "https://mainnet.infura.io/v3/${INFURA_API_KEY}"},
+			}}},
+		},
+	})
+	if res.StatusCode != http.StatusBadRequest {
+		defer res.Body.Close()
+		raw, _ := io.ReadAll(res.Body)
+		t.Fatalf("got %d, want 400: %s", res.StatusCode, raw)
+	}
+	body := decode[errorDetail](t, res)
+	if !strings.Contains(body.Error, "INFURA_API_KEY") {
+		t.Errorf("the refusal must name the key to go get: %q", body.Error)
+	}
+
+	stored, _ := config.Load()
+	if len(stored.Gateways) != 0 {
+		t.Errorf("a gateway that could never be saved again was created anyway: %+v", stored.Gateways)
+	}
+}
+
 // A slot with no key is REFUSED rather than stored. A URL with a literal ${...}
 // in it looks configured and answers nothing, which is the same failure
 // chainlist.Resolve exists to prevent — and the refusal names the key to go get.
