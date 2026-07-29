@@ -109,6 +109,13 @@ type Config struct {
 	AIProvider string `json:"aiProvider"` // ""|gemini|groq|ollama
 	AIKey      string `json:"aiKey"`
 	RefRPCBase string `json:"refRpcBase"` // default: defaultRefRPCBase
+
+	// ValveKeys is the valve API key per chain id. The key is a PATH segment of
+	// valve's unified endpoint, and a key's entitlements are a per-chain matter,
+	// so one global key could express neither "different keys per chain" nor
+	// "valve on this chain but not that one". Absent, catalog.DefaultValveKey
+	// (the shared demo key) is used.
+	ValveKeys map[int]string `json:"valveKeys,omitempty"`
 }
 
 // DefaultGatewayID is the id given to a gateway migrated up from the old

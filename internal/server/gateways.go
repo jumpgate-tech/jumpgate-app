@@ -38,6 +38,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -293,6 +294,10 @@ func (s *Server) registerGatewayRoutes(mux *http.ServeMux) {
 	// eRPC's own selection state. One scrape folded twice, uncached like
 	// traffic and for the same reason. See analytics.go.
 	mux.HandleFunc("GET /api/gateways/{gid}/analytics", s.handleGatewayAnalytics)
+	// The hardcoded, measured known set for one chain, with what this gateway
+	// already has marked so the count offered is the count that lands. GET
+	// because it reads: no key is written here, only reported. See knownset.go.
+	mux.HandleFunc("GET /api/gateways/{gid}/knownset/{chainId}", s.handleKnownSet)
 	mux.HandleFunc("POST /api/gateways/{gid}/{action}", s.handleGatewayAction)
 
 	// A leftover container a merge stopped managing but did not stop — see
@@ -323,6 +328,77 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) (config.Config,
 		return config.Config{}, config.Gateway{}, false
 	}
 	return cfg, gw, true
+}
+
+// ---------------------------------------------------------------------
+// GET /api/gateways/{gid}/knownset/{chainId}
+// ---------------------------------------------------------------------
+
+// knownSetEndpoint is one entry in the offered set, with AlreadyAdded so the
+// UI can grey out what would be a duplicate rather than let the operator add
+// it twice.
+type knownSetEndpoint struct {
+	URL          string `json:"url"`
+	Provider     string `json:"provider"`
+	WebSocket    bool   `json:"websocket"`
+	Archive      bool   `json:"archive"`
+	AlreadyAdded bool   `json:"alreadyAdded"`
+}
+
+type knownSetResponse struct {
+	Endpoints []knownSetEndpoint `json:"endpoints"`
+	// Key is the key the set was resolved with — the stored per-chain key, or
+	// catalog.DefaultValveKey when none is stored.
+	Key string `json:"key"`
+	// UsingDefaultKey says Key is the shared demo key, not one of the
+	// operator's own, so the UI can point at the reason valve's entry is the
+	// least reliable one in the set.
+	UsingDefaultKey bool `json:"usingDefaultKey"`
+}
+
+// handleKnownSet offers the hardcoded set for one chain, marking what this
+// gateway already has so the count the operator sees before clicking matches
+// what actually lands.
+func (s *Server) handleKnownSet(w http.ResponseWriter, r *http.Request) {
+	gid := r.PathValue("gid")
+	chainID, err := strconv.Atoi(r.PathValue("chainId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "chain id must be a number")
+		return
+	}
+	cfg, err := s.loadConfig()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	gw, ok := cfg.FindGateway(gid)
+	if !ok {
+		writeErrorDetail(w, http.StatusNotFound, "no gateway "+gid, "", codeGatewayNotFound)
+		return
+	}
+
+	have := map[string]bool{}
+	for _, n := range gw.Config.Networks {
+		if n.ChainID != chainID {
+			continue
+		}
+		for _, u := range n.Upstreams {
+			have[u.Endpoint] = true
+		}
+	}
+
+	key := cfg.ValveKeys[chainID]
+	out := knownSetResponse{Key: key, UsingDefaultKey: key == ""}
+	if out.UsingDefaultKey {
+		out.Key = catalog.DefaultValveKey
+	}
+	for _, e := range catalog.KnownSet(chainID, key) {
+		out.Endpoints = append(out.Endpoints, knownSetEndpoint{
+			URL: e.URL, Provider: e.Provider, WebSocket: e.WebSocket,
+			Archive: e.Archive, AlreadyAdded: have[e.URL],
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // ---------------------------------------------------------------------
