@@ -126,10 +126,18 @@ global key cannot express either. The stored shape is therefore a key per chain 
 `vk_demo` as the fallback when none is set. The app already collects a free `vk_` key for
 snapshots (`catalog/snapshot.go`), so the input and its wording are established.
 
-`vk_demo` is a shared quota. The failure mode if it runs dry is that **valve's own
-endpoint becomes the least reliable entry in a set that lists it first**, so the UI names
-the key in use per chain and says plainly that a free key of your own removes the shared
-limit.
+**Correction (2026-07-28, measured):** an earlier version of this section claimed
+`vk_demo` was a shared quota that could run dry. That was inferred from the word *demo*
+and never verified. Measured: `x-valve-tier: FULL`, no rate-limit headers, 20/20
+sequential requests answered, and a bogus key returns `401` — so it is a real credential
+on the full tier. The claim is withdrawn and the UI copy that repeated it is wrong.
+
+**This whole section is superseded by
+`2026-07-28-api-key-templates-design.md`.** The per-chain key was justified only by
+valve's key sitting in a URL path; as a general rule it is wrong, because a provider key
+is an account rather than a chain. valve's endpoint becomes an API-key template like
+Infura's, keys are stored per placeholder name, and `vk_demo` becomes the shipped default
+value for `${VALVE_API_KEY}` — preserving the zero-setup property this section wanted.
 
 ## 6. Public upstreams are not fallbacks when they are all you have
 
