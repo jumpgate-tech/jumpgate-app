@@ -632,29 +632,46 @@ export function renderRPC(root: HTMLElement): () => void {
     for (let i = 0; i < SET_SIZE; i++) {
       segs += `<span class="seg${i < filled ? ` seg-on seg-${tone}` : ""}"></span>`;
     }
-    const over = count > SET_SIZE ? `, ${count - SET_SIZE} beyond the set` : "";
+    // "5 of 4" reads as an arithmetic bug at a glance, and a reader who has to
+    // hover to find out it is not one has already lost the second the bar was
+    // supposed to save. Past the set size the label states the count and says
+    // what the four is, in the open.
+    const over = count > SET_SIZE;
+    const label = over ? `${count} (set is ${SET_SIZE})` : `${count} of ${SET_SIZE}`;
     return `
-      <span class="segs" title="${count} upstream${count === 1 ? "" : "s"} configured${over}. valve's set for a chain is ${SET_SIZE}.">${segs}</span>
-      <span class="segs-n">${count} of ${SET_SIZE}</span>
+      <span class="segs" title="${count} upstream${count === 1 ? "" : "s"} configured${
+        over ? `, ${count - SET_SIZE} beyond the set` : ""
+      }. valve's set for a chain is ${SET_SIZE}.">${segs}</span>
+      <span class="segs-n">${label}</span>
     `;
   }
 
-  // chainVerdict is the one sentence, DERIVED — never written per chain. The
-  // rules are ordered by how completely the gap stops something working, so a
-  // chain that matches several says the worst one:
+  // chainVerdict is the one sentence, DERIVED — never written per chain.
   //
-  //   nothing dialable    every call on this path fails
-  //   no ws:// upstream   eth_subscribe fails outright, whatever else works
-  //   one upstream        the chain is one outage from gone
-  //   nothing local       it works, but only while somebody else's box does
+  // The rules are ordered by WHAT IS ALREADY FAILING before what merely might,
+  // and within that by how invisible the fact is on any single endpoint row:
   //
-  // Every one of them is a CONFIGURATION fact, which is what makes them a
-  // resilience readout. Traffic share is deliberately not among them: "your
-  // own endpoint is being bypassed" is a real problem and a measured one, but
-  // it is not an answer to "could this chain survive an outage", and letting it
-  // occupy the row's one sentence would mean a chain with four endpoints and a
-  // node of its own reads as degraded. That signal stays where it is measured —
-  // amber on the endpoint's own share, one line below.
+  //   nothing dialable    every call on this path fails, now
+  //   no ws:// upstream   every eth_subscribe fails, now, on a chain that
+  //                       otherwise looks perfectly healthy — and no endpoint
+  //                       row can say so, because it is a property of the SET
+  //   one upstream        nothing is failing yet; one outage ends the chain
+  //   nothing local       nothing is failing yet; you are relying entirely on
+  //                       other people's boxes
+  //   an unusable one     already failing, but it is the one gap the rows
+  //                       beneath already state for themselves with a red dot
+  //                       and an "unusable" badge, so it is checked last —
+  //                       and it exists to stop the OK sentence being reached
+  //                       by a chain whose redundancy is only nominal
+  //
+  // Every one of them is a CONFIGURATION or REACHABILITY fact, which is what
+  // makes them a resilience readout. Traffic share is deliberately not among
+  // them: "your own endpoint is being bypassed" is a real problem and a
+  // measured one, but it is not an answer to "could this chain survive an
+  // outage", and letting it occupy the row's one sentence would mean a chain
+  // with four endpoints and a node of its own reads as degraded. That signal
+  // stays where it is measured — amber on the endpoint's own share, one line
+  // below.
   //
   // A chain in good shape gets a sentence too. A surface that only speaks when
   // something is wrong teaches people to stop reading it, and "this one is
@@ -668,18 +685,31 @@ export function renderRPC(root: HTMLElement): () => void {
       return { tone: "bad", html: "No upstream here can be dialed, so every call on this path fails." };
     }
     if (!ups.some(isWebSocketUpstream)) {
+      // The rows underneath can carry an un-struck WS tag and still be right:
+      // the prober asks the HOST whether it will upgrade, and this asks what
+      // eRPC was actually given. An endpoint that speaks WebSocket perfectly
+      // well, configured as https://, is dialed as https:// — eRPC has no
+      // separate flag to say otherwise.
+      //
+      // That reconciliation is IN THE SENTENCE, not only in the tooltip below
+      // it. Naming the schemes actually configured is what turns an apparent
+      // contradiction with the tag row into a statement the reader can act on,
+      // and it has to survive having no pointer: touch, keyboard, and a screen
+      // reader all get it, because it is text.
+      const schemes = configuredSchemes(ups);
+      const named = schemes.length
+        ? ` — every upstream here is configured as ${schemes
+            .map((s) => `<code>${escapeHtml(s)}://</code>`)
+            .join(" or ")}.`
+        : ".";
       return {
         tone: "warn",
-        html: "No WebSocket upstream, so <code>eth_subscribe</code> fails on this chain.",
-        // The rows underneath can carry an un-struck WS tag and still be
-        // right: the prober asks the HOST whether it will upgrade, and this
-        // asks what eRPC was actually given. An endpoint that speaks WebSocket
-        // perfectly well, configured as https://, is dialed as https:// —
-        // eRPC has no separate flag to say otherwise.
+        html: `No WebSocket upstream, so <code>eth_subscribe</code> fails on this chain${named}`,
         why:
           "eRPC infers WebSocket from the endpoint's scheme and has no separate setting, " +
           "so a chain configured entirely with http:// or https:// upstreams refuses every " +
-          "eth_subscribe — even where the same host would accept a wss:// connection.",
+          "eth_subscribe — even where the same host would accept a wss:// connection. That " +
+          "is why an endpoint below can be tagged WS and this still be true.",
       };
     }
     if (ups.length === 1) {
@@ -687,6 +717,23 @@ export function renderRPC(root: HTMLElement): () => void {
     }
     if (!ups.some((u) => u.local)) {
       return { tone: "warn", html: "No node of your own serves this chain." };
+    }
+    // Redundancy that cannot answer is not redundancy. serviceable only says
+    // SOMETHING here resolves, and both the count and "one of them yours" would
+    // otherwise happily be satisfied by an upstream carrying a problem — a
+    // de-registered devnet is local, counted, and dead. Saying "this chain can
+    // lose any one and still answer" above a row with a red dot on it is the
+    // page contradicting itself in the one direction that costs something.
+    const broken = ups.filter((u) => !!u.problem);
+    if (broken.length > 0) {
+      const usable = ups.length - broken.length;
+      return {
+        tone: "warn",
+        html:
+          `${broken.length} of these ${ups.length} endpoints ${broken.length === 1 ? "is" : "are"} unusable, so ` +
+          `${usable === 1 ? "only one can" : `only ${usable} can`} actually answer — ` +
+          `the segments above count what is configured, not what is working.`,
+      };
     }
     return {
       tone: "ok",
@@ -700,6 +747,19 @@ export function renderRPC(root: HTMLElement): () => void {
   // eth_subscribe with ErrNoWsUpstreamAvailable however healthy it looks.
   function isWebSocketUpstream(u: api.UpstreamView): boolean {
     return /^wss?:\/\//i.test((u.endpoint ?? "").trim());
+  }
+
+  // configuredSchemes lists the distinct schemes a chain's upstreams are dialed
+  // with, so the no-WebSocket sentence can name what they ARE rather than only
+  // what they are not. An upstream whose endpoint has not resolved yet
+  // contributes nothing rather than an empty entry.
+  function configuredSchemes(ups: api.UpstreamView[]): string[] {
+    const seen = new Set<string>();
+    for (const u of ups) {
+      const m = /^([a-z][a-z0-9+.-]*):\/\//i.exec((u.endpoint ?? "").trim());
+      if (m) seen.add(m[1].toLowerCase());
+    }
+    return [...seen].sort();
   }
 
   // surfaceHead carries the one control that acts on the whole table — a
