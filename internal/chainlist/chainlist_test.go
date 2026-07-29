@@ -243,8 +243,8 @@ func TestCandidates(t *testing.T) {
 			},
 			wantKinds: map[string]Kind{"https://cloudflare-eth.com": KindHTTP},
 			wantReject: map[string]string{
-				"https://mainnet.infura.io/v3/${INFURA_API_KEY}":  "template",
-				"wss://mainnet.infura.io/ws/v3/${INFURA_API_KEY}": "template",
+				"https://mainnet.infura.io/v3/${INFURA_API_KEY}":  "infura_api_key",
+				"wss://mainnet.infura.io/ws/v3/${INFURA_API_KEY}": "infura_api_key",
 			},
 			wantOrder: []string{
 				"https://mainnet.infura.io/v3/${INFURA_API_KEY}",
@@ -293,7 +293,7 @@ func TestCandidates(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Candidates(tt.rpcs)
+			got := Candidates(tt.rpcs, nil)
 
 			if tt.wantOrder != nil {
 				if !equalStrings(urlsOf(got), tt.wantOrder) {
@@ -724,7 +724,7 @@ func TestVendored(t *testing.T) {
 		}
 		// A vendored snapshot must itself survive the candidate filter: no
 		// templated URLs, no unclassifiable schemes.
-		for _, ep := range Candidates(got) {
+		for _, ep := range Candidates(got, nil) {
 			if ep.Status != StatusPending {
 				t.Errorf("Vendored(%d): %q would be rejected: %s", chainID, ep.URL, ep.Reason)
 			}
@@ -801,5 +801,34 @@ func TestDiscover_ContextCancellation(t *testing.T) {
 
 	if _, err := d.Discover(ctx, 369); err == nil {
 		t.Fatal("Discover with a cancelled context: want an error, got nil")
+	}
+}
+
+// A provider slot the app can fill is an endpoint, not a dead end — and it is
+// then probed like any other, because it is trusted for answering, never for
+// resolving.
+func TestCandidatesResolvesTemplatesItHasKeysFor(t *testing.T) {
+	keys := map[string]string{"INFURA_API_KEY": "abc123"}
+	got := Candidates([]string{
+		"https://mainnet.infura.io/v3/${INFURA_API_KEY}",
+		"https://x.example/${ALCHEMY_API_KEY}",
+	}, keys)
+
+	if len(got) != 2 {
+		t.Fatalf("want 2 endpoints, got %d", len(got))
+	}
+	if got[0].Status != StatusPending {
+		t.Errorf("a resolved template must be probed, got %s (%s)", got[0].Status, got[0].Reason)
+	}
+	if got[0].URL != "https://mainnet.infura.io/v3/abc123" {
+		t.Errorf("resolved URL = %q", got[0].URL)
+	}
+	if got[1].Status != StatusRejected {
+		t.Errorf("an unresolvable template stays rejected, got %s", got[1].Status)
+	}
+	// The reason has to name the key, or the operator knows something is
+	// missing without knowing what to go and get.
+	if !strings.Contains(got[1].Reason, "ALCHEMY_API_KEY") {
+		t.Errorf("reason must name the placeholder: %q", got[1].Reason)
 	}
 }
