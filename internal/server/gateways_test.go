@@ -769,6 +769,36 @@ func TestKnownSetUsesAStoredKeyOverTheDefault(t *testing.T) {
 	}
 }
 
+// The redundancy bar's denominator rides on the network view, so it has to be
+// the count "Add valve's set" actually adds for THAT chain — and zero, not
+// four, for a chain valve has never measured. A constant denominator makes the
+// page's own primary action overshoot its target on every chain it knows.
+func TestGatewayListCarriesThePerChainKnownSetSize(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{
+			{ChainID: 1, Upstreams: []catalog.GatewayUpstream{{Endpoint: "https://eth.drpc.org"}}},
+			{ChainID: 369, Upstreams: []catalog.GatewayUpstream{{Endpoint: "https://rpc.pulsechain.com"}}},
+			{ChainID: 31337, Upstreams: []catalog.GatewayUpstream{{Endpoint: "http://127.0.0.1:8545"}}},
+		},
+	})
+
+	body := decode[gatewaysResponse](t, a.do(t, "GET", "/api/gateways", nil))
+	if len(body.Gateways) != 1 {
+		t.Fatalf("want one gateway, got %d", len(body.Gateways))
+	}
+	for _, n := range body.Gateways[0].Networks {
+		want := catalog.KnownSetSize(n.ChainID)
+		if n.KnownSetSize != want {
+			t.Errorf("evm:%d knownSetSize = %d, want %d", n.ChainID, n.KnownSetSize, want)
+		}
+		if n.ChainID == 31337 && n.KnownSetSize != 0 {
+			t.Errorf("a chain with no measured set must report no target, got %d", n.KnownSetSize)
+		}
+	}
+}
+
 func TestKnownSetUnknownGatewayIs404(t *testing.T) {
 	a := gatewayServer(t)
 	res := a.do(t, "GET", "/api/gateways/nope/knownset/1", nil)
