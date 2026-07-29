@@ -94,9 +94,14 @@ type GatewayUpstream struct {
 	// loud failure rather than a gateway that renders and serves nothing.
 	Endpoint string
 
-	// Local marks an upstream the operator runs. Local upstreams are
-	// preferred; every other upstream is deprioritised so it is used only
-	// when the local one cannot serve a request or is down.
+	// Local marks an upstream the operator runs.
+	//
+	// It is preference RELATIVE TO A LOCAL UPSTREAM, not an absolute ranking:
+	// a non-local upstream is rendered tier:fallback at a 0.2 score multiplier
+	// only when its network also has a local one for it to fall back TO. On a
+	// chain served entirely by public endpoints there is nothing to prefer, so
+	// every upstream goes in at full weight — deprioritising all of them would
+	// tell eRPC to avoid the only paths that exist. See RenderGatewayConfig.
 	Local bool
 	// RecentOnly bounds this upstream to recent history, for a full/pruned
 	// node that cannot answer historical state.

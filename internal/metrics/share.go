@@ -8,13 +8,20 @@ import (
 // Intent is what the routing configuration says an upstream should carry.
 //
 // It mirrors catalog.GatewayUpstream just enough for this comparison:
-// Upstream is the rendered erpc.yaml id, and Local is whether it landed in
-// the preferred tier (catalog.GatewayUpstream.Local) or the 0.2-score
-// fallback tier every other upstream gets (see catalog's
-// gatewayConfigTemplate, "scoreMultipliers: - overall: 0.2"). This package
-// does not import catalog to build it — a caller assembles []Intent from
-// whatever GatewayConfig it already has, keeping this package's only
-// dependency on the shape of that decision, not on catalog itself.
+// Upstream is the rendered erpc.yaml id, and Local is
+// catalog.GatewayUpstream.Local — whether the operator runs it.
+//
+// Local is a preference relative to the rest of ITS OWN NETWORK, which is why
+// Shares below reads the whole []Intent rather than each flag alone: a
+// non-local upstream is rendered into the 0.2-score fallback tier (catalog's
+// gatewayConfigTemplate, "scoreMultipliers: - overall: 0.2") only when that
+// network also has a local upstream. On a network with none, every upstream
+// goes in at full weight and intent spreads evenly across all of them — see
+// the default arm of the switch in Shares.
+//
+// This package does not import catalog to build it — a caller assembles
+// []Intent from whatever GatewayConfig it already has, keeping this package's
+// only dependency on the shape of that decision, not on catalog itself.
 type Intent struct {
 	Upstream string
 	Local    bool
