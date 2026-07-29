@@ -1036,84 +1036,137 @@ details.advanced summary {
   margin: 0.2rem 0;
 }
 
-/* --- RPC screen: the three tiers ------------------------------------------
-   The geometry carries the argument. The bar is full width because eRPC
-   fronts everything below it; the chains live INSIDE the bar because "this
-   gateway serves these N networks" is one statement; and the panel under it
-   shows one focused chain's endpoints, not all of them at once.
+/* --- RPC screen: a resilience readout -------------------------------------
 
-   Everything here reuses the existing vocabulary — card, badge, dot,
-   card-selectable's accent-border "this one is chosen" idiom — rather than
-   inventing a second visual language. No fonts, no icon sets, no images: the
-   chips are text, and the only mark on them is the same dot the endpoints
-   card already uses. */
+   COLOUR IS STATE AND NOTHING ELSE on this page. --ok is answering, --warn is
+   degraded or single-path, --bad is down. There is no accent used for emphasis,
+   no gradient and no tint that does not encode a fact: on an operations
+   surface a decorative accent is a lie about state, and the previous version
+   of this screen wore one — a full-width --accent rule that lit up whenever
+   the container was running, which is the least interesting thing the page
+   knows.
 
-.rpc-gateway + .rpc-gateway {
-  margin-top: 1.75rem;
+   Everything here reuses the existing vocabulary — card, badge, dot, the
+   --ok/--warn/--bad triple the banners already use — rather than inventing a
+   second palette. No fonts, no icon sets, no images. */
+
+/* The machine heading exists only when a second machine is managed. One
+   machine hosts one gateway, so with one machine there is nothing to
+   disambiguate and the heading would be chrome. */
+.rpc-machine {
+  font-size: 1rem;
+  margin: 1.75rem 0 0;
 }
 
-.rpc-bar {
-  background: var(--bg-raised);
-  border: 1px solid var(--accent-dim);
-  /* The left rule is the whole "this sits above everything" cue: the panel
-     below is an ordinary card, and the bar is visibly the thing in front. */
-  border-left: 3px solid var(--accent);
-  border-radius: 4px;
-  padding: 0.8rem 1rem;
-  margin: 0.75rem 0 0;
-}
+/* --- the header: infrastructure, quietly ---------------------------------- */
 
-/* A gateway that is not running must not wear the accent that means "this is
-   serving your traffic". */
-.rpc-bar-down {
-  border-color: var(--border);
-  border-left-color: var(--fg-muted);
-}
-
-.rpc-bar-head {
+.rpc-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.75rem 1rem;
   flex-wrap: wrap;
+  padding: 0.6rem 0 0.7rem;
+  border-bottom: 1px solid var(--border);
+  margin: 0.5rem 0 0.75rem;
 }
 
-.rpc-bar-id {
+.rpc-head-id {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
-.rpc-bar-actions {
+.rpc-head-actions {
   display: flex;
   gap: 0.4rem;
   flex-wrap: wrap;
 }
 
-.rpc-bar-actions .btn {
+.rpc-head-actions .btn {
   padding: 0.3rem 0.6rem;
   font-size: 0.78rem;
 }
 
-.rpc-bar-url {
+/* The URL takes the whole second line of the header: it is the one string on
+   this page anybody copies. */
+.rpc-head-url {
+  flex-basis: 100%;
   display: flex;
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
-  margin-top: 0.45rem;
 }
 
-/* --- the Control Surface table -------------------------------------------
+/* --- the attention strip: one place, one line per thing -------------------
 
-   Bands wrap their endpoints, so the routing hierarchy is structural rather
-   than described. This replaced a chip row plus a one-chain panel; the
-   selection model is gone, and with it the .chip rules that served it. */
+   Five separate full-width banners became this. The left rule carries the
+   tone, so a strip of six lines still reads as one region rather than as six
+   boxes pushing the chains off the screen. */
 
+.strip {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin: 0 0 0.75rem;
+  background: var(--bg-raised);
+}
+
+.strip-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.7rem;
+  border-top: 1px solid var(--border);
+  border-left: 3px solid transparent;
+  font-size: 0.85rem;
+}
+
+.strip-line:first-child {
+  border-top: none;
+}
+
+.strip-warn {
+  border-left-color: var(--warn);
+}
+
+.strip-bad {
+  border-left-color: var(--bad);
+}
+
+/* A note is information, not a state claim, so it gets no colour at all —
+   otherwise "install this certificate once" is indistinguishable from "your
+   front is down". */
+.strip-note,
+.strip-note .strip-text {
+  color: var(--fg-muted);
+}
+
+.strip-text {
+  flex: 1 1 20rem;
+}
+
+/* The exact thing to run. It is a code chunk with a Copy beside it because
+   an operator reading this is about to paste it somewhere. */
+.strip-cmd {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0.05rem 0.35rem;
+  word-break: break-all;
+}
+
+/* --- the chains ----------------------------------------------------------- */
+
+/* An ordinary card now. It used to be butted against the bottom edge of the
+   gateway bar with a squared top and a -1px overlap; there is no bar to butt
+   against any more. */
 .rpc-surface {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-  margin-top: -1px;
+  margin-top: 0;
 }
 
 .surface-head {
@@ -1128,9 +1181,9 @@ details.advanced summary {
   margin-right: auto;
 }
 
-/* The table scrolls inside its own box. The page must never scroll
-   sideways — a capability column plus a share column is wide, and a
-   horizontally sliding page loses the gateway bar off the left edge. */
+/* The shared table shell, now used by #/analytics' latency tables only —
+   #/rpc's own chains are sections, not table rows. A table scrolls inside its
+   own box because the page must never scroll sideways. */
 .surface-scroll {
   overflow-x: auto;
 }
@@ -1163,36 +1216,8 @@ table.surface tbody tr:last-child td {
   border-bottom: none;
 }
 
-.col-endpoint {
-  width: 32%;
-  min-width: 14rem;
-}
-
-.col-share {
-  width: 18%;
-  min-width: 9rem;
-}
-
-.col-act {
-  text-align: right;
-  white-space: nowrap;
-}
-
-/* --- the band: one chain, wrapping its endpoints -------------------------- */
-
-tr.band td {
-  background: var(--bg);
-  border-top: 1px solid var(--border);
-  padding: 0.4rem 0.6rem;
-}
-
-.band-inner {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
+/* .band-id / .band-name name a chain on #/analytics' per-chain cards. They
+   outlived #/rpc's band rows, which is where they were introduced. */
 .band-id {
   font-weight: 700;
   color: var(--accent);
@@ -1202,57 +1227,212 @@ tr.band td {
   font-weight: 600;
 }
 
-.band-path,
-.ep-url {
+/* --- the chain row: redundancy first --------------------------------------
+
+   Each chain is a section, not a table row, because the thing that matters
+   about it — the verdict sentence — is prose and a table cell is the wrong
+   shape for prose. The left rule carries the chain's tone: it is the one mark
+   you can scan a column of and count. */
+
+.chains {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.chain {
+  border-left: 3px solid var(--border);
+  padding: 0.1rem 0 0.2rem 0.75rem;
+}
+
+.chain-ok {
+  border-left-color: var(--ok);
+}
+
+.chain-warn {
+  border-left-color: var(--warn);
+}
+
+.chain-bad {
+  border-left-color: var(--bad);
+}
+
+.chain-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.chain-name {
+  font-weight: 600;
+}
+
+/* evm:<id> is the chain's identity as eRPC and every caller spells it — the
+   bare number it used to show is ambiguous the moment a non-EVM chain
+   appears. */
+.chain-key {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--fg);
+}
+
+.chain-path {
   color: var(--fg-muted);
   font-size: 0.78rem;
 }
 
-.band-right {
+.chain-right {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.5rem;
 }
 
-/* A chain eRPC will accept and then fail every call on must not look like a
-   healthy one. */
-tr.band.band-bad .band-id,
-tr.band.band-bad .band-name {
+/* The verdict is a sentence, so it is set as one: full size, not "small",
+   because it is the answer the page exists to give. It inherits the chain's
+   tone through the section class rather than carrying a colour of its own. */
+.chain-verdict {
+  margin: 0.3rem 0 0.45rem;
+  font-size: 0.85rem;
+}
+
+.chain-ok > .chain-verdict {
+  color: var(--fg-muted);
+}
+
+.chain-warn > .chain-verdict {
+  color: var(--warn);
+}
+
+.chain-bad > .chain-verdict {
   color: var(--bad);
 }
 
-.band-warn {
+.chain-verdict code {
+  font-size: 0.8rem;
+}
+
+/* Only the verdict that has evidence behind it offers a cursor for it — see
+   chainVerdict's `why`. */
+.chain-verdict-why {
+  cursor: help;
+}
+
+.chain-note {
+  margin: 0.3rem 0 0;
   color: var(--warn);
   font-size: 0.78rem;
-  margin-top: 0.3rem;
+}
+
+/* --- the redundancy bar: the count as a mark ------------------------------
+
+   Four segments, matching valve's set. Filled is what the chain has, hollow
+   is what it could have — so the gap is a shape rather than a number to
+   subtract. */
+
+.segs {
+  display: inline-flex;
+  gap: 3px;
+  cursor: help;
+}
+
+.seg {
+  width: 1.1rem;
+  height: 9px;
+  border: 1px solid var(--border);
+  border-radius: 1px;
+  background: transparent;
+}
+
+.seg-on {
+  border-color: transparent;
+  background: var(--fg-muted);
+}
+
+.seg-on.seg-ok {
+  background: var(--ok);
+}
+
+.seg-on.seg-warn {
+  background: var(--warn);
+}
+
+.seg-on.seg-bad {
+  background: var(--bad);
+}
+
+.segs-n {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
 }
 
 /* --- endpoint rows -------------------------------------------------------- */
 
-tr.ep:hover td {
+.ups {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.up {
+  display: grid;
+  grid-template-columns: minmax(11rem, 1fr) minmax(10rem, 1.3fr) auto minmax(7rem, auto) auto;
+  align-items: center;
+  column-gap: 0.75rem;
+  row-gap: 0.2rem;
+  padding: 0.35rem 0.4rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.up:hover {
   background: var(--bg-raised);
 }
 
-tr.ep-bad td {
+.up-bad {
   /* The row carries the fault, next to its reason, rather than the card
      carrying one banner for all of them. */
   background: rgba(224, 138, 111, 0.06);
 }
 
-.ep-what {
+.up-what {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  flex-wrap: wrap;
 }
 
-.ep-label {
+.up-label {
   font-weight: 600;
 }
 
-.ep-url {
-  display: block;
+.up-url {
+  color: var(--fg-muted);
+  font-size: 0.78rem;
   word-break: break-all;
+}
+
+.up-acts {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.up-problem {
+  grid-column: 1 / -1;
+}
+
+/* Below the width the five columns need, the row stacks rather than the page
+   scrolling sideways. */
+@media (max-width: 900px) {
+  .up {
+    grid-template-columns: 1fr;
+  }
+
+  .up-acts {
+    text-align: left;
+  }
 }
 
 .btn-tiny {
