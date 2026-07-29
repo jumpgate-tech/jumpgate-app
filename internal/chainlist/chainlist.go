@@ -210,6 +210,12 @@ type Discoverer struct {
 	// Dialer dials the raw connections used for WebSocket probes. Defaults
 	// to a plain net.Dialer.
 	Dialer *net.Dialer
+	// Keys holds provider API keys by placeholder name (e.g.
+	// "INFURA_API_KEY"), used to resolve templated feed URLs into real
+	// endpoints before probing. Nil means no templated URL can be filled in,
+	// so every provider slot is rejected — the same behaviour as before this
+	// field existed.
+	Keys map[string]string
 }
 
 // New returns a Discoverer with the package defaults.
@@ -315,7 +321,7 @@ func (d *Discoverer) Discover(ctx context.Context, chainID int) (Result, error) 
 		rpcs = vendored
 	}
 
-	res.Endpoints = d.probeAll(ctx, chainID, Candidates(rpcs))
+	res.Endpoints = d.probeAll(ctx, chainID, Candidates(rpcs, d.Keys))
 	return res, nil
 }
 
@@ -343,10 +349,15 @@ func (d *Discoverer) rpcsForChain(ctx context.Context, chainID int) ([]string, e
 // operator why an endpoint they expected to see is missing. Everything else
 // comes back StatusPending, ready to probe.
 //
+// keys is provider API keys by placeholder name, used to resolve templated
+// slots like ${INFURA_API_KEY} into real endpoints before probing. A nil or
+// incomplete map is fine — anything left unresolved is rejected, naming the
+// placeholder it needs.
+//
 // Exported because the filtering rules are useful on their own — e.g. to sanity
 // check a hand-written upstream list — and because they are what the tests
 // pin down.
-func Candidates(rpcs []string) []Endpoint {
+func Candidates(rpcs []string, keys map[string]string) []Endpoint {
 	out := make([]Endpoint, 0, len(rpcs))
 	seen := make(map[string]bool, len(rpcs))
 
@@ -359,12 +370,32 @@ func Candidates(rpcs []string) []Endpoint {
 		ep := Endpoint{URL: raw}
 		switch {
 		case isTemplated(raw):
-			// e.g. https://mainnet.infura.io/v3/${INFURA_API_KEY} — a
-			// provider slot, not an endpoint. Mandatory filter: chain 1
-			// alone carries two.
+			// A provider slot. If a key for it is known, fill it in and let
+			// it be probed like anything else — resolving is not evidence,
+			// only answering is. Otherwise reject as before, but name the
+			// key: the old message said an account was required without
+			// saying which, which is the difference between a dead end and
+			// a next step.
+			name := PlaceholderName(raw)
+			if resolved, ok := Resolve(raw, keys); ok {
+				kind := kindOf(resolved)
+				if kind == "" {
+					ep.Status = StatusRejected
+					ep.Reason = "unsupported URL scheme (want http, https, ws or wss)"
+					break
+				}
+				ep.URL = resolved
+				ep.Kind = kind
+				ep.Status = StatusPending
+				break
+			}
 			ep.Kind = kindOf(raw)
 			ep.Status = StatusRejected
-			ep.Reason = "API-key template (contains ${...}); requires a provider account"
+			if name != "" {
+				ep.Reason = "needs " + name + " — add it in Settings"
+			} else {
+				ep.Reason = "API-key template (contains ${...}); requires a provider account"
+			}
 		default:
 			kind := kindOf(raw)
 			if kind == "" {
