@@ -1185,6 +1185,37 @@ export function discoverEndpoints(chainId: number): Promise<ChainlistResult> {
 }
 
 // ---------------------------------------------------------------------
+// known set: valve's own vetted, measured, ordered endpoints per chain
+// (internal/server/knownset.go)
+// ---------------------------------------------------------------------
+
+export interface KnownSetEndpoint {
+  url: string;
+  provider: string;
+  websocket: boolean;
+  archive: boolean;
+  // alreadyAdded is true when this URL is already an upstream on this
+  // gateway's chain — the row is still shown (the count offered has to be
+  // the count that lands), just not offered again.
+  alreadyAdded: boolean;
+}
+
+// KnownSetResponse.endpoints is JSON null (not []) for a chain valve has not
+// measured — callers must coalesce with `?? []` rather than assume an array.
+export interface KnownSetResponse {
+  endpoints: KnownSetEndpoint[] | null;
+  key: string;
+  usingDefaultKey: boolean;
+}
+
+// knownSet is the vetted, ordered set — measured capability, not a live
+// feed — offered before the chainlist probe because it is the vetted
+// default and the feed is the escape hatch.
+export function knownSet(gid: string, chainId: number): Promise<KnownSetResponse> {
+  return request<KnownSetResponse>(`/api/gateways/${encodeURIComponent(gid)}/knownset/${chainId}`);
+}
+
+// ---------------------------------------------------------------------
 // settings
 // ---------------------------------------------------------------------
 

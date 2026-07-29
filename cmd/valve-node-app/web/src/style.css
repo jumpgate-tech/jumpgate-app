@@ -1320,6 +1320,35 @@ tr.ep-bad td {
   border-bottom: 1px dotted var(--fg-muted);
 }
 
+/* --- known-set row tags: capability + already-added ------------------------
+   Reuses .badge's state palette rather than inventing colours: websocket and
+   archive are measured capabilities (--ok, the same "supported" green as
+   .cap), and "already added" is neutral state, not a warning — the row is
+   shown, not hidden, precisely so the count offered is the count that
+   lands. */
+
+.t {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 0.02rem 0.32rem;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  margin-left: 0.25rem;
+}
+
+.t.ws,
+.t.ar {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.t.dup {
+  color: var(--fg-muted);
+  border-color: var(--border);
+}
+
 /* --- share of traffic: actual fill, intended tick ------------------------- */
 
 .share {
