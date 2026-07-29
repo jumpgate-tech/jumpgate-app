@@ -4,11 +4,15 @@ package server
 //
 // This is how "add an endpoint" offers something real for a chain nobody in
 // the fleet runs a node for. chainlist reads the canonical
-// ethereum-lists/chains feed, drops the entries that are provider slots
-// rather than endpoints (${INFURA_API_KEY} and friends — chain 1 alone
-// carries two), and then PROBES what is left with eth_chainId, because the
-// feed is advertising and roughly a third of what it lists for a popular
-// chain is dead or serving a different chain than it claims.
+// ethereum-lists/chains feed, fills the provider slots it finds (${INFURA_API_KEY}
+// and friends — chain 1 alone carries two) from the operator's stored keys, and
+// then PROBES the lot with eth_chainId, because the feed is advertising and
+// roughly a third of what it lists for a popular chain is dead or serving a
+// different chain than it claims. A slot with no key stored is rejected
+// unprobed, naming the key to go and get.
+//
+// The keys never reach the browser: what goes out is the ${PLACEHOLDER} form
+// again — see redactKeys — and the save path fills it back in.
 //
 // The probing is the entire value: offering an operator the raw feed would be
 // offering them a list of upstreams a third of which fail, which is the same
@@ -37,12 +41,6 @@ import (
 // legitimate few seconds, and the caller is a human watching a spinner who
 // would rather wait than retry.
 const chainlistTimeout = 45 * time.Second
-
-// minRedactableKey is the shortest key value redactKeys will substitute back
-// out. Every real provider key clears it comfortably — vk_demo's siblings are
-// 35 characters, an Infura project id is 32 — while a value below it is far
-// likelier to collide with ordinary URL text than to be a secret worth hiding.
-const minRedactableKey = 8
 
 // chainlistEndpoint is one candidate as the UI needs it: the URL, whether it
 // is usable, and — when it is not — why not, in words written for an
@@ -188,20 +186,28 @@ func providerKeys(cfg config.Config) map[string]string {
 // another cannot leave a fragment behind, and so the result does not depend on
 // map order.
 //
-// Values shorter than minRedactableKey are left alone. Longest-first handles a
-// value that contains another value, but not a value that turns up inside a
-// placeholder NAME already substituted in: with {"X": "API"} in play,
-// "${INFURA_API_KEY}" would come out as "${INFURA_${X}_KEY}", which Resolve
-// then cannot parse, so the URL the client posts back is refused. Nothing that
-// short is a real provider key — the failure it would cause is certain and the
-// leak it would prevent is imaginary.
+// The ONE value left alone is catalog.DefaultValveKey: it is a published
+// constant compiled into this binary, not a secret, and the zero-setup story
+// depends on the operator seeing the URL that actually gets dialled when they
+// have configured nothing. This used to be a length test instead, which was the
+// same carve-out written as a generalisation — and it silently exempted any
+// SHORT operator key too, sending a real secret to the browser in a discovery
+// URL, a probe reason or a knownset URL. A short key is a bad key, not a public
+// one.
+//
+// The cost of dropping the length floor is that a very short value can now turn
+// up inside a placeholder NAME already substituted in: with {"X": "API"} stored,
+// "${INFURA_API_KEY}" comes out as "${INFURA_${X}_KEY}", which Resolve cannot
+// parse, so the URL the client posts back is refused on save. That is a visible
+// refusal over a key nobody should have stored; the alternative was a silent
+// leak. Refusing loudly is the better failure.
 func redactKeys(s string, keys map[string]string) string {
 	if s == "" || len(keys) == 0 {
 		return s
 	}
 	names := make([]string, 0, len(keys))
 	for name, v := range keys {
-		if len(v) >= minRedactableKey {
+		if v != "" && v != catalog.DefaultValveKey {
 			names = append(names, name)
 		}
 	}
