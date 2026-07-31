@@ -258,18 +258,65 @@ func TestGatewayPreflight_SystemdRequiresLinuxAndRoot(t *testing.T) {
 	}
 }
 
-func TestGatewayPreflight_BusyPortFails(t *testing.T) {
+// The eRPC HTTP port (and the metrics port) now RECLAIM: a foreign listener is
+// noted but no longer aborts a preflight that has no Run to fix it. Per the
+// direction doc's "Related decision, taken separately", docker/systemd fail
+// loudly and specifically on a REAL collision, so a false "busy" was the worse
+// outcome. Our own gateway is still exempt (see ExemptsOurOwnRunningGateway);
+// this covers the FOREIGN listener case that used to fail here.
+func TestGatewayPreflight_ForeignListenerOnERPCPortNoLongerFails(t *testing.T) {
 	e := dockerReady().script("grep -Ei", executor.Result{
 		Stdout: "tcp   LISTEN 0  4096   127.0.0.1:4100   0.0.0.0:*\n",
 	})
 	step := stepByID(t, mustPlanGateway(t, testGateway(), BackendDocker), "preflight")
 
+	if err := step.Verify(context.Background(), e, &State{}); err != nil {
+		t.Fatalf("a foreign listener on the eRPC port must no longer abort preflight: %v", err)
+	}
+}
+
+// A foreign listener on the eRPC/metrics port is not silently swallowed either:
+// it is announced onto the event stream so the operator knows a port is being
+// reclaimed and why the loud runtime failure (if any) is expected.
+func TestGatewayPreflight_ForeignListenerOnERPCPortIsAnnounced(t *testing.T) {
+	e := dockerReady().script("grep -Ei", executor.Result{
+		Stdout: "tcp   LISTEN 0  4096   127.0.0.1:4100   0.0.0.0:*\n",
+	})
+	events := make(chan Event, 16)
+	st := &State{Events: events}
+	step := stepByID(t, mustPlanGateway(t, testGateway(), BackendDocker), "preflight")
+
+	if err := step.Verify(context.Background(), e, st); err != nil {
+		t.Fatalf("reclaim must not fail preflight: %v", err)
+	}
+	close(events)
+	var announced bool
+	for _, line := range collectLines(events) {
+		if strings.Contains(line, "reclaim") && strings.Contains(line, "127.0.0.1:4100") {
+			announced = true
+		}
+	}
+	if !announced {
+		t.Fatal("want a non-fatal notice naming the reclaimed listener")
+	}
+}
+
+// The HTTPS front port is the deliberate, still-unresolved exception the
+// direction doc carves out: reclaiming it would take down someone else's TLS
+// front and the failure is silent from its owner's side. So a foreign listener
+// on 8443 STILL refuses, with the port and the evidence in the error.
+func TestGatewayPreflight_ForeignListenerOnHTTPSFrontStillRefuses(t *testing.T) {
+	e := caddyReady().script("grep -Ei", executor.Result{
+		Stdout: "tcp   LISTEN 0  4096   0.0.0.0:8443   0.0.0.0:*\n",
+	})
+	step := stepByID(t, mustPlanGateway(t, frontedGateway(), BackendDocker), "preflight")
+
 	err := step.Verify(context.Background(), e, &State{})
 	if err == nil {
-		t.Fatal("want an error when the published port is taken")
+		t.Fatal("want a refusal when a foreign listener holds the HTTPS front port")
 	}
-	if !strings.Contains(err.Error(), "4100") || !strings.Contains(err.Error(), "127.0.0.1:4100") {
-		t.Fatalf("want the port and the evidence in the error, got %v", err)
+	if !strings.Contains(err.Error(), "8443") || !strings.Contains(err.Error(), "0.0.0.0:8443") {
+		t.Fatalf("want the HTTPS port and the evidence in the error, got %v", err)
 	}
 }
 
