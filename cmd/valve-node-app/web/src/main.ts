@@ -1,20 +1,21 @@
-// Hash-routed SPA shell: #/targets, #/rpc, #/analytics/<gid>, #/setup/<id>,
-// #/dash/<id>, #/logs/<id>, #/services/<id>, #/settings. No framework — each
-// screen module renders into a shared content element and returns a cleanup
-// function (closes any EventSource / timers) that main.ts calls before routing
-// away.
+// Hash-routed SPA shell: #/targets, #/rpc, #/analytics/<gid>, #/machine/<id>,
+// #/security/<id>, #/diag/<id>, #/settings. No framework — each screen module
+// renders into a shared content element and returns a cleanup function (closes
+// any EventSource / timers) that main.ts calls before routing away.
+//
+// #/machine/<id> is the collapsed per-machine page (setup + dashboard + logs +
+// devnet as expandable sections). The four routes it replaced — #/setup,
+// #/dash, #/logs, #/services — are kept alive as REDIRECTS to it so existing
+// deep links still land somewhere, preserving the id.
 import "./style.css";
 import { renderAnalytics } from "./analytics";
-import { renderDashboard } from "./dashboard";
-import { renderLogs } from "./logs";
 import { renderDiagnostics } from "./diag";
+import { renderMachine } from "./machine";
 import { renderSecurity } from "./security";
 import { renderSettings } from "./settings";
 import { renderShell } from "./ui";
 import { renderRPC } from "./rpc";
-import { renderServices } from "./services";
 import { renderTargets } from "./targets";
-import { renderWizard } from "./wizard";
 
 type Cleanup = () => void;
 
@@ -34,6 +35,9 @@ function parseHash(): Route {
   if (parts.length === 0) return { screen: "targets" };
   const [screen, rawId] = parts;
   if (
+    screen === "machine" ||
+    // The four former per-machine routes are still parsed (id-scoped) so the
+    // switch below can redirect them to #/machine/<id> with the id intact.
     screen === "setup" ||
     screen === "dash" ||
     screen === "logs" ||
@@ -76,27 +80,26 @@ function route(): void {
   setActiveNav(screen);
 
   switch (screen) {
+    case "machine":
+      if (!id) {
+        location.hash = "#/targets";
+        return;
+      }
+      currentCleanup = mount((root) => renderMachine(root, id));
+      break;
+    // The per-machine routes collapsed into #/machine/<id>. They still parse
+    // (see parseHash) purely so an old deep link can be redirected with its id
+    // preserved — each is now a section of the machine page, not a screen.
     case "setup":
-      if (!id) {
-        location.hash = "#/targets";
-        return;
-      }
-      currentCleanup = mount((root) => renderWizard(root, id));
-      break;
     case "dash":
-      if (!id) {
-        location.hash = "#/targets";
-        return;
-      }
-      currentCleanup = mount((root) => renderDashboard(root, id));
-      break;
     case "logs":
+    case "services":
       if (!id) {
         location.hash = "#/targets";
         return;
       }
-      currentCleanup = mount((root) => renderLogs(root, id));
-      break;
+      location.hash = `#/machine/${encodeURIComponent(id)}`;
+      return;
     case "security":
       if (!id) {
         location.hash = "#/targets";
@@ -110,13 +113,6 @@ function route(): void {
         return;
       }
       currentCleanup = mount((root) => renderDiagnostics(root, id));
-      break;
-    case "services":
-      if (!id) {
-        location.hash = "#/targets";
-        return;
-      }
-      currentCleanup = mount((root) => renderServices(root, id));
       break;
     case "analytics":
       if (!id) {
