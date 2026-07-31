@@ -2,6 +2,7 @@
 // "add server over SSH" form.
 import * as api from "./api";
 import { badge, confirmModal, escapeHtml, footer, onAction } from "./ui";
+import { computeFleetVerdict, renderVerdictLine } from "./verdict";
 
 const LOCAL_TARGET_ID = "local";
 
@@ -66,6 +67,7 @@ export function renderTargets(root: HTMLElement): () => void {
     const hasLocal = targets.some((t) => t.mode === "local");
 
     body.innerHTML = `
+      <div id="fleet-verdict"></div>
       <section class="section">
         <div class="section-head"><h2>Your machines</h2></div>
         ${list}
@@ -76,6 +78,12 @@ export function renderTargets(root: HTMLElement): () => void {
         ${showSSHForm ? sshFormMarkup() : ""}
       </section>
     `;
+
+    // One verdict, above everything: the app opens saying what needs attention
+    // or that nothing does, so the operator never assembles it from the cards
+    // below. Recomputed on every rerender since it reads the same target set.
+    const verdictEl = body.querySelector<HTMLElement>("#fleet-verdict");
+    if (verdictEl) renderVerdictLine(verdictEl, computeFleetVerdict(targets, catalog));
   }
 
   // addOptions renders the ways to add a machine as options that each carry
@@ -259,41 +267,28 @@ function targetCard(t: api.Target, catalog: api.Catalog, canRunNode: boolean, ho
   const modeLabel = t.mode === "local" ? "this machine" : "SSH";
   const location = t.mode === "ssh" && t.ssh ? `${escapeHtml(t.ssh.User)}@${escapeHtml(t.ssh.Host)}` : modeLabel;
 
-  // The devnet is offered on EVERY machine, whatever its node status. That is
-  // not generosity, it is the actual capability: it is a container, so unlike
-  // a node it needs no Linux host and no root — which makes it the one thing a
-  // macOS or Windows controller can genuinely run for itself. Hiding it behind
-  // "not set up" would be hiding the option that works.
+  // Everything you can do to a machine now lives on ONE page (#/machine/<id>):
+  // setup, dashboard, logs and the devnet as expandable sections. The card no
+  // longer sprouts a link per capability — it just opens the machine, and the
+  // per-machine reasoning (setup vs. not, and that a devnet is offered on every
+  // machine because it needs no Linux host and no root) moved inside that page.
   //
-  // The RPC gateway is deliberately NOT linked per-machine: it fronts chains
-  // across every machine, so it has one top-level screen (#/rpc) rather than a
-  // copy under each box.
-  const servicesLink = `<a class="btn btn-ghost" href="#/services/${encodeURIComponent(t.id)}">Devnet</a>`;
-
+  // The RPC gateway is still deliberately NOT linked per-machine: it fronts
+  // chains across every machine, so it has one top-level screen (#/rpc) rather
+  // than a copy under each box.
+  //
+  // canRunNode/hostOS still shape the STATUS line so a machine that cannot
+  // complete node setup says so on the card, but the action is the same "Open"
+  // either way — the machine page is where that constraint is acted on.
   let statusLine: string;
-  let actions: string;
   if (!wire && !canRunNode) {
     statusLine = `${badge("can't run a node", "warn")} ${badge(hostOS || "not Linux", "neutral")}`;
-    actions = `
-      ${servicesLink}
-      <a class="btn btn-ghost" href="#/setup/${encodeURIComponent(t.id)}">Preview setup wizard</a>
-    `;
   } else if (!wire) {
     statusLine = badge("not set up", "neutral");
-    actions = `
-      <a class="btn" href="#/setup/${encodeURIComponent(t.id)}">Run setup wizard</a>
-      ${servicesLink}
-    `;
   } else {
     const net = catalog.networks.find((n) => n.ChainID === wire.ChainID);
     const netName = net ? net.Name : `chain ${wire.ChainID}`;
     statusLine = `${badge(netName, "ok")} ${badge(wire.ExecID, "neutral")} ${badge(wire.BeaconID, "neutral")}${wire.Archive ? " " + badge("archive", "warn") : ""}`;
-    actions = `
-      <a class="btn" href="#/dash/${encodeURIComponent(t.id)}">Dashboard</a>
-      <a class="btn" href="#/logs/${encodeURIComponent(t.id)}">Logs</a>
-      ${servicesLink}
-      <a class="btn btn-ghost" href="#/setup/${encodeURIComponent(t.id)}">Re-run setup</a>
-    `;
   }
 
   return `
@@ -302,7 +297,7 @@ function targetCard(t: api.Target, catalog: api.Catalog, canRunNode: boolean, ho
       <p class="muted">${location}</p>
       <p>${statusLine}</p>
       <div class="card-actions">
-        ${actions}
+        <a class="btn" href="#/machine/${encodeURIComponent(t.id)}">Open</a>
         <button class="btn btn-danger" data-action="delete-target" data-id="${escapeHtml(t.id)}">Remove</button>
       </div>
     </div>

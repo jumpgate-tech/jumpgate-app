@@ -58,8 +58,12 @@ export function renderShell(root: HTMLElement): Shell {
   const contentEl = root.querySelector<HTMLElement>("#content")!;
   const navLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>("[data-nav]"));
   const setActiveNav = (screen: string) => {
+    // The machine page lives under Targets — it's opened from a machine card,
+    // not from a nav entry of its own — so it lights the Targets item. The top
+    // nav stays Targets/RPC/Settings; per-machine screens never appear there.
+    const navScreen = screen === "machine" ? "targets" : screen;
     for (const a of navLinks) {
-      a.classList.toggle("active", a.dataset.nav === screen);
+      a.classList.toggle("active", a.dataset.nav === navScreen);
     }
   };
   return { contentEl, setActiveNav };

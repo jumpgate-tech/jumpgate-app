@@ -1830,3 +1830,101 @@ table.an-errors td {
   padding: 0.15rem 0.6rem 0.15rem 0;
   border: none;
 }
+
+/* --- machine page (#/machine/<id>): collapsed sections --------------------
+   Each former per-machine route is a card whose header row is a button: the
+   section title, its one-line status, and a caret that rotates when open. The
+   detail (the reused screen) lives in .machine-section-body, hidden until the
+   row is expanded. */
+.machine-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0.75rem 0;
+}
+
+/* The card padding lives on the head/body instead of the card, so a collapsed
+   row is a single clean line and the caret can sit flush at the edge. */
+.machine-section {
+  padding: 0;
+  overflow: hidden;
+}
+
+.machine-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.machine-section-head:hover {
+  background: var(--bg);
+}
+
+.machine-section-title {
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+/* The status takes the middle and can wrap its badges; the caret is pinned
+   right by the auto margin. */
+.machine-section-status {
+  flex: 1 1 auto;
+  color: var(--fg-muted);
+}
+
+.machine-section-caret {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--fg-muted);
+  transition: transform 0.12s ease;
+}
+
+.machine-section.open .machine-section-caret {
+  transform: rotate(90deg);
+}
+
+/* A divider above the detail keeps the expanded screen visually distinct from
+   its header row. */
+.machine-section-body {
+  padding: 0.5rem 1rem 1rem;
+  border-top: 1px solid var(--border);
+}
+
+/* The fleet verdict: one line at the top of the home screen answering "is
+   anything wrong?" before the operator reads a single card. A raised banner
+   with a left rule coloured by level (the --ok/--warn palette the badges use),
+   so ok recedes and attention draws the eye. The pill inside carries the
+   state name; this line carries the sentence. */
+.verdict-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 6px;
+}
+.verdict-ok {
+  border-left-color: var(--ok);
+}
+.verdict-attention {
+  border-left-color: var(--warn);
+}
+.verdict-sentence {
+  color: var(--fg);
+}
+/* The implicated machines hang off the sentence as inline actions. */
+.verdict-machines a {
+  margin-left: 0.5rem;
+}
