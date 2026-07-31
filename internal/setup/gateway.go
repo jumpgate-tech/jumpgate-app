@@ -364,12 +364,12 @@ func (p *gatewayPlan) preflightStep() Step {
 		ID:    "preflight",
 		Title: "Preflight checks (" + p.backend + " gateway)",
 		Verify: func(ctx context.Context, e executor.Executor, st *State) error {
-			return p.preflight(ctx, e)
+			return p.preflight(ctx, e, st)
 		},
 	}
 }
 
-func (p *gatewayPlan) preflight(ctx context.Context, e executor.Executor) error {
+func (p *gatewayPlan) preflight(ctx context.Context, e executor.Executor, st *State) error {
 	switch p.backend {
 	case BackendDocker:
 		info, err := ops.ProbeDocker(ctx, e)
@@ -390,7 +390,7 @@ func (p *gatewayPlan) preflight(ctx context.Context, e executor.Executor) error 
 			return err
 		}
 	}
-	return p.checkPortFree(ctx, e)
+	return p.checkPortFree(ctx, e, st)
 }
 
 // requireLinuxRoot performs the two host expectations a systemd install has.
@@ -433,56 +433,90 @@ func requireLinuxRoot(ctx context.Context, e executor.Executor) error {
 // to fix it.
 const listenerProbe = `{ ss -ltn 2>/dev/null || netstat -an 2>/dev/null || lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null; } | grep -Ei '[:.]%d([^0-9]|$)' | grep -i listen`
 
-// checkPortFree fails when something other than our own gateway is already
-// listening on the port the gateway is about to publish.
+// checkPortFree probes the ports the gateway is about to publish and decides
+// what a foreign listener means for each — which is no longer "always refuse".
 //
-// Two deliberate leniencies. A target with none of the three tools yields no
-// output and reads as free: docker and systemd both fail loudly and
-// specifically on a port collision anyway ("port is already allocated"), so
-// the cost of guessing wrong that way is a worse error message, whereas a
-// false "busy" blocks setup outright. And our own already-running gateway is
-// exempt, which is what makes re-running this plan against a live gateway
-// (a config change, a resume) work at all.
-func (p *gatewayPlan) checkPortFree(ctx context.Context, e executor.Executor) error {
+// The eRPC HTTP port and the metrics port RECLAIM: a foreign listener is noted
+// (see probePort) but does NOT abort setup. This is the direction taken in
+// docs/superpowers/specs/2026-07-28-ui-direction-notes.md ("Related decision,
+// taken separately"): docker and systemd both fail loudly and specifically on
+// a genuine collision ("port is already allocated"), whereas a false "busy"
+// blocks a preflight that has no Run to fix it — and the latter is the worse
+// outcome. Adopt the process, reclaim the port, and rely on the loud, specific
+// runtime failure if the collision was real.
+//
+// The HTTPS front port (p.gw.TLS.HTTPS(), typically 8443) is the DELIBERATE,
+// STILL-UNRESOLVED EXCEPTION the same doc carves out: there the casualty of
+// reclaiming is someone else's TLS front, and the failure is silent from its
+// owner's side. So it stays conservative — a foreign listener there still
+// refuses (see probePort's reclaim=false path). This is the caveat the owner
+// may want to revisit; do NOT silently reclaim 8443.
+//
+// Two leniencies survive unchanged and apply to every port. A target with none
+// of ss/netstat/lsof yields no output and reads as free (a missing tool exits
+// non-zero, which is not a transport error). And our own already-running
+// gateway is exempt via gatewayHoldsPort, which is what makes re-running this
+// plan against a live gateway (a config change, a resume) work at all.
+func (p *gatewayPlan) checkPortFree(ctx context.Context, e executor.Executor, st *State) error {
 	if p.gatewayHoldsPort(ctx, e) {
 		return nil
 	}
 	// A fronted gateway publishes no host port for eRPC at all — Caddy is the
-	// only front door — so the port to check is the TLS one. Checking the eRPC
-	// port there would fail a perfectly good setup whenever something unrelated
-	// happened to hold 4000, for a port nothing is going to bind.
-	port := p.gw.HTTP()
-	what := "gateway"
+	// only front door — so the port to check is the TLS one, and that is the one
+	// port that still refuses on a foreign listener (reclaim=false). An unfronted
+	// gateway publishes eRPC's HTTP port, which now reclaims (reclaim=true).
 	if p.fronted() {
-		port = p.gw.TLS.HTTPS()
-		what = "gateway's HTTPS front"
+		if err := p.probePort(ctx, e, st, p.gw.TLS.HTTPS(), "gateway's HTTPS front", false); err != nil {
+			return err
+		}
+	} else {
+		if err := p.probePort(ctx, e, st, p.gw.HTTP(), "gateway", true); err != nil {
+			return err
+		}
 	}
-	if err := p.probePort(ctx, e, port, what); err != nil {
-		return err
-	}
-	// The metrics port is checked too, and it is not a formality: it defaults
-	// to 4001, which is one above eRPC's default RPC port and therefore exactly
-	// the kind of number something else on a developer's machine has already
-	// taken. Left unchecked, the collision surfaces as `docker run` failing
-	// halfway through the run step with the container already removed.
+	// The metrics port defaults to 4001, one above eRPC's default RPC port and
+	// therefore exactly the kind of number something else on a developer's
+	// machine has already taken. It reclaims like the eRPC port: a foreign
+	// listener is noted, not fatal, and `docker run` fails loudly on a real
+	// collision. The metrics port is never the TLS front, so the 8443 exception
+	// does not reach here.
 	if mp := p.metricsHostPort(); mp > 0 {
-		if err := p.probePort(ctx, e, mp, "gateway's metrics port"); err != nil {
+		if err := p.probePort(ctx, e, st, mp, "gateway's metrics port", true); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// probePort is one port's half of checkPortFree, split out so the two calls
-// cannot drift in how they read the probe's output. The leniencies documented
-// on checkPortFree apply to both.
-func (p *gatewayPlan) probePort(ctx context.Context, e executor.Executor, port int, what string) error {
+// probePort is one port's half of checkPortFree, split out so the calls cannot
+// drift in how they read the probe's output.
+//
+// reclaim selects what a FOREIGN LISTENER means. When true (the eRPC HTTP and
+// metrics ports), a listener is noted onto the event stream and setup proceeds
+// — docker/systemd will fail loudly if the collision was real. When false (the
+// HTTPS front, the deliberate exception per the direction doc), a listener
+// still aborts the preflight with an evidence-carrying error, because the
+// casualty of reclaiming a TLS front is silent from its owner's side.
+//
+// A transport error (e.Run itself failing, e.g. a dropped connection) is fatal
+// regardless of reclaim: that is a broken executor, not a port that happens to
+// be busy, and every later step would hit it too. The leniency is about a
+// listener being FOUND, never about being unable to look. A missing listener
+// tool exits non-zero without a transport error and so reads as free.
+func (p *gatewayPlan) probePort(ctx context.Context, e executor.Executor, st *State, port int, what string, reclaim bool) error {
 	res, err := e.Run(ctx, fmt.Sprintf(listenerProbe, port), nil)
 	if err != nil {
 		return fmt.Errorf("preflight: probe listeners on port %d: %w", port, err)
 	}
 	if res.ExitCode == 0 && strings.TrimSpace(res.Stdout) != "" {
-		return fmt.Errorf("preflight: port %d is already in use by something other than valve-node-app's %s:\n%s", port, what, strings.TrimSpace(res.Stdout))
+		found := strings.TrimSpace(res.Stdout)
+		if reclaim {
+			_ = emit(ctx, st, Event{StepID: "preflight", Line: fmt.Sprintf(
+				"port %d already has a foreign listener; proceeding and reclaiming it — docker/systemd will fail loudly if this is a real collision:\n%s",
+				port, found)})
+			return nil
+		}
+		return fmt.Errorf("preflight: port %d is already in use by something other than valve-node-app's %s:\n%s", port, what, found)
 	}
 	return nil
 }
