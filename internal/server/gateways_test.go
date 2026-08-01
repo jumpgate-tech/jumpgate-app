@@ -76,6 +76,28 @@ func TestGateways_TwoGatewaysCoexistWithDistinctContainers(t *testing.T) {
 	}
 }
 
+// A freshly created gateway fronts NO chains — and in particular does not
+// auto-seed the local devnet (evm:1337). The RPC screen's devnet opt-in rests
+// on this: a newcomer must not land on a gateway already advertising an
+// unrecognized chain. "An empty one is the intended starting state" is what
+// handleGatewayCreate says in its own comment; this pins it so a future change
+// that seeds a default network cannot pass unnoticed.
+func TestGateways_FreshGatewayFrontsNoChains(t *testing.T) {
+	a := gatewayServer(t)
+	// The UI's create flow sends an empty network list.
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+
+	got := decode[gatewayView](t, a.do(t, "GET", "/api/gateways/default", nil))
+	for _, net := range got.Config.Networks {
+		if net.ChainID == catalog.DevnetChainID {
+			t.Errorf("a fresh gateway auto-seeded the devnet (evm:%d) — it must be opt-in", catalog.DevnetChainID)
+		}
+	}
+	if n := len(got.Config.Networks); n != 0 {
+		t.Errorf("a fresh gateway must front no chains, got %d: %+v", n, got.Config.Networks)
+	}
+}
+
 // A gateway NAMES the machine it runs on, so a second one on that machine is a
 // second managed eRPC container: overlapping chains, two state pollers against
 // one node, and only one of them reachable through the reverse proxy.
