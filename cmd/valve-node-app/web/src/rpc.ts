@@ -181,6 +181,17 @@ export function renderRPC(root: HTMLElement): () => void {
   // record must not blank the others, so it is keyed the same way the
   // gateway state above is.
   const orphanErr: Record<string, string | null> = {};
+  // The one-click trust-store install per gateway: whether one is in flight and
+  // its last result, so the button shows a spinner and then either success or
+  // the exact command to run by hand.
+  const trustBusy: Record<string, boolean> = {};
+  const trustResult: Record<string, api.TrustCertResult | null> = {};
+  // The controller's OS — this machine, where valve-node-app runs — read once.
+  // It picks the manual trust command shown for the DEVICE that opens the URL.
+  // That device is usually this machine, but the command is shown even when the
+  // gateway runs elsewhere, because the certificate must be trusted wherever the
+  // browser is, not where the gateway is.
+  let hostOS = "";
   let streamStop: (() => void) | null = null;
 
   root.innerHTML = `
@@ -205,8 +216,23 @@ export function renderRPC(root: HTMLElement): () => void {
   wireDropdowns(root, () => {});
 
   void load();
+  void loadHost();
 
   // --- data ---------------------------------------------------------------
+
+  // loadHost reads the controller's OS once. A failure is silent: it only
+  // selects which manual trust command to SUGGEST, and a missing answer falls
+  // back to the Linux form rather than blocking anything.
+  async function loadHost(): Promise<void> {
+    try {
+      const h = await api.getHost();
+      if (disposed) return;
+      hostOS = h.os;
+      render();
+    } catch {
+      // Leave hostOS empty; manualTrustCommand defaults sensibly.
+    }
+  }
 
   async function load(): Promise<void> {
     try {
@@ -453,6 +479,52 @@ export function renderRPC(root: HTMLElement): () => void {
     return null;
   }
 
+  // targetModeOf is how a gateway's placement machine was registered ("local"
+  // or "ssh"). It is what decides whether the one-click "Trust on this machine"
+  // makes sense: the button installs the root on the machine the gateway RUNS
+  // on, which only helps the person at the screen when that machine is this one
+  // — i.e. a local gateway. For an SSH gateway the useful thing is the manual
+  // command, run on whatever device actually opens the URL.
+  function targetModeOf(gw: api.GatewayView): string {
+    return (data?.targets ?? []).find((t) => t.id === gw.placement.targetId)?.mode ?? "";
+  }
+
+  // osLabel names an OS the way an operator says it, for the "run this on <OS>"
+  // hint beside the manual command.
+  function osLabel(os: string): string {
+    switch (os) {
+      case "darwin":
+        return "macOS";
+      case "windows":
+        return "Windows";
+      case "linux":
+        return "Linux";
+      default:
+        return os || "this device";
+    }
+  }
+
+  // manualTrustCommand is the copy-paste fallback: the exact command that
+  // installs the gateway's root into a trust store, for the OS of the device
+  // that will open the URL. It mirrors the server's own per-OS commands
+  // (setup.TrustStoreCommand) but in the shell an operator types by hand — so
+  // darwin/linux carry an explicit sudo rather than the app's osascript prompt.
+  //
+  // certPath is the path ON THE GATEWAY'S MACHINE. When the calling device is a
+  // different machine, the file has to be copied there first — the label beside
+  // this command says so; the command itself cannot.
+  function manualTrustCommand(os: string, certPath: string, gid: string): string {
+    switch (os) {
+      case "darwin":
+        return `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "${certPath}"`;
+      case "windows":
+        return `certutil -addstore -f ROOT "${certPath}"`;
+      case "linux":
+      default:
+        return `sudo cp "${certPath}" /usr/local/share/ca-certificates/valve-node-app-${gid}.crt && sudo update-ca-certificates`;
+    }
+  }
+
   // manageSection is where the gateway's container chrome went: the lifecycle
   // actions (Stop/Restart/Re-create/Wipe), Settings, Forget, the capability
   // re-probe, Analytics, the certificate file to install, and any leftover
@@ -530,13 +602,56 @@ export function renderRPC(root: HTMLElement): () => void {
   function certBlock(gw: api.GatewayView): string {
     const path = internalCaPath(gw);
     if (!path) return "";
+    const local = targetModeOf(gw) === "local";
+    const cmd = manualTrustCommand(hostOS, path, gw.id);
+    const r = trustResult[gw.id];
     return `
       <div class="strip">
         <div class="strip-line strip-note">
-          <span class="strip-text">Served by Caddy's own certificate authority. Install this file (on ${escapeHtml(gw.placement.targetId)}) into the trust store of every device that will call it and the browser warning goes away:</span>
+          <span class="strip-text">Served by Caddy's own certificate authority — the browser warns once, on every device that calls it, until that authority's root is trusted. The root is on ${escapeHtml(gw.placement.targetId)} at:</span>
           <code class="strip-cmd">${escapeHtml(path)}</code>
-          <button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(path)}">Copy</button>
+          <button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(path)}">Copy path</button>
         </div>
+        ${
+          local
+            ? `<div class="strip-line strip-note">
+                 <span class="strip-text">This gateway runs on this machine, so its root can be installed here in one click:</span>
+                 <button class="btn btn-tiny" data-action="trust-cert" data-gid="${escapeHtml(gw.id)}" ${trustBusy[gw.id] ? "disabled" : ""}>
+                   ${trustBusy[gw.id] ? `<span class="spinner" aria-label="installing"></span>` : "Trust on this machine"}
+                 </button>
+               </div>`
+            : ""
+        }
+        ${r ? trustResultLine(r) : ""}
+        <div class="strip-line strip-note">
+          <span class="strip-text">The certificate must be trusted on whatever device opens the URL — ${
+            local
+              ? "if that is a different device (a phone, another laptop), copy the root above to it and run"
+              : "this gateway runs elsewhere, so on the device you browse from run"
+          }${hostOS ? ` (${escapeHtml(osLabel(hostOS))})` : ""}:</span>
+          <code class="strip-cmd">${escapeHtml(cmd)}</code>
+          <button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(cmd)}">Copy command</button>
+        </div>
+      </div>
+    `;
+  }
+
+  // trustResultLine renders the outcome of a one-click install: a plain note on
+  // success, and on failure the message with the exact command the server could
+  // not run itself (needs sudo, or a device we cannot reach), ready to copy.
+  function trustResultLine(r: api.TrustCertResult): string {
+    if (r.ok) {
+      return `<div class="strip-line strip-note"><span class="strip-text">${escapeHtml(r.message)}</span></div>`;
+    }
+    return `
+      <div class="strip-line strip-warn">
+        <span class="strip-text">${escapeHtml(r.message)}</span>
+        ${
+          r.ranCommand
+            ? `<code class="strip-cmd">${escapeHtml(r.ranCommand)}</code>
+               <button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(r.ranCommand)}">Copy</button>`
+            : ""
+        }
       </div>
     `;
   }
@@ -769,8 +884,23 @@ export function renderRPC(root: HTMLElement): () => void {
         ${
           caPath
             ? `<span class="chain-cert muted small">Your wallet must trust this gateway's certificate first —</span>
+               ${
+                 targetModeOf(gw) === "local"
+                   ? `<button class="btn btn-ghost btn-tiny" data-action="trust-cert" data-gid="${escapeHtml(gw.id)}" ${trustBusy[gw.id] ? "disabled" : ""}
+                              title="Install this gateway's root certificate into this machine's trust store, then reload your wallet.">${
+                       trustBusy[gw.id] ? "Trusting…" : "Trust on this machine"
+                     }</button>`
+                   : ""
+               }
                <button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(caPath)}"
-                       title="Copy the path to Caddy's root certificate. Install it on ${escapeHtml(gw.placement.targetId)} and in the trust store of any device that will call this URL, and the warning goes away.">Copy cert path</button>`
+                       title="Copy the path to Caddy's root certificate. Install it on ${escapeHtml(gw.placement.targetId)} and in the trust store of any device that will call this URL, and the warning goes away.">Copy cert path</button>
+               ${
+                 trustResult[gw.id]
+                   ? `<span class="chain-cert muted small">${escapeHtml(
+                       trustResult[gw.id]!.ok ? "Trusted — reload your wallet or browser." : trustResult[gw.id]!.message,
+                     )}</span>`
+                   : ""
+               }`
             : ""
         }
       </div>
@@ -1477,6 +1607,9 @@ export function renderRPC(root: HTMLElement): () => void {
       case "verify-tls":
         await verifyTLS(gid);
         return;
+      case "trust-cert":
+        await trustCert(gid);
+        return;
       case "gw-start":
       case "gw-stop":
       case "gw-restart":
@@ -1586,6 +1719,25 @@ export function renderRPC(root: HTMLElement): () => void {
 
   function note(gid: string, text: string): void {
     activity[gid] = [text];
+  }
+
+  // trustCert asks the server to install this gateway's own internal-CA root
+  // into the trust store of the machine it runs on. On success the result line
+  // says so; on failure it carries the exact command to run by hand (needs
+  // sudo, an OS we do not automate, or a device we cannot reach), which the
+  // fallback in certBlock renders with a Copy button.
+  async function trustCert(gid: string): Promise<void> {
+    if (trustBusy[gid]) return;
+    trustBusy[gid] = true;
+    trustResult[gid] = null;
+    render();
+    try {
+      trustResult[gid] = await api.trustGatewayCert(gid);
+    } catch (err) {
+      trustResult[gid] = { ok: false, message: `${message(err)}${hintOf(err)}` };
+    }
+    trustBusy[gid] = false;
+    render();
   }
 
   async function runAction(gid: string, kind: api.ContainerActionKind): Promise<void> {
