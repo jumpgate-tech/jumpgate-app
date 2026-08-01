@@ -562,3 +562,140 @@ func TestGatewayTLSView_OffersAHostnameEvenWithHTTPSOff(t *testing.T) {
 			tls.SuggestedHostname, catalog.DefaultTLSDomain)
 	}
 }
+
+// ---------------------------------------------------------------------
+// POST /api/gateways/{gid}/trust-cert
+// ---------------------------------------------------------------------
+
+// internalTLSGateway is the smallest fronted gateway: HTTPS on, served by
+// Caddy's own internal CA — the case trust-cert exists for.
+func internalTLSGateway(port int) catalog.GatewayConfig {
+	cfg := pulsechainOnly(port)
+	cfg.TLS = &catalog.GatewayTLS{
+		Enabled:    true,
+		Hostname:   "default-abc.localhost-valaxy.com",
+		CertSource: catalog.CertInternal,
+	}
+	return cfg
+}
+
+// trustExecutor is a fleet executor whose ReadFile serves a certificate for
+// the exported-root path, so the trust-cert handler's "is this actually the
+// root we exported?" read has something to find.
+type trustExecutor struct {
+	*scriptedExecutor
+	cert []byte
+}
+
+func (e *trustExecutor) ReadFile(_ context.Context, path string) ([]byte, error) {
+	if strings.HasSuffix(path, ".crt") {
+		return e.cert, nil
+	}
+	return nil, &noSuchFileError{path: path}
+}
+
+func (e *trustExecutor) ran(sub string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, c := range e.calls {
+		if strings.Contains(c, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// The one-click trust install must run the OS's trust-store command, on the
+// gateway's own machine, against THIS gateway's exported internal root — the
+// derived rootCAPath — and report structured success.
+func TestGatewayTrustCert_InstallsTheGatewaysOwnInternalRoot(t *testing.T) {
+	root := issueLeaf(t, "root", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	var ex *trustExecutor
+	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) {
+		if ex == nil {
+			ex = &trustExecutor{scriptedExecutor: fleetExecutor("true|0|img|sha256:abc\n"), cert: root}
+			// Root, so the linux branch runs its command rather than returning
+			// the sudo fallback — keeping the run-path assertion OS-independent.
+			ex.script("id -u", executor.Result{Stdout: "0\n"})
+		}
+		return ex, nil
+	})
+	addTarget(t, a)
+	addGateway(t, a, "default", "local", internalTLSGateway(4100))
+
+	res := a.do(t, "POST", "/api/gateways/default/trust-cert", nil)
+	body := decode[trustCertResult](t, res)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("got %d, want 200 (%s)", res.StatusCode, body.Message)
+	}
+	if !body.OK {
+		t.Fatalf("trust reported failure: %s", body.Message)
+	}
+	// It installs the gateway's OWN exported root (rootCAPath ends in
+	// caddy-root.crt), never a path from the request.
+	if !strings.Contains(body.RanCommand, "caddy-root.crt") {
+		t.Errorf("command does not install the gateway's own root: %q", body.RanCommand)
+	}
+	// And it ran on the machine the gateway is placed on.
+	if ex == nil || !ex.ran("caddy-root.crt") {
+		t.Error("no trust command reached the gateway's machine")
+	}
+}
+
+// SECURITY: a gateway not served by Caddy's own CA has no internal root of
+// ours to install. Trust-cert must refuse it rather than install some other
+// file as a root authority. tlsGatewayServer serves a valid files certificate,
+// so the effective source is "files".
+func TestGatewayTrustCert_RefusesAnythingButItsOwnInternalRoot(t *testing.T) {
+	now := time.Now()
+	a := tlsGatewayServer(t, map[string][]byte{
+		testCertPath: issueLeaf(t, "gw.valve.city", now.Add(-time.Hour), now.Add(24*time.Hour)),
+		testKeyPath:  []byte("key"),
+	})
+
+	res := a.do(t, "POST", "/api/gateways/default/trust-cert", nil)
+	body := decode[errorDetail](t, res)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", res.StatusCode)
+	}
+	if !strings.Contains(body.Error, catalog.CertFiles) {
+		t.Errorf("refusal should name the cert source that is not ours: %q", body.Error)
+	}
+}
+
+// A gateway with no HTTPS front has no certificate to trust; the refusal points
+// at the setting to turn on rather than failing obscurely.
+func TestGatewayTrustCert_RefusesWhenNotFronted(t *testing.T) {
+	f := newFleet()
+	a := newAPITestServerWithExecutor(t, f.factory)
+	addTarget(t, a)
+	addGateway(t, a, "default", "local", pulsechainOnly(4100))
+
+	res := a.do(t, "POST", "/api/gateways/default/trust-cert", nil)
+	body := decode[errorDetail](t, res)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", res.StatusCode)
+	}
+	if body.Code != codeNotConfigured {
+		t.Errorf("code: got %q, want %q", body.Code, codeNotConfigured)
+	}
+}
+
+// The root is written by the HTTPS front at provision time. If it is not there
+// yet, the operator is told to create the gateway first — not handed a command
+// that would install nothing (or worse, whatever else is at that path).
+func TestGatewayTrustCert_SaysWhenTheRootIsNotExportedYet(t *testing.T) {
+	f := newFleet()
+	a := newAPITestServerWithExecutor(t, f.factory)
+	addTarget(t, a)
+	addGateway(t, a, "default", "local", internalTLSGateway(4100))
+
+	res := a.do(t, "POST", "/api/gateways/default/trust-cert", nil)
+	body := decode[errorDetail](t, res)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", res.StatusCode)
+	}
+	if !strings.Contains(body.Error, "not been exported") {
+		t.Errorf("message should say the root is not exported yet: %q", body.Error)
+	}
+}
