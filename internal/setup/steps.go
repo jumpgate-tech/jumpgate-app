@@ -362,8 +362,64 @@ func snapshotStep() Step {
 			}
 			opts := streamOpts(ctx, st, "snapshot")
 
+			// Resolve the manifest URL against the LIVE gateway before
+			// touching the datadir. Snapshots are cut per reth minor line and
+			// the gateway exposes no `latest` — so the concrete URL depends on
+			// the reth version actually installed on this target (built from
+			// `main`, so not a constant) and on what versions.json advertises
+			// right now. All the network happens here, on the target; the
+			// parsing and selection are pure catalog functions so they stay
+			// testable. Every branch below fails LOUD — this repo's snapshot
+			// bug was a 404 that surfaced only hours into a download.
+
+			// (a) What reth version is on the box? Invoke the same binary path
+			// the install step verified and the units will run.
+			rethBin := "/usr/local/bin/" + binaryNameFor(w.ExecID)
+			res, err := e.Run(ctx, fmt.Sprintf("%s --version", shQuote(rethBin)), opts)
+			if err != nil {
+				return fmt.Errorf("snapshot: reth --version: %w", err)
+			}
+			if res.ExitCode != 0 {
+				return fmt.Errorf("snapshot: reth --version failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+			}
+			rethVersion, err := catalog.ParseRethMajorMinor(res.Stdout)
+			if err != nil {
+				return fmt.Errorf("snapshot: %w", err)
+			}
+
+			// (b) Fetch the keyless discovery document on the target. -f makes
+			// curl exit non-zero on a 404 (mainnet has no snapshot), so a
+			// missing snapshot is an error here, not empty output later.
+			versionsURL := catalog.SnapshotVersionsURL(w.ChainID)
+			res, err = e.Run(ctx, fmt.Sprintf("curl -fsSL %s", shQuote(versionsURL)), opts)
+			if err != nil {
+				return fmt.Errorf("snapshot: fetch %s: %w", versionsURL, err)
+			}
+			if res.ExitCode != 0 {
+				return fmt.Errorf("snapshot: no snapshot published for chain %d — fetching %s failed (exit %d): %s",
+					w.ChainID, versionsURL, res.ExitCode, strings.TrimSpace(res.Stderr))
+			}
+
+			// (c) Select the newest manifest matching this reth version, then
+			// inject the operator's key so reth's chunk fetches are authorized.
+			manifestURL, err := catalog.SelectSnapshotManifest([]byte(res.Stdout), rethVersion, w.ChainID)
+			if err != nil {
+				return fmt.Errorf("snapshot: %w", err)
+			}
+			manifestURL, err = catalog.InjectSnapshotKey(manifestURL, w.SnapshotKey)
+			if err != nil {
+				return fmt.Errorf("snapshot: %w", err)
+			}
+			cmd, err := catalog.RethDownloadCommand(w, manifestURL)
+			if err != nil {
+				return fmt.Errorf("snapshot: %w", err)
+			}
+
+			// (d) Only now make the datadir and run the download — creating it
+			// earlier would leave a prepared-looking directory behind a resolve
+			// that failed.
 			mkdirCmd := "mkdir -p " + shQuote(w.DataDir)
-			res, err := e.Run(ctx, mkdirCmd, opts)
+			res, err = e.Run(ctx, mkdirCmd, opts)
 			if err != nil {
 				return fmt.Errorf("snapshot: mkdir data dir: %w", err)
 			}
@@ -371,10 +427,6 @@ func snapshotStep() Step {
 				return fmt.Errorf("snapshot: mkdir %s failed (exit %d): %s", w.DataDir, res.ExitCode, strings.TrimSpace(res.Stderr))
 			}
 
-			cmd, err := catalog.RethDownloadCommand(w)
-			if err != nil {
-				return fmt.Errorf("snapshot: %w", err)
-			}
 			res, err = e.Run(ctx, cmd, opts)
 			if err != nil {
 				return fmt.Errorf("snapshot: reth download: %w", err)

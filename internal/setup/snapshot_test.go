@@ -16,6 +16,27 @@ func snapshotWire() catalog.WireConfig {
 	return w
 }
 
+// snapshotVersionsJSON is a minimal versions.json (chain 369) with a 2.3
+// snapshot — the resolvable() reth version below is 2.3, so resolution finds
+// this entry and the step reaches the download.
+const snapshotVersionsJSON = `{
+  "chain_id": 369,
+  "available_versions": [
+    {"reth_version_range": "2.2.x", "manifest_url": "https://one.valve.city/snapshot/evm/369/reth/2.2/1779991009/manifest.json", "timestamp": 1779991009, "generated_at": 1779991009},
+    {"reth_version_range": "2.3.x", "manifest_url": "https://one.valve.city/snapshot/evm/369/reth/2.3/1785121890/manifest.json", "timestamp": 1785171299, "generated_at": 1785171299}
+  ]
+}`
+
+// resolvable scripts the two network calls snapshotStep makes on the target
+// before it can build the download command — `reth --version` and the
+// versions.json fetch — so a test that cares about mkdir/download reaches
+// them instead of failing at resolution.
+func resolvable(e *fakeExecutor) *fakeExecutor {
+	return e.
+		script("--version", executor.Result{Stdout: "reth Version: 2.3.0-pulse\n", ExitCode: 0}).
+		script("curl -fsSL", executor.Result{Stdout: snapshotVersionsJSON, ExitCode: 0})
+}
+
 // ran reports whether any command the fake was given contains every fragment.
 // Requiring all of them together is what stops "reth download ran" passing
 // when it ran against the wrong datadir.
@@ -66,7 +87,7 @@ func TestSnapshot_DoesNothingAtAllWhenNotOptedIn(t *testing.T) {
 // download has to carry the operator's key. Both are asserted on the command
 // the target would really receive.
 func TestSnapshot_CreatesTheDataDirThenDownloadsIntoIt(t *testing.T) {
-	e := newFakeExecutor()
+	e := resolvable(newFakeExecutor())
 	w := snapshotWire()
 
 	if err := snapshotStep().Run(context.Background(), e, &State{Wire: w}); err != nil {
@@ -98,7 +119,7 @@ func TestSnapshot_CreatesTheDataDirThenDownloadsIntoIt(t *testing.T) {
 // A datadir with a space or a quote in it is a path an operator can genuinely
 // type, and it reaches `sh -c`. It must arrive as one argument.
 func TestSnapshot_QuotesADataDirThatWouldOtherwiseSplit(t *testing.T) {
-	e := newFakeExecutor()
+	e := resolvable(newFakeExecutor())
 	w := snapshotWire()
 	w.DataDir = "/mnt/my data/reth"
 
@@ -118,7 +139,7 @@ func TestSnapshot_QuotesADataDirThatWouldOtherwiseSplit(t *testing.T) {
 // failed" sends the operator to the logs; the exit code and stderr are what
 // they would have gone looking for.
 func TestSnapshot_FailureQuotesWhatTheTargetSaid(t *testing.T) {
-	e := newFakeExecutor().script("reth download", executor.Result{
+	e := resolvable(newFakeExecutor()).script("reth download", executor.Result{
 		ExitCode: 1,
 		Stderr:   "error: manifest 404 (is your key right?)\n",
 	})
@@ -135,7 +156,7 @@ func TestSnapshot_FailureQuotesWhatTheTargetSaid(t *testing.T) {
 }
 
 func TestSnapshot_FailureToMakeTheDataDirStopsBeforeDownloading(t *testing.T) {
-	e := newFakeExecutor().script("mkdir -p", executor.Result{
+	e := resolvable(newFakeExecutor()).script("mkdir -p", executor.Result{
 		ExitCode: 1,
 		Stderr:   "mkdir: /mnt/reth: Read-only file system\n",
 	})
@@ -173,7 +194,7 @@ func TestSnapshot_RefusesAClientThatCannotRestore(t *testing.T) {
 // A chain with no reth --chain name has no snapshot. The step must fail
 // BEFORE it makes the directory look prepared.
 func TestSnapshot_RefusesAChainWithNoSnapshot(t *testing.T) {
-	e := newFakeExecutor()
+	e := resolvable(newFakeExecutor())
 	w := snapshotWire()
 	w.ChainID = catalog.DevnetChainID
 
@@ -183,6 +204,88 @@ func TestSnapshot_RefusesAChainWithNoSnapshot(t *testing.T) {
 	}
 	if ran(e, "reth download") {
 		t.Error("a download ran for a chain that has no snapshot")
+	}
+}
+
+// ---------------------------------------------------------------------
+// discovery: the resolve happens on the target, and every failure is loud
+// ---------------------------------------------------------------------
+
+// versions.json is fetched keyless; the manifest URL it returns must be
+// rewritten to carry the operator's key before reth pulls chunks from it. The
+// download command the target receives therefore has the key in the URL, and
+// the URL is the concrete version/timestamp path — never the old bare
+// …/reth/manifest.json that always 404'd.
+func TestSnapshot_ResolvesTheKeyedVersionedManifestURL(t *testing.T) {
+	e := resolvable(newFakeExecutor())
+	w := snapshotWire()
+
+	if err := snapshotStep().Run(context.Background(), e, &State{Wire: w}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// 2.3 reth → the 2.3 manifest, with the key spliced in ahead of /evm/.
+	wantURL := "https://one.valve.city/snapshot/vk_abcd1234/evm/369/reth/2.3/1785121890/manifest.json"
+	if !ran(e, "reth download", "--manifest-url", wantURL) {
+		t.Errorf("the resolved manifest URL is not what the target would receive; ran: %q", e.callLog())
+	}
+}
+
+// curl -f exits non-zero on the 404 that mainnet (and any chain with no
+// snapshot) returns. That must stop the step with a message naming the chain,
+// not fall through to a download with empty input.
+func TestSnapshot_FailsLoudlyWhenTheChainHasNoSnapshotPublished(t *testing.T) {
+	e := newFakeExecutor().
+		script("--version", executor.Result{Stdout: "reth Version: 2.3.0-pulse\n", ExitCode: 0}).
+		script("curl -fsSL", executor.Result{ExitCode: 22, Stderr: "curl: (22) The requested URL returned error: 404\n"})
+	w := snapshotWire()
+	w.ChainID = 1 // mainnet: versions.json 404s
+
+	err := snapshotStep().Run(context.Background(), e, &State{Wire: w})
+	if err == nil {
+		t.Fatal("a chain with no published snapshot reported success")
+	}
+	for _, want := range []string{"chain 1", "exit 22"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not carry %q", err, want)
+		}
+	}
+	if ran(e, "reth download") || ran(e, "mkdir") {
+		t.Errorf("a failed discovery still touched the target: %q", e.callLog())
+	}
+}
+
+// If reth --version cannot be read, we cannot know which snapshot to fetch —
+// guessing is how the URL went stale in the first place. Fail before any
+// directory is made.
+func TestSnapshot_FailsWhenTheRethVersionCannotBeRead(t *testing.T) {
+	e := newFakeExecutor().script("--version", executor.Result{ExitCode: 0, Stdout: "\n"})
+
+	err := snapshotStep().Run(context.Background(), e, &State{Wire: snapshotWire()})
+	if err == nil {
+		t.Fatal("an unreadable reth version reported success")
+	}
+	if ran(e, "reth download") || ran(e, "mkdir") {
+		t.Errorf("resolution failed but the target was still touched: %q", e.callLog())
+	}
+}
+
+// A reth on a minor line Valve has not cut a snapshot for must fail with a
+// message naming the version and the ranges that exist — not silently sync
+// from genesis while every step reports success.
+func TestSnapshot_FailsWhenNoSnapshotMatchesTheRethVersion(t *testing.T) {
+	e := newFakeExecutor().
+		script("--version", executor.Result{Stdout: "reth Version: 9.9.0-pulse\n", ExitCode: 0}).
+		script("curl -fsSL", executor.Result{Stdout: snapshotVersionsJSON, ExitCode: 0})
+
+	err := snapshotStep().Run(context.Background(), e, &State{Wire: snapshotWire()})
+	if err == nil {
+		t.Fatal("a reth version with no matching snapshot reported success")
+	}
+	if !strings.Contains(err.Error(), "9.9") {
+		t.Errorf("error %q does not name the unmatched version", err)
+	}
+	if ran(e, "reth download") {
+		t.Error("a download ran with no matching snapshot")
 	}
 }
 
