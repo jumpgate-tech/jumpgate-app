@@ -1124,6 +1124,27 @@ export function gatewayAction(
   );
 }
 
+// TrustCertResult is the outcome of installing a gateway's internal-CA root
+// into the trust store of the machine it runs on. ok is true only when the
+// install actually ran and succeeded; when it is false, ranCommand (if present)
+// is the exact command to run by hand — the only option when the device that
+// opens the URL is not the machine the gateway runs on.
+export interface TrustCertResult {
+  ok: boolean;
+  ranCommand?: string;
+  message: string;
+}
+
+// trustGatewayCert installs THIS gateway's own exported internal-CA root into
+// the trust store of the machine it runs on. It only ever installs that one
+// derived path — never an arbitrary file — and only when the gateway is served
+// by Caddy's own authority; the server refuses otherwise.
+export function trustGatewayCert(gid: string): Promise<TrustCertResult> {
+  return request<TrustCertResult>(`/api/gateways/${encodeURIComponent(gid)}/trust-cert`, {
+    method: "POST",
+  });
+}
+
 // provisionGateway returns as soon as the run is accepted. Progress arrives
 // on the PLACEMENT machine's setup stream — the same one the node wizard and
 // the devnet use — and the response says which machine that is, so the caller
