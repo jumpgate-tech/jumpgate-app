@@ -187,6 +187,18 @@ pre {
   border-color: var(--warn);
 }
 
+/* The eRPC-first landing's hero: the one card a node-less controller should
+   read first, so it carries a little more presence than a plain card — the
+   accent left rule the verdict line uses, and roomier prose. Everything else
+   on that screen reuses the standard card/section/badge chrome. */
+.hero-card {
+  border-left: 3px solid var(--accent);
+  padding: 1.1rem 1.25rem;
+}
+.hero-card p {
+  max-width: 60ch;
+}
+
 .card-selectable {
   cursor: pointer;
   text-align: left;

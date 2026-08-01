@@ -45,10 +45,10 @@ export function renderShell(root: HTMLElement): Shell {
   root.innerHTML = `
     <div class="shell">
       <header class="topbar">
-        <a class="brand" href="#/targets">valve-node-app</a>
+        <a class="brand" href="#/">valve-node-app</a>
         <nav class="nav">
-          <a href="#/targets" data-nav="targets">Targets</a>
           <a href="#/rpc" data-nav="rpc">RPC</a>
+          <a href="#/targets" data-nav="targets">Machines</a>
           <a href="#/settings" data-nav="settings">Settings</a>
         </nav>
       </header>
@@ -58,10 +58,13 @@ export function renderShell(root: HTMLElement): Shell {
   const contentEl = root.querySelector<HTMLElement>("#content")!;
   const navLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>("[data-nav]"));
   const setActiveNav = (screen: string) => {
-    // The machine page lives under Targets — it's opened from a machine card,
-    // not from a nav entry of its own — so it lights the Targets item. The top
-    // nav stays Targets/RPC/Settings; per-machine screens never appear there.
-    const navScreen = screen === "machine" ? "targets" : screen;
+    // The nav is RPC / Machines / Settings, RPC first because eRPC is the
+    // node-independent path every audience can use. Two screens have no nav
+    // entry of their own and borrow one: the machine page (opened from a
+    // machine card) lights Machines, and the capability-detected home — which
+    // is the eRPC-first landing whenever it does not redirect to the machines
+    // view — lights RPC.
+    const navScreen = screen === "machine" ? "targets" : screen === "home" ? "rpc" : screen;
     for (const a of navLinks) {
       a.classList.toggle("active", a.dataset.nav === navScreen);
     }
