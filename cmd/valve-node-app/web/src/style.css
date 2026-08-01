@@ -1147,6 +1147,85 @@ details.advanced summary {
   flex-wrap: wrap;
 }
 
+/* --- the quiet identity line ----------------------------------------------
+
+   Which gateway these chains belong to, stated once and small. It replaced the
+   full-width bar that led with lifecycle buttons and a big base URL — those are
+   container chrome and moved to "Manage gateway"; the per-chain URLs are the
+   thing to copy now, so this stays out of the way. */
+.rpc-ident {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.4rem 0 0.6rem;
+  margin: 0.5rem 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The base URL is discoverable but deliberately last and muted: a chain is
+   addressed by PATH on top of it, so it is context, not the thing to copy. */
+.rpc-ident-base {
+  margin-left: auto;
+}
+
+/* --- Manage gateway: the demoted container chrome -------------------------
+
+   Everything an operator does to the container, not the chains — folded into
+   one collapsed section that reuses the machine page's header/caret pattern so
+   the two screens open the same way. */
+.manage-section {
+  padding: 0;
+  overflow: hidden;
+  margin-top: 0.75rem;
+}
+
+.manage-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.7rem 1rem;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.manage-head:hover {
+  background: var(--bg);
+}
+
+.manage-title {
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.manage-status {
+  flex: 1 1 auto;
+}
+
+.manage-caret {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--fg-muted);
+  transition: transform 0.12s ease;
+}
+
+.manage-section.open .manage-caret {
+  transform: rotate(90deg);
+}
+
+.manage-body {
+  padding: 0.6rem 1rem 1rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
 /* --- the attention strip: one place, one line per thing -------------------
 
    Five separate full-width banners became this. The left rule carries the
@@ -1344,15 +1423,15 @@ table.surface tbody tr:last-child td {
   font-size: 0.85rem;
 }
 
-.chain-ok > .chain-verdict {
+.chain-ok .chain-verdict {
   color: var(--fg-muted);
 }
 
-.chain-warn > .chain-verdict {
+.chain-warn .chain-verdict {
   color: var(--warn);
 }
 
-.chain-bad > .chain-verdict {
+.chain-bad .chain-verdict {
   color: var(--bad);
 }
 
@@ -1370,6 +1449,85 @@ table.surface tbody tr:last-child td {
   margin: 0.3rem 0 0;
   color: var(--warn);
   font-size: 0.78rem;
+}
+
+/* --- the wallet-first connect line ----------------------------------------
+
+   The hero of a collapsed chain card: the URL a wallet dials and a prominent
+   Copy. The cert hint sits inline because a copied URL that throws a TLS
+   warning is a dead end until the certificate is trusted — that step cannot be
+   a section away. */
+.chain-connect {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 0.35rem 0 0.1rem;
+}
+
+/* The one Copy on this page that is NOT ghost: pasting this URL into a wallet
+   is the action the whole screen leads to. */
+.chain-connect .endpoint-url {
+  font-size: 0.85rem;
+}
+
+.chain-cert {
+  margin-left: 0.25rem;
+}
+
+.chain-connect-none {
+  margin: 0.35rem 0 0.1rem;
+}
+
+/* A tag, not a badge: the devnet label states what the chain IS, so it is
+   quiet text rather than a coloured state claim. */
+.chain-tag {
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0.02rem 0.35rem;
+}
+
+/* The devnet is optional and unrecognised by a newcomer, so its whole card is
+   dimmed — present, findable, but plainly not the point of the page. */
+.chain-devnet {
+  opacity: 0.72;
+}
+
+.chain-devnet:hover,
+.chain-devnet:focus-within {
+  opacity: 1;
+}
+
+/* The expanded operator detail. A little inset so it reads as "inside" the
+   card rather than as a second card. */
+.chain-detail {
+  margin-top: 0.35rem;
+}
+
+.chain-detail-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 0.35rem 0;
+}
+
+/* The quiet whole-table footer: add a chain, the devnet opt-in, and the
+   re-probe with its last-run time pushed to the right. */
+.chains-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.chains-foot-gap {
+  flex: 1 1 auto;
 }
 
 /* --- the redundancy bar: the count as a mark ------------------------------

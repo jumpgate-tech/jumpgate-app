@@ -73,6 +73,14 @@ const CAP_TAGS: Record<string, string> = {
   trace: "TRACE",
 };
 
+// DEVNET_CHAIN_ID is reth's --dev genesis id (catalog.DevnetChainID). It is the
+// one chain this screen treats specially: it is a private scratch chain, not
+// something a newcomer recognises, so it renders LAST and de-emphasised, and
+// when absent it is offered only as a quiet opt-in rather than shown by
+// default. Kept in sync with internal/catalog/devnet.go by being a single
+// literal here rather than scattered 1337s.
+const DEVNET_CHAIN_ID = 1337;
+
 // Tone is the only colour vocabulary this page has. It is state, never
 // decoration: ok = answering, warn = degraded or single-path, bad = down.
 type Tone = "ok" | "warn" | "bad";
@@ -149,6 +157,20 @@ export function renderRPC(root: HTMLElement): () => void {
   // The bar's own settings (port, bind) are edited in place, opened per
   // gateway. Kept out of the DOM for the same reason as focus.
   const settingsOpen: Record<string, boolean> = {};
+  // Per-chain "details" expander, keyed `gid:chainId`. Collapsed by default:
+  // the card leads with what a WALLET needs — the dialable URL and a one-word
+  // health state — and keeps the operator detail (the per-upstream probe
+  // table, the redundancy bar, the verdict's explanation, +Endpoint/Remove)
+  // behind this. A newcomer's first question is "what do I paste into my
+  // wallet", not "how many upstreams answer trace_", so that is what opens.
+  const chainDetailOpen: Record<string, boolean> = {};
+  // The gateway's container chrome — lifecycle actions, settings, the cert
+  // file to install, and any leftover container — folded into one "Manage
+  // gateway" section, open per gateway. It is the same in-render toggle as
+  // settingsOpen: this file re-renders wholesale, so a boolean map is the
+  // whole of the machinery. Demoting it here is the point — the top of the
+  // page is the URLs, not a console.
+  const manageOpen: Record<string, boolean> = {};
   // The live HTTPS verification per gateway: the last result this screen ran
   // (the server also returns its own last one on the view, which is what shows
   // after a reload), whether one is in flight, and why one failed to run.
@@ -168,8 +190,9 @@ export function renderRPC(root: HTMLElement): () => void {
     </div>
     <p class="muted">
       A machine runs one gateway, and that gateway fronts as many chains as you list.
-      Each chain below leads with how many ways it can still be answered: the filled
-      segments are the endpoints it has, the hollow ones are endpoints it could have.
+      Each chain below leads with the URL you point a wallet or dApp at and whether it
+      is healthy. The operator detail — every upstream, its capabilities and share —
+      is one click away under each chain's “Details”.
     </p>
     <div id="rpc-body"><p class="muted">Loading…</p></div>
     ${footer()}
@@ -283,10 +306,19 @@ export function renderRPC(root: HTMLElement): () => void {
     // none. canAddGatewayOn is the same guard the picker uses, so the button
     // and the modal cannot disagree about whether there is anywhere to put one.
     const canAdd = (data.targets ?? []).some((t) => canAddGatewayOn(t.id, gateways));
+    // A leftover container belongs to a MACHINE, and a machine has one gateway,
+    // so an orphan is shown inside that gateway's "Manage gateway" section (see
+    // manageSection) rather than as a banner at the top — it is container
+    // chrome, not a chain a wallet connects to. The exception is an orphan on a
+    // machine with no surviving gateway: there is nothing to fold it into, so
+    // it stays visible at the bottom rather than vanishing while it keeps
+    // serving.
+    const withGateway = new Set(gateways.map((g) => g.placement.targetId));
+    const looseOrphans = (data.orphans ?? []).filter((o) => !withGateway.has(o.targetId));
     body.innerHTML = `
-      ${(data.orphans ?? []).map(orphanBanner).join("")}
       ${gateways.map((gw) => gatewayBlock(gw, many)).join("")}
       ${gateways.length === 0 ? emptyState() : ""}
+      ${looseOrphans.map(orphanBanner).join("")}
       ${
         canAdd
           ? `<div class="card-actions rpc-add-gateway">
@@ -363,26 +395,26 @@ export function renderRPC(root: HTMLElement): () => void {
   function gatewayBlock(gw: api.GatewayView, showMachine: boolean): string {
     return `
       ${showMachine ? `<h2 class="rpc-machine">${escapeHtml(gw.placement.targetId)}</h2>` : ""}
-      ${gatewayBar(gw)}
+      ${gatewayIdentity(gw)}
       ${attentionStrip(gw)}
       ${activityBlock(gw)}
-      ${settingsOpen[gw.id] ? settingsBlock(gw) : ""}
       ${networksTable(gw)}
+      ${manageSection(gw)}
     `;
   }
 
   // ---- the header: the infrastructure, stated once and quietly -----------
 
-  // gatewayBar states the facts that are true of the whole page rather than of
-  // any chain: which machine, what image the container was made from, whether
-  // an HTTPS front is in the way, and the URL callers dial.
+  // gatewayIdentity is the one quiet line that says WHICH gateway these chains
+  // belong to: its state, the machine, the image, and whether HTTPS fronts it.
   //
-  // It used to be a full-width accented bar. That accent was decoration — it
-  // was on whenever the container was running, which is the least interesting
-  // thing this page knows — and it pulled the eye away from the chains, which
-  // are the answer the reader came for. What is left carries colour in exactly
-  // one place: the state dot and badge.
-  function gatewayBar(gw: api.GatewayView): string {
+  // It is deliberately not the old full-width bar with the lifecycle buttons
+  // and a big copyable base URL. Those controls are container chrome, not what
+  // a wallet needs, and they moved to "Manage gateway" below. The base URL is
+  // kept here — discoverable but quiet — because a chain is addressed by PATH
+  // on top of it, so the per-chain URLs on the cards are the thing to copy, not
+  // this. Colour lives in exactly one place: the state dot and badge.
+  function gatewayIdentity(gw: api.GatewayView): string {
     const running = gw.status.State === "running";
     const t = gw.tls;
     const facts: string[] = [`on <strong>${escapeHtml(gw.placement.targetId)}</strong>`];
@@ -393,31 +425,117 @@ export function renderRPC(root: HTMLElement): () => void {
         : "no HTTPS front",
     );
     return `
-      <div class="rpc-head">
-        <div class="rpc-head-id">
-          ${stateDot(gw)}
-          <strong>${escapeHtml(gw.label)}</strong>
-          ${stateBadge(gw)}
-          <span class="muted small">${facts.join(" · ")}</span>
-        </div>
+      <div class="rpc-ident">
+        ${stateDot(gw)}
+        <strong>${escapeHtml(gw.label)}</strong>
+        ${stateBadge(gw)}
+        <span class="muted small">${facts.join(" · ")}</span>
+        <span class="rpc-ident-base muted small">${
+          running
+            ? `base <code>${escapeHtml(gw.baseUrl)}</code>`
+            : "not serving"
+        }</span>
+      </div>
+    `;
+  }
+
+  // internalCaPath is the file a caller must trust when the gateway is fronted
+  // by Caddy's OWN certificate authority — the self-signed case where a wallet
+  // or browser throws a warning until caddy-root.crt is installed. It returns
+  // the path only when that is actually the situation, so both the inline hint
+  // on a chain card and the fuller note under "Manage gateway" ask the same
+  // question of the same fact rather than guessing separately.
+  function internalCaPath(gw: api.GatewayView): string | null {
+    const t = gw.tls;
+    if (t?.enabled && t.rootCaPath && t.effectiveCertSource === "internal") {
+      return t.rootCaPath;
+    }
+    return null;
+  }
+
+  // manageSection is where the gateway's container chrome went: the lifecycle
+  // actions (Stop/Restart/Re-create/Wipe), Settings, Forget, the capability
+  // re-probe, Analytics, the certificate file to install, and any leftover
+  // container on this machine. All of it is collapsed by default — a wallet
+  // user never opens it, and an operator opens it once — so the top of the page
+  // stays the URLs. It reuses the machine page's collapse pattern (a header
+  // button + a body rendered only when open), driven by manageOpen.
+  function manageSection(gw: api.GatewayView): string {
+    const open = manageOpen[gw.id] ?? false;
+    const orphans = (data?.orphans ?? []).filter((o) => o.targetId === gw.placement.targetId);
+    return `
+      <section class="card manage-section${open ? " open" : ""}">
+        <button type="button" class="manage-head" data-action="toggle-manage"
+                data-gid="${escapeHtml(gw.id)}" aria-expanded="${open}">
+          <span class="manage-title">Manage gateway</span>
+          <span class="manage-status muted small">${manageStatus(gw, orphans.length)}</span>
+          <span class="manage-caret" aria-hidden="true">▸</span>
+        </button>
+        ${open ? manageBody(gw, orphans) : ""}
+      </section>
+    `;
+  }
+
+  // manageStatus is the collapsed line's one-glance summary: enough that an
+  // operator knows whether they need to open it (a stopped gateway, a leftover
+  // container) without it competing with the chains for attention.
+  function manageStatus(gw: api.GatewayView, orphanCount: number): string {
+    const bits: string[] = [];
+    if (gw.status.State !== "running") bits.push("gateway not running");
+    if (orphanCount > 0) bits.push(`${orphanCount} leftover container${orphanCount === 1 ? "" : "s"}`);
+    if (bits.length === 0) return "container, settings, certificate";
+    return bits.join(" · ");
+  }
+
+  function manageBody(gw: api.GatewayView, orphans: api.OrphanedContainer[]): string {
+    return `
+      <div class="manage-body">
         <div class="rpc-head-actions">
           ${(gw.actions ?? []).map((a) => actionButton(gw, a)).join("")}
           <a class="btn btn-ghost" href="#/analytics/${encodeURIComponent(gw.id)}"
              title="Latency, failures and why eRPC is routing the way it is. This screen tells you something is off; that one tells you what.">Analytics</a>
+          <button class="btn btn-ghost" data-action="reprobe" data-gid="${escapeHtml(gw.id)}"
+                  title="Ask every endpoint what it can do, again. This opens real connections to them."
+                  ${capsBusy[gw.id] ? "disabled" : ""}>
+            ${capsBusy[gw.id] ? `<span class="spinner" aria-label="probing"></span>` : "Re-probe"}
+          </button>
           <button class="btn btn-ghost" data-action="toggle-settings" data-gid="${escapeHtml(gw.id)}">
-            ${settingsOpen[gw.id] ? "Close" : "Settings"}
+            ${settingsOpen[gw.id] ? "Close settings" : "Settings"}
           </button>
           <button class="btn btn-ghost" data-action="forget-gateway" data-gid="${escapeHtml(gw.id)}"
                   title="Remove this gateway from valve-node-app. Its container is left alone.">Forget…</button>
         </div>
-        <div class="rpc-head-url">
-          ${
-            running
-              ? `<code class="endpoint-url">${escapeHtml(gw.baseUrl)}</code>
-                 <button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(gw.baseUrl)}">Copy</button>
-                 <span class="muted small">a chain is addressed by path, e.g. <code>${escapeHtml((gw.networks ?? [])[0]?.path ?? "/main/evm/<chainId>")}</code></span>`
-              : `<span class="muted small">Not serving — it will answer on <code>${escapeHtml(gw.baseUrl)}</code> once it is running.</span>`
-          }
+        ${
+          gw.status.State === "running"
+            ? `<div class="rpc-head-url">
+                 <code class="endpoint-url">${escapeHtml(gw.baseUrl)}</code>
+                 <button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(gw.baseUrl)}">Copy base</button>
+                 <span class="muted small">a chain is addressed by path, e.g. <code>${escapeHtml((gw.networks ?? [])[0]?.path ?? "/main/evm/<chainId>")}</code></span>
+               </div>`
+            : `<p class="muted small">Not serving — it will answer on <code>${escapeHtml(gw.baseUrl)}</code> once it is running.</p>`
+        }
+        ${certBlock(gw)}
+        ${orphans.map(orphanBanner).join("")}
+        ${settingsOpen[gw.id] ? settingsBlock(gw) : ""}
+      </div>
+    `;
+  }
+
+  // certBlock is the full "install this certificate" note, relocated here from
+  // the attention strip. It is a note, not a warning — nothing is broken, the
+  // browser warning is expected and one-time — so it carries no colour. The
+  // short, wallet-facing version of the same fact sits inline next to each
+  // chain's URL (see chainConnect); this is the operator's copy with the whole
+  // sentence and the path.
+  function certBlock(gw: api.GatewayView): string {
+    const path = internalCaPath(gw);
+    if (!path) return "";
+    return `
+      <div class="strip">
+        <div class="strip-line strip-note">
+          <span class="strip-text">Served by Caddy's own certificate authority. Install this file (on ${escapeHtml(gw.placement.targetId)}) into the trust store of every device that will call it and the browser warning goes away:</span>
+          <code class="strip-cmd">${escapeHtml(path)}</code>
+          <button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(path)}">Copy</button>
         </div>
       </div>
     `;
@@ -495,15 +613,11 @@ export function renderRPC(root: HTMLElement): () => void {
       });
     }
     if (v?.expiryWarning) out.push({ tone: "warn", text: v.expiryWarning });
-    if (t.rootCaPath && t.effectiveCertSource === "internal") {
-      // A note, not a warning: nothing is wrong, and colouring it would make
-      // "install this once" indistinguishable from "your front is down".
-      out.push({
-        tone: "note",
-        text: `Served by Caddy's own certificate authority. Install this file (on ${gw.placement.targetId}) into the trust store of every device that will call it and the browser warning goes away:`,
-        cmd: t.rootCaPath,
-      });
-    }
+    // The "install Caddy's own CA" note is NOT here any more. It is not a state
+    // claim about the front — nothing is wrong — so it belongs beside the URL a
+    // wallet dials (chainConnect's inline hint) and in the operator's own copy
+    // under "Manage gateway" (certBlock), not in the strip that says what has
+    // gone wrong with this gateway.
     return out;
   }
 
@@ -549,15 +663,16 @@ export function renderRPC(root: HTMLElement): () => void {
     `;
   }
 
-  // ---- the chains: one row each, leading with redundancy -----------------
+  // ---- the chains: wallet-first cards, operator detail collapsed ----------
 
-  // networksTable renders every chain this gateway fronts, one row each. It
-  // was a table with a Role/State/Capabilities/Share column per endpoint, which
-  // listed the upstreams accurately and left the reader to work out the
-  // consequence — the thing they actually came to find out. The row now leads
-  // with the consequence and keeps the detail underneath it.
+  // networksTable renders every chain this gateway fronts, one card each, in
+  // the order a newcomer should read them: the real chains first, then the
+  // devnet LAST. The devnet is a private scratch chain nobody recognises, so
+  // landing on it first is the fastest way to make the page look like it is not
+  // for you. See orderedNetworks.
   function networksTable(gw: api.GatewayView): string {
-    const nets = gw.networks ?? [];
+    const nets = orderedNetworks(gw.networks ?? []);
+    const hasDevnet = nets.some((n) => n.chainId === DEVNET_CHAIN_ID);
     if (nets.length === 0) {
       return `
         <div class="card rpc-surface">
@@ -567,52 +682,156 @@ export function renderRPC(root: HTMLElement): () => void {
           </p>
           <div class="card-actions">
             <button class="btn" data-action="add-chain" data-gid="${escapeHtml(gw.id)}">Add a network</button>
+            ${devnetOptIn(gw, hasDevnet)}
           </div>
         </div>
       `;
     }
     return `
       <div class="card rpc-surface">
-        ${surfaceHead(gw)}
         <div class="chains">
           ${nets.map((n) => chainRow(gw, n)).join("")}
         </div>
+        ${chainsFooter(gw, hasDevnet)}
         ${trafficFootnote(gw)}
       </div>
     `;
   }
 
-  // chainRow is the unit of this page: what the chain is, how many ways it can
-  // be answered, what each of those ways can do, and one sentence saying what
-  // that adds up to.
+  // orderedNetworks puts the devnet last without disturbing the order of the
+  // real chains. A stable partition, not a sort, so evm:1 and evm:369 keep the
+  // order the operator configured them in.
+  function orderedNetworks(nets: api.NetworkView[]): api.NetworkView[] {
+    const real = nets.filter((n) => n.chainId !== DEVNET_CHAIN_ID);
+    const dev = nets.filter((n) => n.chainId === DEVNET_CHAIN_ID);
+    return [...real, ...dev];
+  }
+
+  // chainRow is the unit of this page. Collapsed — the default — it is what a
+  // wallet needs and nothing else: the chain's name and evm:<id>, one word for
+  // its health, the full URL to paste with a prominent Copy, and, when the
+  // gateway uses its own CA, the one-line "your wallet must trust this cert"
+  // hint right beside that URL. The operator detail (the verdict's reasoning,
+  // the redundancy bar, the per-upstream probe table, +Endpoint/Remove) is one
+  // "Details" click away — see chainDetail.
   function chainRow(gw: api.GatewayView, n: api.NetworkView): string {
-    const ups = n.upstreams ?? [];
     const v = chainVerdict(n);
+    const isDevnet = n.chainId === DEVNET_CHAIN_ID;
+    const key = `${gw.id}:${n.chainId}`;
+    const open = chainDetailOpen[key] ?? false;
+    // ok is the only state that is genuinely "nothing to see here"; warn and
+    // bad both mean a human should look, so both collapse to one word. The
+    // BADGE still carries the tone, so amber and red stay distinct — the word
+    // is the summary, the colour is the severity.
+    const health = v.tone === "ok" ? "healthy" : "attention";
     return `
-      <section class="chain chain-${v.tone}">
+      <section class="chain chain-${v.tone}${isDevnet ? " chain-devnet" : ""}">
         <div class="chain-head">
           <span class="chain-name">${escapeHtml(n.name)}</span>
           <code class="chain-key">evm:${n.chainId}</code>
-          <code class="chain-path">${escapeHtml(n.path)}</code>
-          ${
-            n.url
-              ? `<button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(n.url)}"
-                         title="Copy ${escapeHtml(n.url)}">Copy URL</button>`
-              : ""
-          }
+          ${isDevnet ? `<span class="chain-tag">local test chain (devnet)</span>` : ""}
+          ${badge(health, v.tone)}
           <span class="chain-right">
-            ${redundancyBar(ups.length, v.tone, n.knownSetSize)}
-            <button class="btn btn-ghost btn-tiny" data-action="add-endpoint"
-                    data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">+ Endpoint</button>
-            <button class="btn btn-ghost btn-tiny" data-action="remove-chain"
-                    data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">Remove</button>
+            <button class="btn btn-ghost btn-tiny" data-action="toggle-chain-detail"
+                    data-key="${escapeHtml(key)}" aria-expanded="${open}">
+              ${open ? "Hide details" : "Details"}
+            </button>
           </span>
         </div>
-        <p class="chain-verdict${v.why ? " chain-verdict-why" : ""}"${v.why ? ` title="${escapeHtml(v.why)}"` : ""}>${v.html}</p>
-        ${endpointRows(gw, n)}
-        ${(n.warnings ?? []).map((wmsg) => `<p class="chain-note">${escapeHtml(wmsg)}</p>`).join("")}
+        ${chainConnect(gw, n)}
+        ${open ? chainDetail(gw, n, v) : ""}
       </section>
     `;
+  }
+
+  // chainConnect is the hero of the card: the exact URL a wallet dials, with a
+  // prominent Copy. When the gateway is fronted by Caddy's own CA the cert hint
+  // sits INLINE right here, because a copied URL that throws a TLS warning is a
+  // dead end until the cert is trusted — that step must not be buried a section
+  // away. When there is no URL, it says so plainly rather than showing a broken
+  // one: an absent URL means the gateway is not serving this path (not running,
+  // or nothing dialable), and which of those it is is the useful thing to say.
+  function chainConnect(gw: api.GatewayView, n: api.NetworkView): string {
+    if (!n.url) {
+      const notRunning = gw.status.State !== "running";
+      return `<p class="chain-connect-none muted small">${
+        notRunning
+          ? `No URL yet — the gateway is not running, so nothing answers on this path. Start it under “Manage gateway”.`
+          : `Not serviceable — nothing on this chain can be dialed, so there is no URL to connect to. Open Details to add an endpoint.`
+      }</p>`;
+    }
+    const caPath = internalCaPath(gw);
+    return `
+      <div class="chain-connect">
+        <code class="endpoint-url">${escapeHtml(n.url)}</code>
+        <button class="btn btn-tiny" data-action="copy" data-copy="${escapeHtml(n.url)}"
+                title="Copy ${escapeHtml(n.url)}">Copy URL</button>
+        ${
+          caPath
+            ? `<span class="chain-cert muted small">Your wallet must trust this gateway's certificate first —</span>
+               <button class="btn btn-ghost btn-tiny" data-action="copy" data-copy="${escapeHtml(caPath)}"
+                       title="Copy the path to Caddy's root certificate. Install it on ${escapeHtml(gw.placement.targetId)} and in the trust store of any device that will call this URL, and the warning goes away.">Copy cert path</button>`
+            : ""
+        }
+      </div>
+    `;
+  }
+
+  // chainDetail is everything an operator drills into: the derived verdict
+  // sentence (with its evidence in the title), the redundancy bar, the
+  // per-upstream probe table, and the add/remove controls. None of it is what a
+  // wallet user came for, which is exactly why it is folded away until asked
+  // for.
+  function chainDetail(gw: api.GatewayView, n: api.NetworkView, v: Verdict): string {
+    const ups = n.upstreams ?? [];
+    return `
+      <div class="chain-detail">
+        <p class="chain-verdict${v.why ? " chain-verdict-why" : ""}"${v.why ? ` title="${escapeHtml(v.why)}"` : ""}>${v.html}</p>
+        <div class="chain-detail-bar">
+          ${redundancyBar(ups.length, v.tone, n.knownSetSize)}
+          <button class="btn btn-ghost btn-tiny" data-action="add-endpoint"
+                  data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">+ Endpoint</button>
+          <button class="btn btn-ghost btn-tiny" data-action="remove-chain"
+                  data-gid="${escapeHtml(gw.id)}" data-chain="${n.chainId}">Remove</button>
+        </div>
+        ${endpointRows(gw, n)}
+        ${(n.warnings ?? []).map((wmsg) => `<p class="chain-note">${escapeHtml(wmsg)}</p>`).join("")}
+      </div>
+    `;
+  }
+
+  // chainsFooter carries the quiet, whole-table affordances the old surfaceHead
+  // held (add a chain, re-probe with its last-run time) plus the devnet opt-in.
+  // It sits at the BOTTOM now, not the top: adding a chain and re-probing are
+  // things you do after reading the chains, not before, and a wallet user never
+  // touches them.
+  function chainsFooter(gw: api.GatewayView, hasDevnet: boolean): string {
+    const c = caps[gw.id];
+    const when = c?.at ? `probed ${escapeHtml(shortTime(c.at))}` : "not probed yet";
+    return `
+      <div class="chains-foot">
+        <button class="btn btn-ghost btn-tiny" data-action="add-chain" data-gid="${escapeHtml(gw.id)}">+ Network</button>
+        ${devnetOptIn(gw, hasDevnet)}
+        <span class="chains-foot-gap"></span>
+        <span class="muted small">${when}</span>
+        <button class="btn btn-ghost btn-tiny" data-action="reprobe" data-gid="${escapeHtml(gw.id)}"
+                title="Ask every endpoint what it can do, again. This opens real connections to them."
+                ${capsBusy[gw.id] ? "disabled" : ""}>
+          ${capsBusy[gw.id] ? `<span class="spinner" aria-label="probing"></span>` : "Re-probe"}
+        </button>
+      </div>
+    `;
+  }
+
+  // devnetOptIn is the single quiet affordance a NEW user gets: no devnet is
+  // shown by default, so when none is present this offers to add one on demand.
+  // It routes through the same addDevnetChain path the picker uses, which
+  // already handles "there is no devnet on this machine yet — go make one
+  // first" rather than quietly producing a chain with nothing behind it.
+  function devnetOptIn(gw: api.GatewayView, hasDevnet: boolean): string {
+    if (hasDevnet) return "";
+    return `<button class="btn btn-ghost btn-tiny" data-action="add-devnet" data-gid="${escapeHtml(gw.id)}"
+                    title="Add a throwaway local test chain (evm:${DEVNET_CHAIN_ID}) fronted by this gateway. Optional — real chains only by default.">Add a local devnet</button>`;
   }
 
   // redundancyBar is the count made into a mark, because redundancy IS a count
@@ -778,25 +997,6 @@ export function renderRPC(root: HTMLElement): () => void {
     return [...seen].sort();
   }
 
-  // surfaceHead carries the one control that acts on the whole table — a
-  // capability re-probe — and says when the probes last ran. A capability
-  // verdict with no timestamp invites being read as live, and it is not: it is
-  // cached precisely because probing opens real sockets.
-  function surfaceHead(gw: api.GatewayView): string {
-    const c = caps[gw.id];
-    const when = c?.at ? `probed ${escapeHtml(shortTime(c.at))}` : "not probed yet";
-    return `
-      <div class="surface-head">
-        <span class="muted small">${when}</span>
-        <button class="btn btn-ghost" data-action="reprobe" data-gid="${escapeHtml(gw.id)}"
-                title="Ask every endpoint what it can do, again. This opens real connections to them."
-                ${capsBusy[gw.id] ? "disabled" : ""}>
-          ${capsBusy[gw.id] ? `<span class="spinner" aria-label="probing"></span>` : "Re-probe"}
-        </button>
-        <button class="btn btn-ghost" data-action="add-chain" data-gid="${escapeHtml(gw.id)}">+ Network</button>
-      </div>
-    `;
-  }
 
   // endpointRows renders a chain's servers. It states what each endpoint IS
   // before what it is called, because "the devnet on this machine" is the fact
@@ -1261,6 +1461,16 @@ export function renderRPC(root: HTMLElement): () => void {
         settingsOpen[gid] = !settingsOpen[gid];
         render();
         return;
+      case "toggle-manage":
+        manageOpen[gid] = !manageOpen[gid];
+        render();
+        return;
+      case "toggle-chain-detail": {
+        const key = el.dataset.key ?? "";
+        if (key) chainDetailOpen[key] = !chainDetailOpen[key];
+        render();
+        return;
+      }
       case "save-settings":
         await saveSettings(gid);
         return;
@@ -1291,6 +1501,21 @@ export function renderRPC(root: HTMLElement): () => void {
       case "add-chain":
         openAddChainModal(gid);
         return;
+      case "add-devnet": {
+        // The bottom "Add a local devnet" opt-in. It calls the same
+        // addDevnetChain path the picker's devnet preset uses, resolving
+        // whether the placement machine already has a devnet the same way
+        // openAddChainModal does — so a machine with no devnet is sent to make
+        // one rather than handed a chain with nothing behind it.
+        const gw = gatewayOf(gid);
+        if (gw) {
+          const placementHasDevnet = (data?.targets ?? []).some(
+            (t) => t.id === gw.placement.targetId && t.hasDevnet,
+          );
+          void addDevnetChain(gid, DEVNET_CHAIN_ID, placementHasDevnet);
+        }
+        return;
+      }
       case "remove-chain":
         await removeChain(gid, Number.parseInt(el.dataset.chain ?? "", 10));
         return;
