@@ -30,6 +30,7 @@ package server
 //     cannot drift from what the app actually supports.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -316,6 +318,11 @@ func (s *Server) registerGatewayRoutes(mux *http.ServeMux) {
 	// already has marked so the count offered is the count that lands. GET
 	// because it reads: no key is written here, only reported. See knownset.go.
 	mux.HandleFunc("GET /api/gateways/{gid}/knownset/{chainId}", s.handleKnownSet)
+	// Install THIS gateway's own internal-CA root into the trust store of the
+	// machine it runs on — a literal segment, so it wins the match over the
+	// {action} wildcard exactly as wipe/provision do, and never reaches the
+	// start/stop/restart dispatcher below. See handleGatewayTrustCert.
+	mux.HandleFunc("POST /api/gateways/{gid}/trust-cert", s.handleGatewayTrustCert)
 	mux.HandleFunc("POST /api/gateways/{gid}/{action}", s.handleGatewayAction)
 
 	// A leftover container a merge stopped managing but did not stop — see
@@ -1509,6 +1516,165 @@ func (s *Server) gatewayExecutor(w http.ResponseWriter, cfg config.Config, gw co
 		return nil, config.Target{}, false
 	}
 	return ex, host, true
+}
+
+// ---------------------------------------------------------------------
+// POST /api/gateways/{gid}/trust-cert
+// ---------------------------------------------------------------------
+
+// trustCertResult is the structured outcome of a trust-store install, so the
+// UI can show success or fall back to the exact command for the operator to run
+// by hand — the second being the ONLY option when the calling device is not the
+// machine the gateway runs on.
+type trustCertResult struct {
+	// OK is true only when the install actually ran and succeeded on the target.
+	OK bool `json:"ok"`
+	// RanCommand is the command that was run — or, when OK is false, the one to
+	// run by hand. It is echoed so a failed auto-install degrades into a
+	// copy-paste rather than a dead end.
+	RanCommand string `json:"ranCommand,omitempty"`
+	Message    string `json:"message"`
+}
+
+// handleGatewayTrustCert installs THIS gateway's own internal-CA root into the
+// trust store of the machine the gateway runs on, automating the one manual
+// step a fronted gateway otherwise leaves the operator.
+//
+// SECURITY, and the reason this is safe to expose as a one-click: the only
+// certificate it will ever install is the root the app itself exported for this
+// gateway (rootCAPath, resolved HERE — never a path taken from the request), and
+// only when that gateway is actually served by Caddy's internal CA. A gateway on
+// files/ACME is trusted by whoever issued its certificate; there is nothing of
+// ours to install, and installing an arbitrary file as a ROOT authority is
+// precisely the thing not to make easy. The path is then validated and quoted by
+// setup.TrustStoreCommand before it reaches a privileged command.
+func (s *Server) handleGatewayTrustCert(w http.ResponseWriter, r *http.Request) {
+	cfg, gw, ok := s.gateway(w, r)
+	if !ok {
+		return
+	}
+	ex, host, ok := s.gatewayExecutor(w, cfg, gw)
+	if !ok {
+		return
+	}
+
+	resolved, _ := resolveGateway(cfg, gw)
+	if !resolved.Fronted() {
+		writeErrorDetail(w, http.StatusBadRequest, setup.ErrNoTLSFront.Error(),
+			"turn on “Serve HTTPS” in this gateway's settings and re-create it — there is no certificate to trust until it is fronted", codeNotConfigured)
+		return
+	}
+
+	front, path, err := setup.GatewayTLSState(r.Context(), ex, gw.ID, resolved)
+	if err != nil {
+		writeOpsError(w, err)
+		return
+	}
+	// front.CertSource is the EFFECTIVE source, so a files certificate that fell
+	// back to the internal CA is (correctly) trustable here, while one actually
+	// serving a files/ACME certificate is refused: there is no root of ours.
+	if front.CertSource != catalog.CertInternal || path == "" {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"this gateway is served with the %q certificate source, not Caddy's own authority, so there is no internal root for valve-node-app to install — a files or ACME certificate is trusted by whoever issued it",
+			front.CertSource))
+		return
+	}
+
+	// Read the root back before installing it. We are about to add a ROOT
+	// certificate authority to a trust store, so we install only bytes we can
+	// see are a certificate this app exported — never merely whatever happens to
+	// sit at that path now.
+	pem, err := ex.ReadFile(r.Context(), path)
+	if err != nil || !bytes.Contains(pem, []byte("BEGIN CERTIFICATE")) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"the internal CA root has not been exported to %s on machine %q yet — create or re-create this gateway so its HTTPS front writes it, then trust it",
+			path, host.ID))
+		return
+	}
+
+	goos, err := targetGOOS(r.Context(), ex, host)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	install, err := setup.TrustStoreCommand(goos, path, gw.ID)
+	if err != nil {
+		// A GOOS we do not automate: hand the reason back with no command, so the
+		// UI shows the copy-the-path fallback rather than a broken button.
+		writeJSON(w, http.StatusOK, trustCertResult{OK: false, Message: err.Error()})
+		return
+	}
+
+	// linux (and windows) need root and do not elevate on their own. If the
+	// executor is not root, do not prompt for a password we cannot supply — hand
+	// back the exact command to run with elevation instead.
+	if install.NeedsRoot && !targetIsRoot(r.Context(), ex) {
+		writeJSON(w, http.StatusOK, trustCertResult{
+			OK:         false,
+			RanCommand: install.Command,
+			Message: fmt.Sprintf(
+				"installing a root certificate needs root on machine %q. Run this on it (e.g. with sudo):", host.ID),
+		})
+		return
+	}
+
+	res, err := ex.Run(r.Context(), install.Command, nil)
+	if err != nil {
+		writeJSON(w, http.StatusOK, trustCertResult{
+			OK:         false,
+			RanCommand: install.Command,
+			Message:    fmt.Sprintf("the trust-store install could not be run on machine %q (%v). Run it there by hand:", host.ID, err),
+		})
+		return
+	}
+	if res.ExitCode != 0 {
+		detail := strings.TrimSpace(res.Stderr)
+		if detail == "" {
+			detail = strings.TrimSpace(res.Stdout)
+		}
+		writeJSON(w, http.StatusOK, trustCertResult{
+			OK:         false,
+			RanCommand: install.Command,
+			Message:    fmt.Sprintf("the trust-store install exited %d on machine %q: %s. Run it there by hand:", res.ExitCode, host.ID, detail),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, trustCertResult{
+		OK:         true,
+		RanCommand: install.Command,
+		Message:    fmt.Sprintf("Installed this gateway's root certificate into the trust store on machine %q. Reload your wallet or browser and the warning is gone.", host.ID),
+	})
+}
+
+// targetGOOS is the operating system of the machine a gateway runs on, which
+// decides how its root certificate is installed. A local target IS this
+// process's own machine, so runtime.GOOS is exact; an SSH target is asked with
+// uname (the same probe preflight uses).
+func targetGOOS(ctx context.Context, ex executor.Executor, host config.Target) (string, error) {
+	if host.Mode == "local" {
+		return runtime.GOOS, nil
+	}
+	res, err := ex.Run(ctx, "uname", nil)
+	if err != nil {
+		return "", fmt.Errorf("could not ask machine %q what operating system it runs (uname): %w", host.ID, err)
+	}
+	switch strings.TrimSpace(res.Stdout) {
+	case "Darwin":
+		return "darwin", nil
+	case "Linux":
+		return "linux", nil
+	default:
+		return strings.ToLower(strings.TrimSpace(res.Stdout)), nil
+	}
+}
+
+// targetIsRoot reports whether the executor runs as root on the target, so the
+// trust-store install can choose between running itself and handing back a
+// command to run with sudo.
+func targetIsRoot(ctx context.Context, ex executor.Executor) bool {
+	res, err := ex.Run(ctx, "id -u", nil)
+	return err == nil && strings.TrimSpace(res.Stdout) == "0"
 }
 
 // ---------------------------------------------------------------------
