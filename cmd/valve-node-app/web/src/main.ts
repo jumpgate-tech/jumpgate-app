@@ -1,7 +1,13 @@
-// Hash-routed SPA shell: #/targets, #/rpc, #/analytics/<gid>, #/machine/<id>,
-// #/security/<id>, #/diag/<id>, #/settings. No framework — each screen module
-// renders into a shared content element and returns a cleanup function (closes
-// any EventSource / timers) that main.ts calls before routing away.
+// Hash-routed SPA shell: #/ (home), #/targets, #/rpc, #/analytics/<gid>,
+// #/machine/<id>, #/security/<id>, #/diag/<id>, #/settings. No framework — each
+// screen module renders into a shared content element and returns a cleanup
+// function (closes any EventSource / timers) that main.ts calls before routing
+// away.
+//
+// The empty hash is the capability-detected home (home.ts): it opens on the
+// machines view for a fleet that can run a node and on an eRPC-first hero for a
+// controller that cannot. eRPC is the first-class, node-independent path, so it
+// leads the nav and is the default surface for GUI-only users.
 //
 // #/machine/<id> is the collapsed per-machine page (setup + dashboard + logs +
 // devnet as expandable sections). The four routes it replaced — #/setup,
@@ -10,6 +16,7 @@
 import "./style.css";
 import { renderAnalytics } from "./analytics";
 import { renderDiagnostics } from "./diag";
+import { renderHome } from "./home";
 import { renderMachine } from "./machine";
 import { renderSecurity } from "./security";
 import { renderSettings } from "./settings";
@@ -32,7 +39,7 @@ interface Route {
 function parseHash(): Route {
   const hash = location.hash.replace(/^#\/?/, "");
   const parts = hash.split("/").filter(Boolean);
-  if (parts.length === 0) return { screen: "targets" };
+  if (parts.length === 0) return { screen: "home" };
   const [screen, rawId] = parts;
   if (
     screen === "machine" ||
@@ -130,8 +137,14 @@ function route(): void {
       currentCleanup = mount((root) => renderSettings(root));
       break;
     case "targets":
-    default:
       currentCleanup = mount((root) => renderTargets(root));
+      break;
+    // The empty hash and anything unrecognised land on the capability-detected
+    // home, which decides between the machines view and the eRPC-first hero and
+    // (for a node-capable fleet) redirects to #/targets itself.
+    case "home":
+    default:
+      currentCleanup = mount((root) => renderHome(root));
       break;
   }
 }
