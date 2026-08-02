@@ -40,11 +40,15 @@ vi.mock("./screens/Diagnostics/Diagnostics", async () => {
     },
   };
 });
-vi.mock("./analytics", () => ({
-  renderAnalytics: vi.fn((el: HTMLElement, id: string) => {
-    el.textContent = `analytics-screen:${id}`;
-  }),
-}));
+vi.mock("./screens/Analytics/Analytics", async () => {
+  const { useParams } = await import("react-router-dom");
+  return {
+    Analytics: () => {
+      const { id } = useParams<{ id: string }>();
+      return <div>analytics-screen:{id}</div>;
+    },
+  };
+});
 
 describe("activeNav", () => {
   it("maps machine→targets and home/panel→rpc, else identity", () => {
