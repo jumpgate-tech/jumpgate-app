@@ -17,6 +17,8 @@ import {
   withUpstream,
   withoutUpstream,
   endpointNameFromUrl,
+  networkSlowRate,
+  endpointSlowRate,
   type MasterState,
   type CapCell,
 } from "./panelModel";
@@ -95,6 +97,21 @@ export function renderPanel(root: HTMLElement): () => void {
   let epHealth: api.GatewayAnalytics | null = null;
   let epHealthGid: string | null = null;
   let epHealthBusy = false;
+  // netHealth is the LIVE health scrape driving every dot's animation — the
+  // one epHealth deliberately isn't (see epHealth's own comment): fetched on
+  // a 5s poll regardless of which screen is open, so a list row or a
+  // network's endpoint rows keep twitching (or stop) without the operator
+  // having to drill in. netHealthBusy guards the poll against overlap — a
+  // slow scrape must not stack a second request behind it.
+  let netHealth: api.GatewayAnalytics | null = null;
+  let netHealthBusy = false;
+  // lastHealthSig is the health-class fingerprint of the last render (see
+  // healthSignature) — refreshHealth only calls render() when this changes,
+  // so a poll that finds nothing different doesn't tear down and rebuild the
+  // DOM (which would restart every dot's CSS animation from frame zero,
+  // stutter-stepping a steady twitch every 5s) or blow away in-flight UI
+  // state like focus or a copy-flash.
+  let lastHealthSig = "";
 
   root.innerHTML = SPRITE + `<div class="p-wrap"><div class="p-panel" id="p-card"></div></div>`;
   const card = root.querySelector<HTMLElement>("#p-card")!;
@@ -123,6 +140,7 @@ export function renderPanel(root: HTMLElement): () => void {
         tlsErr,
         copyFlash,
         error: networkErr,
+        netHealth,
       });
     }
     if (view.name === "endpoint") {
@@ -133,9 +151,10 @@ export function renderPanel(root: HTMLElement): () => void {
         healthBusy: epHealthBusy,
         copyFlash,
         error: endpointErr,
+        netHealth,
       });
     }
-    return renderList(gw, busy, actionErr, setupLog);
+    return renderList(gw, busy, actionErr, setupLog, netHealth);
   }
 
   // loadCaps probes (or reads the cached probe of) a gateway's capabilities —
@@ -171,6 +190,49 @@ export function renderPanel(root: HTMLElement): () => void {
     }
     epHealthBusy = false;
     render();
+  }
+
+  // healthSignature fingerprints every dot the panel currently knows how to
+  // draw (every network row, every upstream row, whichever gateway is
+  // loaded) as one string of "id:class" pairs. refreshHealth diffs this
+  // before and after a scrape so it can skip render() when nothing about the
+  // ANIMATION actually changed — see netHealth/lastHealthSig above for why
+  // that matters.
+  function healthSignature(): string {
+    if (!gw) return "";
+    const running = gw.status.State === "running";
+    const parts: string[] = [];
+    for (const nv of gw.networks ?? []) {
+      const na = netHealth?.networks?.find((n) => n.chainId === nv.chainId);
+      const rate = na ? networkSlowRate(na) : undefined;
+      parts.push(`n${nv.chainId}:${healthClass({ running, serviceable: nv.serviceable, slowRate: rate })}`);
+      for (const u of nv.upstreams ?? []) {
+        const upRate = na ? endpointSlowRate(na, u.id) : undefined;
+        parts.push(`u${nv.chainId}/${u.id}:${healthClass({ running, serviceable: !u.problem, slowRate: upRate })}`);
+      }
+    }
+    return parts.join("|");
+  }
+
+  // refreshHealth is the panel's live-dot heartbeat: fetch the gateway's
+  // analytics scrape, then re-render ONLY if that changed at least one dot's
+  // computed class (see healthSignature). netHealthBusy guards against a
+  // slow scrape overlapping the next poll tick.
+  async function refreshHealth(): Promise<void> {
+    if (!gw || netHealthBusy) return;
+    netHealthBusy = true;
+    try {
+      netHealth = await api.getGatewayAnalytics(gw.id);
+    } catch {
+      // A failed scrape leaves netHealth as whatever it last was — stale-but-
+      // real beats every dot flashing to "no data" on one transient error.
+    }
+    netHealthBusy = false;
+    const sig = healthSignature();
+    if (sig !== lastHealthSig) {
+      lastHealthSig = sig;
+      render();
+    }
   }
 
   // removeNetworkFlow confirms (a network's URL and every endpoint under it
@@ -366,7 +428,7 @@ export function renderPanel(root: HTMLElement): () => void {
       }
       case "recheck": {
         if (!gw) return;
-        const tasks: Promise<unknown>[] = [loadCaps(gw.id, true), load()];
+        const tasks: Promise<unknown>[] = [loadCaps(gw.id, true), load(), refreshHealth()];
         if (view.name === "endpoint") tasks.push(loadHealth(gw.id, true));
         await Promise.all(tasks);
         return;
@@ -950,8 +1012,23 @@ export function renderPanel(root: HTMLElement): () => void {
     await load();
   }
 
-  void load();
+  // stopped flags that renderPanel's cleanup already ran — load() is async,
+  // so a fast mount/unmount (navigate away before the first load resolves)
+  // could otherwise have this .then() fire AFTER cleanup and start an
+  // interval nothing would ever clear. Checked right before arming poll.
+  let stopped = false;
+  void load().then(() => {
+    if (stopped) return;
+    // Baseline the fingerprint against what's ON SCREEN right now (netHealth
+    // is still null at this point) so the poll's first tick only forces a
+    // render if the live scrape actually changes a dot's class.
+    lastHealthSig = healthSignature();
+    poll = window.setInterval(() => {
+      void refreshHealth();
+    }, 5000);
+  });
   return () => {
+    stopped = true;
     if (poll) window.clearInterval(poll);
     streamStop?.();
   };
@@ -983,11 +1060,12 @@ function renderList(
   busy: string | null,
   actionErr: string | null,
   setupLog: string[],
+  netHealth: api.GatewayAnalytics | null,
 ): string {
   if (gw === null) return renderEmpty(busy, actionErr, setupLog);
   const m = masterState(gw);
   const rows = gw?.networks?.length
-    ? gw.networks.map((nv, i) => networkRow(gw, nv, i > 0)).join("")
+    ? gw.networks.map((nv, i) => networkRow(gw, nv, i > 0, netHealth)).join("")
     : "";
   return `
     <div class="p-band p-phead">
@@ -1112,8 +1190,10 @@ function capsHtml(cells: CapCell[]): string {
 // sockets against real endpoints) is deliberately never run for a whole
 // gateway's worth of chains just to paint the list; it fires lazily, once,
 // when a network's own detail screen opens (see renderNetwork/loadCaps).
-function networkRow(gw: api.GatewayView, nv: api.NetworkView, divider: boolean): string {
-  const hc = healthClass({ running: gw.status.State === "running", serviceable: nv.serviceable });
+function networkRow(gw: api.GatewayView, nv: api.NetworkView, divider: boolean, netHealth: api.GatewayAnalytics | null): string {
+  const na = netHealth?.networks?.find((n) => n.chainId === nv.chainId);
+  const slowRate = na ? networkSlowRate(na) : undefined;
+  const hc = healthClass({ running: gw.status.State === "running", serviceable: nv.serviceable, slowRate });
   const cells = capabilityCells({});
   return `
     <div class="p-row${divider ? " p-rowdiv" : ""}" data-action="open-network" data-chain-id="${nv.chainId}">
@@ -1139,6 +1219,9 @@ interface NetworkDetailState {
   tlsErr: string | null;
   copyFlash: boolean;
   error: string | null;
+  // netHealth is the panel's live 5s analytics poll (see renderPanel) — the
+  // source for this screen's header dot and every endpoint row's dot.
+  netHealth: api.GatewayAnalytics | null;
 }
 
 // capStatusOf mirrors rpc.ts's statusOf (~L1195-1202): there is no "http"
@@ -1184,7 +1267,9 @@ function renderNetwork(gw: api.GatewayView | null, chainId: number, st: NetworkD
   }
 
   const running = gw.status.State === "running";
-  const hc = healthClass({ running, serviceable: nv.serviceable });
+  const na = st.netHealth?.networks?.find((n) => n.chainId === chainId);
+  const networkRate = na ? networkSlowRate(na) : undefined;
+  const hc = healthClass({ running, serviceable: nv.serviceable, slowRate: networkRate });
   const ups = nv.upstreams ?? [];
 
   // Gateway band: the one dialable URL, a lock reflecting the last real
@@ -1219,7 +1304,8 @@ function renderNetwork(gw: api.GatewayView | null, chainId: number, st: NetworkD
   // the (stub) "Add endpoint" row Task 10 wires up for real.
   const upRows = ups
     .map((u, i) => {
-      const uhc = healthClass({ running, serviceable: !u.problem });
+      const upRate = na ? endpointSlowRate(na, u.id) : undefined;
+      const uhc = healthClass({ running, serviceable: !u.problem, slowRate: upRate });
       return `
         <div class="p-row${i > 0 ? " p-rowdiv" : ""}" data-action="open-endpoint" data-chain-id="${nv.chainId}" data-upstream-id="${escapeHtml(u.id)}">
           <span class="p-lead"><span class="p-dot ${uhc}"></span></span>
@@ -1300,6 +1386,11 @@ interface EndpointDetailState {
   healthBusy: boolean;
   copyFlash: boolean;
   error: string | null;
+  // netHealth is the same live 5s poll NetworkDetailState carries — this
+  // screen's dot uses it too, so it keeps animating on the same cadence as
+  // the list/network screens rather than only on open/recheck like headLag
+  // (epHealth/`health` above) does.
+  netHealth: api.GatewayAnalytics | null;
 }
 
 // singleCapabilities is unionCapabilities narrowed to exactly one upstream —
@@ -1328,7 +1419,9 @@ function renderEndpoint(gw: api.GatewayView | null, chainId: number, upstreamId:
   }
 
   const running = gw.status.State === "running";
-  const hc = healthClass({ running, serviceable: !up.problem });
+  const na = st.netHealth?.networks?.find((n) => n.chainId === chainId);
+  const upRate = na ? endpointSlowRate(na, upstreamId) : undefined;
+  const hc = healthClass({ running, serviceable: !up.problem, slowRate: upRate });
 
   // Address band: the endpoint's own dialable URL. Editable only for
   // "external" upstreams — see the edit-address case in handleAction for why

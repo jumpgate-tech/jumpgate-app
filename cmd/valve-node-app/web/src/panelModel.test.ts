@@ -8,8 +8,11 @@ import {
   withoutNetwork,
   withUpstream,
   withoutUpstream,
+  slowRateFromLatency,
+  networkSlowRate,
+  endpointSlowRate,
 } from "./panelModel";
-import type { GatewayView, GatewayConfig, GatewayUpstream } from "./api";
+import type { GatewayView, GatewayConfig, GatewayUpstream, Latency, NetworkAnalytics } from "./api";
 
 describe("endpointNameFromUrl", () => {
   it("takes the registrable label from the host", () => {
@@ -163,5 +166,84 @@ describe("withoutUpstream", () => {
     expect(next.Networks).toHaveLength(1);
     expect(next.Networks![0].Upstreams.map((u) => u.ID)).toEqual(["b"]);
     expect(cfg).toEqual(snapshot);
+  });
+});
+
+// eRPC's histograms carry a fixed bucket set — 0.05/0.5/5/30/+Inf — never an
+// arbitrary threshold, so every fixture below uses exactly those bounds.
+const latency = (count: number, cumAt: Partial<Record<"0.05" | "0.5" | "5" | "30" | "+Inf", number>>): Latency => ({
+  count,
+  mean: count > 0 ? 0.1 : null,
+  buckets: (["0.05", "0.5", "5", "30", "+Inf"] as const).map((le) => ({ le, count: cumAt[le] ?? count })),
+});
+
+describe("slowRateFromLatency", () => {
+  it("is the fraction past the 0.5s bucket", () => {
+    // 10 total, 8 finished within 0.5s -> 2 slow -> 0.2
+    const l = latency(10, { "0.05": 3, "0.5": 8, "5": 10, "30": 10, "+Inf": 10 });
+    expect(slowRateFromLatency(l)).toBeCloseTo(0.2);
+  });
+  it("is 0 when everything finished within 0.5s", () => {
+    const l = latency(10, { "0.5": 10 });
+    expect(slowRateFromLatency(l)).toBe(0);
+  });
+  it("is undefined with no buckets, zero count, or missing input", () => {
+    expect(slowRateFromLatency(null)).toBeUndefined();
+    expect(slowRateFromLatency({ count: 0, mean: null, buckets: [] })).toBeUndefined();
+    expect(slowRateFromLatency({ count: 5, mean: 0.1, buckets: null })).toBeUndefined();
+    expect(slowRateFromLatency({ count: 5, mean: 0.1, buckets: [{ le: "+Inf", count: 5 }] })).toBeUndefined();
+  });
+});
+
+const networkAnalytics = (over: Partial<NetworkAnalytics>): NetworkAnalytics => ({
+  chainId: 1,
+  name: "chain",
+  received: 0,
+  answered: 0,
+  unattributed: 0,
+  failed: 0,
+  methods: null,
+  endpoints: null,
+  cached: latency(0, {}),
+  failedLatency: latency(0, {}),
+  ...over,
+});
+
+describe("networkSlowRate", () => {
+  it("folds every method's histogram before reading the slow tail", () => {
+    const na = networkAnalytics({
+      received: 20,
+      methods: [
+        { method: "eth_call", ...latency(10, { "0.5": 9, "5": 10, "30": 10, "+Inf": 10 }) },
+        { method: "eth_getLogs", ...latency(10, { "0.5": 7, "5": 10, "30": 10, "+Inf": 10 }) },
+      ],
+    });
+    // combined: 20 total, 16 within 0.5s -> 4 slow -> 0.2
+    expect(networkSlowRate(na)).toBeCloseTo(0.2);
+  });
+  it("falls back to failed/received when the histograms are empty", () => {
+    const na = networkAnalytics({ received: 10, failed: 3, methods: [] });
+    expect(networkSlowRate(na)).toBeCloseTo(0.3);
+  });
+  it("is undefined with no traffic at all", () => {
+    expect(networkSlowRate(networkAnalytics({}))).toBeUndefined();
+  });
+});
+
+describe("endpointSlowRate", () => {
+  it("reads the one upstream's own histogram", () => {
+    const na = networkAnalytics({
+      endpoints: [
+        { upstream: "a", ...latency(10, { "0.5": 4, "5": 10, "30": 10, "+Inf": 10 }) },
+        { upstream: "b", ...latency(10, { "0.5": 10 }) },
+      ],
+    });
+    expect(endpointSlowRate(na, "a")).toBeCloseTo(0.6);
+    expect(endpointSlowRate(na, "b")).toBe(0);
+  });
+  it("is undefined for an unknown upstream or a missing network", () => {
+    const na = networkAnalytics({ endpoints: [{ upstream: "a", ...latency(10, { "0.5": 10 }) }] });
+    expect(endpointSlowRate(na, "missing")).toBeUndefined();
+    expect(endpointSlowRate(null, "a")).toBeUndefined();
   });
 });
