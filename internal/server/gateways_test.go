@@ -939,6 +939,44 @@ func TestGatewayPutConfig_FillsAProviderSlotFromTheStoredKey(t *testing.T) {
 	}
 }
 
+// TestGatewayPutConfig_FillsAnEmptyTLSHostname pins the bug the one-click
+// setup flow (home.ts/panel.ts setupEndpoint) hit live: it builds the same
+// internalTLSConfig(networks) — TLS.Enabled true, Hostname "" — twice, once
+// for the create (which fills the hostname via defaultTLSHostname) and once
+// for this PUT once the networks are known. Before this fix, PUT never
+// called defaultTLSHostname, so the second call always 400'd with "hostname
+// is required" even though the identical shape had just succeeded on create.
+func TestGatewayPutConfig_FillsAnEmptyTLSHostname(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+
+	res := a.do(t, "PUT", "/api/gateways/default/config", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+			{ID: "public-1-1", Kind: catalog.UpstreamExternal, Endpoint: "https://mainnet.example.com"},
+		}}},
+		TLS: &catalog.GatewayTLS{Enabled: true, Hostname: "", CertSource: catalog.CertInternal},
+	})
+	if res.StatusCode != http.StatusOK {
+		defer res.Body.Close()
+		raw, _ := io.ReadAll(res.Body)
+		t.Fatalf("PUT config with an empty TLS hostname: got %d, want 200 (the server should fill one in, exactly as create does): %s", res.StatusCode, raw)
+	}
+	res.Body.Close()
+
+	stored, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	gw, ok := stored.FindGateway("default")
+	if !ok {
+		t.Fatal("the gateway vanished")
+	}
+	if gw.Config.TLS == nil || strings.TrimSpace(gw.Config.TLS.Hostname) == "" {
+		t.Errorf("stored TLS.Hostname is still empty; want a generated name, as create would produce")
+	}
+}
+
 // ---------------------------------------------------------------------
 // the gateway views never carry a provider key either
 // ---------------------------------------------------------------------

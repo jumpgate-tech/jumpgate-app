@@ -1289,6 +1289,16 @@ func (s *Server) handleGatewayPutConfig(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Same slot-filling handleGatewayCreate does, and for the same reason: a
+	// caller that builds a config from scratch (rather than round-tripping one
+	// this app already returned) sends an empty Hostname meaning "you choose",
+	// not "turn HTTPS off" — TLS.Enabled already carries that decision. Without
+	// this, a config that validated fine on create fails here with "hostname is
+	// required" the moment anything else about it changes, which is exactly the
+	// gap the one-click setup flow (home.ts/panel.ts) hit: it builds the same
+	// internalTLSConfig(networks) twice, once for create and once for this PUT,
+	// and only create used to fill the hostname in.
+	defaultTLSHostname(&gwCfg, gid)
 	// Before validation, because an unfilled ${...} slot is not a URL eRPC
 	// could ever dial, and the operator should be told which key is missing
 	// rather than whatever the renderer makes of the literal.
