@@ -22,6 +22,7 @@ export function EndpointView({
   caps,
   capsBusy,
   capsErr,
+  busy,
   error,
   onBack,
   onRename,
@@ -36,6 +37,12 @@ export function EndpointView({
   caps: api.GatewayCapabilities | undefined;
   capsBusy: boolean;
   capsErr: string | null;
+  // busy is the in-flight lifecycle action (see Panel). While it is set, the
+  // config-mutation controls (rename, edit address, remove) are disabled — a
+  // provision can hold busy for minutes, and a config write landing mid-stream
+  // would store a change provision() then no-ops on, diverging stored config
+  // from the live erpc.yaml. Mirrors panel.ts's `if (busy) return` guards.
+  busy: string | null;
   error: string | null;
   onBack: () => void;
   onRename: () => void;
@@ -92,7 +99,11 @@ export function EndpointView({
         <span className="p-dtitle">
           <HealthDot running={running} serviceable={!up.problem} slowRate={upRate} />{" "}
           <span className="p-nmtxt">{up.label}</span>{" "}
-          <span className="p-pen" onClick={onRename}>
+          <span
+            className={`p-pen${busy ? " p-disabled" : ""}`}
+            aria-disabled={busy ? true : undefined}
+            onClick={busy ? undefined : onRename}
+          >
             <Icon name="pencil" />
           </span>
         </span>
@@ -113,8 +124,8 @@ export function EndpointView({
         </div>
         <div
           className="p-gwurl"
-          style={editable ? { cursor: "text" } : undefined}
-          onClick={editable ? onEditAddress : undefined}
+          style={editable && !busy ? { cursor: "text" } : undefined}
+          onClick={editable && !busy ? onEditAddress : undefined}
         >
           {up.endpoint || "—"}
         </div>
@@ -158,7 +169,11 @@ export function EndpointView({
         </div>
       ) : null}
 
-      <div className="p-band p-remove" onClick={onRemove}>
+      <div
+        className={`p-band p-remove${busy ? " p-disabled" : ""}`}
+        aria-disabled={busy ? true : undefined}
+        onClick={busy ? undefined : onRemove}
+      >
         <Icon name="trash" /> Remove endpoint
       </div>
     </>

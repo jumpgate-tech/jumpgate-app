@@ -26,6 +26,7 @@ describe("EndpointView", () => {
         caps={undefined}
         capsBusy={false}
         capsErr={null}
+        busy={null}
         error={null}
         {...handlers}
         onEditAddress={onEditAddress}
@@ -70,12 +71,47 @@ describe("EndpointView", () => {
         caps={undefined}
         capsBusy={false}
         capsErr={null}
+        busy={null}
         error={null}
         {...handlers}
       />,
     );
     expect(screen.getByText("Chain head")).toBeInTheDocument();
     expect(screen.getByText("behind 3 blocks")).toBeInTheDocument();
+  });
+
+  it("disables rename / edit-address / remove while a lifecycle action is in flight", () => {
+    const onRename = vi.fn();
+    const onEditAddress = vi.fn();
+    const onRemove = vi.fn();
+    const { container } = render(
+      <EndpointView
+        gw={makeGateway()}
+        chainId={1}
+        upstreamId="public-1-1"
+        health={undefined}
+        caps={undefined}
+        capsBusy={false}
+        capsErr={null}
+        busy={"create"}
+        error={null}
+        {...handlers}
+        onRename={onRename}
+        onEditAddress={onEditAddress}
+        onRemove={onRemove}
+      />,
+    );
+    const pen = container.querySelector(".p-pen") as HTMLElement;
+    const url = screen.getByText("https://rpc.publicnode.com");
+    const remove = screen.getByText("Remove endpoint").closest(".p-remove") as HTMLElement;
+    expect(pen).toHaveClass("p-disabled");
+    expect(remove).toHaveClass("p-disabled");
+    pen.click();
+    url.click();
+    remove.click();
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onEditAddress).not.toHaveBeenCalled();
+    expect(onRemove).not.toHaveBeenCalled();
   });
 
   it("shows 'no longer configured' when the upstream has gone", () => {
@@ -88,6 +124,7 @@ describe("EndpointView", () => {
         caps={undefined}
         capsBusy={false}
         capsErr={null}
+        busy={null}
         error={null}
         {...handlers}
       />,

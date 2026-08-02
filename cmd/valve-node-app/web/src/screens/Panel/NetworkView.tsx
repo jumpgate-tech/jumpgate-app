@@ -206,7 +206,11 @@ export function NetworkView({
         </div>
       ) : null}
 
-      <div className="p-band p-remove" onClick={onRemoveNetwork}>
+      <div
+        className={`p-band p-remove${busy ? " p-disabled" : ""}`}
+        aria-disabled={busy ? true : undefined}
+        onClick={busy ? undefined : onRemoveNetwork}
+      >
         <Icon name="trash" /> Remove network
       </div>
     </>

@@ -354,7 +354,7 @@ export function Panel() {
   }
 
   async function submitRename(chainId: number, upstreamId: string, name: string) {
-    if (!gw) return;
+    if (!gw || busyRef.current) return;
     const cfgUp = findConfigUpstream(gw, chainId, upstreamId);
     if (!cfgUp) {
       setDialog(null);
@@ -372,7 +372,7 @@ export function Panel() {
   }
 
   async function submitEditAddress(chainId: number, upstreamId: string, url: string) {
-    if (!gw) return;
+    if (!gw || busyRef.current) return;
     const cfgUp = findConfigUpstream(gw, chainId, upstreamId);
     if (!cfgUp) {
       setDialog(null);
@@ -391,7 +391,7 @@ export function Panel() {
 
   async function removeNetwork(chainId: number) {
     setDialog(null);
-    if (!gw) return;
+    if (!gw || busyRef.current) return;
     setNetworkErr(null);
     try {
       await putCfgMut.mutateAsync({ gid: gw.id, config: withoutNetwork(gw.config, chainId) });
@@ -406,7 +406,7 @@ export function Panel() {
 
   async function removeEndpoint(chainId: number, upstreamId: string) {
     setDialog(null);
-    if (!gw) return;
+    if (!gw || busyRef.current) return;
     setEndpointErr(null);
     try {
       await putCfgMut.mutateAsync({ gid: gw.id, config: withoutUpstream(gw.config, chainId, upstreamId) });
@@ -510,6 +510,7 @@ export function Panel() {
           caps={caps.data}
           capsBusy={capsBusy}
           capsErr={capsErr}
+          busy={busy}
           error={endpointErr}
           onBack={() => setView({ name: "network", chainId })}
           onRename={() => {
