@@ -76,6 +76,12 @@ export function renderPanel(root: HTMLElement): () => void {
   let netCaps: api.GatewayCapabilities | null = null;
   let netCapsGid: string | null = null;
   let netCapsBusy = false;
+  // netCapsErr is the last probe's failure (mirrors tlsErr/networkErr) — a
+  // thrown probe must not render identically to "genuinely no capabilities
+  // supported" (every cell unlit), so the Capabilities band shows this
+  // instead of the meter when it's set. Cleared on the next successful
+  // (re)probe.
+  let netCapsErr: string | null = null;
   // tlsVerify is the LAST live tls/verify result run from this screen — it
   // starts from gw.tls.verification (the server's own last check) and is
   // replaced once the operator clicks the lock.
@@ -135,18 +141,21 @@ export function renderPanel(root: HTMLElement): () => void {
       return renderNetwork(gw, view.chainId, {
         caps: netCaps,
         capsBusy: netCapsBusy,
+        capsErr: netCapsErr,
         tls: tlsVerify,
         tlsBusy,
         tlsErr,
         copyFlash,
         error: networkErr,
         netHealth,
+        busy,
       });
     }
     if (view.name === "endpoint") {
       return renderEndpoint(gw, view.chainId, view.upstreamId, {
         caps: netCaps,
         capsBusy: netCapsBusy,
+        capsErr: netCapsErr,
         health: epHealth,
         healthBusy: epHealthBusy,
         copyFlash,
@@ -166,9 +175,11 @@ export function renderPanel(root: HTMLElement): () => void {
     try {
       netCaps = await api.getGatewayCapabilities(gid, refresh);
       netCapsGid = gid;
-    } catch {
+      netCapsErr = null;
+    } catch (e) {
       netCaps = null;
       netCapsGid = gid;
+      netCapsErr = message(e);
     }
     netCapsBusy = false;
     render();
@@ -214,20 +225,42 @@ export function renderPanel(root: HTMLElement): () => void {
     return parts.join("|");
   }
 
+  // netHealthInFlight is the currently-running scrape's promise (or null) —
+  // refreshHealth(true) awaits it rather than no-op'ing outright, so an
+  // explicit recheck clicked while the automatic 5s poll is mid-flight still
+  // forces a genuinely fresh read instead of silently doing nothing.
+  let netHealthInFlight: Promise<void> | null = null;
+
   // refreshHealth is the panel's live-dot heartbeat: fetch the gateway's
   // analytics scrape, then re-render ONLY if that changed at least one dot's
   // computed class (see healthSignature). netHealthBusy guards against a
-  // slow scrape overlapping the next poll tick.
-  async function refreshHealth(): Promise<void> {
-    if (!gw || netHealthBusy) return;
-    netHealthBusy = true;
-    try {
-      netHealth = await api.getGatewayAnalytics(gw.id);
-    } catch {
-      // A failed scrape leaves netHealth as whatever it last was — stale-but-
-      // real beats every dot flashing to "no data" on one transient error.
+  // slow scrape overlapping the next poll tick — that guard stays in force
+  // for the automatic poll (refreshHealth() with no argument). Pass
+  // force=true (as "recheck" does) to bypass the skip: if a scrape is
+  // already in flight, this awaits it, then runs one more of its own so the
+  // caller gets a read that started after it was asked for.
+  async function refreshHealth(force = false): Promise<void> {
+    if (!gw) return;
+    if (netHealthBusy) {
+      if (!force) return;
+      await netHealthInFlight;
+      await refreshHealth(true);
+      return;
     }
+    netHealthBusy = true;
+    const gid = gw.id;
+    netHealthInFlight = (async () => {
+      try {
+        netHealth = await api.getGatewayAnalytics(gid);
+      } catch {
+        // A failed scrape leaves netHealth as whatever it last was — stale-
+        // but-real beats every dot flashing to "no data" on one transient
+        // error.
+      }
+    })();
+    await netHealthInFlight;
     netHealthBusy = false;
+    netHealthInFlight = null;
     const sig = healthSignature();
     if (sig !== lastHealthSig) {
       lastHealthSig = sig;
@@ -319,12 +352,14 @@ export function renderPanel(root: HTMLElement): () => void {
       networkErr = null;
       tlsVerify = null;
       tlsErr = null;
+      copyFlash = false;
       render();
       if (gw && netCapsGid !== gw.id) void loadCaps(gw.id, false);
       return;
     }
     if (action === "back") {
       view = { name: "list" };
+      copyFlash = false;
       render();
       return;
     }
@@ -332,6 +367,7 @@ export function renderPanel(root: HTMLElement): () => void {
       const chainId = Number(el.dataset.chainId);
       view = Number.isFinite(chainId) ? { name: "network", chainId } : { name: "list" };
       endpointErr = null;
+      copyFlash = false;
       render();
       return;
     }
@@ -387,6 +423,7 @@ export function renderPanel(root: HTMLElement): () => void {
         if (!Number.isFinite(chainId) || !upstreamId) return;
         view = { name: "endpoint", chainId, upstreamId };
         endpointErr = null;
+        copyFlash = false;
         render();
         if (gw && netCapsGid !== gw.id) void loadCaps(gw.id, false);
         if (gw && epHealthGid !== gw.id) void loadHealth(gw.id, false);
@@ -428,7 +465,7 @@ export function renderPanel(root: HTMLElement): () => void {
       }
       case "recheck": {
         if (!gw) return;
-        const tasks: Promise<unknown>[] = [loadCaps(gw.id, true), load(), refreshHealth()];
+        const tasks: Promise<unknown>[] = [loadCaps(gw.id, true), load(), refreshHealth(true)];
         if (view.name === "endpoint") tasks.push(loadHealth(gw.id, true));
         await Promise.all(tasks);
         return;
@@ -660,7 +697,11 @@ export function renderPanel(root: HTMLElement): () => void {
       return;
     }
     closeModal();
-    await provision(gid);
+    // A freshly-added endpoint has never been probed — reload the caps cache
+    // once the recreate lands (onDone, not the "provision started" return
+    // above) so its capability meter shows a real read instead of staying
+    // unlit from before this endpoint existed.
+    await provision(gid, () => void loadCaps(gid, true));
   }
 
   // openAddNetworkModal offers the catalog's networks (Devnet appended,
@@ -789,6 +830,10 @@ export function renderPanel(root: HTMLElement): () => void {
     await provision(gid, () => {
       view = { name: "network", chainId };
       render();
+      // A freshly-added network's upstreams have never been probed — reload
+      // the caps cache once the recreate lands so this screen's meter shows
+      // a real read instead of every cell sitting unlit until "recheck".
+      void loadCaps(gid, true);
     });
   }
 
@@ -1078,7 +1123,7 @@ function renderList(
     <div class="p-band">
       <div class="p-lblrow"><span class="p-seclbl">Networks</span></div>
       ${rows}
-      <div class="p-row p-rowdiv addr" data-action="add-network">
+      <div class="p-row p-rowdiv addr${busy ? " p-disabled" : ""}" data-action="add-network"${busy ? ' aria-disabled="true"' : ""}>
         <span class="p-lead">${ic("plus")}</span>
         <span class="p-nm">Add a network</span>
       </div>
@@ -1214,6 +1259,11 @@ function networkRow(gw: api.GatewayView, nv: api.NetworkView, divider: boolean, 
 interface NetworkDetailState {
   caps: api.GatewayCapabilities | null;
   capsBusy: boolean;
+  // capsErr is the last probe's failure (see netCapsErr in renderPanel) —
+  // distinct from "probed and nothing supported", so the Capabilities band
+  // can tell the operator the check itself failed rather than showing a
+  // meter that looks identical to a real all-unsupported verdict.
+  capsErr: string | null;
   tls: api.TlsVerification | null;
   tlsBusy: boolean;
   tlsErr: string | null;
@@ -1222,6 +1272,11 @@ interface NetworkDetailState {
   // netHealth is the panel's live 5s analytics poll (see renderPanel) — the
   // source for this screen's header dot and every endpoint row's dot.
   netHealth: api.GatewayAnalytics | null;
+  // busy is the list view's in-flight lifecycle action (see renderPanel) —
+  // this screen's "Add endpoint" row dims while it's set, same as the list
+  // view's "Add a network" row, so a provision in flight doesn't look
+  // clickable.
+  busy: string | null;
 }
 
 // capStatusOf mirrors rpc.ts's statusOf (~L1195-1202): there is no "http"
@@ -1319,7 +1374,7 @@ function renderNetwork(gw: api.GatewayView | null, chainId: number, st: NetworkD
     <div class="p-band">
       <div class="p-lblrow"><span class="p-seclbl">Endpoints · ${ups.length}</span></div>
       ${upRows}
-      <div class="p-row${ups.length > 0 ? " p-rowdiv" : ""} addr" data-action="add-endpoint">
+      <div class="p-row${ups.length > 0 ? " p-rowdiv" : ""} addr${st.busy ? " p-disabled" : ""}" data-action="add-endpoint"${st.busy ? ' aria-disabled="true"' : ""}>
         <span class="p-lead">${ic("plus")}</span>
         <span class="p-nm">Add endpoint</span>
       </div>
@@ -1338,9 +1393,11 @@ function renderNetwork(gw: api.GatewayView | null, chainId: number, st: NetworkD
       ${
         st.capsBusy && !st.caps
           ? `<div class="p-caprow" style="color:var(--dim2)">probing…</div>`
-          : `<div class="p-caprow">${capCells
-              .map((c) => `<span class="p-capitem${c.lit ? " lit" : ""}">${ic(CAP_ICON[c.key])}${escapeHtml(c.label)}</span>`)
-              .join("")}</div>`
+          : st.capsErr && !st.caps
+            ? `<div class="p-caprow p-caperr">Couldn't check capabilities — ${escapeHtml(st.capsErr)}</div>`
+            : `<div class="p-caprow">${capCells
+                .map((c) => `<span class="p-capitem${c.lit ? " lit" : ""}">${ic(CAP_ICON[c.key])}${escapeHtml(c.label)}</span>`)
+                .join("")}</div>`
       }
     </div>
   `;
@@ -1382,6 +1439,9 @@ function renderNetwork(gw: api.GatewayView | null, chainId: number, st: NetworkD
 interface EndpointDetailState {
   caps: api.GatewayCapabilities | null;
   capsBusy: boolean;
+  // capsErr mirrors NetworkDetailState.capsErr — see there for why a probe
+  // failure needs its own state instead of just falling through to null caps.
+  capsErr: string | null;
   health: api.GatewayAnalytics | null;
   healthBusy: boolean;
   copyFlash: boolean;
@@ -1448,9 +1508,11 @@ function renderEndpoint(gw: api.GatewayView | null, chainId: number, upstreamId:
       ${
         st.capsBusy && !st.caps
           ? `<div class="p-caprow" style="color:var(--dim2)">probing…</div>`
-          : `<div class="p-caprow">${capCells
-              .map((c) => `<span class="p-capitem${c.lit ? " lit" : ""}">${ic(CAP_ICON[c.key])}${escapeHtml(c.label)}</span>`)
-              .join("")}</div>`
+          : st.capsErr && !st.caps
+            ? `<div class="p-caprow p-caperr">Couldn't check capabilities — ${escapeHtml(st.capsErr)}</div>`
+            : `<div class="p-caprow">${capCells
+                .map((c) => `<span class="p-capitem${c.lit ? " lit" : ""}">${ic(CAP_ICON[c.key])}${escapeHtml(c.label)}</span>`)
+                .join("")}</div>`
       }
     </div>
   `;
