@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { endpointNameFromUrl, masterState, healthClass, capabilityCells } from "./panelModel";
-import type { GatewayView } from "./api";
+import {
+  endpointNameFromUrl,
+  masterState,
+  healthClass,
+  capabilityCells,
+  withNetwork,
+  withoutNetwork,
+  withUpstream,
+  withoutUpstream,
+} from "./panelModel";
+import type { GatewayView, GatewayConfig, GatewayUpstream } from "./api";
 
 describe("endpointNameFromUrl", () => {
   it("takes the registrable label from the host", () => {
@@ -66,5 +75,93 @@ describe("capabilityCells", () => {
     expect(cells.map((c) => c.key)).toEqual(["http", "ws", "archive", "trace"]);
     expect(cells.find((c) => c.key === "archive")).toMatchObject({ lit: true, hot: true });
     expect(cells.find((c) => c.key === "trace")).toMatchObject({ lit: false });
+  });
+});
+
+const upstream = (id: string, endpoint = "https://x.example"): GatewayUpstream => ({
+  ID: id,
+  Kind: "external",
+  Endpoint: endpoint,
+  Local: false,
+  RecentOnly: false,
+});
+
+const baseConfig = (): GatewayConfig =>
+  ({
+    ProjectID: "default",
+    BindAddr: "127.0.0.1",
+    Port: 4000,
+    Networks: [{ ChainID: 1, Upstreams: [upstream("a"), upstream("b")] }],
+  }) as GatewayConfig;
+
+describe("withNetwork", () => {
+  it("appends a new network", () => {
+    const cfg = baseConfig();
+    const snapshot = JSON.parse(JSON.stringify(cfg));
+    const next = withNetwork(cfg, 369, [upstream("c")]);
+    expect(next.Networks).toHaveLength(2);
+    expect(next.Networks!.find((n) => n.ChainID === 369)?.Upstreams.map((u) => u.ID)).toEqual(["c"]);
+    expect(cfg).toEqual(snapshot);
+  });
+
+  it("replaces upstreams for a duplicate chainId", () => {
+    const cfg = baseConfig();
+    const snapshot = JSON.parse(JSON.stringify(cfg));
+    const next = withNetwork(cfg, 1, [upstream("z")]);
+    expect(next.Networks).toHaveLength(1);
+    expect(next.Networks![0].Upstreams.map((u) => u.ID)).toEqual(["z"]);
+    expect(cfg).toEqual(snapshot);
+  });
+});
+
+describe("withoutNetwork", () => {
+  it("drops the network", () => {
+    const cfg = baseConfig();
+    const snapshot = JSON.parse(JSON.stringify(cfg));
+    const next = withoutNetwork(cfg, 1);
+    expect(next.Networks).toEqual([]);
+    expect(cfg).toEqual(snapshot);
+  });
+
+  it("is a no-op when the chainId isn't present", () => {
+    const cfg = baseConfig();
+    const next = withoutNetwork(cfg, 999);
+    expect(next.Networks).toHaveLength(1);
+  });
+});
+
+describe("withUpstream", () => {
+  it("replaces an existing ID", () => {
+    const cfg = baseConfig();
+    const snapshot = JSON.parse(JSON.stringify(cfg));
+    const next = withUpstream(cfg, 1, upstream("a", "https://replaced.example"));
+    expect(next.Networks![0].Upstreams).toHaveLength(2);
+    expect(next.Networks![0].Upstreams.find((u) => u.ID === "a")?.Endpoint).toBe("https://replaced.example");
+    expect(cfg).toEqual(snapshot);
+  });
+
+  it("appends a new ID", () => {
+    const cfg = baseConfig();
+    const snapshot = JSON.parse(JSON.stringify(cfg));
+    const next = withUpstream(cfg, 1, upstream("c"));
+    expect(next.Networks![0].Upstreams.map((u) => u.ID)).toEqual(["a", "b", "c"]);
+    expect(cfg).toEqual(snapshot);
+  });
+
+  it("creates the network when the chainId doesn't exist yet", () => {
+    const cfg = baseConfig();
+    const next = withUpstream(cfg, 369, upstream("x"));
+    expect(next.Networks!.find((n) => n.ChainID === 369)?.Upstreams.map((u) => u.ID)).toEqual(["x"]);
+  });
+});
+
+describe("withoutUpstream", () => {
+  it("removes by ID and leaves the network present", () => {
+    const cfg = baseConfig();
+    const snapshot = JSON.parse(JSON.stringify(cfg));
+    const next = withoutUpstream(cfg, 1, "a");
+    expect(next.Networks).toHaveLength(1);
+    expect(next.Networks![0].Upstreams.map((u) => u.ID)).toEqual(["b"]);
+    expect(cfg).toEqual(snapshot);
   });
 });

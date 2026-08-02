@@ -1,6 +1,6 @@
 // Pure helpers for the panel. No DOM, no api calls — unit-tested in panelModel.test.ts.
 
-import type { GatewayView } from "./api";
+import type { GatewayConfig, GatewayNetwork, GatewayUpstream, GatewayView } from "./api";
 
 // endpointNameFromUrl derives a friendly default name from an endpoint URL:
 // the second-level domain label ("publicnode" from rpc.publicnode.com), or the
@@ -65,4 +65,54 @@ export function capabilityCells(statuses: Record<string, string>): CapCell[] {
     const lit = statuses[key] === "supported";
     return { key, label, lit, hot: !!hot && lit };
   });
+}
+
+// The four helpers below are the panel's only writers of GatewayConfig. Each
+// returns a NEW config — the input is never mutated — so a caller can hold
+// onto the config it read while building the one it's about to PUT.
+
+// withNetwork adds a network at chainId, or — if one is already configured for
+// that chain — replaces its upstreams wholesale.
+export function withNetwork(cfg: GatewayConfig, chainId: number, upstreams: GatewayUpstream[]): GatewayConfig {
+  const networks = cfg.Networks ?? [];
+  const idx = networks.findIndex((n) => n.ChainID === chainId);
+  const network: GatewayNetwork = { ChainID: chainId, Upstreams: upstreams };
+  const nextNetworks = idx === -1 ? [...networks, network] : networks.map((n, i) => (i === idx ? network : n));
+  return { ...cfg, Networks: nextNetworks };
+}
+
+// withoutNetwork drops the network at chainId, if one is configured.
+export function withoutNetwork(cfg: GatewayConfig, chainId: number): GatewayConfig {
+  const networks = cfg.Networks ?? [];
+  return { ...cfg, Networks: networks.filter((n) => n.ChainID !== chainId) };
+}
+
+// withUpstream adds or replaces (by ID) one upstream on chainId's network. If
+// chainId has no network configured yet, one is created holding just this
+// upstream — the panel's "add an endpoint" affordance doesn't require the
+// operator to have added the chain first.
+export function withUpstream(cfg: GatewayConfig, chainId: number, up: GatewayUpstream): GatewayConfig {
+  const networks = cfg.Networks ?? [];
+  const idx = networks.findIndex((n) => n.ChainID === chainId);
+  if (idx === -1) {
+    return { ...cfg, Networks: [...networks, { ChainID: chainId, Upstreams: [up] }] };
+  }
+  const network = networks[idx];
+  const upIdx = network.Upstreams.findIndex((u) => u.ID === up.ID);
+  const nextUpstreams =
+    upIdx === -1 ? [...network.Upstreams, up] : network.Upstreams.map((u, i) => (i === upIdx ? up : u));
+  const nextNetwork: GatewayNetwork = { ...network, Upstreams: nextUpstreams };
+  return { ...cfg, Networks: networks.map((n, i) => (i === idx ? nextNetwork : n)) };
+}
+
+// withoutUpstream removes one upstream by ID from chainId's network. The
+// network itself is left in place, even with zero upstreams left — only
+// withoutNetwork removes a network.
+export function withoutUpstream(cfg: GatewayConfig, chainId: number, upstreamId: string): GatewayConfig {
+  const networks = cfg.Networks ?? [];
+  const idx = networks.findIndex((n) => n.ChainID === chainId);
+  if (idx === -1) return { ...cfg, Networks: networks };
+  const network = networks[idx];
+  const nextNetwork: GatewayNetwork = { ...network, Upstreams: network.Upstreams.filter((u) => u.ID !== upstreamId) };
+  return { ...cfg, Networks: networks.map((n, i) => (i === idx ? nextNetwork : n)) };
 }
