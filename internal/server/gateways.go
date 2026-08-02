@@ -1012,7 +1012,16 @@ func networkViews(cfg config.Config, gw config.Gateway, resolved catalog.Gateway
 			}
 			if err != nil {
 				uv.Problem = redactKeys(err.Error(), keys)
-				uv.Label = unresolvedLabel(u)
+				// An operator-set Name still wins even here: it is the thing
+				// they recognise their row by, and that is exactly what they
+				// need most when the row has gone unhealthy — reverting to a
+				// generic "public endpoint (unusable)" the moment it breaks
+				// would hide the one label the operator chose.
+				if name := strings.TrimSpace(u.Name); name != "" {
+					uv.Label = name
+				} else {
+					uv.Label = unresolvedLabel(u)
+				}
 			} else {
 				nv.Serviceable = true
 			}
