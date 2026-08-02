@@ -26,11 +26,15 @@ vi.mock("./machine", () => ({
     el.textContent = `machine-screen:${id}`;
   }),
 }));
-vi.mock("./security", () => ({
-  renderSecurity: vi.fn((el: HTMLElement, id: string) => {
-    el.textContent = `security-screen:${id}`;
-  }),
-}));
+vi.mock("./screens/Security/Security", async () => {
+  const { useParams } = await import("react-router-dom");
+  return {
+    Security: () => {
+      const { id } = useParams<{ id: string }>();
+      return <div>security-screen:{id}</div>;
+    },
+  };
+});
 vi.mock("./diag", () => ({
   renderDiagnostics: vi.fn((el: HTMLElement, id: string) => {
     el.textContent = `diag-screen:${id}`;
