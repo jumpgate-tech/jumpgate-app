@@ -155,7 +155,7 @@ export function renderPanel(root: HTMLElement): () => void {
       streamStop?.();
       streamStop = null;
       busy = null;
-      if (ev.err) actionErr = "Provisioning failed — see the machine's setup log.";
+      if (ev.err) actionErr = `Provisioning failed: ${ev.err}`;
       void load();
     });
   }
