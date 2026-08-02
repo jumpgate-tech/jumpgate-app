@@ -297,11 +297,16 @@ export function renderPanel(root: HTMLElement): () => void {
       streamStop?.();
       streamStop = null;
       busy = null;
-      if (ev.err) {
-        actionErr = `Provisioning failed: ${ev.err}`;
-        render();
-        return;
-      }
+      // Unconditional, mirroring provision() below: by the time this stream
+      // fires, createGateway + putGatewayConfig have already succeeded, so a
+      // "default" gateway record exists server-side even on an error here —
+      // returning early without reloading would leave gw null and the panel
+      // stuck showing the empty "Set up my endpoint" hero over a gateway that
+      // now actually exists, so a retry would 400 with "already exists"
+      // instead of showing the real failure. actionErr survives the reload
+      // (load() never touches it), so the reason still shows once the
+      // now-non-null gateway state renders.
+      if (ev.err) actionErr = `Provisioning failed: ${ev.err}`;
       setupLog = [];
       void load();
     });
