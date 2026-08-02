@@ -65,6 +65,34 @@ describe("NetworkView", () => {
     await waitFor(() => expect(onVerifyTls).toHaveBeenCalled());
   });
 
+  it("disables add-endpoint and remove-network while a lifecycle action is in flight", () => {
+    const onAddEndpoint = vi.fn();
+    const onRemoveNetwork = vi.fn();
+    render(
+      <NetworkView
+        gw={makeGateway()}
+        chainId={1}
+        health={undefined}
+        caps={undefined}
+        capsBusy={false}
+        capsErr={null}
+        busy={"create"}
+        error={null}
+        {...handlers}
+        onAddEndpoint={onAddEndpoint}
+        onRemoveNetwork={onRemoveNetwork}
+      />,
+    );
+    const add = screen.getByText("Add endpoint").closest(".p-row") as HTMLElement;
+    const remove = screen.getByText("Remove network").closest(".p-remove") as HTMLElement;
+    expect(add).toHaveClass("p-disabled");
+    expect(remove).toHaveClass("p-disabled");
+    add.click();
+    remove.click();
+    expect(onAddEndpoint).not.toHaveBeenCalled();
+    expect(onRemoveNetwork).not.toHaveBeenCalled();
+  });
+
   it("shows 'no longer configured' when the chain has gone", () => {
     render(
       <NetworkView
