@@ -4,7 +4,7 @@
 *.out
 
 # Web tooling
-cmd/valve-node/web/node_modules/
+cmd/valve-node-app/web/node_modules/
 
 # goreleaser
 /dist/
