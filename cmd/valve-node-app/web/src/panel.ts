@@ -9,6 +9,7 @@ import "./panel.css";
 import * as api from "./api";
 import { onAction, escapeHtml, confirmModal } from "./ui";
 import { masterState, healthClass, capabilityCells, type MasterState, type CapCell } from "./panelModel";
+import { SETUP_CHAINS, internalTLSConfig } from "./home";
 
 // Inline SVG sprite (currentColor stroke) — cross-platform, no SF Symbols.
 const SPRITE = `<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
@@ -44,6 +45,11 @@ export function renderPanel(root: HTMLElement): () => void {
   let busy: string | null = null;
   let actionErr: string | null = null;
   let streamStop: (() => void) | null = null;
+  // setupLog accumulates the one-click setup's progress lines (registering
+  // the machine, the Docker gate, creating the gateway, each setup-stream
+  // event) — cleared at the start of every attempt so a retry doesn't show
+  // a previous failed run's tail above the new one.
+  let setupLog: string[] = [];
 
   root.innerHTML = SPRITE + `<div class="p-wrap"><div class="p-panel" id="p-card"></div></div>`;
   const card = root.querySelector<HTMLElement>("#p-card")!;
@@ -65,13 +71,18 @@ export function renderPanel(root: HTMLElement): () => void {
     if (err) return bandError(err);
     if (view.name === "network") return renderNetwork(gw, view.chainId);
     if (view.name === "endpoint") return renderEndpoint(gw, view.chainId, view.upstreamId);
-    return renderList(gw, busy, actionErr);
+    return renderList(gw, busy, actionErr, setupLog);
   }
 
   onAction(card, (action, el) => {
     void handleAction(action, el);
   });
   async function handleAction(action: string, el: HTMLElement): Promise<void> {
+    if (action === "setup") {
+      if (busy) return;
+      await runSetup();
+      return;
+    }
     if (action === "power") {
       if (!gw || busy) return;
       const m = masterState(gw);
@@ -160,6 +171,142 @@ export function renderPanel(root: HTMLElement): () => void {
     });
   }
 
+  // runSetup is the empty state's one-click: it stands up a whole gateway
+  // from nothing, mirroring home.ts's setupEndpoint step for step (register
+  // this machine, gate on Docker, create the gateway, add valve's known set
+  // for Ethereum + PulseChain, provision, follow the setup stream) so the
+  // panel's own path never drifts from the eRPC screen's. It shares
+  // SETUP_CHAINS and internalTLSConfig with home.ts rather than a second copy.
+  async function runSetup(): Promise<void> {
+    if (busy) return;
+    busy = "setup";
+    actionErr = null;
+    setupLog = [];
+    render();
+
+    const say = (line: string): void => {
+      setupLog = [...setupLog, line];
+      render();
+    };
+    const fail = (msg: string, h?: string): void => {
+      busy = null;
+      actionErr = h ? `${msg} — ${h}` : msg;
+      render();
+    };
+
+    say("Preparing your endpoint…");
+
+    // 1. Register this machine as a local target if it is not already one.
+    try {
+      const targets = await api.listTargets();
+      if (!targets.some((t) => t.id === "local")) {
+        await api.addTarget({ id: "local", mode: "local" });
+      }
+    } catch (e) {
+      fail(`Could not register this machine: ${message(e)}`, hint(e));
+      return;
+    }
+
+    // 2. A gateway is a container, so this needs a reachable Docker engine —
+    //    checked up front, clearly, with the engine's own hint, rather than
+    //    failing later mid-provision.
+    try {
+      const c = await api.getContainers("local");
+      if (!c.docker.reachable) {
+        fail(
+          c.docker.detail || "A gateway runs as a container, and no Docker engine answered on this machine.",
+          c.docker.hint || "Start Docker Desktop, OrbStack or colima, then try again.",
+        );
+        return;
+      }
+    } catch (e) {
+      fail(`Could not check Docker on this machine: ${message(e)}`, hint(e));
+      return;
+    }
+
+    // 3. Create the gateway, fronted by the internal-CA HTTPS front.
+    say("Creating the gateway…");
+    let gid = "default";
+    try {
+      const created = await api.createGateway({
+        id: gid,
+        placement: { targetId: "local", backend: "docker" },
+        config: internalTLSConfig([]),
+      });
+      gid = created.id;
+    } catch (e) {
+      fail(`Could not create the gateway: ${message(e)}`, hint(e));
+      return;
+    }
+
+    // 4. Add valve's known set for Ethereum + PulseChain — the same vetted,
+    //    measured set the RPC screen's "Add valve's set…" adds. Devnet is
+    //    deliberately excluded: this builds a real public endpoint, not a
+    //    scratch chain.
+    say("Adding Ethereum and PulseChain endpoints…");
+    const networks: api.GatewayNetwork[] = [];
+    for (const { chainId } of SETUP_CHAINS) {
+      try {
+        const set = await api.knownSet(gid, chainId);
+        const urls = (set.endpoints ?? []).filter((e) => !e.alreadyAdded).map((e) => e.url);
+        if (urls.length === 0) continue;
+        networks.push({
+          ChainID: chainId,
+          Upstreams: urls.map((url, i) => ({
+            ID: `public-${chainId}-${i + 1}`,
+            Kind: "external",
+            Endpoint: url,
+            Local: false,
+            RecentOnly: false,
+          })),
+        });
+      } catch (e) {
+        fail(`Could not read valve's set for chain ${chainId}: ${message(e)}`, hint(e));
+        return;
+      }
+    }
+    if (networks.length === 0) {
+      fail("valve has no measured endpoints for Ethereum or PulseChain right now, so there was nothing to add.");
+      return;
+    }
+    try {
+      await api.putGatewayConfig(gid, internalTLSConfig(networks));
+    } catch (e) {
+      fail(`Could not save the endpoints: ${message(e)}`, hint(e));
+      return;
+    }
+
+    // 5. Provision the container and follow the placement machine's setup
+    //    stream to completion, exactly as provision() above does for an
+    //    existing gateway's create/recreate.
+    say("Starting the gateway… the first run pulls the eRPC and Caddy images.");
+    let started: { targetId: string };
+    try {
+      started = await api.provisionGateway(gid);
+    } catch (e) {
+      fail(`Could not start the gateway: ${message(e)}`, hint(e));
+      return;
+    }
+
+    streamStop?.();
+    streamStop = api.streamSetup(started.targetId, (ev) => {
+      const line = ev.err ? `${ev.stepId}: ${ev.err}` : ev.line ? `${ev.stepId}: ${ev.line}` : `${ev.stepId}: done`;
+      say(line);
+      const finished = !!ev.err || (ev.stepId === FINAL_STEP && !!ev.done);
+      if (!finished) return;
+      streamStop?.();
+      streamStop = null;
+      busy = null;
+      if (ev.err) {
+        actionErr = `Provisioning failed: ${ev.err}`;
+        render();
+        return;
+      }
+      setupLog = [];
+      void load();
+    });
+  }
+
   // runWipe confirms (wipeDiscards names exactly what is destroyed) before
   // calling the destructive endpoint, then reloads to show the wiped state.
   async function runWipe(g: api.GatewayView): Promise<void> {
@@ -202,13 +349,26 @@ function primaryGateway(gws: api.GatewayView[] | null): api.GatewayView | null {
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
+// hint surfaces the server's operator-facing hint verbatim (e.g. "start
+// Docker Desktop / OrbStack / colima") — the same helper home.ts's
+// setupEndpoint uses, kept local here since it's two lines and both files
+// exporting it from a shared spot would be more indirection than it's worth.
+function hint(e: unknown): string | undefined {
+  return e instanceof api.ApiError ? e.hint : undefined;
+}
 function bandError(m: string): string {
   return `<div class="p-band" style="padding:16px;color:var(--red)">${escapeHtml(m)}</div>`;
 }
 
 // --- list view -------------------------------------------------------------
 
-function renderList(gw: api.GatewayView | null, busy: string | null, actionErr: string | null): string {
+function renderList(
+  gw: api.GatewayView | null,
+  busy: string | null,
+  actionErr: string | null,
+  setupLog: string[],
+): string {
+  if (gw === null) return renderEmpty(busy, actionErr, setupLog);
   const m = masterState(gw);
   const rows = gw?.networks?.length
     ? gw.networks.map((nv, i) => networkRow(gw, nv, i > 0)).join("")
@@ -228,6 +388,35 @@ function renderList(gw: api.GatewayView | null, busy: string | null, actionErr: 
         <span class="p-lead">${ic("plus")}</span>
         <span class="p-nm">Add a network</span>
       </div>
+    </div>
+  `;
+}
+
+// renderEmpty is the zero-gateway state: no gateway exists yet on this
+// fleet, so instead of a networks list the card shows one centered hero —
+// the same power button, dimmed, as the one-click "set up my endpoint"
+// action. setupLog/actionErr surface the one-click flow's progress and any
+// failure right on this card; nothing here navigates away.
+function renderEmpty(busy: string | null, actionErr: string | null, setupLog: string[]): string {
+  const running = busy === "setup";
+  const errLine = actionErr ? `<div class="p-emptyerr">${escapeHtml(actionErr)}</div>` : "";
+  const log = setupLog.length
+    ? `<div class="p-setup-log" aria-live="polite">${setupLog.map((l) => `<div>${escapeHtml(l)}</div>`).join("")}</div>`
+    : "";
+  return `
+    <div class="p-band p-phead">
+      <span class="p-brand"><span class="p-bd"></span> Valve</span>
+    </div>
+    <div class="p-band p-empty">
+      <button type="button" class="p-emptybtn" data-action="setup"${running ? " disabled" : ""}>
+        <div class="p-pbtn off big${running ? " busy" : ""}">${ic("power")}</div>
+      </button>
+      <div class="p-emptytitle">Set up my endpoint</div>
+      <div class="p-emptysub">
+        One click gets you a managed RPC endpoint for Ethereum and PulseChain — no node required.
+      </div>
+      ${errLine}
+      ${log}
     </div>
   `;
 }
@@ -256,12 +445,17 @@ function powerBand(gw: api.GatewayView | null, m: MasterState, busy: string | nu
   const subText = m.tone === "blocked" ? (m.blocked ?? "") : m.sub;
   const busyClass = busy ? " busy" : "";
   const errLine = actionErr ? `<div class="p-ps" style="color:var(--red)">${escapeHtml(actionErr)}</div>` : "";
+  // hintLine surfaces the server's own operator-facing reason (e.g. "start
+  // Docker Desktop / OrbStack / colima") under the blocked sub-line — the
+  // detail that turns "blocked" into something actionable.
+  const hintLine = m.tone === "blocked" && gw?.hint ? `<div class="p-ps">${escapeHtml(gw.hint)}</div>` : "";
   const power = `
     <div class="p-power${busyClass}" data-action="power">
       <div class="p-pbtn ${m.tone}">${ic("power")}</div>
       <div class="p-pmeta">
         <div class="p-pl">${escapeHtml(m.label)}</div>
         <div class="p-ps"${m.tone === "blocked" ? ' style="color:var(--red)"' : ""}>${escapeHtml(subText)}</div>
+        ${hintLine}
         ${errLine}
       </div>
     </div>

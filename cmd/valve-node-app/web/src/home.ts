@@ -25,7 +25,7 @@ const FINAL_STEP = "run";
 // serving: Ethereum and PulseChain, by valve's own measured known set. The
 // devnet (1337) is deliberately absent — this flow builds a real public
 // endpoint, not a scratch chain.
-const SETUP_CHAINS = [
+export const SETUP_CHAINS = [
   { chainId: 1, name: "Ethereum" },
   { chainId: 369, name: "PulseChain" },
 ];
@@ -309,31 +309,33 @@ export function renderHome(root: HTMLElement): () => void {
     });
   }
 
-  // internalTLSConfig is the gateway config this flow creates and updates: an
-  // eRPC on 4000 fronted by Caddy's internal CA (HTTPSPort 0 → 443). Hostname
-  // is left empty on purpose — the server fills a name whose wildcard already
-  // resolves to loopback.
-  function internalTLSConfig(networks: api.GatewayNetwork[]): api.GatewayConfig {
-    return {
-      ProjectID: "main",
-      BindAddr: "127.0.0.1",
-      Port: 4000,
-      Networks: networks,
-      TLS: {
-        Enabled: true,
-        Hostname: "",
-        CertSource: "internal",
-        CertFile: "",
-        KeyFile: "",
-        HTTPSPort: 0,
-        BindAddr: "",
-        ImageRef: "",
-      },
-    };
-  }
-
   return () => {
     disposed = true;
+  };
+}
+
+// internalTLSConfig is the gateway config the one-click setup flow creates and
+// updates: an eRPC on 4000 fronted by Caddy's internal CA (HTTPSPort 0 → 443).
+// Hostname is left empty on purpose — the server fills a name whose wildcard
+// already resolves to loopback. Exported so the Easy-Button panel's own
+// one-click setup (panel.ts) builds the exact same config rather than a
+// second, driftable version of it.
+export function internalTLSConfig(networks: api.GatewayNetwork[]): api.GatewayConfig {
+  return {
+    ProjectID: "main",
+    BindAddr: "127.0.0.1",
+    Port: 4000,
+    Networks: networks,
+    TLS: {
+      Enabled: true,
+      Hostname: "",
+      CertSource: "internal",
+      CertFile: "",
+      KeyFile: "",
+      HTTPSPort: 0,
+      BindAddr: "",
+      ImageRef: "",
+    },
   };
 }
 
