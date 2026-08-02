@@ -1,13 +1,12 @@
-// Hash-routed SPA shell: #/ (home), #/targets, #/rpc, #/analytics/<gid>,
-// #/machine/<id>, #/security/<id>, #/diag/<id>, #/settings. No framework — each
-// screen module renders into a shared content element and returns a cleanup
-// function (closes any EventSource / timers) that main.ts calls before routing
-// away.
+// Hash-routed SPA shell: #/ (panel), #/panel, #/targets, #/rpc,
+// #/analytics/<gid>, #/machine/<id>, #/security/<id>, #/diag/<id>,
+// #/settings. No framework — each screen module renders into a shared content
+// element and returns a cleanup function (closes any EventSource / timers)
+// that main.ts calls before routing away.
 //
-// The empty hash is the capability-detected home (home.ts): it opens on the
-// machines view for a fleet that can run a node and on an eRPC-first hero for a
-// controller that cannot. eRPC is the first-class, node-independent path, so it
-// leads the nav and is the default surface for GUI-only users.
+// The empty hash (and any unrecognised route) lands on the Easy-Button panel
+// (panel.ts), which replaced the old capability-detected home (home.ts, still
+// present but no longer routed to) as the default landing.
 //
 // #/machine/<id> is the collapsed per-machine page (setup + dashboard + logs +
 // devnet as expandable sections). The four routes it replaced — #/setup,
@@ -16,8 +15,8 @@
 import "./style.css";
 import { renderAnalytics } from "./analytics";
 import { renderDiagnostics } from "./diag";
-import { renderHome } from "./home";
 import { renderMachine } from "./machine";
+import { renderPanel } from "./panel";
 import { renderSecurity } from "./security";
 import { renderSettings } from "./settings";
 import { renderShell } from "./ui";
@@ -139,12 +138,15 @@ function route(): void {
     case "targets":
       currentCleanup = mount((root) => renderTargets(root));
       break;
-    // The empty hash and anything unrecognised land on the capability-detected
-    // home, which decides between the machines view and the eRPC-first hero and
-    // (for a node-capable fleet) redirects to #/targets itself.
+    case "panel":
+      currentCleanup = mount((root) => renderPanel(root));
+      break;
+    // The empty hash and anything unrecognised land on the Easy-Button panel,
+    // which is now the default landing (it replaces the old capability-detected
+    // home for that role).
     case "home":
     default:
-      currentCleanup = mount((root) => renderHome(root));
+      currentCleanup = mount((root) => renderPanel(root));
       break;
   }
 }
