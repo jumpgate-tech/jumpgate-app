@@ -629,6 +629,36 @@ func TestGateways_UpstreamNameOverridesTheDerivedLabel(t *testing.T) {
 	}
 }
 
+// A set Name must survive resolution FAILING, not just succeeding — that is
+// exactly when an operator most needs to recognise their own row (Task 10's
+// rename flow can be applied to an already-unhealthy endpoint). This drives
+// the real view path (networkViews, via GET), not resolveUpstream directly,
+// because the failure-path label is decided there, not in resolveUpstream.
+func TestGateways_UpstreamNameSurvivesAnUnresolvedUpstream(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{
+			{ChainID: catalog.DevnetChainID, Upstreams: []catalog.GatewayUpstream{
+				// There is no devnet configured on "local", so this fails to resolve.
+				{ID: "devnet", Kind: catalog.UpstreamManagedDevnet, TargetID: "local", Name: "my node"},
+			}},
+		},
+	})
+
+	got := decode[gatewayView](t, a.do(t, "GET", "/api/gateways/default", nil))
+	if len(got.Networks) != 1 || len(got.Networks[0].Upstreams) != 1 {
+		t.Fatalf("networks/upstreams = %+v, want exactly one of each", got.Networks)
+	}
+	up := got.Networks[0].Upstreams[0]
+	if up.Problem == "" {
+		t.Fatal("this upstream must still be unresolvable — that is the case under test")
+	}
+	if up.Label != "my node" {
+		t.Errorf("label = %q, want the operator-set Name %q to survive an unresolved upstream", up.Label, "my node")
+	}
+}
+
 // ---------------------------------------------------------------------
 // orphaned containers — what a merge left running
 // ---------------------------------------------------------------------
