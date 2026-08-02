@@ -22,7 +22,7 @@ import {
   withoutUpstream,
   endpointNameFromUrl,
 } from "../../panelModel";
-import { SETUP_CHAINS, internalTLSConfig } from "../../home";
+import { SETUP_CHAINS, internalTLSConfig } from "../../lib/gatewaySetup";
 import {
   useGateways,
   useGatewayHealth,
@@ -166,9 +166,9 @@ export function Panel() {
   }
 
   // runSetup: the empty state's one-click. Stands up a whole gateway from
-  // nothing, mirroring home.ts's setupEndpoint step for step, so the panel's
-  // path never drifts from the eRPC screen's — it shares SETUP_CHAINS and
-  // internalTLSConfig with home.ts rather than a second copy.
+  // nothing, so the panel's path never drifts from the eRPC screen's — it
+  // shares SETUP_CHAINS and internalTLSConfig (lib/gatewaySetup.ts) rather
+  // than a second copy.
   async function runSetup() {
     if (busyRef.current) return;
     setBusy("setup");

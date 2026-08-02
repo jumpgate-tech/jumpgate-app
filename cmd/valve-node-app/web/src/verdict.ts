@@ -32,7 +32,6 @@
 //     peers. Measured per-machine health is a separate, later signal.
 
 import * as api from "./api";
-import { badge, escapeHtml } from "./ui";
 
 export interface FleetVerdict {
   level: "ok" | "attention";
@@ -82,28 +81,6 @@ export function computeFleetVerdict(targets: api.Target[], catalog: api.Catalog)
     sentence: `All ${targets.length} ${plural} healthy — ${humanList(names)}.`,
     machines: [],
   };
-}
-
-// renderVerdictLine paints the verdict as one prominent line: a status pill
-// (green for ok, amber for attention) followed by the sentence, and — when the
-// verdict implicates machines — a link to each so the operator can act without
-// hunting. Minimal DOM, existing classes only; no framework.
-export function renderVerdictLine(root: HTMLElement, v: FleetVerdict): void {
-  // Implicated machines link to their setup route, which is exactly what an
-  // un-set-up machine needs. (The machine-page collapse keeps #/setup alive as
-  // a redirect, so the link stays valid once the routes merge.)
-  const links = v.machines.length
-    ? ` <span class="verdict-machines">${v.machines
-        .map((id) => `<a href="#/setup/${encodeURIComponent(id)}">${escapeHtml(id)}</a>`)
-        .join(" ")}</span>`
-    : "";
-
-  root.innerHTML = `
-    <div class="verdict-line verdict-${v.level}">
-      ${badge(v.level === "ok" ? "OK" : "Attention", v.level === "ok" ? "ok" : "warn")}
-      <strong class="verdict-sentence">${escapeHtml(v.sentence)}</strong>${links}
-    </div>
-  `;
 }
 
 // distinct preserves first-seen order while dropping repeats — two machines on
