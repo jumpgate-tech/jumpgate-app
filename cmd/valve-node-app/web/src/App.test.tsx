@@ -16,10 +16,8 @@ vi.mock("./targets", () => ({
     el.textContent = "targets-screen";
   }),
 }));
-vi.mock("./settings", () => ({
-  renderSettings: vi.fn((el: HTMLElement) => {
-    el.textContent = "settings-screen";
-  }),
+vi.mock("./screens/Settings/Settings", () => ({
+  Settings: () => <div>settings-screen</div>,
 }));
 vi.mock("./machine", () => ({
   renderMachine: vi.fn((el: HTMLElement, id: string) => {
