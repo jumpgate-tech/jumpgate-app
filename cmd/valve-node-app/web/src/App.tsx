@@ -6,9 +6,9 @@ import { Security } from "./screens/Security/Security";
 import { Diagnostics } from "./screens/Diagnostics/Diagnostics";
 import { Settings } from "./screens/Settings/Settings";
 import { Targets } from "./screens/Targets/Targets";
+import { Analytics } from "./screens/Analytics/Analytics";
 import { renderRPC } from "./rpc";
 import { renderMachine } from "./machine";
-import { renderAnalytics } from "./analytics";
 
 const NAV = [
   { to: "#/rpc", nav: "rpc", label: "RPC" },
@@ -34,10 +34,6 @@ function LegacyRPC() {
 function LegacyMachine() {
   const { id } = useParams();
   return <Bridge render={useCallback((el: HTMLElement) => renderMachine(el, id!), [id])} />;
-}
-function LegacyAnalytics() {
-  const { id } = useParams();
-  return <Bridge render={useCallback((el: HTMLElement) => renderAnalytics(el, id!), [id])} />;
 }
 function RedirectToMachine() {
   const { id } = useParams();
@@ -75,7 +71,7 @@ export function App() {
           <Route path="/security" element={<Navigate to="/targets" replace />} />
           <Route path="/diag/:id" element={<Diagnostics />} />
           <Route path="/diag" element={<Navigate to="/targets" replace />} />
-          <Route path="/analytics/:id" element={<LegacyAnalytics />} />
+          <Route path="/analytics/:id" element={<Analytics />} />
           <Route path="/analytics" element={<Navigate to="/rpc" replace />} />
           {["setup", "dash", "logs", "services"].map((p) => (
             <Route key={p} path={`/${p}/:id`} element={<RedirectToMachine />} />
