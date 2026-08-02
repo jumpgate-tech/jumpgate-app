@@ -94,6 +94,13 @@ type GatewayUpstream struct {
 	// loud failure rather than a gateway that renders and serves nothing.
 	Endpoint string
 
+	// Name is an operator-chosen label for this upstream ("" → the resolver
+	// derives one from Kind/Endpoint instead, as it always used to). Set, it
+	// overrides that derived label everywhere the upstream is shown — the
+	// point of letting someone rename "public endpoint" to something they
+	// recognise.
+	Name string `json:"Name,omitempty"`
+
 	// Local marks an upstream the operator runs.
 	//
 	// It is preference RELATIVE TO A LOCAL UPSTREAM, not an absolute ranking:

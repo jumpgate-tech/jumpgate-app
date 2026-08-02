@@ -727,7 +727,18 @@ func resolveGateway(cfg config.Config, gw config.Gateway) (catalog.GatewayConfig
 }
 
 // resolveUpstream derives one upstream's dialable URL and a human label.
+//
+// An operator-set Name overrides the derived label on success; it is left
+// alone on failure so a dead reference still reads as what kind of thing
+// went missing (unresolvedLabel takes over from there, in networkViews).
 func resolveUpstream(cfg config.Config, gw config.Gateway, u catalog.GatewayUpstream) (endpoint, label string, err error) {
+	defer func() {
+		if err == nil {
+			if name := strings.TrimSpace(u.Name); name != "" {
+				label = name
+			}
+		}
+	}()
 	switch u.KindOrDefault() {
 	case catalog.UpstreamExternal:
 		e := strings.TrimSpace(u.Endpoint)

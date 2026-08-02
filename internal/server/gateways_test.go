@@ -599,6 +599,36 @@ func TestGateways_AnEndpointTheOperatorOwnsIsNotCalledPublic(t *testing.T) {
 	}
 }
 
+// An operator-set Name overrides the derived label; an empty Name leaves the
+// derived label exactly as it was.
+func TestGateways_UpstreamNameOverridesTheDerivedLabel(t *testing.T) {
+	cfg := config.Config{Targets: []config.Target{{ID: "here", Mode: "local"}}}
+	gw := config.Gateway{
+		ID:        "default",
+		Placement: config.GatewayPlacement{TargetID: "here", Backend: "docker"},
+		Config: catalog.GatewayConfig{Networks: []catalog.GatewayNetwork{{ChainID: 369, Upstreams: []catalog.GatewayUpstream{
+			{ID: "named", Endpoint: "https://rpc.pulsechain.com", Name: "my node"},
+			{ID: "unnamed", Endpoint: "https://rpc.pulsechain.com"},
+		}}}},
+	}
+
+	_, named, err := resolveUpstream(cfg, gw, gw.Config.Networks[0].Upstreams[0])
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if named != "my node" {
+		t.Errorf("label = %q, want the operator-set Name %q", named, "my node")
+	}
+
+	_, unnamed, err := resolveUpstream(cfg, gw, gw.Config.Networks[0].Upstreams[1])
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !strings.Contains(unnamed, "public endpoint") {
+		t.Errorf("an upstream with no Name should keep its derived label: %q", unnamed)
+	}
+}
+
 // ---------------------------------------------------------------------
 // orphaned containers — what a merge left running
 // ---------------------------------------------------------------------
@@ -1159,6 +1189,42 @@ func TestGatewayView_ConfigRoundTripsBackToRealURLs(t *testing.T) {
 	}
 	if got := ups[1].Endpoint; got != "https://rpc.example.com" {
 		t.Errorf("the added upstream = %q, want it stored verbatim", got)
+	}
+}
+
+// Full stack, not just the resolver: PUT a config with an upstream Name,
+// GET the gateway back, and check the JSON label the RPC screen actually
+// renders. This is what proves the JSON round-trip (config.Save/Load) keeps
+// Name, not just that resolveUpstream honours it in memory.
+func TestGatewayView_UpstreamNameRoundTripsToTheLabel(t *testing.T) {
+	a := gatewayServer(t)
+	addGateway(t, a, "default", "local", catalog.GatewayConfig{
+		Port: 4100,
+		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+			{ID: "named-1", Kind: catalog.UpstreamExternal, Endpoint: "https://rpc.example.com", Name: "my node"},
+		}}},
+	})
+
+	res := a.do(t, "GET", "/api/gateways/default", nil)
+	view := decode[gatewayView](t, res)
+
+	if len(view.Networks) != 1 || len(view.Networks[0].Upstreams) != 1 {
+		t.Fatalf("view networks/upstreams = %+v, want exactly one of each", view.Networks)
+	}
+	if got := view.Networks[0].Upstreams[0].Label; got != "my node" {
+		t.Errorf("label = %q, want the round-tripped Name %q", got, "my node")
+	}
+
+	stored, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	gw, ok := stored.FindGateway("default")
+	if !ok {
+		t.Fatal("the gateway vanished")
+	}
+	if got := gw.Config.Networks[0].Upstreams[0].Name; got != "my node" {
+		t.Errorf("stored Name = %q, want it to survive the save/load round trip", got)
 	}
 }
 

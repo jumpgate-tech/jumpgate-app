@@ -649,6 +649,10 @@ export interface GatewayUpstream {
   // Endpoint is stored only for "external"; for managed kinds it is derived
   // and whatever is stored here is ignored.
   Endpoint: string;
+  // Name is an operator-chosen label. Unset, the resolver derives one from
+  // Kind/Endpoint instead; set, it becomes UpstreamView.label everywhere this
+  // upstream is shown.
+  Name?: string;
   Local: boolean;
   RecentOnly: boolean;
 }
