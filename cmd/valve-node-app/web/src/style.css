@@ -15,6 +15,30 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
+/* Light theme. The whole app is tokenized, so a light appearance is just a
+   set of overrides on the same tokens, gated on <html data-theme="light">
+   (theme.ts stamps this; "system" is resolved to light/dark there, never in
+   CSS). The default :root above stays dark, so no data-theme — and every
+   [data-theme="dark"] — keeps the original look untouched. */
+:root[data-theme="light"] {
+  --bg: #f3f6f4;
+  --bg-raised: #ffffff;
+  --border: #d6ded9;
+  --fg: #17211c;
+  --fg-muted: #566159;
+  --accent: #0b8f54;
+  --accent-dim: #bfe6cd;
+  --warn: #97701a;
+  --bad: #c33a24;
+  --ok: #0b8f54;
+  --link: #0e7d92;
+}
+/* .btn-primary hardcodes near-black text for contrast on the dark-theme green;
+   on the light theme's deeper green, white reads better. */
+:root[data-theme="light"] .btn-primary {
+  color: #ffffff;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -2097,4 +2121,69 @@ table.an-errors td {
 /* The implicated machines hang off the sentence as inline actions. */
 .verdict-machines a {
   margin-left: 0.5rem;
+}
+
+/* --- settings sheet (panel gear) ------------------------------------------
+   The panel's gear opens a standard app modal (rendered on document.body,
+   outside .p-wrap), so these use the app :root tokens and theme with it. */
+.set-group {
+  margin: 0 0 18px;
+}
+.set-group:last-of-type {
+  margin-bottom: 4px;
+}
+.set-label {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  font-weight: 600;
+  margin-bottom: 9px;
+}
+.set-label.danger {
+  color: var(--bad);
+}
+.set-wipe {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+.set-wipe .p-i {
+  width: 16px;
+  height: 16px;
+}
+
+/* segmented System / Light / Dark control */
+.theme-seg {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.theme-opt {
+  flex: 1 1 0;
+  padding: 8px 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  border: 0;
+  border-left: 1px solid var(--border);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: 0.12s;
+}
+.theme-opt:first-child {
+  border-left: 0;
+}
+.theme-opt:hover {
+  color: var(--fg);
+}
+/* --bg as the text color reads well on the accent in both themes: near-black
+   on dark-green, near-white on light-blue-green. */
+.theme-opt.active {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
 }

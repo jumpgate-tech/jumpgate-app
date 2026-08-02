@@ -13,6 +13,7 @@
 // #/dash, #/logs, #/services — are kept alive as REDIRECTS to it so existing
 // deep links still land somewhere, preserving the id.
 import "./style.css";
+import { initTheme } from "./theme";
 import { renderAnalytics } from "./analytics";
 import { renderDiagnostics } from "./diag";
 import { renderMachine } from "./machine";
@@ -24,6 +25,10 @@ import { renderRPC } from "./rpc";
 import { renderTargets } from "./targets";
 
 type Cleanup = () => void;
+
+// Stamp the resolved light/dark/system theme onto <html> before the shell
+// renders, so the first paint is already in the right theme (no dark flash).
+initTheme();
 
 const appRoot = document.querySelector<HTMLDivElement>("#app")!;
 const { contentEl, setActiveNav } = renderShell(appRoot);

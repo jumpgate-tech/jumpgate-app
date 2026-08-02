@@ -23,6 +23,7 @@ import {
   type CapCell,
 } from "./panelModel";
 import { SETUP_CHAINS, internalTLSConfig } from "./home";
+import { getThemePref, setThemePref, type ThemePref } from "./theme";
 
 // Inline SVG sprite (currentColor stroke) — cross-platform, no SF Symbols.
 const SPRITE = `<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
@@ -40,6 +41,7 @@ const SPRITE = `<svg width="0" height="0" style="position:absolute" aria-hidden=
   <symbol id="p-chevR" viewBox="0 0 24 24"><path d="M9.5 5.5l6.5 6.5-6.5 6.5"/></symbol>
   <symbol id="p-chevL" viewBox="0 0 24 24"><path d="M14.5 5.5 8 12l6.5 6.5"/></symbol>
   <symbol id="p-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="p-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.3"/><path d="M12 2.2v3.1M12 18.7v3.1M2.2 12h3.1M18.7 12h3.1M5 5l2.2 2.2M16.8 16.8 19 19M19 5l-2.2 2.2M7.2 16.8 5 19"/></symbol>
 </defs></svg>`;
 const ic = (id: string) => `<svg class="p-i"><use href="#p-${id}"/></svg>`;
 
@@ -337,6 +339,10 @@ export function renderPanel(root: HTMLElement): () => void {
       await runSetup();
       return;
     }
+    if (action === "open-settings") {
+      openSettingsModal();
+      return;
+    }
     if (action === "power") {
       if (!gw || busy) return;
       const m = masterState(gw);
@@ -385,9 +391,6 @@ export function renderPanel(root: HTMLElement): () => void {
       case "gw-create":
       case "gw-recreate":
         if (gw && !busy) await provision(gw.id);
-        return;
-      case "gw-wipe":
-        if (gw && !busy) await runWipe(gw);
         return;
       case "copy-url": {
         const url = el.dataset.url ?? "";
@@ -1030,6 +1033,66 @@ export function renderPanel(root: HTMLElement): () => void {
     });
   }
 
+  // openSettingsModal is the gear: a small sheet with the app-wide appearance
+  // control (System/Light/Dark, applied instantly and persisted) and — only
+  // when the server actually lists wipe as an available action — the
+  // destructive "Wipe gateway" that used to sit exposed in the power band's
+  // chip row. Wipe hands straight off to runWipe (its own confirm + reload).
+  function openSettingsModal(): void {
+    const pref = getThemePref();
+    const seg = (["system", "light", "dark"] as ThemePref[])
+      .map(
+        (p) =>
+          `<button type="button" class="theme-opt${p === pref ? " active" : ""}" data-modal-action="theme:${p}">${p[0].toUpperCase()}${p.slice(1)}</button>`,
+      )
+      .join("");
+    const canWipe = !!gw && (gw.actions ?? []).includes("wipe");
+    const danger = canWipe
+      ? `
+        <div class="set-group">
+          <div class="set-label danger">Danger zone</div>
+          <button class="btn btn-danger set-wipe" data-modal-action="wipe"${busy ? " disabled" : ""}>${ic("trash")} Wipe gateway</button>
+          <p class="muted small">Destroys the gateway container and its stored config. Every chain it fronts stops being served until it comes back. Nothing behind it — no node, devnet or public endpoint — is touched.</p>
+        </div>`
+      : "";
+    openModal(
+      `
+        <h2>Settings</h2>
+        <div class="set-group">
+          <div class="set-label">Appearance</div>
+          <div class="theme-seg" role="group" aria-label="Appearance">${seg}</div>
+        </div>
+        ${danger}
+        <div class="modal-actions">
+          <button class="btn btn-ghost" data-modal-action="cancel">Done</button>
+        </div>
+      `,
+      (action) => {
+        if (action === "cancel") {
+          closeModal();
+          return;
+        }
+        if (action.startsWith("theme:")) {
+          const p = action.slice("theme:".length) as ThemePref;
+          setThemePref(p);
+          // Update the segment in place rather than re-rendering the modal —
+          // the whole app (visible behind the backdrop) has already flipped;
+          // this just moves the active pill without dropping focus/scroll.
+          document.querySelectorAll<HTMLElement>(".theme-opt").forEach((b) => {
+            b.classList.toggle("active", b.dataset.modalAction === `theme:${p}`);
+          });
+          return;
+        }
+        if (action === "wipe") {
+          if (!gw || busy) return;
+          const g = gw;
+          closeModal();
+          void runWipe(g);
+        }
+      },
+    );
+  }
+
   // runWipe confirms (wipeDiscards names exactly what is destroyed) before
   // calling the destructive endpoint, then reloads to show the wiped state.
   async function runWipe(g: api.GatewayView): Promise<void> {
@@ -1115,7 +1178,10 @@ function renderList(
   return `
     <div class="p-band p-phead">
       <span class="p-brand"><span class="p-bd"></span> Valve</span>
-      <span class="p-sum">${escapeHtml(m.sub)}</span>
+      <span class="p-hright">
+        <span class="p-sum">${escapeHtml(m.sub)}</span>
+        <button type="button" class="p-gear" data-action="open-settings" title="Settings" aria-label="Settings">${ic("gear")}</button>
+      </span>
     </div>
     <div class="p-band">
       ${powerBand(gw, m, busy, actionErr)}
@@ -1145,6 +1211,9 @@ function renderEmpty(busy: string | null, actionErr: string | null, setupLog: st
   return `
     <div class="p-band p-phead">
       <span class="p-brand"><span class="p-bd"></span> Valve</span>
+      <span class="p-hright">
+        <button type="button" class="p-gear" data-action="open-settings" title="Settings" aria-label="Settings">${ic("gear")}</button>
+      </span>
     </div>
     <div class="p-band p-empty">
       <button type="button" class="p-emptybtn" data-action="setup"${running ? " disabled" : ""}>
@@ -1204,19 +1273,19 @@ function powerBand(gw: api.GatewayView | null, m: MasterState, busy: string | nu
 }
 
 // chipsHtml renders every action gw.actions carries MINUS the one the power
-// button already performs, so the operator can always reach the remaining
-// transitions (e.g. recreate/wipe while running, or restart while stopped)
+// button already performs AND wipe (which now lives behind the gear's settings
+// sheet, not exposed inline) — so the operator can still reach the remaining
+// safe transitions (e.g. recreate while running, or restart while stopped)
 // without the panel ever offering an action the server didn't list.
 function chipsHtml(gw: api.GatewayView, m: MasterState, busy: string | null): string {
   const primary = primaryAction(gw, m);
-  const remaining = (gw.actions ?? []).filter((a) => a !== primary);
+  const remaining = (gw.actions ?? []).filter((a) => a !== primary && a !== "wipe");
   if (remaining.length === 0) return "";
   const items = remaining
     .map((a) => {
       const label = ACTION_LABEL[a] ?? a;
       const icon = ACTION_ICON[a] ? ic(ACTION_ICON[a]) : "";
-      const danger = a === "wipe" ? " danger" : "";
-      return `<button type="button" class="p-chip${danger}" data-action="gw-${a}" data-gid="${escapeHtml(gw.id)}"${busy ? " disabled" : ""}>${icon}${escapeHtml(label)}</button>`;
+      return `<button type="button" class="p-chip" data-action="gw-${a}" data-gid="${escapeHtml(gw.id)}"${busy ? " disabled" : ""}>${icon}${escapeHtml(label)}</button>`;
     })
     .join("");
   return `<div class="p-chips">${items}</div>`;

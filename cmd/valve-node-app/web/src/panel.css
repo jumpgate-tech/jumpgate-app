@@ -340,7 +340,7 @@
   animation: p-glitch 1.25s steps(1, end) infinite;
 }
 .p-dot.off {
-  background: #39434f;
+  background: var(--dim3);
 }
 @keyframes p-glitch {
   0%,
@@ -678,4 +678,84 @@
   .p-pbtn.busy .p-i {
     animation: none;
   }
+}
+
+/* --- header gear + right-aligned group ------------------------------------
+   The list/empty headers group the summary + gear on the right. The gear
+   opens the settings sheet (appearance + wipe). */
+.p-hright {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.p-gear {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  color: var(--dim);
+  border-radius: 8px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+}
+.p-gear:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+.p-gear .p-i {
+  width: 18px;
+  height: 18px;
+}
+
+/* --- light theme ----------------------------------------------------------
+   Same tokens as the dark default (scoped to .p-wrap), overridden under
+   <html data-theme="light">, plus the handful of panel colors that were
+   hardcoded rather than tokenized (white-tint hovers go invisible on a light
+   surface, so they flip to dark tints). */
+:root[data-theme="light"] .p-wrap {
+  --panel: #ffffff;
+  --line: #e4e9ef;
+  --line-soft: #eef2f6;
+  --text: #16202b;
+  --dim: #5c6a79;
+  --dim2: #8492a1;
+  --dim3: #bcc6d1;
+  --green: #12a866;
+  --green-dim: #d8f3e6;
+  --red: #dc2f2f;
+  --amber: #b9820c;
+  --accent: #2f6fe0;
+}
+:root[data-theme="light"] .p-panel {
+  background: linear-gradient(180deg, #ffffff 0%, #f5f8fb 100%);
+  box-shadow: 0 18px 44px -16px rgba(20, 40, 70, 0.28);
+}
+:root[data-theme="light"] .p-chip {
+  background: rgba(20, 30, 45, 0.04);
+}
+:root[data-theme="light"] .p-chip:hover {
+  background: rgba(20, 30, 45, 0.08);
+}
+:root[data-theme="light"] .p-row:hover {
+  background: rgba(20, 30, 45, 0.04);
+}
+:root[data-theme="light"] .p-back:hover {
+  background: rgba(20, 30, 45, 0.06);
+}
+:root[data-theme="light"] .p-gear:hover {
+  background: rgba(20, 30, 45, 0.06);
+}
+:root[data-theme="light"] .p-setup-log {
+  background: rgba(20, 30, 45, 0.03);
+}
+:root[data-theme="light"] .p-sw {
+  background: #cbd5e0;
+}
+/* The dark theme's pale-blue mono URL is unreadable on white — use the panel
+   accent, which already carries the "dialable link" meaning here. */
+:root[data-theme="light"] .p-gwurl {
+  color: var(--accent);
 }
