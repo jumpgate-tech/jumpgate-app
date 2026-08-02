@@ -130,6 +130,16 @@ describe("App routing", () => {
     expect(await screen.findByText("rpc-screen")).toBeInTheDocument();
   });
 
+  it("#/security with no id redirects to targets", async () => {
+    renderAt("#/security");
+    expect(await screen.findByText("targets-screen")).toBeInTheDocument();
+  });
+
+  it("#/diag with no id redirects to targets", async () => {
+    renderAt("#/diag");
+    expect(await screen.findByText("targets-screen")).toBeInTheDocument();
+  });
+
   it.each(["setup", "dash", "logs", "services"])("#/%s/:id redirects to machine/:id", async (p) => {
     renderAt(`#/${p}/xyz`);
     expect(await screen.findByText("machine-screen:xyz")).toBeInTheDocument();
