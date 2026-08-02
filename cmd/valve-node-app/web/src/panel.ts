@@ -7,8 +7,8 @@
 // pure helpers this file builds on).
 import "./panel.css";
 import * as api from "./api";
-import { onAction, escapeHtml, confirmModal } from "./ui";
-import { masterState, healthClass, capabilityCells, type MasterState, type CapCell } from "./panelModel";
+import { onAction, escapeHtml, confirmModal, copyToClipboard } from "./ui";
+import { masterState, healthClass, capabilityCells, withoutNetwork, type MasterState, type CapCell } from "./panelModel";
 import { SETUP_CHAINS, internalTLSConfig } from "./home";
 
 // Inline SVG sprite (currentColor stroke) — cross-platform, no SF Symbols.
@@ -50,6 +50,23 @@ export function renderPanel(root: HTMLElement): () => void {
   // event) — cleared at the start of every attempt so a retry doesn't show
   // a previous failed run's tail above the new one.
   let setupLog: string[] = [];
+  // Network-detail-only state: capabilities are probed lazily (opening the
+  // gateway's real sockets), cached per gateway id, and reused across
+  // re-renders until "recheck" or a different gateway asks for them.
+  let netCaps: api.GatewayCapabilities | null = null;
+  let netCapsGid: string | null = null;
+  let netCapsBusy = false;
+  // tlsVerify is the LAST live tls/verify result run from this screen — it
+  // starts from gw.tls.verification (the server's own last check) and is
+  // replaced once the operator clicks the lock.
+  let tlsVerify: api.TlsVerification | null = null;
+  let tlsBusy = false;
+  let tlsErr: string | null = null;
+  let copyFlash = false;
+  // networkErr surfaces a remove-network failure on the network screen itself
+  // — actionErr is the list view's lifecycle-action error and stays reserved
+  // for that.
+  let networkErr: string | null = null;
 
   root.innerHTML = SPRITE + `<div class="p-wrap"><div class="p-panel" id="p-card"></div></div>`;
   const card = root.querySelector<HTMLElement>("#p-card")!;
@@ -69,9 +86,68 @@ export function renderPanel(root: HTMLElement): () => void {
   }
   function renderView(): string {
     if (err) return bandError(err);
-    if (view.name === "network") return renderNetwork(gw, view.chainId);
+    if (view.name === "network") {
+      return renderNetwork(gw, view.chainId, {
+        caps: netCaps,
+        capsBusy: netCapsBusy,
+        tls: tlsVerify,
+        tlsBusy,
+        tlsErr,
+        copyFlash,
+        error: networkErr,
+      });
+    }
     if (view.name === "endpoint") return renderEndpoint(gw, view.chainId, view.upstreamId);
     return renderList(gw, busy, actionErr, setupLog);
+  }
+
+  // loadCaps probes (or reads the cached probe of) a gateway's capabilities —
+  // real sockets against real endpoints, so it is never fired on a poll, only
+  // on entering the network screen and on an explicit "recheck".
+  async function loadCaps(gid: string, refresh: boolean): Promise<void> {
+    netCapsBusy = true;
+    render();
+    try {
+      netCaps = await api.getGatewayCapabilities(gid, refresh);
+      netCapsGid = gid;
+    } catch {
+      netCaps = null;
+      netCapsGid = gid;
+    }
+    netCapsBusy = false;
+    render();
+  }
+
+  // removeNetworkFlow confirms (a network's URL and every endpoint under it
+  // stop being served) before writing the config without this chain and
+  // re-provisioning — the same write-then-provision cycle every other config
+  // change on this panel follows, so a removed chain actually disappears from
+  // the running container rather than just the stored config.
+  async function removeNetworkFlow(g: api.GatewayView, chainId: number): Promise<void> {
+    const nv = g.networks?.find((n) => n.chainId === chainId);
+    const ok = await confirmModal({
+      title: "Remove network",
+      body: `Stop serving ${nv?.name ?? `chain ${chainId}`}?`,
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
+    networkErr = null;
+    render();
+    try {
+      await api.putGatewayConfig(g.id, withoutNetwork(g.config, chainId));
+    } catch (e) {
+      networkErr = `Could not remove the network: ${message(e)}`;
+      render();
+      return;
+    }
+    // The config write succeeded — the chain is gone from what's stored, so
+    // there is nothing left to show on this screen even before the
+    // re-provision finishes. Hand off to provision(), which owns busy/render
+    // and reloads once the setup stream completes (mirrors gw-recreate).
+    view = { name: "list" };
+    render();
+    await provision(g.id);
   }
 
   onAction(card, (action, el) => {
@@ -93,12 +169,23 @@ export function renderPanel(root: HTMLElement): () => void {
       return;
     }
     if (action === "open-network") {
-      view = { name: "network", chainId: Number(el.dataset.chainId) };
+      const chainId = Number(el.dataset.chainId);
+      view = { name: "network", chainId };
+      networkErr = null;
+      tlsVerify = null;
+      tlsErr = null;
+      render();
+      if (gw && netCapsGid !== gw.id) void loadCaps(gw.id, false);
+      return;
+    }
+    if (action === "back") {
+      view = { name: "list" };
       render();
       return;
     }
-    if (action === "back-to-list") {
-      view = { name: "list" };
+    if (action === "back-to-network") {
+      const chainId = Number(el.dataset.chainId);
+      view = Number.isFinite(chainId) ? { name: "network", chainId } : { name: "list" };
       render();
       return;
     }
@@ -119,6 +206,55 @@ export function renderPanel(root: HTMLElement): () => void {
       case "gw-wipe":
         if (gw && !busy) await runWipe(gw);
         return;
+      case "copy-url": {
+        const url = el.dataset.url ?? "";
+        if (!url) return;
+        const ok = await copyToClipboard(url);
+        if (ok) {
+          copyFlash = true;
+          render();
+          window.setTimeout(() => {
+            copyFlash = false;
+            render();
+          }, 1200);
+        }
+        return;
+      }
+      case "verify-tls": {
+        if (!gw || tlsBusy) return;
+        tlsBusy = true;
+        tlsErr = null;
+        render();
+        try {
+          tlsVerify = await api.verifyGatewayTls(gw.id);
+        } catch (e) {
+          tlsErr = message(e);
+        }
+        tlsBusy = false;
+        render();
+        return;
+      }
+      case "open-endpoint": {
+        const chainId = Number(el.dataset.chainId);
+        const upstreamId = el.dataset.upstreamId ?? "";
+        if (!Number.isFinite(chainId) || !upstreamId) return;
+        view = { name: "endpoint", chainId, upstreamId };
+        render();
+        return;
+      }
+      case "add-endpoint":
+        // No-op stub this task — the real add-an-endpoint flow lands in Task 10.
+        return;
+      case "remove-network": {
+        if (!gw || busy || view.name !== "network") return;
+        await removeNetworkFlow(gw, view.chainId);
+        return;
+      }
+      case "recheck": {
+        if (!gw) return;
+        await Promise.all([loadCaps(gw.id, true), load()]);
+        return;
+      }
       default:
         return;
     }
@@ -496,8 +632,11 @@ function capsHtml(cells: CapCell[]): string {
     .join("");
 }
 
-// networkRow: 18px lead health dot, name, capability meter (all-unlit until
-// Task 9 wires real probed capabilities), chevron. Clicking drills in.
+// networkRow: 18px lead health dot, name, capability meter, chevron.
+// Clicking drills in. The meter here stays unlit — the real probe (real
+// sockets against real endpoints) is deliberately never run for a whole
+// gateway's worth of chains just to paint the list; it fires lazily, once,
+// when a network's own detail screen opens (see renderNetwork/loadCaps).
 function networkRow(gw: api.GatewayView, nv: api.NetworkView, divider: boolean): string {
   const hc = healthClass({ running: gw.status.State === "running", serviceable: nv.serviceable });
   const cells = capabilityCells({});
@@ -511,20 +650,180 @@ function networkRow(gw: api.GatewayView, nv: api.NetworkView, divider: boolean):
   `;
 }
 
-// --- network / endpoint detail ---------------------------------------------
-// Minimal placeholders — the real content (endpoints list, gateway URL,
-// capabilities, status, remove) arrives in Task 9.
+// --- network detail ----------------------------------------------------------
 
-function renderNetwork(gw: api.GatewayView | null, chainId: number): string {
+// NetworkDetailState carries everything renderNetwork needs that isn't
+// pure — probed capabilities, the last live TLS check, in-flight/error
+// flags — all owned by renderPanel; renderNetwork stays a plain
+// string-returning function, same shape as renderList.
+interface NetworkDetailState {
+  caps: api.GatewayCapabilities | null;
+  capsBusy: boolean;
+  tls: api.TlsVerification | null;
+  tlsBusy: boolean;
+  tlsErr: string | null;
+  copyFlash: boolean;
+  error: string | null;
+}
+
+// capStatusOf mirrors rpc.ts's statusOf (~L1195-1202): there is no "http"
+// probe result because answering JSON-RPC over HTTP IS reachability,
+// recorded as EndpointCapabilities.reachable rather than an eleventh method
+// call.
+function capStatusOf(e: api.EndpointCapabilities, key: string): api.CapabilityStatus | undefined {
+  if (key === "http") {
+    if (e.unprobeable) return "inconclusive";
+    return e.reachable ? "supported" : "unsupported";
+  }
+  return (e.capabilities ?? []).find((c) => c.key === key)?.status;
+}
+
+// unionCapabilities folds every probed upstream on this chain into one
+// verdict per capability: supported if ANY upstream on the chain supports
+// it. The network-level question is "can I get this AT ALL through this
+// gateway's one URL for this chain", which a balanced/failover front answers
+// with the best of its upstreams, not the worst.
+function unionCapabilities(
+  caps: api.GatewayCapabilities | null,
+  chainId: number,
+  upstreamIds: string[],
+): Record<string, string> {
+  const endpoints = (caps?.endpoints ?? []).filter((e) => e.chainId === chainId && upstreamIds.includes(e.upstream));
+  const out: Record<string, string> = {};
+  for (const key of ["http", "ws", "archive", "trace"]) {
+    if (endpoints.some((e) => capStatusOf(e, key) === "supported")) out[key] = "supported";
+  }
+  return out;
+}
+
+function renderNetwork(gw: api.GatewayView | null, chainId: number, st: NetworkDetailState): string {
   const nv = gw?.networks?.find((n) => n.chainId === chainId);
+  if (!gw || !nv) {
+    return `
+      <div class="p-band p-dhead">
+        <span class="p-back" data-action="back">${ic("chevL")}</span>
+        <span class="p-dtitle"><span class="p-nmtxt">Chain ${chainId}</span></span>
+      </div>
+      <div class="p-band" style="padding:16px;color:var(--dim)">This network is no longer configured.</div>
+    `;
+  }
+
+  const running = gw.status.State === "running";
+  const hc = healthClass({ running, serviceable: nv.serviceable });
+  const ups = nv.upstreams ?? [];
+
+  // Gateway band: the one dialable URL, a lock reflecting the last real
+  // tls/verify (gw.tls.verification is the server's own last check; a click
+  // here replaces it with a fresh one), and a copy icon that flashes green
+  // once the clipboard write lands.
+  const tlsResult = st.tls ?? gw.tls.verification ?? null;
+  const tlsOk = tlsResult?.ok === true;
+  const lockTitle = st.tlsBusy
+    ? "Verifying…"
+    : tlsOk
+      ? `Verified ${tlsResult ? new Date(tlsResult.at).toLocaleString() : ""}`
+      : "Verify HTTPS now";
+  const tlsErrLine = st.tlsErr
+    ? `<div class="p-ps" style="color:var(--red);padding:0 var(--gut) 10px">${escapeHtml(st.tlsErr)}</div>`
+    : "";
+  const gatewayBand = `
+    <div class="p-band">
+      <div class="p-lblrow">
+        <span class="p-seclbl">Gateway <span style="color:var(--dim3);letter-spacing:0"> · balanced across all</span></span>
+        <span class="p-acts">
+          <span class="p-ic ${tlsOk ? "green" : "dim"}" data-action="verify-tls" title="${escapeHtml(lockTitle)}">${ic("lock")}</span>
+          <span class="p-ic ${st.copyFlash ? "green" : "accent"}" data-action="copy-url" data-url="${escapeHtml(nv.url ?? "")}" title="Copy the gateway URL">${ic("copy")}</span>
+        </span>
+      </div>
+      <div class="p-gwurl">${escapeHtml(nv.url || "—")}</div>
+      ${tlsErrLine}
+    </div>
+  `;
+
+  // Endpoints band: one row per configured upstream, health dot first, plus
+  // the (stub) "Add endpoint" row Task 10 wires up for real.
+  const upRows = ups
+    .map((u, i) => {
+      const uhc = healthClass({ running, serviceable: !u.problem });
+      return `
+        <div class="p-row${i > 0 ? " p-rowdiv" : ""}" data-action="open-endpoint" data-chain-id="${nv.chainId}" data-upstream-id="${escapeHtml(u.id)}">
+          <span class="p-lead"><span class="p-dot ${uhc}"></span></span>
+          <span class="p-nm">${escapeHtml(u.label)}</span>
+          <span class="p-chev">${ic("chevR")}</span>
+        </div>
+      `;
+    })
+    .join("");
+  const endpointsBand = `
+    <div class="p-band">
+      <div class="p-lblrow"><span class="p-seclbl">Endpoints · ${ups.length}</span></div>
+      ${upRows}
+      <div class="p-row${ups.length > 0 ? " p-rowdiv" : ""} addr" data-action="add-endpoint">
+        <span class="p-lead">${ic("plus")}</span>
+        <span class="p-nm">Add endpoint</span>
+      </div>
+    </div>
+  `;
+
+  // Capabilities band: folded from the probe (union across this chain's
+  // upstreams — see unionCapabilities). "probing…" shows only while the
+  // first lazy fetch for this gateway is in flight; on "recheck" the cells
+  // keep showing the previous verdict until the refresh lands.
+  const capStatuses = unionCapabilities(st.caps, chainId, ups.map((u) => u.id));
+  const capCells = capabilityCells(capStatuses);
+  const capsBand = `
+    <div class="p-band">
+      <div class="p-lblrow"><span class="p-seclbl">Capabilities</span></div>
+      ${
+        st.capsBusy && !st.caps
+          ? `<div class="p-caprow" style="color:var(--dim2)">probing…</div>`
+          : `<div class="p-caprow">${capCells
+              .map((c) => `<span class="p-capitem${c.lit ? " lit" : ""}">${ic(CAP_ICON[c.key])}${escapeHtml(c.label)}</span>`)
+              .join("")}</div>`
+      }
+    </div>
+  `;
+
+  // Status band: Health mirrors the list row's own dot+word. Chain head is
+  // omitted rather than faked — there is no per-network head reading yet.
+  const healthWord = !running ? "Stopped" : nv.serviceable ? "Healthy" : "Unserviceable";
+  const statusBand = `
+    <div class="p-band">
+      <div class="p-lblrow"><span class="p-seclbl">Status</span><span class="p-acts"><span class="p-ic dim" data-action="recheck" title="Re-check capabilities and reload">${ic("refresh")}</span></span></div>
+      <div class="p-srow"><span class="p-k">Health</span><span class="p-v"><span class="p-dot ${hc}"></span> ${escapeHtml(healthWord)}</span></div>
+    </div>
+  `;
+
+  const removeErrLine = st.error
+    ? `<div class="p-band" style="padding:10px 16px;color:var(--red)">${escapeHtml(st.error)}</div>`
+    : "";
+
   return `
     <div class="p-band p-dhead">
-      <span class="p-back" data-action="back-to-list">${ic("chevL")}</span>
-      <span class="p-dtitle"><span class="p-nmtxt">${escapeHtml(nv?.name ?? `Chain ${chainId}`)}</span></span>
+      <span class="p-back" data-action="back">${ic("chevL")}</span>
+      <span class="p-dtitle"><span class="p-dot ${hc}"></span> <span class="p-nmtxt">${escapeHtml(nv.name)}</span></span>
     </div>
-    <div class="p-band" style="padding:16px;color:var(--dim)">Network detail is coming soon.</div>
+    ${gatewayBand}
+    ${endpointsBand}
+    ${capsBand}
+    ${statusBand}
+    ${removeErrLine}
+    <div class="p-band p-remove" data-action="remove-network">${ic("trash")} Remove network</div>
   `;
 }
-function renderEndpoint(_gw: api.GatewayView | null, _c: number, _u: string): string {
-  return "";
+
+// --- endpoint detail -----------------------------------------------------
+// Minimal placeholder — the real content (address editor, capabilities,
+// status, remove) arrives in Task 10. It still gives the operator a working
+// way back rather than a dead end.
+function renderEndpoint(gw: api.GatewayView | null, chainId: number, upstreamId: string): string {
+  const nv = gw?.networks?.find((n) => n.chainId === chainId);
+  const up = nv?.upstreams?.find((u) => u.id === upstreamId);
+  return `
+    <div class="p-band p-dhead">
+      <span class="p-back" data-action="back-to-network" data-chain-id="${chainId}">${ic("chevL")}</span>
+      <span class="p-dtitle"><span class="p-nmtxt">${escapeHtml(up?.label ?? "Endpoint")}</span></span>
+    </div>
+    <div class="p-band" style="padding:16px;color:var(--dim)">Endpoint detail is coming soon.</div>
+  `;
 }
