@@ -5,8 +5,8 @@ import { Panel } from "./screens/Panel/Panel";
 import { Security } from "./screens/Security/Security";
 import { Diagnostics } from "./screens/Diagnostics/Diagnostics";
 import { Settings } from "./screens/Settings/Settings";
+import { Targets } from "./screens/Targets/Targets";
 import { renderRPC } from "./rpc";
-import { renderTargets } from "./targets";
 import { renderMachine } from "./machine";
 import { renderAnalytics } from "./analytics";
 
@@ -30,9 +30,6 @@ function Bridge({ render }: { render: (el: HTMLElement) => (() => void) | void }
 }
 function LegacyRPC() {
   return <Bridge render={useCallback((el: HTMLElement) => renderRPC(el), [])} />;
-}
-function LegacyTargets() {
-  return <Bridge render={useCallback((el: HTMLElement) => renderTargets(el), [])} />;
 }
 function LegacyMachine() {
   const { id } = useParams();
@@ -70,7 +67,7 @@ export function App() {
           <Route path="/" element={<Panel />} />
           <Route path="/panel" element={<Panel />} />
           <Route path="/rpc" element={<LegacyRPC />} />
-          <Route path="/targets" element={<LegacyTargets />} />
+          <Route path="/targets" element={<Targets />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/machine/:id" element={<LegacyMachine />} />
           <Route path="/machine" element={<Navigate to="/targets" replace />} />

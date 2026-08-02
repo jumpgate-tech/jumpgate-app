@@ -11,10 +11,8 @@ vi.mock("./rpc", () => ({
     el.textContent = "rpc-screen";
   }),
 }));
-vi.mock("./targets", () => ({
-  renderTargets: vi.fn((el: HTMLElement) => {
-    el.textContent = "targets-screen";
-  }),
+vi.mock("./screens/Targets/Targets", () => ({
+  Targets: () => <div>targets-screen</div>,
 }));
 vi.mock("./screens/Settings/Settings", () => ({
   Settings: () => <div>settings-screen</div>,
