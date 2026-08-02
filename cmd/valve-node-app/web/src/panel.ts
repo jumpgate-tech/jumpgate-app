@@ -7,8 +7,19 @@
 // pure helpers this file builds on).
 import "./panel.css";
 import * as api from "./api";
-import { onAction, escapeHtml, confirmModal, copyToClipboard } from "./ui";
-import { masterState, healthClass, capabilityCells, withoutNetwork, type MasterState, type CapCell } from "./panelModel";
+import { onAction, escapeHtml, confirmModal, copyToClipboard, openModal, closeModal, modalBody, fmtInt } from "./ui";
+import {
+  masterState,
+  healthClass,
+  capabilityCells,
+  withoutNetwork,
+  withNetwork,
+  withUpstream,
+  withoutUpstream,
+  endpointNameFromUrl,
+  type MasterState,
+  type CapCell,
+} from "./panelModel";
 import { SETUP_CHAINS, internalTLSConfig } from "./home";
 
 // Inline SVG sprite (currentColor stroke) — cross-platform, no SF Symbols.
@@ -34,6 +45,13 @@ type View = { name: "list" } | { name: "network"; chainId: number } | { name: "e
 
 // FINAL_STEP is the id every gateway setup plan ends on (mirrors rpc.ts).
 const FINAL_STEP = "run";
+
+// DEVNET_CHAIN_ID is reth's --dev genesis id (catalog.DevnetChainID), mirrors
+// rpc.ts's own copy of the same literal. catalog.Networks() (what
+// api.getCatalog() returns) deliberately excludes it — it is a private
+// scratch chain, not a supported public network — so the add-network picker
+// appends it itself, always last.
+const DEVNET_CHAIN_ID = 1337;
 
 export function renderPanel(root: HTMLElement): () => void {
   let gw: api.GatewayView | null = null;
@@ -67,6 +85,16 @@ export function renderPanel(root: HTMLElement): () => void {
   // — actionErr is the list view's lifecycle-action error and stays reserved
   // for that.
   let networkErr: string | null = null;
+  // endpointErr is networkErr's sibling for the endpoint screen (remove-
+  // endpoint failures land here, not on networkErr or actionErr).
+  let endpointErr: string | null = null;
+  // epHealth is the gateway's analytics scrape, fetched lazily (like
+  // netCaps) only once an endpoint's own detail screen needs a per-upstream
+  // headLag reading — the list and network screens never need it, so it is
+  // never fetched on a poll or on entering the network screen.
+  let epHealth: api.GatewayAnalytics | null = null;
+  let epHealthGid: string | null = null;
+  let epHealthBusy = false;
 
   root.innerHTML = SPRITE + `<div class="p-wrap"><div class="p-panel" id="p-card"></div></div>`;
   const card = root.querySelector<HTMLElement>("#p-card")!;
@@ -97,7 +125,16 @@ export function renderPanel(root: HTMLElement): () => void {
         error: networkErr,
       });
     }
-    if (view.name === "endpoint") return renderEndpoint(gw, view.chainId, view.upstreamId);
+    if (view.name === "endpoint") {
+      return renderEndpoint(gw, view.chainId, view.upstreamId, {
+        caps: netCaps,
+        capsBusy: netCapsBusy,
+        health: epHealth,
+        healthBusy: epHealthBusy,
+        copyFlash,
+        error: endpointErr,
+      });
+    }
     return renderList(gw, busy, actionErr, setupLog);
   }
 
@@ -115,6 +152,24 @@ export function renderPanel(root: HTMLElement): () => void {
       netCapsGid = gid;
     }
     netCapsBusy = false;
+    render();
+  }
+
+  // loadHealth reads the gateway's analytics scrape (the source of
+  // EndpointHealth.headLag) — see epHealth above for why this is lazy and
+  // cached rather than fetched with every gateway poll.
+  async function loadHealth(gid: string, refresh: boolean): Promise<void> {
+    if (!refresh && epHealthGid === gid && epHealth) return;
+    epHealthBusy = true;
+    render();
+    try {
+      epHealth = await api.getGatewayAnalytics(gid);
+      epHealthGid = gid;
+    } catch {
+      epHealth = null;
+      epHealthGid = gid;
+    }
+    epHealthBusy = false;
     render();
   }
 
@@ -146,6 +201,34 @@ export function renderPanel(root: HTMLElement): () => void {
     // re-provision finishes. Hand off to provision(), which owns busy/render
     // and reloads once the setup stream completes (mirrors gw-recreate).
     view = { name: "list" };
+    render();
+    await provision(g.id);
+  }
+
+  // removeEndpointFlow is removeNetworkFlow's sibling one level down: confirm,
+  // write the config without this one upstream, re-provision, then land back
+  // on the network the endpoint used to belong to (not the list — the
+  // operator was drilled in one level less than removeNetworkFlow's caller).
+  async function removeEndpointFlow(g: api.GatewayView, chainId: number, upstreamId: string): Promise<void> {
+    const nv = g.networks?.find((n) => n.chainId === chainId);
+    const up = findUpstream(g, chainId, upstreamId);
+    const ok = await confirmModal({
+      title: "Remove endpoint",
+      body: `Stop routing to ${up?.label ?? "this endpoint"}? The gateway keeps balancing across whatever else remains on ${nv?.name ?? `chain ${chainId}`}.`,
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
+    endpointErr = null;
+    render();
+    try {
+      await api.putGatewayConfig(g.id, withoutUpstream(g.config, chainId, upstreamId));
+    } catch (e) {
+      endpointErr = `Could not remove the endpoint: ${message(e)}`;
+      render();
+      return;
+    }
+    view = { name: "network", chainId };
     render();
     await provision(g.id);
   }
@@ -186,11 +269,13 @@ export function renderPanel(root: HTMLElement): () => void {
     if (action === "back-to-network") {
       const chainId = Number(el.dataset.chainId);
       view = Number.isFinite(chainId) ? { name: "network", chainId } : { name: "list" };
+      endpointErr = null;
       render();
       return;
     }
     if (action === "add-network") {
-      // No-op stub this task — the real add-a-chain flow lands in Task 10.
+      if (!gw || busy) return;
+      await openAddNetworkModal(gw);
       return;
     }
     switch (action) {
@@ -239,25 +324,410 @@ export function renderPanel(root: HTMLElement): () => void {
         const upstreamId = el.dataset.upstreamId ?? "";
         if (!Number.isFinite(chainId) || !upstreamId) return;
         view = { name: "endpoint", chainId, upstreamId };
+        endpointErr = null;
         render();
+        if (gw && netCapsGid !== gw.id) void loadCaps(gw.id, false);
+        if (gw && epHealthGid !== gw.id) void loadHealth(gw.id, false);
         return;
       }
-      case "add-endpoint":
-        // No-op stub this task — the real add-an-endpoint flow lands in Task 10.
+      case "add-endpoint": {
+        if (!gw || busy || view.name !== "network") return;
+        openAddEndpointModal(gw, view.chainId);
         return;
+      }
       case "remove-network": {
         if (!gw || busy || view.name !== "network") return;
         await removeNetworkFlow(gw, view.chainId);
         return;
       }
+      case "rename-endpoint": {
+        if (!gw || busy || view.name !== "endpoint") return;
+        const up = findUpstream(gw, view.chainId, view.upstreamId);
+        if (!up) return;
+        openRenameEndpointModal(gw.id, view.chainId, up.id, up.label);
+        return;
+      }
+      case "edit-address": {
+        if (!gw || busy || view.name !== "endpoint") return;
+        const up = findUpstream(gw, view.chainId, view.upstreamId);
+        // Managed upstreams (a node, a devnet) derive their endpoint on every
+        // read — whatever is stored for one is ignored server-side (see
+        // GatewayUpstream.Endpoint) — so offering an edit here would be a
+        // control that silently does nothing. Only "external" upstreams
+        // actually take the value.
+        if (!up || up.kind !== "external") return;
+        openEditAddressModal(gw.id, view.chainId, up.id, up.endpoint);
+        return;
+      }
+      case "remove-endpoint": {
+        if (!gw || busy || view.name !== "endpoint") return;
+        await removeEndpointFlow(gw, view.chainId, view.upstreamId);
+        return;
+      }
       case "recheck": {
         if (!gw) return;
-        await Promise.all([loadCaps(gw.id, true), load()]);
+        const tasks: Promise<unknown>[] = [loadCaps(gw.id, true), load()];
+        if (view.name === "endpoint") tasks.push(loadHealth(gw.id, true));
+        await Promise.all(tasks);
         return;
       }
       default:
         return;
     }
+  }
+
+  // findUpstream reads the UpstreamView (the resolved, displayable form) for
+  // one upstream — used by the endpoint-detail actions to read what to show
+  // in a modal (up.label, up.endpoint, up.kind).
+  function findUpstream(g: api.GatewayView, chainId: number, upstreamId: string): api.UpstreamView | undefined {
+    return g.networks?.find((n) => n.chainId === chainId)?.upstreams?.find((u) => u.id === upstreamId);
+  }
+
+  // findConfigUpstream reads the STORED GatewayUpstream for one upstream —
+  // the object every write in this section mutates (via withUpstream), never
+  // the UpstreamView, whose fields like `endpoint` are server-resolved and
+  // would silently discard a managed upstream's TargetID if round-tripped.
+  function findConfigUpstream(g: api.GatewayView, chainId: number, upstreamId: string): api.GatewayUpstream | undefined {
+    return g.config.Networks?.find((n) => n.ChainID === chainId)?.Upstreams.find((u) => u.ID === upstreamId);
+  }
+
+  // appendModalError adds an error line to the currently open modal without
+  // closing it — the same pattern rpc.ts's runWipe uses — so a failed save
+  // stays next to the input the operator can fix, rather than vanishing into
+  // a screen-level error the modal already closed on.
+  function appendModalError(msg: string): void {
+    const panel = modalBody();
+    if (!panel) return;
+    const p = document.createElement("p");
+    p.className = "error small";
+    p.textContent = msg;
+    panel.appendChild(p);
+  }
+
+  // openRenameEndpointModal prefills the operator-chosen label (up.label —
+  // the RESOLVED display name, per the brief, not the raw stored Name, which
+  // may be unset). Saving writes Name on the stored upstream and re-
+  // provisions; clearing the field back to blank drops Name so the resolver's
+  // own default takes back over.
+  function openRenameEndpointModal(gid: string, chainId: number, upstreamId: string, currentLabel: string): void {
+    openModal(
+      `
+        <h2>Rename endpoint</h2>
+        <label>
+          Name
+          <input type="text" id="ep-rename-input" autocomplete="off" spellcheck="false" value="${escapeHtml(currentLabel)}" />
+        </label>
+        <p class="muted small">Clear it to fall back to the automatic name.</p>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" data-modal-action="cancel">Cancel</button>
+          <button class="btn" data-modal-action="save" id="ep-rename-save">Save</button>
+        </div>
+      `,
+      (action) => {
+        if (action === "cancel") {
+          closeModal();
+          return;
+        }
+        if (action !== "save") return;
+        void submitRename(gid, chainId, upstreamId);
+      },
+    );
+    const input = document.getElementById("ep-rename-input") as HTMLInputElement | null;
+    input?.focus();
+    input?.select();
+  }
+
+  async function submitRename(gid: string, chainId: number, upstreamId: string): Promise<void> {
+    if (!gw) return;
+    const cfgUp = findConfigUpstream(gw, chainId, upstreamId);
+    if (!cfgUp) {
+      closeModal();
+      return;
+    }
+    const input = document.getElementById("ep-rename-input") as HTMLInputElement | null;
+    const btn = document.getElementById("ep-rename-save") as HTMLButtonElement | null;
+    const name = input?.value.trim() ?? "";
+    if (input) input.disabled = true;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Saving…";
+    }
+    const nextUp: api.GatewayUpstream = { ...cfgUp, Name: name || undefined };
+    try {
+      await api.putGatewayConfig(gid, withUpstream(gw.config, chainId, nextUp));
+    } catch (e) {
+      appendModalError(`Could not rename the endpoint: ${message(e)}`);
+      if (input) input.disabled = false;
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Save";
+      }
+      return;
+    }
+    closeModal();
+    await provision(gid);
+  }
+
+  // openEditAddressModal is rename's sibling for the endpoint's own URL —
+  // only ever opened for an "external" upstream (see the edit-address case
+  // in handleAction for why managed ones never get here).
+  function openEditAddressModal(gid: string, chainId: number, upstreamId: string, currentUrl: string): void {
+    openModal(
+      `
+        <h2>Edit endpoint address</h2>
+        <p class="muted small">http://, https://, ws:// or wss://.</p>
+        <label>
+          URL
+          <input type="text" id="ep-addr-input" autocomplete="off" spellcheck="false" value="${escapeHtml(currentUrl)}" placeholder="https://rpc.example.com" />
+        </label>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" data-modal-action="cancel">Cancel</button>
+          <button class="btn" data-modal-action="save" id="ep-addr-save">Save</button>
+        </div>
+      `,
+      (action) => {
+        if (action === "cancel") {
+          closeModal();
+          return;
+        }
+        if (action !== "save") return;
+        void submitAddress(gid, chainId, upstreamId);
+      },
+    );
+    const input = document.getElementById("ep-addr-input") as HTMLInputElement | null;
+    input?.focus();
+    input?.select();
+  }
+
+  async function submitAddress(gid: string, chainId: number, upstreamId: string): Promise<void> {
+    if (!gw) return;
+    const input = document.getElementById("ep-addr-input") as HTMLInputElement | null;
+    const btn = document.getElementById("ep-addr-save") as HTMLButtonElement | null;
+    const url = input?.value.trim() ?? "";
+    if (!/^(https?|wss?):\/\//i.test(url)) {
+      appendModalError("It needs a scheme eRPC can dial: http://, https://, ws:// or wss://.");
+      return;
+    }
+    const cfgUp = findConfigUpstream(gw, chainId, upstreamId);
+    if (!cfgUp) {
+      closeModal();
+      return;
+    }
+    if (input) input.disabled = true;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Saving…";
+    }
+    const nextUp: api.GatewayUpstream = { ...cfgUp, Endpoint: url };
+    try {
+      await api.putGatewayConfig(gid, withUpstream(gw.config, chainId, nextUp));
+    } catch (e) {
+      appendModalError(`Could not save the address: ${message(e)}`);
+      if (input) input.disabled = false;
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Save";
+      }
+      return;
+    }
+    closeModal();
+    await provision(gid);
+  }
+
+  // openAddEndpointModal is the network screen's "Add endpoint" row — a
+  // single URL, added as an "external" upstream named from its own domain
+  // (endpointNameFromUrl), same default a fresh public endpoint gets
+  // anywhere else in this app.
+  function openAddEndpointModal(g: api.GatewayView, chainId: number): void {
+    openModal(
+      `
+        <h2>Add an endpoint by URL</h2>
+        <p class="muted small">http://, https://, ws:// or wss://.</p>
+        <label>
+          Endpoint
+          <input type="text" id="ep-add-input" autocomplete="off" spellcheck="false" placeholder="https://rpc.example.com" />
+        </label>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" data-modal-action="cancel">Cancel</button>
+          <button class="btn" data-modal-action="add" id="ep-add-save">Add endpoint</button>
+        </div>
+      `,
+      (action) => {
+        if (action === "cancel") {
+          closeModal();
+          return;
+        }
+        if (action !== "add") return;
+        void submitAddEndpoint(g.id, chainId);
+      },
+    );
+    document.getElementById("ep-add-input")?.focus();
+  }
+
+  async function submitAddEndpoint(gid: string, chainId: number): Promise<void> {
+    if (!gw) return;
+    const input = document.getElementById("ep-add-input") as HTMLInputElement | null;
+    const btn = document.getElementById("ep-add-save") as HTMLButtonElement | null;
+    const url = input?.value.trim() ?? "";
+    if (!/^(https?|wss?):\/\//i.test(url)) {
+      appendModalError("It needs a scheme eRPC can dial: http://, https://, ws:// or wss://.");
+      return;
+    }
+    if (input) input.disabled = true;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Adding…";
+    }
+    const up: api.GatewayUpstream = {
+      ID: crypto.randomUUID(),
+      Kind: "external",
+      Endpoint: url,
+      Local: false,
+      RecentOnly: false,
+      Name: endpointNameFromUrl(url),
+    };
+    try {
+      await api.putGatewayConfig(gid, withUpstream(gw.config, chainId, up));
+    } catch (e) {
+      appendModalError(`Could not add the endpoint: ${message(e)}`);
+      if (input) input.disabled = false;
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Add endpoint";
+      }
+      return;
+    }
+    closeModal();
+    await provision(gid);
+  }
+
+  // openAddNetworkModal offers the catalog's networks (Devnet appended,
+  // always last — see DEVNET_CHAIN_ID) minus whatever this gateway already
+  // fronts. Fetching the catalog is the one part of this flow that cannot
+  // start until the operator clicks — the list screen never prefetches it —
+  // so `busy` is held for that short round trip too, disabling the rest of
+  // the list exactly as it does during a real provision.
+  async function openAddNetworkModal(g: api.GatewayView): Promise<void> {
+    busy = "add-network";
+    actionErr = null;
+    render();
+    let networks: api.Network[];
+    try {
+      const catalog = await api.getCatalog();
+      networks = catalog.networks ?? [];
+    } catch (e) {
+      busy = null;
+      actionErr = `Could not load the network catalog: ${message(e)}`;
+      render();
+      return;
+    }
+    busy = null;
+    render();
+
+    const present = new Set((g.networks ?? []).map((n) => n.chainId));
+    const picks: { chainId: number; name: string }[] = networks
+      .filter((n) => !present.has(n.ChainID))
+      .map((n) => ({ chainId: n.ChainID, name: n.Name }));
+    // Devnet is not in catalog.Networks() (see DEVNET_CHAIN_ID) but the
+    // picker still offers it, last. Picking it goes through the same
+    // external-only knownSet path as everything else here — there is no
+    // managed-devnet wiring in this flow — so it honestly fails with the
+    // server's own "no upstreams" error unless valve has a measured public
+    // set for it. That failure surfaces through actionErr like any other.
+    if (!present.has(DEVNET_CHAIN_ID)) picks.push({ chainId: DEVNET_CHAIN_ID, name: "Devnet" });
+    if (picks.length === 0) {
+      actionErr = "Every network valve's catalog knows about is already configured on this gateway.";
+      render();
+      return;
+    }
+
+    openModal(
+      `
+        <h2>Add a network</h2>
+        <ul class="plain-list rpc-picker">
+          ${picks
+            .map(
+              (p) => `
+            <li>
+              <button class="btn btn-ghost rpc-picker-option" data-modal-action="pick:${p.chainId}">
+                <span>${escapeHtml(p.name)}</span>
+                <span class="muted small">chain ${p.chainId}</span>
+              </button>
+            </li>`,
+            )
+            .join("")}
+        </ul>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" data-modal-action="cancel">Cancel</button>
+        </div>
+      `,
+      (action) => {
+        if (action === "cancel") {
+          closeModal();
+          return;
+        }
+        if (action.startsWith("pick:")) {
+          const chainId = Number.parseInt(action.slice("pick:".length), 10);
+          if (!Number.isFinite(chainId)) return;
+          closeModal();
+          void submitAddNetwork(g.id, chainId);
+        }
+      },
+    );
+  }
+
+  // submitAddNetwork reads valve's known set for chainId (the same vetted
+  // list "Add valve's set…" offers on the eRPC screen), writes every not-
+  // already-added URL from it as one new network, provisions, and — once the
+  // stream finishes clean and gw has been reloaded — opens that network's
+  // own detail screen, since the operator picked it to go look at it.
+  async function submitAddNetwork(gid: string, chainId: number): Promise<void> {
+    if (!gw || busy) return;
+    busy = "create";
+    actionErr = null;
+    render();
+    let urls: string[];
+    try {
+      const set = await api.knownSet(gid, chainId);
+      urls = (set.endpoints ?? []).filter((e) => !e.alreadyAdded).map((e) => e.url);
+    } catch (e) {
+      busy = null;
+      actionErr = `Could not read valve's known set for chain ${chainId}: ${message(e)}`;
+      render();
+      return;
+    }
+    if (urls.length === 0) {
+      busy = null;
+      actionErr = `valve has no measured endpoints for chain ${chainId} yet, so there was nothing to add.`;
+      render();
+      return;
+    }
+    const upstreams: api.GatewayUpstream[] = urls.map((url, i) => ({
+      ID: `public-${chainId}-${i + 1}`,
+      Kind: "external",
+      Endpoint: url,
+      Local: false,
+      RecentOnly: false,
+    }));
+    try {
+      await api.putGatewayConfig(gid, withNetwork(gw.config, chainId, upstreams));
+    } catch (e) {
+      busy = null;
+      actionErr = `Could not add the network: ${message(e)}`;
+      render();
+      return;
+    }
+    // provision() owns `busy` itself (it guards on `if (busy) return` at its
+    // own top) — leaving it set to "create" here would make that guard fire
+    // and provision() return immediately without recreating the container,
+    // so the config write above would silently never go live. Caught live:
+    // config.json picked up chain 943 but erpc.yaml (the rendered file the
+    // container mounts) stayed stale until this was cleared.
+    busy = null;
+    await provision(gid, () => {
+      view = { name: "network", chainId };
+      render();
+    });
   }
 
   // runAction mirrors rpc.ts's runAction: start/stop/restart go straight to
@@ -278,8 +748,11 @@ export function renderPanel(root: HTMLElement): () => void {
 
   // provision mirrors rpc.ts's provision: create/recreate run the gateway's
   // setup plan and follow the PLACEMENT machine's setup event stream — the
-  // same per-machine stream the node wizard and the devnet use.
-  async function provision(gid: string): Promise<void> {
+  // same per-machine stream the node wizard and the devnet use. onDone, if
+  // given, runs once the stream finishes WITHOUT an error and load() has
+  // refreshed gw — used by add-network to land on the new network's own
+  // detail screen only once it is actually there to show.
+  async function provision(gid: string, onDone?: () => void): Promise<void> {
     if (busy) return;
     busy = "create";
     actionErr = null;
@@ -303,7 +776,9 @@ export function renderPanel(root: HTMLElement): () => void {
       streamStop = null;
       busy = null;
       if (ev.err) actionErr = `Provisioning failed: ${ev.err}`;
-      void load();
+      void load().then(() => {
+        if (!ev.err) onDone?.();
+      });
     });
   }
 
@@ -813,17 +1288,112 @@ function renderNetwork(gw: api.GatewayView | null, chainId: number, st: NetworkD
 }
 
 // --- endpoint detail -----------------------------------------------------
-// Minimal placeholder — the real content (address editor, capabilities,
-// status, remove) arrives in Task 10. It still gives the operator a working
-// way back rather than a dead end.
-function renderEndpoint(gw: api.GatewayView | null, chainId: number, upstreamId: string): string {
+
+// EndpointDetailState mirrors NetworkDetailState one level down: the same
+// caps cache (already scoped to the whole gateway, just filtered here to one
+// upstream) plus epHealth for the one reading this screen adds that the
+// network screen doesn't need — headLag.
+interface EndpointDetailState {
+  caps: api.GatewayCapabilities | null;
+  capsBusy: boolean;
+  health: api.GatewayAnalytics | null;
+  healthBusy: boolean;
+  copyFlash: boolean;
+  error: string | null;
+}
+
+// singleCapabilities is unionCapabilities narrowed to exactly one upstream —
+// no folding, because there is only one endpoint's own verdict to show here.
+function singleCapabilities(caps: api.GatewayCapabilities | null, chainId: number, upstreamId: string): Record<string, string> {
+  const e = (caps?.endpoints ?? []).find((c) => c.chainId === chainId && c.upstream === upstreamId);
+  if (!e) return {};
+  const out: Record<string, string> = {};
+  for (const key of ["http", "ws", "archive", "trace"]) {
+    if (capStatusOf(e, key) === "supported") out[key] = "supported";
+  }
+  return out;
+}
+
+function renderEndpoint(gw: api.GatewayView | null, chainId: number, upstreamId: string, st: EndpointDetailState): string {
   const nv = gw?.networks?.find((n) => n.chainId === chainId);
   const up = nv?.upstreams?.find((u) => u.id === upstreamId);
+  if (!gw || !nv || !up) {
+    return `
+      <div class="p-band p-dhead">
+        <span class="p-back" data-action="back-to-network" data-chain-id="${chainId}">${ic("chevL")}</span>
+        <span class="p-dtitle"><span class="p-nmtxt">Endpoint</span></span>
+      </div>
+      <div class="p-band" style="padding:16px;color:var(--dim)">This endpoint is no longer configured.</div>
+    `;
+  }
+
+  const running = gw.status.State === "running";
+  const hc = healthClass({ running, serviceable: !up.problem });
+
+  // Address band: the endpoint's own dialable URL. Editable only for
+  // "external" upstreams — see the edit-address case in handleAction for why
+  // managed ones (their Endpoint is derived, never stored) don't get the
+  // affordance at all rather than one that would silently do nothing.
+  const editable = up.kind === "external";
+  const addressBand = `
+    <div class="p-band">
+      <div class="p-lblrow">
+        <span class="p-seclbl">Address</span>
+        <span class="p-acts"><span class="p-ic ${st.copyFlash ? "green" : "accent"}" data-action="copy-url" data-url="${escapeHtml(up.endpoint)}" title="Copy the endpoint URL">${ic("copy")}</span></span>
+      </div>
+      <div class="p-gwurl"${editable ? ' data-action="edit-address" style="cursor:text"' : ""}>${escapeHtml(up.endpoint || "—")}</div>
+    </div>
+  `;
+
+  // Capabilities band: this ONE upstream's probe result, same cell markup as
+  // the network band's folded one.
+  const capStatuses = singleCapabilities(st.caps, chainId, upstreamId);
+  const capCells = capabilityCells(capStatuses);
+  const capsBand = `
+    <div class="p-band">
+      <div class="p-lblrow"><span class="p-seclbl">Capabilities</span></div>
+      ${
+        st.capsBusy && !st.caps
+          ? `<div class="p-caprow" style="color:var(--dim2)">probing…</div>`
+          : `<div class="p-caprow">${capCells
+              .map((c) => `<span class="p-capitem${c.lit ? " lit" : ""}">${ic(CAP_ICON[c.key])}${escapeHtml(c.label)}</span>`)
+              .join("")}</div>`
+      }
+    </div>
+  `;
+
+  // Status band: Health mirrors the row's own dot, worded from up.problem
+  // when the server gave one (a real reason, not a generic label). "behind N
+  // blocks" is added only when the gateway's own analytics scored this exact
+  // upstream with a positive headLag — never shown, never guessed, when
+  // there is nothing real to report.
+  const healthWord = !running ? "Stopped" : up.problem ? up.problem : "Healthy";
+  const healthEntry = (st.health?.endpoints ?? []).find((e) => e.chainId === chainId && e.upstream === upstreamId);
+  const lagLine =
+    healthEntry && healthEntry.scored && healthEntry.headLag > 0
+      ? `<div class="p-srow"><span class="p-k">Chain head</span><span class="p-v">behind ${fmtInt(healthEntry.headLag)} block${healthEntry.headLag === 1 ? "" : "s"}</span></div>`
+      : "";
+  const statusBand = `
+    <div class="p-band">
+      <div class="p-lblrow"><span class="p-seclbl">Status</span><span class="p-acts"><span class="p-ic dim" data-action="recheck" title="Re-check capabilities and reload">${ic("refresh")}</span></span></div>
+      <div class="p-srow"><span class="p-k">Health</span><span class="p-v"><span class="p-dot ${hc}"></span> ${escapeHtml(healthWord)}</span></div>
+      ${lagLine}
+    </div>
+  `;
+
+  const removeErrLine = st.error
+    ? `<div class="p-band" style="padding:10px 16px;color:var(--red)">${escapeHtml(st.error)}</div>`
+    : "";
+
   return `
     <div class="p-band p-dhead">
       <span class="p-back" data-action="back-to-network" data-chain-id="${chainId}">${ic("chevL")}</span>
-      <span class="p-dtitle"><span class="p-nmtxt">${escapeHtml(up?.label ?? "Endpoint")}</span></span>
+      <span class="p-dtitle"><span class="p-dot ${hc}"></span> <span class="p-nmtxt">${escapeHtml(up.label)}</span> <span class="p-pen" data-action="rename-endpoint">${ic("pencil")}</span></span>
     </div>
-    <div class="p-band" style="padding:16px;color:var(--dim)">Endpoint detail is coming soon.</div>
+    ${addressBand}
+    ${capsBand}
+    ${statusBand}
+    ${removeErrLine}
+    <div class="p-band p-remove" data-action="remove-endpoint">${ic("trash")} Remove endpoint</div>
   `;
 }
