@@ -89,7 +89,9 @@ export function App() {
           <Route path="/machine/:id" element={<LegacyMachine />} />
           <Route path="/machine" element={<Navigate to="/targets" replace />} />
           <Route path="/security/:id" element={<LegacySecurity />} />
+          <Route path="/security" element={<Navigate to="/targets" replace />} />
           <Route path="/diag/:id" element={<LegacyDiag />} />
+          <Route path="/diag" element={<Navigate to="/targets" replace />} />
           <Route path="/analytics/:id" element={<LegacyAnalytics />} />
           <Route path="/analytics" element={<Navigate to="/rpc" replace />} />
           {["setup", "dash", "logs", "services"].map((p) => (
