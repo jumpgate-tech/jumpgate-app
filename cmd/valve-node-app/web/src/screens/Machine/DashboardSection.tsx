@@ -141,7 +141,7 @@ export function DashboardSection({ targetId }: { targetId: string }) {
           svc={clearSvc}
           diskUsage={diskUsageQuery.data}
           pending={clearMutation.isPending}
-          error={clearMutation.error ? formatError(clearMutation.error) : null}
+          error={clearMutation.error ? `Clear failed: ${formatError(clearMutation.error)}` : null}
           onCancel={closeClear}
           onConfirm={() => void confirmClear(clearSvc)}
         />
@@ -546,7 +546,7 @@ function ClearServiceModal({
       />
       {error && <p className="error small">{error}</p>}
       <div className="modal-actions">
-        <button className="btn btn-ghost" type="button" onClick={onCancel} disabled={pending}>
+        <button className="btn btn-ghost" type="button" onClick={onCancel}>
           Cancel
         </button>
         <button className="btn btn-danger" type="button" disabled={!valid || pending} onClick={onConfirm}>

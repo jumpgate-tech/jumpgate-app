@@ -396,8 +396,8 @@ describe("DashboardSection", () => {
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     });
 
-    it("shows an inline error and keeps the modal open when clear fails", async () => {
-      vi.mocked(api.clearService).mockRejectedValue(new Error("clear failed"));
+    it("shows a 'Clear failed: <message>' inline error (mirrors runClear's own prefix) and keeps the modal open", async () => {
+      vi.mocked(api.clearService).mockRejectedValue(new Error("disk busy"));
 
       await renderWired();
       fireEvent.click(within(serviceRow("exec")).getByText("Clear…"));
@@ -406,7 +406,7 @@ describe("DashboardSection", () => {
       fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "exec" } });
       fireEvent.click(within(dialog).getByText("Clear and resync"));
 
-      expect(await within(dialog).findByText("clear failed")).toBeInTheDocument();
+      expect(await within(dialog).findByText("Clear failed: disk busy")).toBeInTheDocument();
       expect(within(dialog).getByText("Clear and resync")).not.toBeDisabled();
     });
 
@@ -419,6 +419,30 @@ describe("DashboardSection", () => {
 
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(api.clearService).not.toHaveBeenCalled();
+    });
+
+    it("does not disable Cancel while a clear is in flight (dashboard.ts never disables it there either)", async () => {
+      let resolveClear: (() => void) | null = null;
+      vi.mocked(api.clearService).mockReturnValue(
+        new Promise((resolve) => {
+          resolveClear = () => resolve({ status: "ok" });
+        }),
+      );
+
+      await renderWired();
+      fireEvent.click(within(serviceRow("exec")).getByText("Clear…"));
+
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "exec" } });
+      fireEvent.click(within(dialog).getByText("Clear and resync"));
+
+      await waitFor(() => expect(within(dialog).getByText("Clearing…")).toBeInTheDocument());
+      expect(within(dialog).getByText("Cancel")).not.toBeDisabled();
+
+      await act(async () => {
+        resolveClear!();
+        await Promise.resolve();
+      });
     });
   });
 });
