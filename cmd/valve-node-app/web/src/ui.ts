@@ -59,12 +59,13 @@ export function renderShell(root: HTMLElement): Shell {
   const navLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>("[data-nav]"));
   const setActiveNav = (screen: string) => {
     // The nav is RPC / Machines / Settings, RPC first because eRPC is the
-    // node-independent path every audience can use. Two screens have no nav
+    // node-independent path every audience can use. Three screens have no nav
     // entry of their own and borrow one: the machine page (opened from a
-    // machine card) lights Machines, and the capability-detected home — which
-    // is the eRPC-first landing whenever it does not redirect to the machines
-    // view — lights RPC.
-    const navScreen = screen === "machine" ? "targets" : screen === "home" ? "rpc" : screen;
+    // machine card) lights Machines, and both the capability-detected home
+    // and the Easy-Button panel — which replaced it as the default landing,
+    // eRPC-first whenever it does not redirect to the machines view — light
+    // RPC.
+    const navScreen = screen === "machine" ? "targets" : screen === "home" || screen === "panel" ? "rpc" : screen;
     for (const a of navLinks) {
       a.classList.toggle("active", a.dataset.nav === navScreen);
     }
