@@ -1,6 +1,6 @@
 // Pure helpers for the panel. No DOM, no api calls — unit-tested in panelModel.test.ts.
 
-import type { GatewayConfig, GatewayNetwork, GatewayUpstream, GatewayView } from "./api";
+import type { GatewayConfig, GatewayNetwork, GatewayUpstream, GatewayView, Latency, NetworkAnalytics } from "./api";
 
 // endpointNameFromUrl derives a friendly default name from an endpoint URL:
 // the second-level domain label ("publicnode" from rpc.publicnode.com), or the
@@ -50,6 +50,73 @@ export function healthClass(input: { running: boolean; serviceable: boolean; slo
   if (r > 0.4) return "frequent";
   if (r >= 0.1) return "occasional";
   return "stable";
+}
+
+// SLOW_LATENCY_LE is the bucket boundary the dots call "slow". eRPC's
+// histograms carry a FIXED bucket set — 0.05s / 0.5s / 5s / 30s / +Inf (see
+// internal/metrics's own Latency doc) — so there is no bucket for an
+// arbitrary threshold like 1s; asking for one would just never match. 0.5s
+// is the nearest real boundary: under it is ordinary RPC latency, over it is
+// a request an operator would actually notice.
+const SLOW_LATENCY_LE = "0.5";
+
+// slowRateFromLatency reads the fraction of one cumulative histogram's
+// requests that finished slower than SLOW_LATENCY_LE. Buckets are
+// cumulative (Prometheus-style): the count at a given `le` is every request
+// that finished within `le` seconds, so subtracting it from the histogram's
+// total count leaves exactly the slow tail.
+//
+// Returns undefined — "no opinion", not "healthy" — when there's nothing to
+// read: no buckets yet, zero requests counted, or (defensively) a bucket set
+// that doesn't include SLOW_LATENCY_LE. Callers fall back to a cruder signal
+// rather than let undefined be misread as "fast".
+export function slowRateFromLatency(l: Latency | null | undefined): number | undefined {
+  if (!l || l.count <= 0 || !l.buckets || l.buckets.length === 0) return undefined;
+  const bucket = l.buckets.find((b) => b.le === SLOW_LATENCY_LE);
+  if (!bucket) return undefined;
+  const slow = l.count - bucket.count;
+  return Math.max(0, Math.min(1, slow / l.count));
+}
+
+// combineLatency folds a list of per-method (or per-upstream) histograms
+// into one combined histogram, summing counts bucket-by-bucket at matching
+// `le`s. Valid because every histogram on the wire shares eRPC's one fixed
+// bucket set — summing cumulative counts at the same bound is itself a valid
+// cumulative count.
+function combineLatency(list: readonly Latency[] | null | undefined): Latency | null {
+  if (!list || list.length === 0) return null;
+  let count = 0;
+  const byLe = new Map<string, number>();
+  for (const l of list) {
+    count += l.count;
+    for (const b of l.buckets ?? []) byLe.set(b.le, (byLe.get(b.le) ?? 0) + b.count);
+  }
+  return { count, mean: null, buckets: [...byLe.entries()].map(([le, c]) => ({ le, count: c })) };
+}
+
+// networkSlowRate is the network dot's live signal: the fraction of this
+// network's client-observed requests — folded across every RPC method it
+// served — that finished slower than SLOW_LATENCY_LE.
+//
+// Falls back to failed/received (cruder, but still a real symptom) when the
+// histograms haven't filled in — e.g. right after a (re)start, or a chain
+// with too little traffic to have landed in a bucket yet.
+export function networkSlowRate(na: NetworkAnalytics): number | undefined {
+  const fromBuckets = slowRateFromLatency(combineLatency(na.methods));
+  if (fromBuckets !== undefined) return fromBuckets;
+  if (na.received > 0) return Math.max(0, Math.min(1, na.failed / na.received));
+  return undefined;
+}
+
+// endpointSlowRate is the per-upstream signal for one endpoint's own dot:
+// this network's EndpointLatency row for that upstream ID — the same
+// client-observed histogram narrowed to the requests eRPC actually routed
+// there. No received/failed fallback at this level (NetworkAnalytics only
+// counts those per-network) — an upstream with no histogram yet reports
+// undefined, same as "no opinion" anywhere else in this module.
+export function endpointSlowRate(na: NetworkAnalytics | null | undefined, upstreamId: string): number | undefined {
+  const el = na?.endpoints?.find((e) => e.upstream === upstreamId);
+  return slowRateFromLatency(el ?? null);
 }
 
 export interface CapCell { key: string; label: string; lit: boolean; hot: boolean; }
