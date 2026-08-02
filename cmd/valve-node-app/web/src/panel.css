@@ -419,6 +419,17 @@
 .p-row.addr .p-nm {
   color: var(--accent);
 }
+/* "Add a network" / "Add endpoint" while busy — the handler already guards
+   on `if (busy) return`, this makes that guard visible so the row doesn't
+   read as clickable mid-provision. */
+.p-row.p-disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+.p-row.p-disabled:hover {
+  background: none;
+}
 
 /* --- gateway URL band (network detail) ------------------------------------ */
 
@@ -453,6 +464,13 @@
   width: 16px;
   height: 16px;
   stroke-width: 1.7;
+}
+/* shown in place of the meter when the probe itself threw — see
+   netCapsErr in panel.ts. Distinct from every cell simply unlit, which
+   otherwise reads identically to "genuinely unsupported". */
+.p-caprow.p-caperr {
+  color: var(--dim2);
+  font-size: 12px;
 }
 
 /* --- key/value status rows ------------------------------------------------- */
@@ -636,4 +654,28 @@
   font-size: 11.5px;
   line-height: 1.6;
   text-align: left;
+}
+
+/* --- reduced motion -------------------------------------------------------
+   .p-dot.occasional/.frequent lean on p-glitch (a 5s/1.25s stutter) to say
+   "unhealthy", and the two busy spinners (.p-power.busy and the empty
+   state's .p-pbtn.busy) lean on p-spin, to say "working". Both are pure
+   motion cues — turn them off under prefers-reduced-motion and re-encode
+   "unhealthy" a non-motion way, since color alone doesn't: stable and
+   occasional are both plain green today (only the animation told them
+   apart), so occasional drops to a visibly lower opacity here. frequent
+   already carries its own amber, so color alone still reads once motion
+   is gone. */
+@media (prefers-reduced-motion: reduce) {
+  .p-dot.occasional,
+  .p-dot.frequent {
+    animation: none;
+  }
+  .p-dot.occasional {
+    opacity: 0.65;
+  }
+  .p-power.busy .p-pbtn .p-i,
+  .p-pbtn.busy .p-i {
+    animation: none;
+  }
 }
