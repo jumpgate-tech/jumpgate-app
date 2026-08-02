@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { endpointNameFromUrl, masterState } from "./panelModel";
+import { endpointNameFromUrl, masterState, healthClass, capabilityCells } from "./panelModel";
 import type { GatewayView } from "./api";
 
 describe("endpointNameFromUrl", () => {
@@ -40,5 +40,31 @@ describe("masterState", () => {
   });
   it("null gateway (nothing set up) is off", () => {
     expect(masterState(null).tone).toBe("off");
+  });
+});
+
+describe("healthClass", () => {
+  it("off when the gateway is not running", () => {
+    expect(healthClass({ running: false, serviceable: true })).toBe("off");
+  });
+  it("frequent when running but not serviceable", () => {
+    expect(healthClass({ running: true, serviceable: false })).toBe("frequent");
+  });
+  it("stable when serviceable and slow requests are rare/unknown", () => {
+    expect(healthClass({ running: true, serviceable: true })).toBe("stable");
+    expect(healthClass({ running: true, serviceable: true, slowRate: 0.02 })).toBe("stable");
+  });
+  it("occasional then frequent as the slow rate climbs", () => {
+    expect(healthClass({ running: true, serviceable: true, slowRate: 0.15 })).toBe("occasional");
+    expect(healthClass({ running: true, serviceable: true, slowRate: 0.6 })).toBe("frequent");
+  });
+});
+
+describe("capabilityCells", () => {
+  it("lights supported caps in fixed order, archive is the hot one", () => {
+    const cells = capabilityCells({ http: "supported", ws: "supported", archive: "supported", trace: "unsupported" });
+    expect(cells.map((c) => c.key)).toEqual(["http", "ws", "archive", "trace"]);
+    expect(cells.find((c) => c.key === "archive")).toMatchObject({ lit: true, hot: true });
+    expect(cells.find((c) => c.key === "trace")).toMatchObject({ lit: false });
   });
 });
