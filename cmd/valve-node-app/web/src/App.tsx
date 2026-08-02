@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { LegacyScreen } from "./components/LegacyScreen";
-import { renderPanel } from "./panel";
+import { Panel } from "./screens/Panel/Panel";
 import { renderRPC } from "./rpc";
 import { renderTargets } from "./targets";
 import { renderSettings } from "./settings";
@@ -27,9 +27,6 @@ export function activeNav(screen: string): string {
 // Bridge wrappers: memoize the legacy render so LegacyScreen's effect is stable.
 function Bridge({ render }: { render: (el: HTMLElement) => (() => void) | void }) {
   return <LegacyScreen render={render} />;
-}
-function LegacyPanel() {
-  return <Bridge render={useCallback((el: HTMLElement) => renderPanel(el), [])} />;
 }
 function LegacyRPC() {
   return <Bridge render={useCallback((el: HTMLElement) => renderRPC(el), [])} />;
@@ -81,8 +78,8 @@ export function App() {
       </header>
       <main id="content" className="content">
         <Routes>
-          <Route path="/" element={<LegacyPanel />} />
-          <Route path="/panel" element={<LegacyPanel />} />
+          <Route path="/" element={<Panel />} />
+          <Route path="/panel" element={<Panel />} />
           <Route path="/rpc" element={<LegacyRPC />} />
           <Route path="/targets" element={<LegacyTargets />} />
           <Route path="/settings" element={<LegacySettings />} />
@@ -100,7 +97,7 @@ export function App() {
           {["setup", "dash", "logs", "services"].map((p) => (
             <Route key={`${p}-noid`} path={`/${p}`} element={<Navigate to="/targets" replace />} />
           ))}
-          <Route path="*" element={<LegacyPanel />} />
+          <Route path="*" element={<Panel />} />
         </Routes>
       </main>
     </div>
