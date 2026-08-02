@@ -1,0 +1,84 @@
+import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import type { GatewayCapabilities, TlsVerification } from "../../api";
+import { NetworkView } from "./NetworkView";
+import { makeGateway } from "./fixtures";
+
+afterEach(cleanup);
+
+const handlers = {
+  onBack: () => {},
+  onOpenEndpoint: () => {},
+  onAddEndpoint: () => {},
+  onRemoveNetwork: () => {},
+  onVerifyTls: () => Promise.resolve({} as TlsVerification),
+  onRecheck: () => {},
+};
+
+describe("NetworkView", () => {
+  it("renders the gateway URL, its endpoints, capabilities and health", () => {
+    const caps: GatewayCapabilities = {
+      at: "now",
+      endpoints: [{ upstream: "public-1-1", chainId: 1, reachable: true, capabilities: [] }],
+    };
+    render(
+      <NetworkView
+        gw={makeGateway()}
+        chainId={1}
+        health={undefined}
+        caps={caps}
+        capsBusy={false}
+        capsErr={null}
+        busy={null}
+        error={null}
+        {...handlers}
+      />,
+    );
+    expect(screen.getByText("https://valve.local/1")).toBeInTheDocument();
+    expect(screen.getByText("publicnode")).toBeInTheDocument();
+    expect(screen.getByText("Endpoints · 1")).toBeInTheDocument();
+    // reachable=true folds to HTTP supported.
+    expect(screen.getByText("HTTP").closest(".p-capitem")).toHaveClass("lit");
+    expect(screen.getByText("Healthy")).toBeInTheDocument();
+    expect(screen.getByText("Remove network")).toBeInTheDocument();
+  });
+
+  it("runs the live TLS check when the lock is clicked", async () => {
+    const onVerifyTls = vi.fn(() => Promise.resolve({ ok: true, at: "2026-08-02T00:00:00Z" } as TlsVerification));
+    render(
+      <NetworkView
+        gw={makeGateway()}
+        chainId={1}
+        health={undefined}
+        caps={undefined}
+        capsBusy={false}
+        capsErr={null}
+        busy={null}
+        error={null}
+        {...handlers}
+        onVerifyTls={onVerifyTls}
+      />,
+    );
+    const lock = document.querySelector('.p-ic[title="Verify HTTPS now"]') as HTMLElement;
+    expect(lock).toBeTruthy();
+    lock.click();
+    await waitFor(() => expect(onVerifyTls).toHaveBeenCalled());
+  });
+
+  it("shows 'no longer configured' when the chain has gone", () => {
+    render(
+      <NetworkView
+        gw={makeGateway()}
+        chainId={9999}
+        health={undefined}
+        caps={undefined}
+        capsBusy={false}
+        capsErr={null}
+        busy={null}
+        error={null}
+        {...handlers}
+      />,
+    );
+    expect(screen.getByText("This network is no longer configured.")).toBeInTheDocument();
+  });
+});

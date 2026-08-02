@@ -3,10 +3,8 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { HashRouter } from "react-router-dom";
 import { activeNav, App } from "./App";
 
-vi.mock("./panel", () => ({
-  renderPanel: vi.fn((el: HTMLElement) => {
-    el.textContent = "panel-screen";
-  }),
+vi.mock("./screens/Panel/Panel", () => ({
+  Panel: () => <div>panel-screen</div>,
 }));
 vi.mock("./rpc", () => ({
   renderRPC: vi.fn((el: HTMLElement) => {
