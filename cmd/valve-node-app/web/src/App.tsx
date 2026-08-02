@@ -2,11 +2,11 @@ import { useCallback } from "react";
 import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { LegacyScreen } from "./components/LegacyScreen";
 import { Panel } from "./screens/Panel/Panel";
+import { Security } from "./screens/Security/Security";
 import { renderRPC } from "./rpc";
 import { renderTargets } from "./targets";
 import { renderSettings } from "./settings";
 import { renderMachine } from "./machine";
-import { renderSecurity } from "./security";
 import { renderDiagnostics } from "./diag";
 import { renderAnalytics } from "./analytics";
 
@@ -40,10 +40,6 @@ function LegacySettings() {
 function LegacyMachine() {
   const { id } = useParams();
   return <Bridge render={useCallback((el: HTMLElement) => renderMachine(el, id!), [id])} />;
-}
-function LegacySecurity() {
-  const { id } = useParams();
-  return <Bridge render={useCallback((el: HTMLElement) => renderSecurity(el, id!), [id])} />;
 }
 function LegacyDiag() {
   const { id } = useParams();
@@ -85,7 +81,7 @@ export function App() {
           <Route path="/settings" element={<LegacySettings />} />
           <Route path="/machine/:id" element={<LegacyMachine />} />
           <Route path="/machine" element={<Navigate to="/targets" replace />} />
-          <Route path="/security/:id" element={<LegacySecurity />} />
+          <Route path="/security/:id" element={<Security />} />
           <Route path="/security" element={<Navigate to="/targets" replace />} />
           <Route path="/diag/:id" element={<LegacyDiag />} />
           <Route path="/diag" element={<Navigate to="/targets" replace />} />
