@@ -35,11 +35,15 @@ vi.mock("./screens/Security/Security", async () => {
     },
   };
 });
-vi.mock("./diag", () => ({
-  renderDiagnostics: vi.fn((el: HTMLElement, id: string) => {
-    el.textContent = `diag-screen:${id}`;
-  }),
-}));
+vi.mock("./screens/Diagnostics/Diagnostics", async () => {
+  const { useParams } = await import("react-router-dom");
+  return {
+    Diagnostics: () => {
+      const { id } = useParams<{ id: string }>();
+      return <div>diag-screen:{id}</div>;
+    },
+  };
+});
 vi.mock("./analytics", () => ({
   renderAnalytics: vi.fn((el: HTMLElement, id: string) => {
     el.textContent = `analytics-screen:${id}`;
