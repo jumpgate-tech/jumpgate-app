@@ -31,6 +31,23 @@ func TestTrustStoreCommand_PerOS(t *testing.T) {
 			t.Errorf("darwin command missing %q:\n%s", want, darwin.Command)
 		}
 	}
+	// darwin carries a run-by-hand fallback for when osascript has no GUI session
+	// to prompt in ("no user interaction was possible"): a sudo command that
+	// prompts in an interactive terminal instead. The path is single-quoted for
+	// sh, safe because validateCertPath forbids a single quote.
+	for _, want := range []string{
+		"sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain",
+		"'" + path + "'",
+	} {
+		if !strings.Contains(darwin.ManualCommand, want) {
+			t.Errorf("darwin ManualCommand missing %q:\n%s", want, darwin.ManualCommand)
+		}
+	}
+	// The osascript one-liner is not what a human should paste into a plain
+	// shell, so the fallback must not merely echo it.
+	if strings.Contains(darwin.ManualCommand, "osascript") {
+		t.Errorf("darwin ManualCommand should be a plain sudo command, not the osascript form:\n%s", darwin.ManualCommand)
+	}
 
 	linux, err := TrustStoreCommand("linux", path, "edge")
 	if err != nil {

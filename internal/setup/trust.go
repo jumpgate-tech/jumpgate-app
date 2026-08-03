@@ -29,6 +29,19 @@ type TrustStoreInstall struct {
 	// administrator privileges), so it is false there; linux and windows need
 	// an already-privileged shell.
 	NeedsRoot bool
+
+	// ManualCommand, when set, is a plain command an operator runs themselves in
+	// a terminal THEY opened, for when Command cannot run automatically. It
+	// exists for darwin: `osascript ... with administrator privileges` can only
+	// show its auth dialog inside a GUI (Aqua) login session, so when the server
+	// was launched detached (over SSH, a background service, `nohup`) the
+	// automatic install fails with "SecTrustSettingsSetTrustSettings: The
+	// authorization was denied since no user interaction was possible." The
+	// osascript one-liner is useless to paste into a plain shell in that state,
+	// so this hands back the equivalent `sudo` command, which prompts normally in
+	// an interactive terminal. It is quoted for `sh` like Command. Empty when
+	// Command is already the run-by-hand form (linux/windows).
+	ManualCommand string
 }
 
 // TrustStoreCommand builds the trust-store install for goos, installing exactly
@@ -53,7 +66,14 @@ func TrustStoreCommand(goos, certPath, gatewayID string) (TrustStoreInstall, err
 		// because validateCertPath forbids a single quote (and a double quote and
 		// backslash, so the AppleScript string literal is safe too).
 		script := `do shell script "security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain " & quoted form of "` + certPath + `" with administrator privileges`
-		return TrustStoreInstall{Command: "osascript -e '" + script + "'"}, nil
+		return TrustStoreInstall{
+			Command: "osascript -e '" + script + "'",
+			// Fallback for when osascript has no GUI session to prompt in: the
+			// same install as a sudo command, which prompts in an interactive
+			// terminal. shQuote is safe here because validateCertPath already
+			// forbids a single quote.
+			ManualCommand: "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain " + shQuote(certPath),
+		}, nil
 
 	case "linux":
 		// update-ca-certificates rebuilds the system bundle from

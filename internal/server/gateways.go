@@ -1648,11 +1648,19 @@ func (s *Server) handleGatewayTrustCert(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// The command to hand back when the auto-install can't run: prefer the
+	// manual (sudo) form when there is one — darwin's osascript one-liner is
+	// useless to paste into a plain shell, its whole point being a GUI prompt.
+	manualCmd := install.ManualCommand
+	if manualCmd == "" {
+		manualCmd = install.Command
+	}
+
 	res, err := ex.Run(r.Context(), install.Command, nil)
 	if err != nil {
 		writeJSON(w, http.StatusOK, trustCertResult{
 			OK:         false,
-			RanCommand: install.Command,
+			RanCommand: manualCmd,
 			Message:    fmt.Sprintf("the trust-store install could not be run on machine %q (%v). Run it there by hand:", host.ID, err),
 		})
 		return
@@ -1662,10 +1670,18 @@ func (s *Server) handleGatewayTrustCert(w http.ResponseWriter, r *http.Request) 
 		if detail == "" {
 			detail = strings.TrimSpace(res.Stdout)
 		}
+		// darwin's osascript can only raise its authorization dialog inside a GUI
+		// login session; when this app was launched detached it fails with
+		// "no user interaction was possible", which reads as a scary internal
+		// error rather than the fixable "run it in your own terminal" it is.
+		msg := fmt.Sprintf("the trust-store install exited %d on machine %q: %s. Run it there by hand:", res.ExitCode, host.ID, detail)
+		if goos == "darwin" {
+			msg = fmt.Sprintf("macOS needs a GUI login session to prompt for authorization, which this app didn't have (it was likely launched detached — over SSH, a background service, or nohup). exit %d: %s. Run this in a Terminal you opened — it prompts for your password:", res.ExitCode, detail)
+		}
 		writeJSON(w, http.StatusOK, trustCertResult{
 			OK:         false,
-			RanCommand: install.Command,
-			Message:    fmt.Sprintf("the trust-store install exited %d on machine %q: %s. Run it there by hand:", res.ExitCode, host.ID, detail),
+			RanCommand: manualCmd,
+			Message:    msg,
 		})
 		return
 	}
