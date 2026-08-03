@@ -1,10 +1,11 @@
 // "Manage gateway" — the container chrome, collapsed by default so the top of
 // the page stays the URLs. Inside: the lifecycle actions the SERVER permits
 // (rendered verbatim from gw.actions), Analytics, re-probe, Settings, Forget,
-// the base URL, the certificate-to-install note, any leftover container, and
-// the settings form.
-import type { OrphanedContainer, GatewayView, TrustCertResult } from "../../api";
-import { internalCaPath, manageStatus, manualTrustCommand, osLabel } from "./rpcModel";
+// the base URL, any leftover container, and the settings form. Cert-trust is
+// NOT here — it is a one-time, gateway-level action that lives beside the
+// base URL in <GatewayIdentity>, not duplicated in this section too.
+import type { OrphanedContainer, GatewayView } from "../../api";
+import { manageStatus } from "./rpcModel";
 import { CopyButton } from "./CopyButton";
 import { OrphanBanner } from "./OrphanBanner";
 import { SettingsBlock, type SettingsValues } from "./SettingsBlock";
@@ -50,12 +51,6 @@ export interface ManageProps {
   onToggleSettings: () => void;
   onSaveSettings: (values: SettingsValues) => void;
   onForget: () => void;
-  // cert / trust
-  hostOS: string;
-  targetMode: string;
-  trustBusy: boolean;
-  trustResult: TrustCertResult | null;
-  onTrust: () => void;
   // verify
   verifying: boolean;
   verifyResult: import("../../api").TlsVerification | null;
@@ -70,77 +65,6 @@ function ActionButton({ action, busy, onAction }: { action: string; busy: string
     <button className={def.className} title={def.title} disabled={!!busy} onClick={() => onAction(action)}>
       {busy === action ? <span className="spinner" aria-label="working" /> : def.label}
     </button>
-  );
-}
-
-function TrustResultLine({ r }: { r: TrustCertResult }) {
-  if (r.ok) {
-    return (
-      <div className="strip-line strip-note">
-        <span className="strip-text">{r.message}</span>
-      </div>
-    );
-  }
-  return (
-    <div className="strip-line strip-warn">
-      <span className="strip-text">{r.message}</span>
-      {r.ranCommand ? (
-        <>
-          <code className="strip-cmd">{r.ranCommand}</code>
-          <CopyButton value={r.ranCommand} />
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-// CertBlock is the full "install this certificate" note — a note, not a warning
-// (nothing is broken), so it carries no colour. It offers the one-click trust
-// only for a LOCAL gateway, and always the manual command for the browsing
-// device's OS.
-function CertBlock({ gw, hostOS, targetMode, trustBusy, trustResult, onTrust }: {
-  gw: GatewayView;
-  hostOS: string;
-  targetMode: string;
-  trustBusy: boolean;
-  trustResult: TrustCertResult | null;
-  onTrust: () => void;
-}) {
-  const path = internalCaPath(gw);
-  if (!path) return null;
-  const local = targetMode === "local";
-  const cmd = manualTrustCommand(hostOS, path, gw.id);
-  return (
-    <div className="strip">
-      <div className="strip-line strip-note">
-        <span className="strip-text">
-          Served by Caddy's own certificate authority — the browser warns once, on every device that calls it, until
-          that authority's root is trusted. The root is on {gw.placement.targetId} at:
-        </span>
-        <code className="strip-cmd">{path}</code>
-        <CopyButton value={path} label="Copy path" />
-      </div>
-      {local ? (
-        <div className="strip-line strip-note">
-          <span className="strip-text">This gateway runs on this machine, so its root can be installed here in one click:</span>
-          <button className="btn btn-tiny" disabled={trustBusy} onClick={onTrust}>
-            {trustBusy ? <span className="spinner" aria-label="installing" /> : "Trust on this machine"}
-          </button>
-        </div>
-      ) : null}
-      {trustResult ? <TrustResultLine r={trustResult} /> : null}
-      <div className="strip-line strip-note">
-        <span className="strip-text">
-          The certificate must be trusted on whatever device opens the URL —{" "}
-          {local
-            ? "if that is a different device (a phone, another laptop), copy the root above to it and run"
-            : "this gateway runs elsewhere, so on the device you browse from run"}
-          {hostOS ? ` (${osLabel(hostOS)})` : ""}:
-        </span>
-        <code className="strip-cmd">{cmd}</code>
-        <CopyButton value={cmd} label="Copy command" />
-      </div>
-    </div>
   );
 }
 
@@ -201,14 +125,6 @@ export function ManageSection(props: ManageProps) {
               Not serving — it will answer on <code>{gw.baseUrl}</code> once it is running.
             </p>
           )}
-          <CertBlock
-            gw={gw}
-            hostOS={props.hostOS}
-            targetMode={props.targetMode}
-            trustBusy={props.trustBusy}
-            trustResult={props.trustResult}
-            onTrust={props.onTrust}
-          />
           {props.orphans.map((o) => (
             <OrphanBanner key={o.containerName} orphan={o} error={props.orphanErr[o.containerName]} onDismiss={props.onDismissOrphan} />
           ))}

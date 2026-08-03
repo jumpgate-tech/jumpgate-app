@@ -50,6 +50,7 @@ import {
 } from "./RpcDialogs";
 import {
   attentionLines,
+  internalCaPath,
   mergePendingNetworks,
   pruneEmptyNetworks,
   storedConfig,
@@ -88,7 +89,6 @@ export function GatewayCard({
   presets,
   orphans,
   showMachine,
-  hostOS,
 }: {
   gw: GatewayView;
   targets: TargetSummary[];
@@ -96,7 +96,6 @@ export function GatewayCard({
   presets: NetworkPreset[];
   orphans: api.OrphanedContainer[];
   showMachine: boolean;
-  hostOS: string;
 }) {
   const gid = gw.id;
   const traffic = useGatewayTraffic(gid);
@@ -461,7 +460,14 @@ export function GatewayCard({
   return (
     <>
       {showMachine ? <h2 className="rpc-machine">{gw.placement.targetId}</h2> : null}
-      <GatewayIdentity gw={gw} />
+      <GatewayIdentity
+        gw={gw}
+        caPath={internalCaPath(gw)}
+        targetMode={targetMode}
+        trustBusy={trustMut.isPending}
+        trustResult={trustMut.data ?? null}
+        onTrust={() => trustMut.mutate(gid)}
+      />
       <AttentionStrip lines={attentionLines(gw, verifyResult, ops.actionErr)} />
       {ops.activity.length > 0 ? (
         <div className="config-block">
@@ -476,9 +482,6 @@ export function GatewayCard({
         capsBusy={reprobing}
         traffic={traffic.data ?? null}
         trafficLoading={traffic.isLoading}
-        targetMode={targetMode}
-        trustBusy={trustMut.isPending}
-        trustMessage={trustMut.data ?? null}
         busy={displayBusy}
         isDetailOpen={(chainId) => openDetails.has(chainId)}
         onToggleDetail={(chainId) =>
@@ -498,7 +501,6 @@ export function GatewayCard({
         onAddChain={() => setDialog({ kind: "add-chain" })}
         onAddDevnet={() => void addDevnetChain(1337)}
         onReprobe={() => void onReprobe()}
-        onTrust={() => trustMut.mutate(gid)}
       />
       <ManageSection
         gw={gw}
@@ -515,11 +517,6 @@ export function GatewayCard({
         onToggleSettings={() => setSettingsOpen((o) => !o)}
         onSaveSettings={(values) => void saveSettings(values)}
         onForget={() => setDialog({ kind: "forget" })}
-        hostOS={hostOS}
-        targetMode={targetMode}
-        trustBusy={trustMut.isPending}
-        trustResult={trustMut.data ?? null}
-        onTrust={() => trustMut.mutate(gid)}
         verifying={verifyMut.isPending}
         verifyResult={verifyResult}
         verifyErr={verifyErr}

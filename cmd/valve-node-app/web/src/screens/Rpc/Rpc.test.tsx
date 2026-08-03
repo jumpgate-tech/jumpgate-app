@@ -247,6 +247,50 @@ describe("Rpc — TLS verify + trust", () => {
     await waitFor(() => expect(api.trustGatewayCert).toHaveBeenCalledWith("default"));
     expect(await screen.findByText("Trusted — reload your wallet or browser.")).toBeInTheDocument();
   });
+
+  it("renders cert-trust exactly once, at the gateway level, even with several chains", async () => {
+    const gw = makeGateway();
+    gw.networks = [
+      ...(gw.networks ?? []),
+      {
+        chainId: 369,
+        name: "PulseChain",
+        url: "https://valve.local/main/evm/369",
+        path: "/main/evm/369",
+        upstreams: [
+          { id: "u3", kind: "external", endpoint: "wss://c", label: "c", local: true, recentOnly: false, actions: [] },
+        ],
+        knownSetSize: 1,
+        serviceable: true,
+      },
+    ];
+    vi.mocked(api.getGateways).mockResolvedValue(response({ gateways: [gw] }));
+    render(<Rpc />, { wrapper });
+    expect(await screen.findByText("PulseChain")).toBeInTheDocument();
+    // One control for the whole gateway, not one per chain — the base URL and
+    // its trust control are host-level; a chain is only a path underneath it.
+    expect(screen.getAllByRole("button", { name: "Trust on this machine" })).toHaveLength(1);
+    expect(screen.queryByText(/Your wallet must trust this gateway's certificate first/)).not.toBeInTheDocument();
+  });
+
+  it("shows a failed trust's ranCommand as a full-width block, with a copy button", async () => {
+    vi.mocked(api.getGateways).mockResolvedValue(response());
+    vi.mocked(api.trustGatewayCert).mockResolvedValue({
+      ok: false,
+      message: "Could not install automatically.",
+      ranCommand: 'sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "/root.crt"',
+    });
+    render(<Rpc />, { wrapper });
+    fireEvent.click(await screen.findByRole("button", { name: "Trust on this machine" }));
+    await waitFor(() => expect(api.trustGatewayCert).toHaveBeenCalledWith("default"));
+    expect(await screen.findByText("Could not install automatically.")).toBeInTheDocument();
+    const cmd = await screen.findByText(
+      'sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "/root.crt"',
+    );
+    expect(cmd.tagName).toBe("CODE");
+    expect(cmd.className).toContain("strip-cmd");
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
+  });
 });
 
 describe("Rpc — config edit", () => {

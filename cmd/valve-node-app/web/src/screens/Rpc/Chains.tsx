@@ -1,16 +1,18 @@
 // The chains — the whole reason to be on this screen. Wallet-first cards
-// (name, evm:<id>, one-word health, the dialable URL with a prominent Copy, and
-// the cert hint inline when the gateway uses its own CA); the operator detail
-// (the derived verdict, the redundancy bar, the per-upstream probe table,
-// +Endpoint/Remove) folds away behind "Details". All presentational: it reads
-// rpcModel's derivations and calls back up for every action.
+// (name, evm:<id>, one-word health, the dialable URL with a prominent Copy);
+// the operator detail (the derived verdict, the redundancy bar, the
+// per-upstream probe table, +Endpoint/Remove) folds away behind "Details".
+// Cert-trust is NOT here — every chain URL is just a path under the gateway's
+// base URL, so trust is a one-time, gateway-level action that lives beside the
+// base URL in <GatewayIdentity>, not repeated under each chain. All
+// presentational: it reads rpcModel's derivations and calls back up for every
+// action.
 import type {
   EndpointCapabilities,
   GatewayCapabilities,
   GatewayTraffic,
   GatewayView,
   NetworkView,
-  TrustCertResult,
   UpstreamView,
 } from "../../api";
 import { Badge } from "../../components/Badge";
@@ -24,7 +26,6 @@ import {
   chainLacksEntirely,
   chainVerdict,
   healthWord,
-  internalCaPath,
   orderedNetworks,
   redundancy,
   shareCellModel,
@@ -43,7 +44,6 @@ export interface ChainCallbacks {
   onAddChain: () => void;
   onAddDevnet: () => void;
   onReprobe: () => void;
-  onTrust: () => void;
 }
 
 export interface ChainsProps extends ChainCallbacks {
@@ -53,9 +53,6 @@ export interface ChainsProps extends ChainCallbacks {
   capsBusy: boolean;
   traffic: GatewayTraffic | null | undefined;
   trafficLoading: boolean;
-  targetMode: string;
-  trustBusy: boolean;
-  trustMessage: TrustCertResult | null;
   busy: string | null;
 }
 
@@ -264,7 +261,7 @@ function EndpointStateBadge({ upstream }: { upstream: UpstreamView }) {
   return upstream.local ? <Badge text="yours" kind="ok" /> : <Badge text="public" kind="neutral" />;
 }
 
-function ChainConnect({ gw, network, props }: { gw: GatewayView; network: NetworkView; props: ChainsProps }) {
+function ChainConnect({ gw, network }: { gw: GatewayView; network: NetworkView }) {
   if (!network.url) {
     const notRunning = gw.status.State !== "running";
     return (
@@ -275,50 +272,10 @@ function ChainConnect({ gw, network, props }: { gw: GatewayView; network: Networ
       </p>
     );
   }
-  const caPath = internalCaPath(gw);
   return (
     <div className="chain-connect">
       <code className="endpoint-url">{network.url}</code>
       <CopyButton value={network.url} label="Copy URL" className="btn btn-tiny" />
-      {caPath ? (
-        <>
-          <span className="chain-cert muted small">Your wallet must trust this gateway's certificate first —</span>
-          {props.targetMode === "local" ? (
-            <button
-              className="btn btn-ghost btn-tiny"
-              disabled={props.trustBusy}
-              title="Install this gateway's root certificate into this machine's trust store, then reload your wallet."
-              onClick={props.onTrust}
-            >
-              {props.trustBusy ? "Trusting…" : "Trust on this machine"}
-            </button>
-          ) : null}
-          <CopyButton
-            value={caPath}
-            label="Copy cert path"
-            title={`Copy the path to Caddy's root certificate. Install it on ${gw.placement.targetId} and in the trust store of any device that will call this URL, and the warning goes away.`}
-          />
-          {props.trustMessage ? (
-            props.trustMessage.ok ? (
-              <span className="chain-cert muted small">Trusted — reload your wallet or browser.</span>
-            ) : (
-              <span className="chain-cert muted small">
-                {props.trustMessage.message}
-                {/* On failure, surface the run-by-hand command (e.g. the darwin
-                    sudo fallback) inline too — the message alone tells the
-                    operator what to do but not the command to do it with. */}
-                {props.trustMessage.ranCommand ? (
-                  <>
-                    {" "}
-                    <code className="strip-cmd">{props.trustMessage.ranCommand}</code>
-                    <CopyButton value={props.trustMessage.ranCommand} label="Copy command" />
-                  </>
-                ) : null}
-              </span>
-            )
-          ) : null}
-        </>
-      ) : null}
     </div>
   );
 }
@@ -386,7 +343,7 @@ function ChainRow({ gw, network, props }: { gw: GatewayView; network: NetworkVie
           </button>
         </span>
       </div>
-      <ChainConnect gw={gw} network={network} props={props} />
+      <ChainConnect gw={gw} network={network} />
       {open ? <ChainDetail network={network} verdict={v} props={props} /> : null}
     </section>
   );
