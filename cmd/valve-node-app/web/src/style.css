@@ -1193,6 +1193,25 @@ details.advanced summary {
   margin-left: auto;
 }
 
+/* The ONE cert-trust control, tied to the base URL rather than repeated under
+   every chain — a chain is just a path under this host, so trust is a
+   host-level, one-time action. Its own row (flex-basis 100%) below the
+   identity line; the result (including a failure's ranCommand) reuses the
+   strip-line markup so a long command wraps instead of truncating. */
+.rpc-ident-trust {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.rpc-ident-trust .strip-line {
+  flex-basis: 100%;
+  border-top: none;
+  padding: 0.3rem 0;
+}
+
 /* --- Manage gateway: the demoted container chrome -------------------------
 
    Everything an operator does to the container, not the chains — folded into
@@ -1478,9 +1497,9 @@ table.surface tbody tr:last-child td {
 /* --- the wallet-first connect line ----------------------------------------
 
    The hero of a collapsed chain card: the URL a wallet dials and a prominent
-   Copy. The cert hint sits inline because a copied URL that throws a TLS
-   warning is a dead end until the certificate is trusted — that step cannot be
-   a section away. */
+   Copy. Cert-trust is NOT here — every chain URL is just a path under the
+   gateway's base URL, so trust is a one-time, host-level action that lives in
+   the identity line (.rpc-ident-trust) instead of being repeated per chain. */
 .chain-connect {
   display: flex;
   align-items: center;
@@ -1493,10 +1512,6 @@ table.surface tbody tr:last-child td {
    is the action the whole screen leads to. */
 .chain-connect .endpoint-url {
   font-size: 0.85rem;
-}
-
-.chain-cert {
-  margin-left: 0.25rem;
 }
 
 .chain-connect-none {

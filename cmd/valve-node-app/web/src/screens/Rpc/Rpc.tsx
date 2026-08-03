@@ -3,16 +3,15 @@
 // you list; each chain leads with the URL a wallet dials and whether it is
 // healthy, with the operator detail one click away.
 //
-// This container owns only the FLEET-level concerns: the gateway list, the
-// controller's OS (for the manual trust command), adding a gateway, and any
-// leftover container on a machine with no surviving gateway. Everything scoped
-// to one gateway lives in <GatewayCard>, which fetches its own traffic and
-// capabilities — a hook per card rather than a loop here.
+// This container owns only the FLEET-level concerns: the gateway list, adding
+// a gateway, and any leftover container on a machine with no surviving
+// gateway. Everything scoped to one gateway lives in <GatewayCard>, which
+// fetches its own traffic and capabilities — a hook per card rather than a
+// loop here.
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as api from "../../api";
 import { useGatewaysFull, useCreateGateway, useDismissOrphan } from "../../hooks/rpc";
-import { useHost } from "../../hooks/target";
 import { Footer } from "../../components/Footer";
 import { GatewayCard } from "./GatewayCard";
 import { OrphanBanner } from "./OrphanBanner";
@@ -28,15 +27,12 @@ function message(e: unknown): string {
 export function Rpc() {
   const qc = useQueryClient();
   const gwQuery = useGatewaysFull();
-  const host = useHost();
   const createMut = useCreateGateway();
   const dismissMut = useDismissOrphan();
 
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [orphanErr, setOrphanErr] = useState<Record<string, string | null>>({});
-
-  const hostOS = host.data?.os ?? "";
 
   function refresh() {
     void qc.invalidateQueries({ queryKey: ["gateways"] });
@@ -133,7 +129,6 @@ export function Rpc() {
             presets={presets}
             orphans={orphans.filter((o) => o.targetId === gw.placement.targetId)}
             showMachine={many}
-            hostOS={hostOS}
           />
         ))}
         {gateways.length === 0 ? <EmptyState targets={targets} /> : null}
