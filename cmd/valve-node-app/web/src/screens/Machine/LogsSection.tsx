@@ -144,7 +144,7 @@ export function LogsSection({ targetId }: { targetId: string }) {
               </div>
               <div className="log-lines" ref={tailRef}>
                 {hits.map((h) => (
-                  <LogLine key={h.signature} hit={h} />
+                  <LogLine key={h._key} hit={h} />
                 ))}
               </div>
             </section>
@@ -157,7 +157,7 @@ export function LogsSection({ targetId }: { targetId: string }) {
                   errs
                     .slice()
                     .reverse()
-                    .map((h, i) => <LogLine key={`${i}-${h.signature}`} hit={h} />)
+                    .map((h) => <LogLine key={h._key} hit={h} />)
                 ) : (
                   <p className="muted">No errors seen yet.</p>
                 )}
