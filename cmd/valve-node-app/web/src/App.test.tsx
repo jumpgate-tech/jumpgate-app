@@ -17,11 +17,15 @@ vi.mock("./screens/Targets/Targets", () => ({
 vi.mock("./screens/Settings/Settings", () => ({
   Settings: () => <div>settings-screen</div>,
 }));
-vi.mock("./machine", () => ({
-  renderMachine: vi.fn((el: HTMLElement, id: string) => {
-    el.textContent = `machine-screen:${id}`;
-  }),
-}));
+vi.mock("./screens/Machine/Machine", async () => {
+  const { useParams } = await import("react-router-dom");
+  return {
+    Machine: () => {
+      const { id } = useParams<{ id: string }>();
+      return <div>machine-screen:{id}</div>;
+    },
+  };
+});
 vi.mock("./screens/Security/Security", async () => {
   const { useParams } = await import("react-router-dom");
   return {
