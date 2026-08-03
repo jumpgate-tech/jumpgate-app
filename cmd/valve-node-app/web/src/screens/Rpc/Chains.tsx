@@ -10,6 +10,7 @@ import type {
   GatewayTraffic,
   GatewayView,
   NetworkView,
+  TrustCertResult,
   UpstreamView,
 } from "../../api";
 import { Badge } from "../../components/Badge";
@@ -54,7 +55,7 @@ export interface ChainsProps extends ChainCallbacks {
   trafficLoading: boolean;
   targetMode: string;
   trustBusy: boolean;
-  trustMessage: { ok: boolean; message: string } | null;
+  trustMessage: TrustCertResult | null;
   busy: string | null;
 }
 
@@ -298,9 +299,23 @@ function ChainConnect({ gw, network, props }: { gw: GatewayView; network: Networ
             title={`Copy the path to Caddy's root certificate. Install it on ${gw.placement.targetId} and in the trust store of any device that will call this URL, and the warning goes away.`}
           />
           {props.trustMessage ? (
-            <span className="chain-cert muted small">
-              {props.trustMessage.ok ? "Trusted — reload your wallet or browser." : props.trustMessage.message}
-            </span>
+            props.trustMessage.ok ? (
+              <span className="chain-cert muted small">Trusted — reload your wallet or browser.</span>
+            ) : (
+              <span className="chain-cert muted small">
+                {props.trustMessage.message}
+                {/* On failure, surface the run-by-hand command (e.g. the darwin
+                    sudo fallback) inline too — the message alone tells the
+                    operator what to do but not the command to do it with. */}
+                {props.trustMessage.ranCommand ? (
+                  <>
+                    {" "}
+                    <code className="strip-cmd">{props.trustMessage.ranCommand}</code>
+                    <CopyButton value={props.trustMessage.ranCommand} label="Copy command" />
+                  </>
+                ) : null}
+              </span>
+            )
           ) : null}
         </>
       ) : null}
