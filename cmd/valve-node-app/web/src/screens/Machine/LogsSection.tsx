@@ -143,8 +143,8 @@ export function LogsSection({ targetId }: { targetId: string }) {
                 </button>
               </div>
               <div className="log-lines" ref={tailRef}>
-                {hits.map((h, i) => (
-                  <LogLine key={`${i}-${h.signature}`} hit={h} />
+                {hits.map((h) => (
+                  <LogLine key={h.signature} hit={h} />
                 ))}
               </div>
             </section>
