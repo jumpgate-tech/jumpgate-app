@@ -1,14 +1,12 @@
-import { useCallback } from "react";
 import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
-import { LegacyScreen } from "./components/LegacyScreen";
 import { Panel } from "./screens/Panel/Panel";
+import { Rpc } from "./screens/Rpc/Rpc";
 import { Security } from "./screens/Security/Security";
 import { Diagnostics } from "./screens/Diagnostics/Diagnostics";
 import { Settings } from "./screens/Settings/Settings";
 import { Targets } from "./screens/Targets/Targets";
 import { Analytics } from "./screens/Analytics/Analytics";
 import { Machine } from "./screens/Machine/Machine";
-import { renderRPC } from "./rpc";
 
 const NAV = [
   { to: "#/rpc", nav: "rpc", label: "RPC" },
@@ -24,13 +22,6 @@ export function activeNav(screen: string): string {
       : screen;
 }
 
-// Bridge wrappers: memoize the legacy render so LegacyScreen's effect is stable.
-function Bridge({ render }: { render: (el: HTMLElement) => (() => void) | void }) {
-  return <LegacyScreen render={render} />;
-}
-function LegacyRPC() {
-  return <Bridge render={useCallback((el: HTMLElement) => renderRPC(el), [])} />;
-}
 function RedirectToMachine() {
   const { id } = useParams();
   return <Navigate to={`/machine/${encodeURIComponent(id!)}`} replace />;
@@ -58,7 +49,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<Panel />} />
           <Route path="/panel" element={<Panel />} />
-          <Route path="/rpc" element={<LegacyRPC />} />
+          <Route path="/rpc" element={<Rpc />} />
           <Route path="/targets" element={<Targets />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/machine/:id" element={<Machine />} />

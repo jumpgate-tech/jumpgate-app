@@ -11,12 +11,15 @@ import * as api from "../api";
 // + orphans) — this hook narrows to the `gateways` array callers actually
 // asked for, coalescing the wire's possible null (see GatewaysResponse) to [].
 export function useGateways(): UseQueryResult<api.GatewayView[]> {
+  // Shares the ["gateways"] cache (the full GatewaysResponse) with the eRPC
+  // screen's useGatewaysFull, narrowing to the array via `select` so both
+  // observers read one consistent cached shape and one invalidation refreshes
+  // both — rather than a second queryFn that could store a different shape
+  // under the same key.
   return useQuery({
     queryKey: ["gateways"],
-    queryFn: async () => {
-      const res = await api.getGateways();
-      return res.gateways ?? [];
-    },
+    queryFn: () => api.getGateways(),
+    select: (res) => res.gateways ?? [],
   });
 }
 
