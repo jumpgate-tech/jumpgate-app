@@ -133,8 +133,8 @@ describe("LogsSection", () => {
     vi.mocked(api.listTargets).mockResolvedValue([WIRED_TARGET]);
     vi.mocked(api.getCatalog).mockResolvedValue(CATALOG);
     vi.mocked(api.getLogs).mockResolvedValue([
-      hit({ line: "starting up", severity: "info", signature: "sig-a" }),
-      hit({ line: "boom", severity: "error", unit: "beacon", signature: "sig-b" }),
+      hit({ line: "starting up", severity: "info" }),
+      hit({ line: "boom", severity: "error", unit: "beacon" }),
     ]);
     vi.mocked(api.streamLogs).mockReturnValue(vi.fn());
 
@@ -162,7 +162,7 @@ describe("LogsSection", () => {
   it("appends a live streamed hit to the tail", async () => {
     vi.mocked(api.listTargets).mockResolvedValue([WIRED_TARGET]);
     vi.mocked(api.getCatalog).mockResolvedValue(CATALOG);
-    vi.mocked(api.getLogs).mockResolvedValue([hit({ line: "seed", signature: "sig-seed" })]);
+    vi.mocked(api.getLogs).mockResolvedValue([hit({ line: "seed" })]);
     let onHit: ((h: Hit) => void) | null = null;
     vi.mocked(api.streamLogs).mockImplementation((_id, cb) => {
       onHit = cb;
@@ -172,7 +172,7 @@ describe("LogsSection", () => {
     renderSection();
     await screen.findByText("seed");
 
-    onHit!(hit({ line: "live-tail-hit", signature: "sig-live" }));
+    onHit!(hit({ line: "live-tail-hit" }));
 
     expect(await screen.findByText("live-tail-hit")).toBeInTheDocument();
   });

@@ -98,6 +98,33 @@ describe("useLogStream", () => {
     expect(result.current.hits[result.current.hits.length - 1].line).toBe(`l${maxRenderedLines + 19}`);
   });
 
+  it("assigns a stable, unique _key to every row — even when signatures collide — that survives the front-splice", async () => {
+    // Both seed rows share the default signature "sig": signature is a
+    // classification pattern name, NOT a per-line id, so it cannot key a list.
+    vi.mocked(api.getLogs).mockResolvedValue([hit({ line: "a" }), hit({ line: "b" })]);
+    let onHit: ((h: Hit) => void) | null = null;
+    vi.mocked(api.streamLogs).mockImplementation((_id, cb) => {
+      onHit = cb;
+      return vi.fn();
+    });
+
+    const { result } = renderHook(() => useLogStream("t1", true));
+    await waitFor(() => expect(result.current.hits).toHaveLength(2));
+
+    // Colliding signatures still get distinct keys.
+    expect(new Set(result.current.hits.map((h) => h._key)).size).toBe(2);
+    const bKey = result.current.hits[1]._key;
+
+    // Append past the cap so the front ("a") is spliced off; "b" stays in view.
+    for (let i = 0; i < maxRenderedLines - 1; i++) onHit!(hit({ line: `l${i}` }));
+    await waitFor(() => expect(result.current.hits).toHaveLength(maxRenderedLines));
+
+    // "b" survived the splice and kept the SAME _key — an array index would
+    // have shifted from 1 to 0. Every rendered key is still unique.
+    expect(result.current.hits.find((h) => h.line === "b")!._key).toBe(bKey);
+    expect(new Set(result.current.hits.map((h) => h._key)).size).toBe(maxRenderedLines);
+  });
+
   it("tears down (calls stop) on unmount", async () => {
     vi.mocked(api.getLogs).mockResolvedValue([]);
     const stop = vi.fn();

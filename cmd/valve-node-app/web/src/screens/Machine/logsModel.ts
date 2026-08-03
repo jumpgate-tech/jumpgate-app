@@ -32,7 +32,10 @@ export function isErrorHit(hit: Hit): boolean {
   return sev === "error" || sev === "critical";
 }
 
-export function errorHits(hits: Hit[]): Hit[] {
+// Generic so a caller passing a richer row type (e.g. useLogStream's LogHit,
+// which carries a stable `_key`) gets that same type back — the error-feed
+// list needs the `_key` to key on, exactly like the tail.
+export function errorHits<T extends Hit>(hits: T[]): T[] {
   return hits.filter(isErrorHit);
 }
 

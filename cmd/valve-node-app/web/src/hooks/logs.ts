@@ -12,12 +12,21 @@
 // return on a failed getLogs) — the stream is never opened. Every hit after
 // that, seed or live, is capped at maxRenderedLines the same way logs.ts's
 // `hits.splice(0, hits.length - maxRenderedLines)` was.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as api from "../api";
 import { maxRenderedLines } from "../screens/Machine/logsModel";
 
+// LogHit is a wire Hit plus a client-assigned, monotonically increasing
+// `_key`. api.Hit.signature is NOT unique per line — it is a classification
+// pattern NAME (empty "" for unclassified lines; see internal/logwatch), so it
+// cannot key a React list. The array index can't either: the tail appends
+// every stream frame and front-splices at the 500-line cap, so an index churns
+// on every new line and React remounts the whole tail. `_key` is stable per
+// surviving row across that splice and unique across the list.
+export type LogHit = api.Hit & { _key: number };
+
 export interface UseLogStreamResult {
-  hits: api.Hit[];
+  hits: LogHit[];
   loading: boolean;
   error: string | null;
 }
@@ -28,9 +37,13 @@ export interface UseLogStreamResult {
 // CALLER's responsibility, not this hook's. Disabling (or changing
 // targetId) tears down any open stream and resets to the empty state.
 export function useLogStream(targetId: string, enabled: boolean): UseLogStreamResult {
-  const [hits, setHits] = useState<api.Hit[]>([]);
+  const [hits, setHits] = useState<LogHit[]>([]);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
+  // Monotonic id source for `_key`. Never reset — ids only need to be unique
+  // within the current list, and letting it grow across targetId/enabled
+  // resets keeps every assigned key globally distinct with no bookkeeping.
+  const nextKey = useRef(0);
 
   useEffect(() => {
     if (!enabled || !targetId) {
@@ -57,13 +70,13 @@ export function useLogStream(targetId: string, enabled: boolean): UseLogStreamRe
         return;
       }
       if (disposed) return;
-      setHits(recent.slice(-maxRenderedLines));
+      setHits(recent.slice(-maxRenderedLines).map((h) => ({ ...h, _key: nextKey.current++ })));
       setLoading(false);
 
       stop = api.streamLogs(targetId, (hit) => {
         if (disposed) return;
         setHits((prev) => {
-          const next = [...prev, hit];
+          const next = [...prev, { ...hit, _key: nextKey.current++ }];
           return next.length > maxRenderedLines ? next.slice(next.length - maxRenderedLines) : next;
         });
       });
