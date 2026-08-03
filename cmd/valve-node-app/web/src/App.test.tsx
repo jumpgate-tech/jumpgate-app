@@ -6,10 +6,8 @@ import { activeNav, App } from "./App";
 vi.mock("./screens/Panel/Panel", () => ({
   Panel: () => <div>panel-screen</div>,
 }));
-vi.mock("./rpc", () => ({
-  renderRPC: vi.fn((el: HTMLElement) => {
-    el.textContent = "rpc-screen";
-  }),
+vi.mock("./screens/Rpc/Rpc", () => ({
+  Rpc: () => <div>rpc-screen</div>,
 }));
 vi.mock("./screens/Targets/Targets", () => ({
   Targets: () => <div>targets-screen</div>,
