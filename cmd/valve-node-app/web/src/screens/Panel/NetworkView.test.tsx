@@ -93,6 +93,29 @@ describe("NetworkView", () => {
     expect(onRemoveNetwork).not.toHaveBeenCalled();
   });
 
+  it("shows each endpoint's provider, its distinguishing URL, and a source icon for a local upstream", () => {
+    const gw = makeGateway();
+    gw.networks![0].upstreams = [
+      { id: "mine", kind: "external", endpoint: "https://rpc.publicnode.com/pulsechain", label: "publicnode", local: true, recentOnly: false, actions: null },
+    ];
+    const caps: GatewayCapabilities = {
+      at: "now",
+      endpoints: [
+        { upstream: "mine", chainId: 1, reachable: true, capabilities: [{ key: "archive", label: "Archive", status: "supported" }] },
+      ],
+    };
+    render(
+      <NetworkView gw={gw} chainId={1} health={undefined} caps={caps} capsBusy={false} capsErr={null} busy={null} error={null} {...handlers} />,
+    );
+    expect(screen.getByText("publicnode")).toBeInTheDocument();
+    // scheme dropped, host + path kept
+    expect(screen.getByText("rpc.publicnode.com/pulsechain")).toBeInTheDocument();
+    // per-endpoint capability meter is drawn on the row
+    expect(document.querySelector(".p-eprow .p-caps")).toBeTruthy();
+    // a local ("yours") upstream carries the server source icon; a public one would not
+    expect(document.querySelector('.p-eprow .p-src use[href="#p-server"]')).toBeTruthy();
+  });
+
   it("shows 'no longer configured' when the chain has gone", () => {
     render(
       <NetworkView

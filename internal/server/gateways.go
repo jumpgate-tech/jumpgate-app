@@ -749,7 +749,7 @@ func resolveUpstream(cfg config.Config, gw config.Gateway, u catalog.GatewayUpst
 		if e == "" {
 			return "", "", errors.New("no endpoint")
 		}
-		return e, externalLabel(e, u.Local), nil
+		return e, externalLabel(e), nil
 
 	case catalog.UpstreamManagedDevnet:
 		t, ok := findTarget(cfg, u.TargetID)
@@ -895,36 +895,64 @@ func nodeLabel(gw config.Gateway, targetID string, w catalog.WireConfig) string 
 	return where + " · " + w.ExecID
 }
 
-// externalLabel names an external endpoint by its host, which is what an
-// operator recognizes ("rpc.pulsechain.com"), rather than repeating the whole
-// URL that is already displayed beside it.
+// externalLabel names an external endpoint by its provider — the short label an
+// operator recognizes ("publicnode" from rpc.publicnode.com, "g4mm4" from
+// rpc-pulsechain.g4mm4.io) — rather than repeating the whole URL shown beside
+// it.
 //
-// Two endpoints are NOT called public, and both exclusions are about not
-// telling the operator something untrue on the row they are reading:
-//
-//   - A LOOPBACK endpoint is something on the gateway's own machine that this
-//     app does not manage. Calling that public is both wrong and misleading
-//     about where the traffic goes.
-//   - An endpoint the operator marked as THEIRS (local, i.e. eRPC's preferred
-//     tier) is theirs whether or not this app installed it. FOUND BY RUNNING
-//     IT: a node fronted this way was labelled "public endpoint · 192.168.3.22"
-//     on a row whose Role column said "Yours", the two contradicting each other
-//     in the same table. This is the ordinary way to front a node
-//     valve-node-app does not manage — someone else's box, an install done by
-//     hand — and the tier is exactly what decides the intended share, so
-//     mislabelling it undercuts the column that explains an amber bar.
-func externalLabel(endpoint string, mine bool) string {
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" {
+// Public-vs-yours is deliberately NOT in the name. It lives in the upstream's
+// Local flag, which the UI renders as an icon/badge. Keeping it out of the label
+// is what stops a Local endpoint from reading "public endpoint · 192.168.3.22"
+// on a row whose tier column says "Yours" (FOUND BY RUNNING IT: those two used
+// to contradict each other), and it drops the bare word "public endpoint" the
+// panel row would otherwise show right next to the host it repeats.
+func externalLabel(endpoint string) string {
+	host := ""
+	if u, err := url.Parse(endpoint); err == nil {
+		host = u.Hostname()
+	}
+	if host == "" {
 		return "external endpoint"
 	}
-	if isLoopbackHost(u.Hostname()) {
-		return "unmanaged endpoint on the gateway's own machine"
+	return hostLabel(host)
+}
+
+// hostLabel is the recognizable short name for a host: its registrable label
+// (the second-level domain), or the bare host for an IP, a loopback name or a
+// single label. Mirrors the web endpointNameFromUrl so a row reads the same
+// wherever it appears.
+func hostLabel(host string) string {
+	if isLoopbackHost(host) || isIPHost(host) {
+		return strings.Trim(host, "[]")
 	}
-	if mine {
-		return "your endpoint · " + u.Hostname()
+	parts := make([]string, 0, 4)
+	for _, p := range strings.Split(host, ".") {
+		if p != "" {
+			parts = append(parts, p)
+		}
 	}
-	return "public endpoint · " + u.Hostname()
+	if len(parts) <= 1 {
+		return host
+	}
+	return parts[len(parts)-2]
+}
+
+// isIPHost reports whether host is a bare IP literal — no registrable label to
+// shorten to. Cheap: anything with a ':' (IPv6) or made only of digits and dots.
+func isIPHost(host string) bool {
+	h := strings.Trim(host, "[]")
+	if h == "" {
+		return false
+	}
+	if strings.Contains(h, ":") {
+		return true
+	}
+	for _, r := range h {
+		if (r < '0' || r > '9') && r != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------

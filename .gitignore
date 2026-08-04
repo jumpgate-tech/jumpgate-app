@@ -24,3 +24,4 @@ cmd/valve-node-app/web/node_modules/
 
 # Superpowers scratch: SDD ledgers, briefs, review packages, brainstorm mockups.
 .superpowers/
+coverage/
