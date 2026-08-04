@@ -594,8 +594,13 @@ func TestGateways_AnEndpointTheOperatorOwnsIsNotCalledPublic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if !strings.Contains(theirs, "public endpoint") {
-		t.Errorf("an endpoint filed in the fallback tier IS a public one here: %q", theirs)
+	// The label names the provider now; public-vs-yours is the Local flag's job
+	// (the UI shows it as an icon/badge), so neither row carries the word.
+	if strings.Contains(theirs, "public") {
+		t.Errorf("the label should name the provider, not carry the word 'public': %q", theirs)
+	}
+	if theirs != "pulsechain" {
+		t.Errorf("label %q should be the provider name %q", theirs, "pulsechain")
 	}
 }
 
@@ -624,8 +629,8 @@ func TestGateways_UpstreamNameOverridesTheDerivedLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if !strings.Contains(unnamed, "public endpoint") {
-		t.Errorf("an upstream with no Name should keep its derived label: %q", unnamed)
+	if unnamed != "pulsechain" {
+		t.Errorf("an upstream with no Name should keep its derived provider label: got %q, want %q", unnamed, "pulsechain")
 	}
 }
 

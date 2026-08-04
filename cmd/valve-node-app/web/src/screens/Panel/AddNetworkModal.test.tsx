@@ -76,4 +76,18 @@ describe("AddNetworkPicker", () => {
     fireEvent.click(screen.getByText("Cancel"));
     expect(onCancel).toHaveBeenCalled();
   });
+
+  it("shows a chain logo, and falls back to a placeholder glyph when it fails to load", () => {
+    setup();
+    const slot = document.querySelector(".p-anm-logo")!;
+    const img = slot.querySelector("img") as HTMLImageElement;
+    expect(img).toBeTruthy();
+    expect(img.getAttribute("src")).toContain("gib.show/image/");
+    // A 404 / offline load error swaps the image for the globe glyph, keeping
+    // the slot (and therefore row alignment) intact.
+    fireEvent.error(img);
+    const after = document.querySelector(".p-anm-logo")!;
+    expect(after.querySelector("img")).toBeNull();
+    expect(after.querySelector("use")).toBeTruthy();
+  });
 });
