@@ -20,14 +20,23 @@
 // enters tray mode via inAppBundle detection.
 package main
 
-import webview "github.com/webview/webview_go"
+import (
+	"context"
+
+	webview "github.com/webview/webview_go"
+)
 
 const trayBuilt = true
 
 // runWindow opens the tiny-app window at url and blocks until it is closed.
 // Must run on the main goroutine (the platform webview owns the UI run loop),
 // so main serves HTTP on a background goroutine and calls this last.
-func runWindow(url string) {
+//
+// When ctx is cancelled (Ctrl-C / SIGTERM), Terminate breaks the run loop so
+// runWindow returns and the process exits — otherwise a terminal signal would
+// stop the HTTP server but leave the webview (and its menubar icon) running.
+// Terminate is documented safe to call from a background goroutine.
+func runWindow(ctx context.Context, url string) {
 	w := webview.New(false)
 	defer w.Destroy()
 	w.SetTitle("Valve")
@@ -40,6 +49,17 @@ func runWindow(url string) {
 	// Add the menubar status item (macOS) into webview's own NSApp/NSWindow, so
 	// there's one Cocoa run loop. No-op off macOS. Must precede Run().
 	installStatusItem(w.Window())
+
+	stopped := make(chan struct{})
+	defer close(stopped)
+	go func() {
+		select {
+		case <-ctx.Done():
+			w.Terminate()
+		case <-stopped:
+		}
+	}()
+
 	w.Navigate(url)
 	w.Run()
 }
