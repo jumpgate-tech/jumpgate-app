@@ -93,6 +93,43 @@ static ValveTray *gValveTray = nil;
 
 void valveSetHealth(int kind); // defined below; install paints an initial dot
 
+// valveHubImage draws the hub/route mark — a central node routing out to three
+// others — as a template NSImage, so macOS tints it for the light/dark menubar.
+// Drawn with NSBezierPath rather than shipping a PNG so it stays crisp at any
+// backing scale. flipped:YES gives a top-left origin matching the 24-unit grid
+// the mark is authored in (shared with cmd/valve-node-app/icon.svg).
+static NSImage *valveHubImage(void) {
+    const CGFloat S = 18.0;
+    NSImage *img = [NSImage imageWithSize:NSMakeSize(S, S) flipped:YES
+        drawingHandler:^BOOL(NSRect dst) {
+            const CGFloat u = S / 24.0; // 24-grid unit → points
+            [[NSColor blackColor] set];
+            NSPoint c  = NSMakePoint(12 * u, 12 * u);
+            NSPoint up = NSMakePoint(12 * u, 5 * u);
+            NSPoint ll = NSMakePoint(6 * u, 18 * u);
+            NSPoint lr = NSMakePoint(18 * u, 18 * u);
+            NSBezierPath *spokes = [NSBezierPath bezierPath];
+            spokes.lineWidth = 1.9 * u;
+            spokes.lineCapStyle = NSLineCapStyleRound;
+            [spokes moveToPoint:c]; [spokes lineToPoint:up];
+            [spokes moveToPoint:c]; [spokes lineToPoint:ll];
+            [spokes moveToPoint:c]; [spokes lineToPoint:lr];
+            [spokes stroke];
+            void (^node)(NSPoint, CGFloat) = ^(NSPoint p, CGFloat r) {
+                [[NSBezierPath bezierPathWithOvalInRect:
+                    NSMakeRect(p.x - r, p.y - r, 2 * r, 2 * r)] fill];
+            };
+            node(c, 3.0 * u);
+            node(up, 2.2 * u);
+            node(ll, 2.2 * u);
+            node(lr, 2.2 * u);
+            return YES;
+        }];
+    img.template = YES;
+    img.accessibilityDescription = @"Valve";
+    return img;
+}
+
 void valveInstallStatusItem(void *nswindow) {
     NSApplication *app = [NSApplication sharedApplication];
     // Menubar app: live in the status bar, not the Dock or app switcher.
@@ -116,17 +153,7 @@ void valveInstallStatusItem(void *nswindow) {
 
     NSStatusItem *item = [[NSStatusBar systemStatusBar]
         statusItemWithLength:NSVariableStatusItemLength];
-    NSImage *img = nil;
-    if (@available(macOS 11.0, *)) {
-        img = [NSImage imageWithSystemSymbolName:@"network"
-                        accessibilityDescription:@"Valve"];
-    }
-    if (img) {
-        img.template = YES; // adapt to light/dark menubar
-        item.button.image = img;
-    } else {
-        item.button.title = @"◈"; // ◈ fallback for pre-11 menubars
-    }
+    item.button.image = valveHubImage(); // custom hub glyph (template)
     // One click = our action, not a dropdown; also deliver right-clicks so the
     // menu can open there.
     item.button.target = tray;
