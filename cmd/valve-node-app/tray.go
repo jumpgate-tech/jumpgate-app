@@ -13,8 +13,9 @@
 //
 // then run it with --tray. On macOS a menubar status item is installed too
 // (see statusitem_darwin.go): the app runs as a menubar accessory (no Dock
-// icon), its icon's menu opens/quits the panel, and closing the window hides it
-// rather than quitting. For a double-clickable app run build-macos-app.sh, which
+// icon), a single click toggles the panel as a popover under the icon, clicking
+// away dismisses it, and a right-click menu quits. For a double-clickable app
+// run build-macos-app.sh, which
 // wraps this build in a Valve.app bundle; a bundled launch has no flags, so main
 // enters tray mode via inAppBundle detection.
 package main
