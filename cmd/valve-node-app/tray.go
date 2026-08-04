@@ -27,9 +27,12 @@ func runWindow(url string) {
 	w := webview.New(false)
 	defer w.Destroy()
 	w.SetTitle("Valve")
-	// The panel card is 360px wide; a little chrome around it reads as a compact
-	// app window rather than a browser.
-	w.SetSize(420, 720, webview.HintNone)
+	// Tell the SPA it's the tiny app so it drops the multi-screen topbar nav and
+	// lets the panel fill the window. Init runs before page scripts on every
+	// load, so it survives the token→cookie redirect the first navigation makes.
+	w.Init("window.__VALVE_TRAY__ = true;")
+	// Snug to the 360px panel — a tiny app, not a browser window.
+	w.SetSize(380, 640, webview.HintNone)
 	w.Navigate(url)
 	w.Run()
 }

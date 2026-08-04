@@ -31,20 +31,26 @@ export function App() {
   const { pathname } = useLocation();
   const screen = pathname.split("/").filter(Boolean)[0] ?? "home";
   const nav = activeNav(screen);
+  // The tray/tiny-app build sets this flag before the app loads (webview.Init).
+  // There the panel IS the whole window, so the multi-screen topbar nav — which
+  // only makes sense for browser-based fleet management — is dropped.
+  const tray = typeof window !== "undefined" && Boolean((window as { __VALVE_TRAY__?: boolean }).__VALVE_TRAY__);
   return (
-    <div className="shell">
-      <header className="topbar">
-        <a className="brand" href="#/">
-          valve-node-app
-        </a>
-        <nav className="nav">
-          {NAV.map((n) => (
-            <a key={n.nav} href={n.to} className={n.nav === nav ? "active" : undefined} data-nav={n.nav}>
-              {n.label}
-            </a>
-          ))}
-        </nav>
-      </header>
+    <div className={`shell${tray ? " shell-tray" : ""}`}>
+      {tray ? null : (
+        <header className="topbar">
+          <a className="brand" href="#/">
+            valve-node-app
+          </a>
+          <nav className="nav">
+            {NAV.map((n) => (
+              <a key={n.nav} href={n.to} className={n.nav === nav ? "active" : undefined} data-nav={n.nav}>
+                {n.label}
+              </a>
+            ))}
+          </nav>
+        </header>
+      )}
       <main id="content" className="content">
         <Routes>
           <Route path="/" element={<Panel />} />
