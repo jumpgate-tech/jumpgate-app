@@ -8,3 +8,6 @@ import "unsafe"
 // feature. Linux/Windows tray builds still get the webview window, just without
 // a status-bar entry.
 func installStatusItem(unsafe.Pointer) {}
+
+// setHealth is a no-op off macOS (no status dot to paint).
+func setHealth(healthKind) {}

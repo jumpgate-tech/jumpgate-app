@@ -22,6 +22,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/url"
+	"time"
 
 	webview "github.com/webview/webview_go"
 )
@@ -60,6 +64,70 @@ func runWindow(ctx context.Context, url string) {
 		}
 	}()
 
+	go pollHealth(ctx, w, url)
+
 	w.Navigate(url)
 	w.Run()
+}
+
+// pollHealth drives the menubar status dot from live gateway health. It polls
+// the local /api/gateways (same server this process runs) on a timer and, only
+// when the folded health changes, marshals a dot repaint onto the main thread
+// via webview.Dispatch — the status item is Cocoa UI and must be touched there.
+// browserURL is the http://host/?token=… the window opened with; its host and
+// token authorize the poll.
+func pollHealth(ctx context.Context, w webview.WebView, browserURL string) {
+	u, err := url.Parse(browserURL)
+	if err != nil {
+		return
+	}
+	apiURL := u.Scheme + "://" + u.Host + "/api/gateways"
+	token := u.Query().Get("token")
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	last := healthKind(-1)
+	check := func() {
+		k := fetchHealth(ctx, client, apiURL, token)
+		if k == last {
+			return
+		}
+		last = k
+		w.Dispatch(func() { setHealth(k) })
+	}
+
+	check()
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			check()
+		}
+	}
+}
+
+// fetchHealth reads /api/gateways once and folds it to a dot state. Any failure
+// to reach or parse our own server reads as "off" (grey) — the honest signal
+// when the control plane isn't answering.
+func fetchHealth(ctx context.Context, client *http.Client, apiURL, token string) healthKind {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return healthOff
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return healthOff
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return healthOff
+	}
+	var r gwListResp
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return healthOff
+	}
+	return overallHealth(r.Gateways)
 }
