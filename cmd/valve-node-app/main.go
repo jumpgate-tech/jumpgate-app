@@ -84,7 +84,7 @@ func main() {
 		if err := waitReady(ctx, *bind); err != nil {
 			log.Fatalf("valve-node-app: server did not come up: %v", err)
 		}
-		runWindow(url)
+		runWindow(ctx, url)
 		stop()
 		<-srvErr // wait for the shutdown we just asked for; its error is expected
 		return
