@@ -11,12 +11,12 @@
 //
 //	go build -tags tray ./cmd/valve-node-app
 //
-// then run it with --tray. For a double-clickable macOS app (Dock icon, window
-// that fronts on launch) run build-macos-app.sh, which wraps this build in a
-// Valve.app bundle; a bundled launch has no flags, so main enters tray mode via
-// inAppBundle detection. A menubar status-item (systray) that toggles this
-// window is the next step; it needs a real desktop session to iterate on, which
-// is why it is not wired here yet.
+// then run it with --tray. On macOS a menubar status item is installed too
+// (see statusitem_darwin.go): the app runs as a menubar accessory (no Dock
+// icon), its icon's menu opens/quits the panel, and closing the window hides it
+// rather than quitting. For a double-clickable app run build-macos-app.sh, which
+// wraps this build in a Valve.app bundle; a bundled launch has no flags, so main
+// enters tray mode via inAppBundle detection.
 package main
 
 import webview "github.com/webview/webview_go"
@@ -36,6 +36,9 @@ func runWindow(url string) {
 	w.Init("window.__VALVE_TRAY__ = true;")
 	// Snug to the 360px panel — a tiny app, not a browser window.
 	w.SetSize(380, 640, webview.HintNone)
+	// Add the menubar status item (macOS) into webview's own NSApp/NSWindow, so
+	// there's one Cocoa run loop. No-op off macOS. Must precede Run().
+	installStatusItem(w.Window())
 	w.Navigate(url)
 	w.Run()
 }
