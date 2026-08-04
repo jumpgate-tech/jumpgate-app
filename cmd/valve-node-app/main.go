@@ -68,7 +68,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if *tray {
+	// Launched by double-clicking the macOS .app bundle, the OS passes no
+	// flags — so a bundled build enters tray mode on its own. An explicit
+	// --tray still works for running the tray binary straight from a shell.
+	if *tray || inAppBundle() {
 		if !trayBuilt {
 			log.Fatalf("valve-node-app: --tray needs a build made with the tray tag: go build -tags tray ./cmd/valve-node-app")
 		}
@@ -94,6 +97,28 @@ func main() {
 	if err := s.ListenAndServe(ctx); err != nil {
 		log.Fatalf("valve-node-app: server: %v", err)
 	}
+}
+
+// inAppBundle reports whether this process was launched from inside a macOS
+// .app bundle (its executable lives at Foo.app/Contents/MacOS/…). Used to
+// default to tray mode when double-clicked, where there are no CLI flags to
+// pass --tray. Always false off darwin, where the layout does not occur.
+func inAppBundle() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	return isAppBundlePath(exe)
+}
+
+// isAppBundlePath reports whether exe sits at the canonical macOS bundle
+// location Foo.app/Contents/MacOS/binary. Split out from inAppBundle so the
+// path rule is testable without a real bundle on disk.
+func isAppBundlePath(exe string) bool {
+	return strings.Contains(exe, ".app/Contents/MacOS/")
 }
 
 // waitReady blocks until the server is accepting connections on bind, so the

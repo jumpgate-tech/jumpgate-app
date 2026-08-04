@@ -11,7 +11,10 @@
 //
 //	go build -tags tray ./cmd/valve-node-app
 //
-// then run it with --tray. A menubar status-item (systray) that toggles this
+// then run it with --tray. For a double-clickable macOS app (Dock icon, window
+// that fronts on launch) run build-macos-app.sh, which wraps this build in a
+// Valve.app bundle; a bundled launch has no flags, so main enters tray mode via
+// inAppBundle detection. A menubar status-item (systray) that toggles this
 // window is the next step; it needs a real desktop session to iterate on, which
 // is why it is not wired here yet.
 package main

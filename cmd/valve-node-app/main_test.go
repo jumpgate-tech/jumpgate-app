@@ -49,6 +49,29 @@ func TestBindFlagUsageWarnsOfExposure(t *testing.T) {
 	}
 }
 
+// TestIsAppBundlePath locks in the macOS-bundle detection that makes a
+// double-clicked Valve.app enter tray mode without a --tray flag: only the
+// canonical Foo.app/Contents/MacOS/ layout counts, and a plain CLI path does
+// not.
+func TestIsAppBundlePath(t *testing.T) {
+	cases := []struct {
+		exe  string
+		want bool
+	}{
+		{"/Applications/Valve.app/Contents/MacOS/valve-node-app", true},
+		{"/Users/x/Documents/valve-node-app/Valve.app/Contents/MacOS/valve-node-app", true},
+		{"/usr/local/bin/valve-node-app", false},
+		{"/Users/x/go/bin/valve-node-app", false},
+		{"./valve-tray", false},
+		{"/tmp/some.app/wrong/place/binary", false},
+	}
+	for _, tc := range cases {
+		if got := isAppBundlePath(tc.exe); got != tc.want {
+			t.Errorf("isAppBundlePath(%q) = %v, want %v", tc.exe, got, tc.want)
+		}
+	}
+}
+
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {
 		if !strings.Contains(s, sub) {
