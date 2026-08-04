@@ -40,6 +40,7 @@ import { EndpointView } from "./EndpointView";
 import { SettingsSheet } from "./SettingsSheet";
 import { ConfirmDialog, TextInputDialog, validateUrlScheme } from "./Dialogs";
 import { AddNetworkDialog } from "./AddNetworkModal";
+import { DEVNET_CHAIN_ID, withDevnetUpstream } from "../Rpc/rpcModel";
 
 // FINAL_STEP is the id every gateway setup plan ends on (mirrors rpc.ts). The
 // setup stream is done when a step errors, or when this step reports done.
@@ -267,6 +268,43 @@ export function Panel() {
     if (!gw || busyRef.current) return;
     setBusy("create");
     setActionErr(null);
+
+    // Devnet is reth --dev on this machine, not a public chain — it is fronted
+    // by a managed-devnet upstream, not by discovered public endpoints. The
+    // devnet has to already be running on the placement (same rule the RPC
+    // screen enforces); if it isn't, say so rather than provisioning a network
+    // that can never come up.
+    if (chainId === DEVNET_CHAIN_ID) {
+      const targetId = gw.placement.targetId;
+      let hasDevnet = false;
+      try {
+        const resp = await api.getGateways();
+        hasDevnet = (resp.targets ?? []).some((t) => t.id === targetId && t.hasDevnet);
+      } catch (e) {
+        setBusy(null);
+        setActionErr(`Could not check for a devnet on ${targetId}: ${message(e)}`);
+        return;
+      }
+      if (!hasDevnet) {
+        setBusy(null);
+        setActionErr(`No devnet is running on ${targetId} yet — create one from Machines → ${targetId}, then add it here.`);
+        return;
+      }
+      try {
+        await api.putGatewayConfig(gw.id, withDevnetUpstream(gw.config, DEVNET_CHAIN_ID, targetId));
+      } catch (e) {
+        setBusy(null);
+        setActionErr(`Could not add the devnet: ${message(e)}`);
+        return;
+      }
+      setBusy(null);
+      const gwId = gw.id;
+      await provision(gwId, () => {
+        setView({ name: "network", chainId: DEVNET_CHAIN_ID });
+        void caps.refetch(true);
+      });
+      return;
+    }
 
     // Endpoints to wire: valve's measured known set first — chains 1/369/943,
     // which already carry g4mm4, pulsechain.com and valve — else discover the
@@ -592,6 +630,7 @@ export function Panel() {
         return (
           <AddNetworkDialog
             presentChainIds={(gw?.networks ?? []).map((n) => n.chainId)}
+            extraPinned={[{ chainId: DEVNET_CHAIN_ID, name: "Devnet", testnet: true }]}
             onPick={(chainId) => void submitAddNetwork(chainId)}
             onCancel={() => setDialog(null)}
           />
