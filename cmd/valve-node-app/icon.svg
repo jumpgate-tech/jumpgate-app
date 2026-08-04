@@ -1,0 +1,18 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2ee38a"/>
+      <stop offset="1" stop-color="#12b268"/>
+    </linearGradient>
+  </defs>
+  <!-- macOS-style rounded tile (squircle-ish) -->
+  <rect x="112" y="112" width="800" height="800" rx="180" fill="url(#bg)"/>
+  <!-- valve handwheel: hub, rim, spokes -->
+  <g fill="none" stroke="#ffffff" stroke-width="46" stroke-linecap="round">
+    <circle cx="512" cy="512" r="212"/>
+    <line x1="512" y1="512" x2="512" y2="264"/>
+    <line x1="512" y1="512" x2="726" y2="636"/>
+    <line x1="512" y1="512" x2="298" y2="636"/>
+  </g>
+  <circle cx="512" cy="512" r="70" fill="#ffffff"/>
+</svg>
