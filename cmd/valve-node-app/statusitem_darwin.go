@@ -91,6 +91,8 @@ package main
 // event monitor) alive for the whole process; a local would be collected.
 static ValveTray *gValveTray = nil;
 
+void valveSetHealth(int kind); // defined below; install paints an initial dot
+
 void valveInstallStatusItem(void *nswindow) {
     NSApplication *app = [NSApplication sharedApplication];
     // Menubar app: live in the status bar, not the Dock or app switcher.
@@ -130,6 +132,7 @@ void valveInstallStatusItem(void *nswindow) {
     item.button.target = tray;
     item.button.action = @selector(statusClicked:);
     [item.button sendActionOn:(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)];
+    item.button.imagePosition = NSImageLeft; // glyph, then the health dot
     tray.item = item;
 
     NSMenu *menu = [[NSMenu alloc] init];
@@ -158,11 +161,37 @@ void valveInstallStatusItem(void *nswindow) {
 
     gValveTray = tray;
 
+    valveSetHealth(0); // neutral dot until the first health poll lands
+
     // Start hidden and open under the icon on the next run-loop tick (once the
     // status button has a real frame to anchor to), so launch shows a popover
     // under the icon rather than a centered window flash.
     [win orderOut:nil];
     dispatch_async(dispatch_get_main_queue(), ^{ [tray showPopover]; });
+}
+
+// valveSetHealth repaints the status dot beside the glyph from a healthKind
+// (0 off/grey, 1 ok/green, 2 warn/amber, 3 down/red). The base glyph stays a
+// template image (system tints it for the light/dark menubar); the dot is a
+// small colored "●" set as the button's title, so its color survives. Must run
+// on the main thread — the poller marshals via webview.Dispatch.
+void valveSetHealth(int kind) {
+    if (gValveTray == nil) return;
+    NSColor *color;
+    NSString *tip;
+    switch (kind) {
+        case 1: color = NSColor.systemGreenColor;  tip = @"Valve — serving"; break;
+        case 2: color = NSColor.systemOrangeColor; tip = @"Valve — degraded"; break;
+        case 3: color = NSColor.systemRedColor;    tip = @"Valve — a gateway is unavailable"; break;
+        default: color = NSColor.tertiaryLabelColor; tip = @"Valve — idle"; break;
+    }
+    NSDictionary *attrs = @{
+        NSForegroundColorAttributeName: color,
+        NSFontAttributeName: [NSFont systemFontOfSize:9],
+    };
+    gValveTray.item.button.attributedTitle =
+        [[NSAttributedString alloc] initWithString:@" ●" attributes:attrs];
+    gValveTray.item.button.toolTip = tip;
 }
 */
 import "C"
@@ -172,4 +201,10 @@ import "unsafe"
 // installStatusItem adds the menubar status item bound to the webview window.
 func installStatusItem(nswindow unsafe.Pointer) {
 	C.valveInstallStatusItem(nswindow)
+}
+
+// setHealth repaints the menubar status dot. Must be called on the main thread
+// (the poller marshals via webview.Dispatch).
+func setHealth(k healthKind) {
+	C.valveSetHealth(C.int(k))
 }
