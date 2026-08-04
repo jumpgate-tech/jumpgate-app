@@ -36,6 +36,20 @@
   padding: 24px 0 48px;
 }
 
+/* Tray / tiny-app: the panel fills the window edge-to-edge instead of floating
+   as a rounded card in a gutter — the window IS the panel. */
+.shell-tray .p-wrap {
+  display: block;
+  padding: 0;
+}
+.shell-tray .p-panel {
+  width: 100%;
+  min-height: 100vh;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .p-wrap * {
   box-sizing: border-box;
 }

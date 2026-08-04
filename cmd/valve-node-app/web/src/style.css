@@ -142,6 +142,12 @@ pre {
   margin: 0 auto;
   padding: 1.5rem 1.25rem 3rem;
 }
+/* Tray / tiny-app: no topbar and no page gutter — the panel fills the window
+   (see .p-wrap/.p-panel overrides in panel.css). */
+.shell-tray .content {
+  padding: 0;
+  max-width: none;
+}
 
 .footer {
   border-top: 1px solid var(--border);

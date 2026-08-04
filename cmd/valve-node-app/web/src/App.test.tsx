@@ -83,6 +83,18 @@ describe("App routing", () => {
     expect(screen.getByText("Settings")).toBeInTheDocument();
   });
 
+  it("drops the topbar nav in tray mode, still rendering the panel", () => {
+    (window as { __VALVE_TRAY__?: boolean }).__VALVE_TRAY__ = true;
+    try {
+      renderAt("");
+      expect(screen.queryByText("RPC")).not.toBeInTheDocument();
+      expect(screen.queryByText("Machines")).not.toBeInTheDocument();
+      expect(screen.getByText("panel-screen")).toBeInTheDocument();
+    } finally {
+      delete (window as { __VALVE_TRAY__?: boolean }).__VALVE_TRAY__;
+    }
+  });
+
   it("empty hash renders the panel screen with RPC active", async () => {
     renderAt("");
     expect(await screen.findByText("panel-screen")).toBeInTheDocument();
