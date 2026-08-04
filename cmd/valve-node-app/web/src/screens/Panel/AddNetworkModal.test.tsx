@@ -35,6 +35,13 @@ describe("AddNetworkPicker", () => {
     expect(screen.queryByText("Arbitrum One")).not.toBeInTheDocument();
   });
 
+  it("pins caller-supplied extras after the curated head", () => {
+    setup({ extraPinned: [{ chainId: 1337, name: "Devnet", testnet: true }] });
+    expect(screen.getByText("Devnet")).toBeInTheDocument();
+    const names = Array.from(document.querySelectorAll(".p-anm-name")).map((n) => n.textContent ?? "");
+    expect(names[names.length - 1]).toContain("Devnet"); // last, after the curated chains
+  });
+
   it("excludes chains already fronted", () => {
     setup({ presentChainIds: [1] });
     expect(screen.queryByText("Ethereum")).not.toBeInTheDocument();
