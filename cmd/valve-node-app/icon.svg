@@ -5,14 +5,18 @@
       <stop offset="1" stop-color="#12b268"/>
     </linearGradient>
   </defs>
-  <!-- macOS-style rounded tile (squircle-ish) -->
+  <!-- macOS-style rounded tile -->
   <rect x="112" y="112" width="800" height="800" rx="180" fill="url(#bg)"/>
-  <!-- valve handwheel: hub, rim, spokes -->
-  <g fill="none" stroke="#ffffff" stroke-width="46" stroke-linecap="round">
-    <circle cx="512" cy="512" r="212"/>
-    <line x1="512" y1="512" x2="512" y2="264"/>
-    <line x1="512" y1="512" x2="726" y2="636"/>
-    <line x1="512" y1="512" x2="298" y2="636"/>
+  <!-- hub / route: a central node routing out to three others -->
+  <g stroke="#ffffff" stroke-width="46" stroke-linecap="round" fill="none">
+    <line x1="512" y1="512" x2="512" y2="300"/>
+    <line x1="512" y1="512" x2="330" y2="700"/>
+    <line x1="512" y1="512" x2="694" y2="700"/>
   </g>
-  <circle cx="512" cy="512" r="70" fill="#ffffff"/>
+  <g fill="#ffffff">
+    <circle cx="512" cy="512" r="72"/>
+    <circle cx="512" cy="300" r="52"/>
+    <circle cx="330" cy="700" r="52"/>
+    <circle cx="694" cy="700" r="52"/>
+  </g>
 </svg>
