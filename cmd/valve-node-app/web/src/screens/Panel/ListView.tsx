@@ -4,21 +4,47 @@
 // real probe (real sockets against real endpoints) is never run for a whole
 // gateway's chains just to paint the list; it fires lazily when a network's own
 // detail screen opens.
+import { useState } from "react";
 import type * as api from "../../api";
 import { capabilityCells, masterState, networkSlowRate } from "../../panelModel";
+import { resolveTheme, setThemePref } from "../../theme";
 import { Icon } from "./icons";
 import { HealthDot } from "./HealthDot";
 import { CapabilityDots } from "./CapabilityMeter";
 import { PowerBand } from "./PowerBand";
 
-function PanelHeader({ summary, onOpenSettings }: { summary?: string; onOpenSettings: () => void }) {
+// ThemeToggle is the inline light/dark switch that used to be reachable only by
+// opening the settings sheet. It flips between the two concrete themes (setting
+// an explicit pref, so it also pins a "system" preference to the current look);
+// the finer System/Light/Dark choice still lives behind the gear. The glyph is
+// the theme you'd switch TO — a sun in dark, a moon in light.
+function ThemeToggle() {
+  const [theme, setTheme] = useState<"light" | "dark">(resolveTheme());
+  const next = theme === "dark" ? "light" : "dark";
+  return (
+    <button
+      type="button"
+      className="p-gear"
+      title={`Switch to ${next} theme`}
+      aria-label={`Switch to ${next} theme`}
+      onClick={() => {
+        setThemePref(next);
+        setTheme(next);
+      }}
+    >
+      <Icon name={theme === "dark" ? "sun" : "moon"} />
+    </button>
+  );
+}
+
+function PanelHeader({ onOpenSettings }: { onOpenSettings: () => void }) {
   return (
     <div className="p-band p-phead">
       <span className="p-brand">
         <span className="p-bd"></span> Valve
       </span>
       <span className="p-hright">
-        {summary ? <span className="p-sum">{summary}</span> : null}
+        <ThemeToggle />
         <button type="button" className="p-gear" title="Settings" aria-label="Settings" onClick={onOpenSettings}>
           <Icon name="gear" />
         </button>
@@ -114,7 +140,7 @@ export function ListView({
   const m = masterState(gw);
   return (
     <>
-      <PanelHeader summary={m.sub} onOpenSettings={onOpenSettings} />
+      <PanelHeader onOpenSettings={onOpenSettings} />
       <div className="p-band">
         <PowerBand gw={gw} master={m} busy={busy} actionErr={actionErr} onPower={onPower} onChip={onChip} />
       </div>

@@ -132,35 +132,3 @@ export function TextInputDialog({
   );
 }
 
-// AddNetworkDialog offers the catalog's networks (Devnet appended last) minus
-// whatever this gateway already fronts — picking one hands its chain id back.
-export function AddNetworkDialog({
-  picks,
-  onPick,
-  onCancel,
-}: {
-  picks: { chainId: number; name: string }[];
-  onPick: (chainId: number) => void;
-  onCancel: () => void;
-}) {
-  return (
-    <Modal onClose={onCancel}>
-      <h2>Add a network</h2>
-      <ul className="plain-list rpc-picker">
-        {picks.map((p) => (
-          <li key={p.chainId}>
-            <button className="btn btn-ghost rpc-picker-option" onClick={() => onPick(p.chainId)}>
-              <span>{p.name}</span>
-              <span className="muted small">chain {p.chainId}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-      <div className="modal-actions">
-        <button className="btn btn-ghost" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-    </Modal>
-  );
-}

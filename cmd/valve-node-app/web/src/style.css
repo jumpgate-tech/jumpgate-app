@@ -6,11 +6,14 @@
   --border: #24322e;
   --fg: #d6ded9;
   --fg-muted: #83958c;
-  --accent: #6fe08a;
-  --accent-dim: #3a5a44;
+  /* Canonical green — one accent across the app, the panel and its modals
+     (was a paler #6fe08a here vs the panel's blue; unified on the panel's
+     richer green). */
+  --accent: #25d07d;
+  --accent-dim: #2a5540;
   --warn: #e0c26f;
   --bad: #e08a6f;
-  --ok: #6fe08a;
+  --ok: #25d07d;
   --link: #7fd4e0;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }

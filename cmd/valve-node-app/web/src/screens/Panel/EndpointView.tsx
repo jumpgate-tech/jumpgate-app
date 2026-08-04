@@ -123,8 +123,8 @@ export function EndpointView({
           </span>
         </div>
         <div
-          className="p-gwurl"
-          style={editable && !busy ? { cursor: "text" } : undefined}
+          className={`p-gwurl${editable && !busy ? " p-gwurl-edit" : ""}`}
+          title={editable && !busy ? "Click to edit the address" : undefined}
           onClick={editable && !busy ? onEditAddress : undefined}
         >
           {up.endpoint || "—"}

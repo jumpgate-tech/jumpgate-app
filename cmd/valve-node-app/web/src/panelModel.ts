@@ -20,6 +20,32 @@ export function endpointNameFromUrl(endpoint: string): string {
   return parts[parts.length - 2];
 }
 
+// shortEndpoint is the distinguishing part of an upstream URL for a row that
+// already carries a provider name and a transport icon: the scheme is dropped
+// (it's the http/ws icon), a trailing slash is trimmed, and any ${KEY} path
+// slot the backend left in collapses to "…". So https://eth.merkle.io →
+// "eth.merkle.io" and https://mainnet.infura.io/v3/${INFURA_API_KEY} →
+// "mainnet.infura.io/v3/…". Returns the input unchanged if it won't parse.
+export function shortEndpoint(endpoint: string): string {
+  let u: URL;
+  try {
+    u = new URL(endpoint);
+  } catch {
+    return endpoint;
+  }
+  // new URL percent-encodes { } in the path, so decode before matching the
+  // ${KEY} slot the backend leaves in (it never sends a real key — see
+  // redactKeys); fall back to the raw path if it won't decode.
+  let path = u.pathname;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    /* keep the raw path */
+  }
+  path = path.replace(/\/+$/, "").replace(/\$\{[^}]+\}/g, "…");
+  return u.host + path;
+}
+
 export type PowerTone = "on" | "off" | "blocked";
 export interface MasterState { tone: PowerTone; label: string; sub: string; actions: string[]; blocked?: string; }
 

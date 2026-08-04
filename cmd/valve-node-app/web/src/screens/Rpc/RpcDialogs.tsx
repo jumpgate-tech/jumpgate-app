@@ -6,7 +6,6 @@ import { useEffect, useRef, useState } from "react";
 import type {
   ChainlistResult,
   KnownSetResponse,
-  NetworkPreset,
   UpstreamSource,
   WipeResult,
 } from "../../api";
@@ -104,100 +103,6 @@ export function MessageDialog({
             {link.label}
           </a>
         ) : null}
-      </div>
-    </Modal>
-  );
-}
-
-// --- add a network -------------------------------------------------------
-
-export function AddChainDialog({
-  baseUrl,
-  targetId,
-  placementHasDevnet,
-  available,
-  already,
-  onPick,
-  onCustom,
-  onCancel,
-}: {
-  baseUrl: string;
-  targetId: string;
-  placementHasDevnet: boolean;
-  available: NetworkPreset[];
-  already: NetworkPreset[];
-  onPick: (preset: NetworkPreset) => void;
-  onCustom: () => void;
-  onCancel: () => void;
-}) {
-  return (
-    <Modal onClose={onCancel}>
-      <h2>Add a network</h2>
-      <p className="muted small">
-        eRPC addresses a chain by URL path, so adding one costs no port and no second process — it is another path on{" "}
-        <code>{baseUrl}</code>.
-      </p>
-      <ul className="plain-list rpc-picker">
-        {available.map((p) => (
-          <li key={p.chainId}>
-            <button className="btn btn-ghost rpc-picker-option" onClick={() => onPick(p)}>
-              <span>{p.name}</span>
-              <span className="muted small">
-                chain {p.chainId}
-                {p.devnet ? (placementHasDevnet ? ` · uses the devnet on ${targetId}` : ` · will create a devnet on ${targetId}`) : ""}
-              </span>
-            </button>
-          </li>
-        ))}
-        <li>
-          <button className="btn btn-ghost rpc-picker-option" onClick={onCustom}>
-            <span>Add custom…</span>
-            <span className="muted small">any chain id — a gateway can front a chain this app cannot run a node for</span>
-          </button>
-        </li>
-      </ul>
-      {already.length ? <p className="muted small">Already fronted: {already.map((p) => p.name).join(", ")}.</p> : null}
-      <div className="modal-actions">
-        <button className="btn btn-ghost" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-export function CustomChainDialog({ onAdd, onCancel }: { onAdd: (chainId: number) => void; onCancel: () => void }) {
-  const [value, setValue] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => ref.current?.focus(), []);
-  function add() {
-    const chainId = Number.parseInt(value.trim(), 10);
-    if (!Number.isFinite(chainId) || chainId <= 0) {
-      setErr("A chain id is a positive whole number.");
-      return;
-    }
-    onAdd(chainId);
-  }
-  return (
-    <Modal onClose={onCancel}>
-      <h2>Add a custom network</h2>
-      <p className="muted small">
-        Any EVM chain id. Nothing here restricts it to the chains this app can run a node for — fronting somebody else's
-        chain is a perfectly good use of a gateway.
-      </p>
-      <label>
-        Chain id
-        <input ref={ref} type="text" inputMode="numeric" autoComplete="off" placeholder="8453" value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} />
-      </label>
-      {err ? <p className="error small">{err}</p> : null}
-      <div className="modal-actions">
-        <button className="btn btn-ghost" onClick={onCancel}>
-          Cancel
-        </button>
-        <button className="btn" onClick={add}>
-          Add network
-        </button>
       </div>
     </Modal>
   );

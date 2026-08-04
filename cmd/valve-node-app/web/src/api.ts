@@ -1216,6 +1216,29 @@ export function discoverEndpoints(chainId: number): Promise<ChainlistResult> {
   return request<ChainlistResult>(`/api/chainlist/${chainId}`);
 }
 
+// chainSummary is one row of the full chain catalogue that backs the network-
+// search picker: just id + name. Endpoint discovery is a separate, heavier call
+// made only once a chain is picked (discoverEndpoints above).
+export interface ChainSummary {
+  chainId: number;
+  name: string;
+}
+
+export interface ChainCatalogue {
+  chains: ChainSummary[];
+  // stale is true when the live feed was unreachable and a cached catalogue
+  // stood in — the picker still works, it just may not be current.
+  stale?: boolean;
+}
+
+// allChains returns the full id+name catalogue (~2,600 chains) the search picker
+// filters over. The server caches it, so calling this per picker-open is cheap;
+// the browser also carries viem's curated set, so a failure here degrades to
+// that rather than an empty picker.
+export function allChains(): Promise<ChainCatalogue> {
+  return request<ChainCatalogue>(`/api/chainlist`);
+}
+
 // ---------------------------------------------------------------------
 // known set: valve's own vetted, measured, ordered endpoints per chain
 // (internal/server/knownset.go)

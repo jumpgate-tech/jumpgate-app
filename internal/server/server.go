@@ -13,6 +13,7 @@ import (
 	"net/http/cookiejar"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/valve-tech/valve-node-app/internal/ai"
 	"github.com/valve-tech/valve-node-app/internal/catalog"
@@ -91,6 +92,15 @@ type Server struct {
 	// against every upstream a gateway fronts.
 	capMu     sync.Mutex
 	capChecks map[string]capabilitiesResponse
+
+	// chainsMu guards the cached full chain catalogue (id + name for every
+	// chain the feed knows) that backs the network-search picker. The feed is
+	// ~1.1 MB / ~2660 chains and changes rarely, so it is fetched once and
+	// reused for chainsTTL rather than pulled on every keystroke — see
+	// handleChainlistAll in chainlist.go.
+	chainsMu    sync.Mutex
+	chainsCache []chainSummary
+	chainsAt    time.Time
 
 	newExecutor   func(config.Target) (executor.Executor, error)
 	newAIProvider func(id, apiKey, baseURL string) (ai.Provider, error)

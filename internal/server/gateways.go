@@ -336,6 +336,10 @@ func (s *Server) registerGatewayRoutes(mux *http.ServeMux) {
 	// is the same whoever asks, and scoping it to a gateway would imply a
 	// per-gateway result that does not exist.
 	mux.HandleFunc("GET /api/chainlist/{chainId}", s.handleChainlist)
+	// The full id+name catalogue behind the network-search picker — the
+	// enumerate-chains counterpart to the per-chain discovery above. A bare
+	// path (no {chainId}), so the mux routes it here, not to the probe handler.
+	mux.HandleFunc("GET /api/chainlist", s.handleChainlistAll)
 }
 
 // gateway resolves {gid} to a stored gateway, answering 404 with a typed code
