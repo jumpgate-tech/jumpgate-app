@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/valve-tech/valve-node-app/internal/config"
 	"github.com/valve-tech/valve-node-app/internal/server"
@@ -33,6 +34,7 @@ const bindFlagUsage = "address to bind the local server to. " +
 func main() {
 	bind := flag.String("bind", "127.0.0.1:8799", bindFlagUsage)
 	noOpen := flag.Bool("no-open", false, "do not open a browser window automatically")
+	tray := flag.Bool("tray", false, "open the UI in a native desktop window (tiny-app mode) instead of a browser tab; requires a build made with -tags tray")
 	flag.Parse()
 
 	if warning := bindWarningLine(*bind); warning != "" {
@@ -63,16 +65,55 @@ func main() {
 	url := fmt.Sprintf("http://%s/?token=%s", *bind, token)
 	fmt.Println(url)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if *tray {
+		if !trayBuilt {
+			log.Fatalf("valve-node-app: --tray needs a build made with the tray tag: go build -tags tray ./cmd/valve-node-app")
+		}
+		// The window is the foreground; HTTP runs behind it. runWindow must own
+		// the main goroutine (the platform webview owns the UI run loop), so the
+		// server goes to a background goroutine. Closing the window returns from
+		// runWindow; we then cancel ctx to shut the server down cleanly.
+		srvErr := make(chan error, 1)
+		go func() { srvErr <- s.ListenAndServe(ctx) }()
+		if err := waitReady(ctx, *bind); err != nil {
+			log.Fatalf("valve-node-app: server did not come up: %v", err)
+		}
+		runWindow(url)
+		stop()
+		<-srvErr // wait for the shutdown we just asked for; its error is expected
+		return
+	}
+
 	if !*noOpen {
 		openBrowser(url)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	if err := s.ListenAndServe(ctx); err != nil {
 		log.Fatalf("valve-node-app: server: %v", err)
 	}
+}
+
+// waitReady blocks until the server is accepting connections on bind, so the
+// tiny-app window never loads before there is something to serve it. Bounded so
+// a server that never binds fails loudly instead of hanging the window.
+func waitReady(ctx context.Context, bind string) error {
+	d := net.Dialer{Timeout: 200 * time.Millisecond}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		conn, err := d.DialContext(ctx, "tcp", bind)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for %s to accept connections", bind)
 }
 
 // bindWarningLine returns a loud warning line when bind's host is not

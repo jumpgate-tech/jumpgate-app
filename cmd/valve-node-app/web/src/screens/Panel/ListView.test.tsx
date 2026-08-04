@@ -21,9 +21,16 @@ describe("ListView", () => {
     expect(screen.getByText("Ethereum")).toBeInTheDocument();
     expect(screen.getByText("PulseChain")).toBeInTheDocument();
     expect(screen.getByText("Add a network")).toBeInTheDocument();
-    // Running gateway → the summary reads "2 networks served" (shown in both
-    // the header and the power band's sub-line).
-    expect(screen.getAllByText("2 networks served").length).toBeGreaterThan(0);
+    // Running gateway → the summary reads "2 networks served" exactly once: it
+    // lives in the power band's sub-line now, no longer duplicated in the header.
+    expect(screen.getAllByText("2 networks served")).toHaveLength(1);
+  });
+
+  it("exposes an inline light/dark toggle and a separate settings gear", () => {
+    render(<ListView gw={makeGateway()} health={undefined} busy={null} actionErr={null} setupLog={[]} {...handlers} />);
+    // The theme toggle names the theme it switches TO; the gear stays Settings.
+    expect(screen.getByLabelText(/Switch to (light|dark) theme/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Settings")).toBeInTheDocument();
   });
 
   it("drills into a network on row click", () => {

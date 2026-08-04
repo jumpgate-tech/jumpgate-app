@@ -37,9 +37,7 @@ import { NetworksPanel } from "./Chains";
 import { ManageSection } from "./ManageSection";
 import type { SettingsValues } from "./SettingsBlock";
 import {
-  AddChainDialog,
   AddEndpointDialog,
-  CustomChainDialog,
   DiscoverDialog,
   KnownSetDialog,
   ManualEndpointDialog,
@@ -48,8 +46,10 @@ import {
   WipeDialog,
   WipeResultDialog,
 } from "./RpcDialogs";
+import { AddNetworkDialog } from "../Panel/AddNetworkModal";
 import {
   attentionLines,
+  DEVNET_CHAIN_ID,
   internalCaPath,
   mergePendingNetworks,
   pruneEmptyNetworks,
@@ -64,7 +64,6 @@ import {
 
 type Dialog =
   | { kind: "add-chain" }
-  | { kind: "custom-chain" }
   | { kind: "add-endpoint"; chainId: number }
   | { kind: "manual-endpoint"; chainId: number }
   | { kind: "known-set"; chainId: number; set: KnownSetResponse | null; error: string | null }
@@ -180,10 +179,13 @@ export function GatewayCard({
     await saveConfig(withDevnetUpstream(storedConfig(gw), chainId, gw.placement.targetId), "Adding the devnet");
   }
 
-  function onPickChain(preset: NetworkPreset) {
+  // The shared picker hands back a chain id; the local Devnet routes to a
+  // managed devnet, everything else to a normal add. (Was onPickChain +
+  // CustomChainDialog; unified now.)
+  function pickChain(chainId: number) {
     setDialog(null);
-    if (preset.devnet) void addDevnetChain(preset.chainId);
-    else void addChain(preset.chainId);
+    if (chainId === DEVNET_CHAIN_ID) void addDevnetChain(chainId);
+    else void addChain(chainId);
   }
 
   async function removeChain(chainId: number) {
@@ -308,28 +310,12 @@ export function GatewayCard({
   function renderDialog() {
     if (!dialog) return null;
     switch (dialog.kind) {
-      case "add-chain": {
-        const present = new Set((gw.networks ?? []).map((n) => n.chainId));
+      case "add-chain":
         return (
-          <AddChainDialog
-            baseUrl={gw.baseUrl}
-            targetId={gw.placement.targetId}
-            placementHasDevnet={placementHasDevnet}
-            available={presets.filter((p) => !present.has(p.chainId))}
-            already={presets.filter((p) => present.has(p.chainId))}
-            onPick={onPickChain}
-            onCustom={() => setDialog({ kind: "custom-chain" })}
-            onCancel={() => setDialog(null)}
-          />
-        );
-      }
-      case "custom-chain":
-        return (
-          <CustomChainDialog
-            onAdd={(chainId) => {
-              setDialog(null);
-              void addChain(chainId);
-            }}
+          <AddNetworkDialog
+            presentChainIds={(gw.networks ?? []).map((n) => n.chainId)}
+            extraPinned={[{ chainId: DEVNET_CHAIN_ID, name: "Devnet", testnet: true }]}
+            onPick={pickChain}
             onCancel={() => setDialog(null)}
           />
         );

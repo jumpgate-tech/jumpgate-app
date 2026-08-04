@@ -6,12 +6,12 @@
 // reset panel.ts did by hand on open-network.
 import { useState } from "react";
 import type * as api from "../../api";
-import { networkSlowRate, endpointSlowRate } from "../../panelModel";
+import { networkSlowRate, endpointSlowRate, capabilityCells, shortEndpoint } from "../../panelModel";
 import { copyToClipboard } from "../../ui";
 import { Icon } from "./icons";
 import { HealthDot } from "./HealthDot";
-import { CapsBand } from "./CapabilityMeter";
-import { unionCapabilities } from "./capsUtil";
+import { CapsBand, CapabilityDots } from "./CapabilityMeter";
+import { unionCapabilities, singleCapabilities } from "./capsUtil";
 
 export function NetworkView({
   gw,
@@ -148,16 +148,26 @@ export function NetworkView({
         </div>
         {ups.map((u, i) => {
           const upRate = na ? endpointSlowRate(na, u.id) : undefined;
+          const yours = u.local;
           return (
             <div
               key={u.id}
-              className={`p-row${i > 0 ? " p-rowdiv" : ""}`}
+              className={`p-row p-eprow${i > 0 ? " p-rowdiv" : ""}`}
               onClick={() => onOpenEndpoint(chainId, u.id)}
             >
               <span className="p-lead">
                 <HealthDot running={running} serviceable={!u.problem} slowRate={upRate} />
               </span>
-              <span className="p-nm">{u.label}</span>
+              <span className="p-epname">
+                <span className="p-eplabel">{u.label}</span>
+                <span className="p-epurl">{shortEndpoint(u.endpoint)}</span>
+              </span>
+              <CapabilityDots cells={capabilityCells(singleCapabilities(caps, chainId, u.id))} />
+              {yours ? (
+                <span className="p-src" title="A node or devnet you run">
+                  <Icon name="server" />
+                </span>
+              ) : null}
               <span className="p-chev">
                 <Icon name="chevR" />
               </span>
@@ -178,7 +188,10 @@ export function NetworkView({
 
       <div className="p-band">
         <div className="p-lblrow">
-          <span className="p-seclbl">Capabilities</span>
+          <span className="p-seclbl">
+            Capabilities
+            <span style={{ color: "var(--dim3)", letterSpacing: 0 }}> · combined across endpoints</span>
+          </span>
         </div>
         <CapsBand statuses={capStatuses} busy={capsBusy} err={capsErr} hasData={!!caps} />
       </div>

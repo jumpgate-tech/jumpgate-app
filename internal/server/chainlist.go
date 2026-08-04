@@ -78,6 +78,80 @@ type chainlistResponse struct {
 	Live int `json:"live"`
 }
 
+// chainsTTL bounds how long the full chain catalogue is reused before a fresh
+// fetch. The feed changes on the order of days (a new chain lands, a name is
+// corrected), never on the order of a search session, so a long TTL keeps the
+// picker instant without ever serving something an operator would notice as
+// wrong. ?refresh=1 forces a pull past the cache.
+const chainsTTL = 6 * time.Hour
+
+// chainSummary is one row of the network-search catalogue: just enough to list
+// and search a chain. The per-chain endpoint discovery (handleChainlist) is a
+// separate, heavier call made only once a chain is picked.
+type chainSummary struct {
+	ChainID int    `json:"chainId"`
+	Name    string `json:"name"`
+}
+
+type chainlistAllResponse struct {
+	Chains []chainSummary `json:"chains"`
+	// Stale is true when the live feed could not be reached and this is a
+	// previously cached answer standing in — the picker still works, it is just
+	// not guaranteed current.
+	Stale bool `json:"stale,omitempty"`
+}
+
+// handleChainlistAll returns the full id+name catalogue of every chain the feed
+// knows, for the network-search picker. It is the enumerate-chains counterpart
+// to handleChainlist's per-chain endpoint discovery, and reuses
+// chainlist.Discoverer.Fetch (exported for exactly this). The result is cached
+// for chainsTTL because the feed is ~1.1 MB and the picker searches it on every
+// keystroke; a fetch failure falls back to any cached answer (flagged stale)
+// before giving up with 502, since the browser also carries viem's curated set
+// and degrades to that.
+func (s *Server) handleChainlistAll(w http.ResponseWriter, r *http.Request) {
+	refresh := r.URL.Query().Get("refresh") == "1"
+
+	s.chainsMu.Lock()
+	cached := s.chainsCache
+	fresh := !refresh && cached != nil && time.Since(s.chainsAt) < chainsTTL
+	s.chainsMu.Unlock()
+
+	if fresh {
+		writeJSON(w, http.StatusOK, chainlistAllResponse{Chains: cached})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), chainlistTimeout)
+	defer cancel()
+
+	chains, err := s.newChainlist().Fetch(ctx)
+	if err != nil {
+		if cached != nil {
+			writeJSON(w, http.StatusOK, chainlistAllResponse{Chains: cached, Stale: true})
+			return
+		}
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	out := make([]chainSummary, 0, len(chains))
+	for _, c := range chains {
+		if c.ChainID <= 0 || strings.TrimSpace(c.Name) == "" {
+			continue
+		}
+		out = append(out, chainSummary{ChainID: c.ChainID, Name: c.Name})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ChainID < out[j].ChainID })
+
+	s.chainsMu.Lock()
+	s.chainsCache = out
+	s.chainsAt = time.Now()
+	s.chainsMu.Unlock()
+
+	writeJSON(w, http.StatusOK, chainlistAllResponse{Chains: out})
+}
+
 // handleChainlist discovers and probes the public endpoints for one chain.
 func (s *Server) handleChainlist(w http.ResponseWriter, r *http.Request) {
 	chainID, err := strconv.Atoi(r.PathValue("chainId"))

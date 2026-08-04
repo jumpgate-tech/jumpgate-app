@@ -21,7 +21,10 @@ export type IconName =
   | "chevR"
   | "chevL"
   | "plus"
-  | "gear";
+  | "gear"
+  | "sun"
+  | "moon"
+  | "server";
 
 // Sprite is the hidden <svg> holding every symbol. Render it ONCE near the top
 // of a screen (Panel does); every <Icon> below references these by id.
@@ -77,8 +80,24 @@ export function Sprite() {
           <path d="M12 5v14M5 12h14" />
         </symbol>
         <symbol id="p-gear" viewBox="0 0 24 24">
-          <circle cx="12" cy="12" r="3.3" />
-          <path d="M12 2.2v3.1M12 18.7v3.1M2.2 12h3.1M18.7 12h3.1M5 5l2.2 2.2M16.8 16.8 19 19M19 5l-2.2 2.2M7.2 16.8 5 19" />
+          {/* A real cog with teeth — the old spoked circle read as a sun, which
+              is why the settings control looked like a light/dark toggle. */}
+          <circle cx="12" cy="12" r="3.2" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+        </symbol>
+        <symbol id="p-sun" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="4.2" />
+          <path d="M12 1.8v2.6M12 19.6v2.6M4.4 4.4l1.9 1.9M17.7 17.7l1.9 1.9M1.8 12h2.6M19.6 12h2.6M4.4 19.6l1.9-1.9M17.7 6.3l1.9-1.9" />
+        </symbol>
+        <symbol id="p-moon" viewBox="0 0 24 24">
+          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
+        </symbol>
+        {/* server — a managed node/devnet you run, vs the globe for a public
+            endpoint. Replaces the word "public"/"yours" on a row. */}
+        <symbol id="p-server" viewBox="0 0 24 24">
+          <rect x="3.5" y="4.5" width="17" height="6" rx="1.6" />
+          <rect x="3.5" y="13.5" width="17" height="6" rx="1.6" />
+          <path d="M7 7.5h.01M7 16.5h.01" />
         </symbol>
       </defs>
     </svg>

@@ -7,7 +7,10 @@
 import { useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-export function Modal({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+// bare skips the default .modal card chrome, for a dialog body that IS its own
+// card (the add-network picker carries panel-language styling of its own and
+// would otherwise be double-boxed).
+export function Modal({ onClose, children, bare }: { onClose: () => void; children: ReactNode; bare?: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -18,9 +21,15 @@ export function Modal({ onClose, children }: { onClose: () => void; children: Re
 
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        {children}
-      </div>
+      {bare ? (
+        <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+          {children}
+        </div>
+      ) : (
+        <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+          {children}
+        </div>
+      )}
     </div>,
     document.body,
   );

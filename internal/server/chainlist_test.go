@@ -78,6 +78,66 @@ func (refusingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, errors.New("no route to host (test transport)")
 }
 
+// The full-catalogue route (GET /api/chainlist) backs the search picker. It
+// enumerates the feed's id+name pairs, drops junk rows, and sorts by id.
+func TestHandleChainlistAll_ReturnsSortedIdNameCatalogue(t *testing.T) {
+	feed := feedStub(t, []chainlist.Chain{
+		{ChainID: 369, Name: "PulseChain", RPC: []string{"https://rpc.pulsechain.com"}},
+		{ChainID: 1, Name: "Ethereum Mainnet", RPC: []string{"https://eth.example"}},
+		{ChainID: 0, Name: "bogus zero id", RPC: nil}, // dropped: id <= 0
+		{ChainID: 8453, Name: "   ", RPC: nil},        // dropped: blank name
+	})
+	d := chainlist.New()
+	d.FeedURL = feed.URL
+
+	a := chainlistServer(t, d)
+	res := a.do(t, "GET", "/api/chainlist", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("got %d, want 200", res.StatusCode)
+	}
+	body := decode[chainlistAllResponse](t, res)
+	if body.Stale {
+		t.Errorf("a fresh fetch must not be flagged stale")
+	}
+	if len(body.Chains) != 2 {
+		t.Fatalf("got %d chains, want 2 (zero-id and blank-name dropped): %+v", len(body.Chains), body.Chains)
+	}
+	if body.Chains[0].ChainID != 1 || body.Chains[1].ChainID != 369 {
+		t.Errorf("not sorted by id ascending: %+v", body.Chains)
+	}
+	if body.Chains[0].Name != "Ethereum Mainnet" {
+		t.Errorf("name: got %q, want %q", body.Chains[0].Name, "Ethereum Mainnet")
+	}
+}
+
+// A feed failure with a warm cache is not a failure: the last good catalogue
+// stands in, flagged stale, because the picker also carries viem's curated set
+// and an empty long-tail is worse than a slightly old one.
+func TestHandleChainlistAll_FallsBackToCacheWhenFeedFails(t *testing.T) {
+	feed := feedStub(t, []chainlist.Chain{{ChainID: 1, Name: "Ethereum", RPC: nil}})
+	d := chainlist.New()
+	d.FeedURL = feed.URL
+
+	a := chainlistServer(t, d)
+	if res := a.do(t, "GET", "/api/chainlist", nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("warm-up got %d, want 200", res.StatusCode)
+	}
+
+	// Break the feed and force past the cache: the cached answer must stand in.
+	d.HTTPClient = &http.Client{Transport: refusingTransport{}}
+	res := a.do(t, "GET", "/api/chainlist?refresh=1", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("stale fallback got %d, want 200", res.StatusCode)
+	}
+	body := decode[chainlistAllResponse](t, res)
+	if !body.Stale {
+		t.Errorf("expected stale=true when the feed is unreachable but a cache exists")
+	}
+	if len(body.Chains) != 1 || body.Chains[0].ChainID != 1 {
+		t.Errorf("cached chains not returned: %+v", body.Chains)
+	}
+}
+
 // The whole value of this route is that it probes: the feed is advertising,
 // and roughly a third of what it lists for a popular chain is dead or serving
 // a different chain than it claims. A live one, a wrong-chain one and a dead

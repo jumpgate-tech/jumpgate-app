@@ -38,16 +38,12 @@ import { ListView } from "./ListView";
 import { NetworkView } from "./NetworkView";
 import { EndpointView } from "./EndpointView";
 import { SettingsSheet } from "./SettingsSheet";
-import { ConfirmDialog, TextInputDialog, AddNetworkDialog, validateUrlScheme } from "./Dialogs";
+import { ConfirmDialog, TextInputDialog, validateUrlScheme } from "./Dialogs";
+import { AddNetworkDialog } from "./AddNetworkModal";
 
 // FINAL_STEP is the id every gateway setup plan ends on (mirrors rpc.ts). The
 // setup stream is done when a step errors, or when this step reports done.
 const FINAL_STEP = "run";
-
-// DEVNET_CHAIN_ID is reth's --dev genesis id. catalog.Networks() excludes it
-// (a private scratch chain, not a supported public network), so the add-network
-// picker appends it itself, always last.
-const DEVNET_CHAIN_ID = 1337;
 
 type View =
   | { name: "list" }
@@ -57,7 +53,7 @@ type View =
 type Dialog =
   | { kind: "settings" }
   | { kind: "confirm-wipe" }
-  | { kind: "add-network"; picks: { chainId: number; name: string }[] }
+  | { kind: "add-network" }
   | { kind: "add-endpoint"; chainId: number }
   | { kind: "rename"; chainId: number; upstreamId: string; current: string }
   | { kind: "edit-address"; chainId: number; upstreamId: string; current: string }
@@ -271,18 +267,36 @@ export function Panel() {
     if (!gw || busyRef.current) return;
     setBusy("create");
     setActionErr(null);
-    let urls: string[];
+
+    // Endpoints to wire: valve's measured known set first — chains 1/369/943,
+    // which already carry g4mm4, pulsechain.com and valve — else discover the
+    // live public endpoints from chainlist. That fallback is what lets the
+    // searchable picker front ANY chain, not just the three valve has curated,
+    // and it wires every endpoint that answers so eRPC can route across them.
+    let urls: string[] = [];
     try {
       const set = await api.knownSet(gw.id, chainId);
       urls = (set.endpoints ?? []).filter((e) => !e.alreadyAdded).map((e) => e.url);
-    } catch (e) {
-      setBusy(null);
-      setActionErr(`Could not read valve's known set for chain ${chainId}: ${message(e)}`);
-      return;
+    } catch {
+      // A missing/failed known set is not fatal — fall through to discovery.
+    }
+    if (urls.length === 0) {
+      try {
+        const res = await api.discoverEndpoints(chainId);
+        urls = (res.endpoints ?? [])
+          .filter((e) => e.status === "live" || e.status === "unprobed")
+          .map((e) => e.url);
+      } catch (e) {
+        setBusy(null);
+        setActionErr(`Could not find endpoints for chain ${chainId}: ${message(e)}`);
+        return;
+      }
     }
     if (urls.length === 0) {
       setBusy(null);
-      setActionErr(`valve has no measured endpoints for chain ${chainId} yet, so there was nothing to add.`);
+      setActionErr(
+        `No public endpoints answered for chain ${chainId} right now — add one by hand from its network screen.`,
+      );
       return;
     }
     const upstreams: api.GatewayUpstream[] = urls.map((url, i) => ({
@@ -309,28 +323,13 @@ export function Panel() {
     });
   }
 
-  async function openAddNetwork() {
+  // The shared modal carries its own catalogue (viem curated + the full
+  // chainlist) and filters out what's already fronted, so opening it is just
+  // showing the dialog — no catalog fetch or pick-list building here anymore.
+  function openAddNetwork() {
     if (!gw || busyRef.current) return;
-    setBusy("add-network");
     setActionErr(null);
-    let networks: api.Network[];
-    try {
-      const catalog = await api.getCatalog();
-      networks = catalog.networks ?? [];
-    } catch (e) {
-      setBusy(null);
-      setActionErr(`Could not load the network catalog: ${message(e)}`);
-      return;
-    }
-    setBusy(null);
-    const present = new Set((gw.networks ?? []).map((n) => n.chainId));
-    const picks = networks.filter((n) => !present.has(n.ChainID)).map((n) => ({ chainId: n.ChainID, name: n.Name }));
-    if (!present.has(DEVNET_CHAIN_ID)) picks.push({ chainId: DEVNET_CHAIN_ID, name: "Devnet" });
-    if (picks.length === 0) {
-      setActionErr("Every network valve's catalog knows about is already configured on this gateway.");
-      return;
-    }
-    setDialog({ kind: "add-network", picks });
+    setDialog({ kind: "add-network" });
   }
 
   async function submitAddEndpoint(chainId: number, url: string) {
@@ -591,7 +590,11 @@ export function Panel() {
         ) : null;
       case "add-network":
         return (
-          <AddNetworkDialog picks={dialog.picks} onPick={(chainId) => void submitAddNetwork(chainId)} onCancel={() => setDialog(null)} />
+          <AddNetworkDialog
+            presentChainIds={(gw?.networks ?? []).map((n) => n.chainId)}
+            onPick={(chainId) => void submitAddNetwork(chainId)}
+            onCancel={() => setDialog(null)}
+          />
         );
       case "add-endpoint": {
         const chainId = dialog.chainId;

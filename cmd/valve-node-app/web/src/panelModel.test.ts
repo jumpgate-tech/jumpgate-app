@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   endpointNameFromUrl,
+  shortEndpoint,
   masterState,
   healthClass,
   capabilityCells,
@@ -27,6 +28,21 @@ describe("endpointNameFromUrl", () => {
   });
   it("returns 'endpoint' for an unparseable string", () => {
     expect(endpointNameFromUrl("not a url")).toBe("endpoint");
+  });
+});
+
+describe("shortEndpoint", () => {
+  it("drops the scheme and a trailing slash, leaving host + path", () => {
+    expect(shortEndpoint("https://eth.merkle.io")).toBe("eth.merkle.io");
+    expect(shortEndpoint("wss://ethereum-rpc.publicnode.com/")).toBe("ethereum-rpc.publicnode.com");
+    expect(shortEndpoint("https://rpc.publicnode.com/pulsechain")).toBe("rpc.publicnode.com/pulsechain");
+  });
+  it("collapses an API-key slot the backend left in", () => {
+    expect(shortEndpoint("https://mainnet.infura.io/v3/${INFURA_API_KEY}")).toBe("mainnet.infura.io/v3/…");
+  });
+  it("keeps a port and returns the input unchanged when it won't parse", () => {
+    expect(shortEndpoint("http://127.0.0.1:8545")).toBe("127.0.0.1:8545");
+    expect(shortEndpoint("not a url")).toBe("not a url");
   });
 });
 
