@@ -143,6 +143,61 @@
   font-size: 12.5px;
 }
 
+/* --- button reset (a11y) --------------------------------------------------
+   The panel's interactive controls are real <button>s now — focusable and
+   keyboard-activatable, where they used to be <div onClick>/<span onClick>
+   that keyboard and screen-reader users could not reach. A <button> drags in
+   native chrome (background, border, padding, centred text, its own font), so
+   this strips all of it back to nothing: every one of these controls keeps its
+   own layout/padding in the rules below and must look pixel-identical to the
+   div/span it replaced. Placed before those rules so their per-control values
+   win. .p-vh is the visually-hidden helper for state words a screen reader
+   should hear but a sighted user reads from colour/motion. */
+.p-power,
+.p-row,
+.p-remove,
+.p-back,
+.p-ic,
+.p-pen,
+.p-gwurl {
+  appearance: none;
+  -webkit-appearance: none;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+/* Keyboard focus ring — only for keyboard users (:focus-visible), so a mouse
+   click leaves the flat look untouched. */
+.p-power:focus-visible,
+.p-row:focus-visible,
+.p-remove:focus-visible,
+.p-back:focus-visible,
+.p-ic:focus-visible,
+.p-pen:focus-visible,
+.p-gwurl-edit:focus-visible,
+.p-emptybtn:focus-visible,
+.p-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.p-vh {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* --- master power band (list view) --------------------------------------- */
 
 .p-power {
@@ -501,6 +556,7 @@
 /* --- gateway URL band (network detail) ------------------------------------ */
 
 .p-gwurl {
+  display: block;
   padding: 2px var(--gut) 14px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12.5px;
@@ -508,6 +564,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* base is not clickable (network URL / non-editable address); the editable
+     button variant re-adds a text cursor below. */
+  cursor: default;
 }
 /* An editable address (external upstream) reads as a field: a hairline box that
    fills in on hover, so "click to edit" is visible rather than implied by a

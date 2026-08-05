@@ -69,7 +69,7 @@ function NetworkRow({
   const na = health?.networks?.find((n) => n.chainId === nv.chainId);
   const slowRate = na ? networkSlowRate(na) : undefined;
   return (
-    <div className={`p-row${divider ? " p-rowdiv" : ""}`} onClick={() => onOpen(nv.chainId)}>
+    <button type="button" className={`p-row${divider ? " p-rowdiv" : ""}`} onClick={() => onOpen(nv.chainId)}>
       <span className="p-lead">
         <HealthDot running={gw.status.State === "running"} serviceable={nv.serviceable} slowRate={slowRate} />
       </span>
@@ -78,7 +78,7 @@ function NetworkRow({
       <span className="p-chev">
         <Icon name="chevR" />
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -151,16 +151,17 @@ export function ListView({
         {(gw.networks ?? []).map((nv, i) => (
           <NetworkRow key={nv.chainId} gw={gw} nv={nv} divider={i > 0} health={health} onOpen={onOpenNetwork} />
         ))}
-        <div
+        <button
+          type="button"
           className={`p-row p-rowdiv addr${busy ? " p-disabled" : ""}`}
-          aria-disabled={busy ? true : undefined}
-          onClick={busy ? undefined : onAddNetwork}
+          disabled={!!busy}
+          onClick={onAddNetwork}
         >
           <span className="p-lead">
             <Icon name="plus" />
           </span>
           <span className="p-nm">Add a network</span>
-        </div>
+        </button>
       </div>
     </>
   );
