@@ -27,4 +27,4 @@ cmd/valve-node-app/web/node_modules/
 coverage/
 
 # Built macOS app bundle (build-macos-app.sh output)
-/Valve.app/
+/Jumpgate.app/
