@@ -456,7 +456,7 @@ type CheckItem struct {
 // `ufw allow`/`ufw enable`/`iptables -A` ever appears in a command this
 // func passes to Executor.Run) — every suggested fix is returned as text
 // in a CheckItem's Fix field for the operator to review and run themselves.
-func FirewallChecklist(ctx context.Context, e executor.Executor, w catalog.WireConfig) ([]CheckItem, error) {
+func FirewallChecklist(ctx context.Context, e executor.Executor, w catalog.WireConfig, overlays ...*net.IPNet) ([]CheckItem, error) {
 	beaconPorts, err := beaconP2PPorts(w.BeaconID)
 	if err != nil {
 		return nil, fmt.Errorf("ops: firewall: %w", err)
@@ -475,7 +475,7 @@ func FirewallChecklist(ctx context.Context, e executor.Executor, w catalog.WireC
 	items := []CheckItem{
 		p2pOpenItem("exec-p2p-open", "Execution p2p port reachable", w.ExecP2P(), w.ExecP2P(), tcp, udp),
 		p2pOpenItem("beacon-p2p-open", "Beacon p2p port reachable", beaconPorts.TCP, beaconPorts.UDP, tcp, udp),
-		rpcNotPublicItem(w, tcp),
+		rpcNotPublicItem(w, tcp, overlays),
 		firewallActiveItem(ctx, e, w, beaconPorts),
 		sshAllowedItem(tcp),
 	}
@@ -564,11 +564,30 @@ var tailscaleCGNAT = func() *net.IPNet {
 	return n
 }()
 
+// ParseOverlayCIDRs turns operator-declared overlay CIDR strings (config's
+// TrustedOverlays) into networks, silently dropping any that don't parse — a
+// malformed entry must never widen exposure grading, it just isn't treated as a
+// trusted overlay. Tailscale's 100.64.0.0/10 is always trusted separately and
+// need not be listed.
+func ParseOverlayCIDRs(cidrs []string) []*net.IPNet {
+	out := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		if _, n, err := net.ParseCIDR(strings.TrimSpace(c)); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // bindAddrTier grades a single bound-address token (as it appears in ss
 // output) by how far it's exposed: "public" (0.0.0.0/all-interfaces or a
-// routable public IP), "lan" (RFC1918 private / link-local), "tailscale"
-// (100.64.0.0/10 overlay), "loopback", or "" for an unparseable token.
-func bindAddrTier(addr string) string {
+// routable public IP), "lan" (RFC1918 private / link-local), "overlay" (an
+// authenticated private overlay — Tailscale's 100.64.0.0/10, always trusted,
+// plus any operator-declared overlays), "loopback", or "" for an unparseable
+// token. The overlay check runs before the LAN check, so an operator whose
+// overlay (e.g. WireGuard) uses an RFC1918 range still grades as overlay, not
+// LAN.
+func bindAddrTier(addr string, overlays []*net.IPNet) string {
 	switch addr {
 	case "0.0.0.0", "*", "::", "[::]":
 		return "public" // all interfaces — includes any public one
@@ -577,23 +596,28 @@ func bindAddrTier(addr string) string {
 	if ip == nil {
 		return ""
 	}
-	switch {
-	case ip.IsLoopback():
+	if ip.IsLoopback() {
 		return "loopback"
-	case tailscaleCGNAT.Contains(ip):
-		return "tailscale"
-	case ip.IsPrivate() || ip.IsLinkLocalUnicast():
-		return "lan"
-	default:
-		return "public"
 	}
+	if tailscaleCGNAT.Contains(ip) {
+		return "overlay"
+	}
+	for _, n := range overlays {
+		if n.Contains(ip) {
+			return "overlay"
+		}
+	}
+	if ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		return "lan"
+	}
+	return "public"
 }
 
-var bindTierRank = map[string]int{"": 0, "loopback": 1, "tailscale": 2, "lan": 3, "public": 4}
+var bindTierRank = map[string]int{"": 0, "loopback": 1, "overlay": 2, "lan": 3, "public": 4}
 
 // portExposureTier returns the most-exposed tier any listener for port is
 // bound to in ss output (dual-binds resolve to the worst).
-func portExposureTier(ssOutput string, port int) string {
+func portExposureTier(ssOutput string, port int, overlays []*net.IPNet) string {
 	suffix := fmt.Sprintf(":%d", port)
 	worst := ""
 	for _, line := range strings.Split(ssOutput, "\n") {
@@ -601,7 +625,7 @@ func portExposureTier(ssOutput string, port int) string {
 			if !strings.HasSuffix(f, suffix) {
 				continue
 			}
-			if t := bindAddrTier(strings.TrimSuffix(f, suffix)); bindTierRank[t] > bindTierRank[worst] {
+			if t := bindAddrTier(strings.TrimSuffix(f, suffix), overlays); bindTierRank[t] > bindTierRank[worst] {
 				worst = t
 			}
 		}
@@ -609,7 +633,7 @@ func portExposureTier(ssOutput string, port int) string {
 	return worst
 }
 
-func rpcNotPublicItem(w catalog.WireConfig, tcp string) CheckItem {
+func rpcNotPublicItem(w catalog.WireConfig, tcp string, overlays []*net.IPNet) CheckItem {
 	type namedPort struct {
 		name string
 		port int
@@ -628,7 +652,7 @@ func rpcNotPublicItem(w catalog.WireConfig, tcp string) CheckItem {
 	byTier := map[string][]string{}
 	worst := ""
 	for _, p := range ports {
-		tier := portExposureTier(tcp, p.port)
+		tier := portExposureTier(tcp, p.port, overlays)
 		if tier == "" || tier == "loopback" {
 			continue
 		}
@@ -653,9 +677,9 @@ func rpcNotPublicItem(w catalog.WireConfig, tcp string) CheckItem {
 			Detail: fmt.Sprintf("bound to a private LAN address: %s — reachable by anyone on your local network", strings.Join(byTier["lan"], ", ")),
 			Fix:    "if that's intended (a trusted LAN) you can ignore this; otherwise bind to 127.0.0.1 or a Tailscale address and restart the service",
 		}
-	case "tailscale":
+	case "overlay":
 		return CheckItem{ID: id, Title: title, Why: why, Status: "pass",
-			Detail: fmt.Sprintf("bound to a Tailscale/overlay address: %s — reachable only on your authenticated tailnet (RPC is unauthenticated, so everyone on that tailnet can drive the node)", strings.Join(byTier["tailscale"], ", ")),
+			Detail: fmt.Sprintf("bound to a private overlay address (e.g. Tailscale, WireGuard): %s — reachable only on your authenticated overlay (RPC is unauthenticated, so everyone on that overlay can drive the node)", strings.Join(byTier["overlay"], ", ")),
 		}
 	default:
 		return CheckItem{ID: id, Title: title, Why: why, Status: "pass",
