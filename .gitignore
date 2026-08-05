@@ -28,3 +28,6 @@ coverage/
 
 # Built macOS app bundle (build-macos-app.sh output)
 /Jumpgate.app/
+
+# wrangler cache (created when wrangler runs from repo root)
+.wrangler/
