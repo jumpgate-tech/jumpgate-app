@@ -126,7 +126,7 @@ static NSImage *valveHubImage(void) {
             return YES;
         }];
     img.template = YES;
-    img.accessibilityDescription = @"Valve";
+    img.accessibilityDescription = @"Jumpgate";
     return img;
 }
 
@@ -163,13 +163,13 @@ void valveInstallStatusItem(void *nswindow) {
     tray.item = item;
 
     NSMenu *menu = [[NSMenu alloc] init];
-    NSMenuItem *open = [[NSMenuItem alloc] initWithTitle:@"Open Valve Panel"
+    NSMenuItem *open = [[NSMenuItem alloc] initWithTitle:@"Open Jumpgate"
                                                   action:@selector(open:)
                                            keyEquivalent:@""];
     open.target = tray;
     [menu addItem:open];
     [menu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"Quit Valve"
+    NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"Quit Jumpgate"
                                                   action:@selector(quit:)
                                            keyEquivalent:@"q"];
     quit.target = tray;
@@ -207,10 +207,10 @@ void valveSetHealth(int kind) {
     NSColor *color;
     NSString *tip;
     switch (kind) {
-        case 1: color = NSColor.systemGreenColor;  tip = @"Valve — serving"; break;
-        case 2: color = NSColor.systemOrangeColor; tip = @"Valve — degraded"; break;
-        case 3: color = NSColor.systemRedColor;    tip = @"Valve — a gateway is unavailable"; break;
-        default: color = NSColor.tertiaryLabelColor; tip = @"Valve — idle"; break;
+        case 1: color = NSColor.systemGreenColor;  tip = @"Jumpgate — serving"; break;
+        case 2: color = NSColor.systemOrangeColor; tip = @"Jumpgate — degraded"; break;
+        case 3: color = NSColor.systemRedColor;    tip = @"Jumpgate — a gateway is unavailable"; break;
+        default: color = NSColor.tertiaryLabelColor; tip = @"Jumpgate — idle"; break;
     }
     NSDictionary *attrs = @{
         NSForegroundColorAttributeName: color,

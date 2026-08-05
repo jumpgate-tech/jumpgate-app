@@ -16,7 +16,7 @@
 // icon), a single click toggles the panel as a popover under the icon, clicking
 // away dismisses it, and a right-click menu quits. For a double-clickable app
 // run build-macos-app.sh, which
-// wraps this build in a Valve.app bundle; a bundled launch has no flags, so main
+// wraps this build in a Jumpgate.app bundle; a bundled launch has no flags, so main
 // enters tray mode via inAppBundle detection.
 package main
 
@@ -43,7 +43,7 @@ const trayBuilt = true
 func runWindow(ctx context.Context, url string) {
 	w := webview.New(false)
 	defer w.Destroy()
-	w.SetTitle("Valve")
+	w.SetTitle("Jumpgate") // product #3's name; the tray surface is Jumpgate
 	// Tell the SPA it's the tiny app so it drops the multi-screen topbar nav and
 	// lets the panel fill the window. Init runs before page scripts on every
 	// load, so it survives the token→cookie redirect the first navigation makes.

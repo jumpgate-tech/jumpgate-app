@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build Valve.app — a double-clickable macOS application bundle around the
+# Build Jumpgate.app — a double-clickable macOS application bundle around the
 # tray/tiny-app build of valve-node-app.
 #
 # Why a bundle (vs. just `go build -tags tray` and running the binary):
@@ -15,15 +15,15 @@
 # cannot cross-compile. Requires: go, rsvg-convert, iconutil, sips.
 #
 # Usage:  cmd/valve-node-app/build-macos-app.sh [output-dir]
-#   output-dir defaults to the repo root, producing <repo>/Valve.app
+#   output-dir defaults to the repo root, producing <repo>/Jumpgate.app
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OUT_DIR="${1:-$REPO_ROOT}"
 
-APP_NAME="Valve"
-BUNDLE_ID="city.valve.node-app"
+APP_NAME="Jumpgate"
+BUNDLE_ID="city.valve.jumpgate"
 EXE_NAME="valve-node-app"
 APP="$OUT_DIR/$APP_NAME.app"
 
