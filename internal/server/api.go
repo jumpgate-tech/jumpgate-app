@@ -1334,7 +1334,16 @@ func (s *Server) handleFirewall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := ops.FirewallChecklist(r.Context(), ex, *target.Wire)
+	// Grade binds to the operator's declared private overlays (WireGuard,
+	// Tailscale, etc.) as overlay rather than LAN. A config load error here is
+	// non-fatal: fall back to no declared overlays (still conservative).
+	var overlayCIDRs []string
+	if cfg, cerr := s.loadConfig(); cerr == nil {
+		overlayCIDRs = cfg.TrustedOverlays
+	}
+	overlays := ops.ParseOverlayCIDRs(overlayCIDRs)
+
+	items, err := ops.FirewallChecklist(r.Context(), ex, *target.Wire, overlays...)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

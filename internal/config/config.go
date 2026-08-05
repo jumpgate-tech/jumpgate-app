@@ -111,6 +111,14 @@ type Config struct {
 	AIKey      string `json:"aiKey"`
 	RefRPCBase string `json:"refRpcBase"` // default: defaultRefRPCBase
 
+	// TrustedOverlays are CIDR ranges of the operator's private overlay
+	// networks (WireGuard, Tailscale, Headscale, Netbird, ZeroTier, …). The
+	// security checklist grades a service bound to an address in one of these
+	// ranges as a private overlay (pass) — reachable only on that authenticated
+	// network — rather than warning as a LAN/public bind. Tailscale's
+	// 100.64.0.0/10 is always trusted and need not be listed here.
+	TrustedOverlays []string `json:"trustedOverlays,omitempty"`
+
 	// ValveKeys is the OLD per-chain valve API key store.
 	//
 	// Deprecated: migration input only. A provider key is an account, not a

@@ -3,6 +3,7 @@ package ops
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"testing"
 
@@ -767,6 +768,53 @@ func TestFirewall_RPCNotPublic_TailscalePassesWithNote(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(it.Detail), "tailscale") {
 		t.Errorf("Detail %q should note the Tailscale/overlay bind", it.Detail)
+	}
+}
+
+// TestFirewall_RPCNotPublic_BYOOverlay is the BYO-overlay slice: a service
+// bound to an operator's own overlay range (here a WireGuard 10.8.0.0/24, which
+// sits inside RFC1918) warns as a LAN bind when undeclared, but grades as a
+// trusted private overlay (pass) once that range is declared in TrustedOverlays.
+func TestFirewall_RPCNotPublic_BYOOverlay(t *testing.T) {
+	ss := sslHeader() + ssLine("10.8.0.1", 8545) + ssLine("127.0.0.1", 8551) + ssLine("127.0.0.1", 5052)
+	mk := func() executor.Executor {
+		return newFakeExecutor().
+			script("ss -ltn", executor.Result{Stdout: ss}).
+			script("ss -lun", executor.Result{Stdout: sslHeader()}).
+			script("ufw status", executor.Result{Stdout: "Status: active\n", ExitCode: 0})
+	}
+
+	// Undeclared: a 10.8.0.1 bind is just a private LAN address → warn.
+	items, err := FirewallChecklist(context.Background(), mk(), firewallWire())
+	if err != nil {
+		t.Fatalf("FirewallChecklist (undeclared): %v", err)
+	}
+	if it := findItem(t, items, "rpc-not-public"); it.Status != "warn" {
+		t.Errorf("undeclared overlay: status = %q, want warn (LAN); detail=%q", it.Status, it.Detail)
+	}
+
+	// Declared as a trusted overlay → pass, and the detail says overlay.
+	_, wg, err := net.ParseCIDR("10.8.0.0/24")
+	if err != nil {
+		t.Fatalf("ParseCIDR: %v", err)
+	}
+	items, err = FirewallChecklist(context.Background(), mk(), firewallWire(), wg)
+	if err != nil {
+		t.Fatalf("FirewallChecklist (declared): %v", err)
+	}
+	it := findItem(t, items, "rpc-not-public")
+	if it.Status != "pass" {
+		t.Errorf("declared overlay: status = %q, want pass; detail=%q", it.Status, it.Detail)
+	}
+	if !strings.Contains(strings.ToLower(it.Detail), "overlay") {
+		t.Errorf("declared overlay: Detail %q should note the overlay bind", it.Detail)
+	}
+}
+
+func TestParseOverlayCIDRs_DropsInvalid(t *testing.T) {
+	got := ParseOverlayCIDRs([]string{"10.8.0.0/24", "not-a-cidr", "  192.168.9.0/24 ", "10.8.0.0/33", ""})
+	if len(got) != 2 {
+		t.Fatalf("ParseOverlayCIDRs kept %d nets, want 2 (invalid/out-of-range/empty dropped): %v", len(got), got)
 	}
 }
 
