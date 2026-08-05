@@ -6,7 +6,7 @@
 // reset panel.ts did by hand on open-network.
 import { useState } from "react";
 import type * as api from "../../api";
-import { networkSlowRate, endpointSlowRate, capabilityCells, shortEndpoint } from "../../panelModel";
+import { networkSlowRate, endpointSlowRate, capabilityCells, shortEndpoint, healthWord } from "../../panelModel";
 import { copyToClipboard } from "../../ui";
 import { Icon } from "./icons";
 import { HealthDot } from "./HealthDot";
@@ -54,9 +54,9 @@ export function NetworkView({
     return (
       <>
         <div className="p-band p-dhead">
-          <span className="p-back" onClick={onBack}>
+          <button type="button" className="p-back" aria-label="Back" onClick={onBack}>
             <Icon name="chevL" />
-          </span>
+          </button>
           <span className="p-dtitle">
             <span className="p-nmtxt">Chain {chainId}</span>
           </span>
@@ -102,14 +102,14 @@ export function NetworkView({
   }
 
   const capStatuses = unionCapabilities(caps, chainId, ups.map((u) => u.id));
-  const healthWord = !running ? "Stopped" : nv.serviceable ? "Healthy" : "Unserviceable";
+  const healthLabel = healthWord({ running, serviceable: nv.serviceable, slowRate: networkRate });
 
   return (
     <>
       <div className="p-band p-dhead">
-        <span className="p-back" onClick={onBack}>
+        <button type="button" className="p-back" aria-label="Back" onClick={onBack}>
           <Icon name="chevL" />
-        </span>
+        </button>
         <span className="p-dtitle">
           <HealthDot running={running} serviceable={nv.serviceable} slowRate={networkRate} />{" "}
           <span className="p-nmtxt">{nv.name}</span>
@@ -122,21 +122,30 @@ export function NetworkView({
             Gateway <span style={{ color: "var(--dim3)", letterSpacing: 0 }}> · balanced across all</span>
           </span>
           <span className="p-acts">
-            <span className={`p-ic ${tlsOk ? "green" : "dim"}`} title={lockTitle} onClick={() => void verify()}>
+            <button
+              type="button"
+              className={`p-ic ${tlsOk ? "green" : "dim"}`}
+              title={lockTitle}
+              aria-label={lockTitle}
+              disabled={tlsBusy}
+              onClick={() => void verify()}
+            >
               <Icon name="lock" />
-            </span>
-            <span
+            </button>
+            <button
+              type="button"
               className={`p-ic ${copyFlash ? "green" : "accent"}`}
               title="Copy the gateway URL"
+              aria-label="Copy the gateway URL"
               onClick={() => void copy(nv.url ?? "")}
             >
               <Icon name="copy" />
-            </span>
+            </button>
           </span>
         </div>
         <div className="p-gwurl">{nv.url || "—"}</div>
         {tlsErr ? (
-          <div className="p-ps" style={{ color: "var(--red)", padding: "0 var(--gut) 10px" }}>
+          <div className="p-ps" role="alert" style={{ color: "var(--red)", padding: "0 var(--gut) 10px" }}>
             {tlsErr}
           </div>
         ) : null}
@@ -150,7 +159,8 @@ export function NetworkView({
           const upRate = na ? endpointSlowRate(na, u.id) : undefined;
           const yours = u.local;
           return (
-            <div
+            <button
+              type="button"
               key={u.id}
               className={`p-row p-eprow${i > 0 ? " p-rowdiv" : ""}`}
               onClick={() => onOpenEndpoint(chainId, u.id)}
@@ -171,19 +181,20 @@ export function NetworkView({
               <span className="p-chev">
                 <Icon name="chevR" />
               </span>
-            </div>
+            </button>
           );
         })}
-        <div
+        <button
+          type="button"
           className={`p-row${ups.length > 0 ? " p-rowdiv" : ""} addr${busy ? " p-disabled" : ""}`}
-          aria-disabled={busy ? true : undefined}
-          onClick={busy ? undefined : onAddEndpoint}
+          disabled={!!busy}
+          onClick={onAddEndpoint}
         >
           <span className="p-lead">
             <Icon name="plus" />
           </span>
           <span className="p-nm">Add endpoint</span>
-        </div>
+        </button>
       </div>
 
       <div className="p-band">
@@ -200,32 +211,39 @@ export function NetworkView({
         <div className="p-lblrow">
           <span className="p-seclbl">Status</span>
           <span className="p-acts">
-            <span className="p-ic dim" title="Re-check capabilities and reload" onClick={onRecheck}>
+            <button
+              type="button"
+              className="p-ic dim"
+              title="Re-check capabilities and reload"
+              aria-label="Re-check capabilities and reload"
+              onClick={onRecheck}
+            >
               <Icon name="refresh" />
-            </span>
+            </button>
           </span>
         </div>
         <div className="p-srow">
           <span className="p-k">Health</span>
           <span className="p-v">
-            <HealthDot running={running} serviceable={nv.serviceable} slowRate={networkRate} /> {healthWord}
+            <HealthDot running={running} serviceable={nv.serviceable} slowRate={networkRate} /> {healthLabel}
           </span>
         </div>
       </div>
 
       {error ? (
-        <div className="p-band" style={{ padding: "10px 16px", color: "var(--red)" }}>
+        <div className="p-band" role="alert" style={{ padding: "10px 16px", color: "var(--red)" }}>
           {error}
         </div>
       ) : null}
 
-      <div
+      <button
+        type="button"
         className={`p-band p-remove${busy ? " p-disabled" : ""}`}
-        aria-disabled={busy ? true : undefined}
-        onClick={busy ? undefined : onRemoveNetwork}
+        disabled={!!busy}
+        onClick={onRemoveNetwork}
       >
         <Icon name="trash" /> Remove network
-      </div>
+      </button>
     </>
   );
 }

@@ -58,9 +58,9 @@ export function EndpointView({
     return (
       <>
         <div className="p-band p-dhead">
-          <span className="p-back" onClick={onBack}>
+          <button type="button" className="p-back" aria-label="Back" onClick={onBack}>
             <Icon name="chevL" />
-          </span>
+          </button>
           <span className="p-dtitle">
             <span className="p-nmtxt">Endpoint</span>
           </span>
@@ -93,19 +93,21 @@ export function EndpointView({
   return (
     <>
       <div className="p-band p-dhead">
-        <span className="p-back" onClick={onBack}>
+        <button type="button" className="p-back" aria-label="Back" onClick={onBack}>
           <Icon name="chevL" />
-        </span>
+        </button>
         <span className="p-dtitle">
           <HealthDot running={running} serviceable={!up.problem} slowRate={upRate} />{" "}
           <span className="p-nmtxt">{up.label}</span>{" "}
-          <span
+          <button
+            type="button"
             className={`p-pen${busy ? " p-disabled" : ""}`}
-            aria-disabled={busy ? true : undefined}
-            onClick={busy ? undefined : onRename}
+            aria-label="Rename endpoint"
+            disabled={!!busy}
+            onClick={onRename}
           >
             <Icon name="pencil" />
-          </span>
+          </button>
         </span>
       </div>
 
@@ -113,22 +115,31 @@ export function EndpointView({
         <div className="p-lblrow">
           <span className="p-seclbl">Address</span>
           <span className="p-acts">
-            <span
+            <button
+              type="button"
               className={`p-ic ${copyFlash ? "green" : "accent"}`}
               title="Copy the endpoint URL"
+              aria-label="Copy the endpoint URL"
               onClick={() => void copy(up.endpoint)}
             >
               <Icon name="copy" />
-            </span>
+            </button>
           </span>
         </div>
-        <div
-          className={`p-gwurl${editable && !busy ? " p-gwurl-edit" : ""}`}
-          title={editable && !busy ? "Click to edit the address" : undefined}
-          onClick={editable && !busy ? onEditAddress : undefined}
-        >
-          {up.endpoint || "—"}
-        </div>
+        {editable ? (
+          <button
+            type="button"
+            className={`p-gwurl${!busy ? " p-gwurl-edit" : ""}`}
+            title={!busy ? "Click to edit the address" : undefined}
+            aria-label={`Edit address: ${up.endpoint || "—"}`}
+            disabled={!!busy}
+            onClick={onEditAddress}
+          >
+            {up.endpoint || "—"}
+          </button>
+        ) : (
+          <div className="p-gwurl">{up.endpoint || "—"}</div>
+        )}
       </div>
 
       <div className="p-band">
@@ -142,9 +153,15 @@ export function EndpointView({
         <div className="p-lblrow">
           <span className="p-seclbl">Status</span>
           <span className="p-acts">
-            <span className="p-ic dim" title="Re-check capabilities and reload" onClick={onRecheck}>
+            <button
+              type="button"
+              className="p-ic dim"
+              title="Re-check capabilities and reload"
+              aria-label="Re-check capabilities and reload"
+              onClick={onRecheck}
+            >
               <Icon name="refresh" />
-            </span>
+            </button>
           </span>
         </div>
         <div className="p-srow">
@@ -164,18 +181,19 @@ export function EndpointView({
       </div>
 
       {error ? (
-        <div className="p-band" style={{ padding: "10px 16px", color: "var(--red)" }}>
+        <div className="p-band" role="alert" style={{ padding: "10px 16px", color: "var(--red)" }}>
           {error}
         </div>
       ) : null}
 
-      <div
+      <button
+        type="button"
         className={`p-band p-remove${busy ? " p-disabled" : ""}`}
-        aria-disabled={busy ? true : undefined}
-        onClick={busy ? undefined : onRemove}
+        disabled={!!busy}
+        onClick={onRemove}
       >
         <Icon name="trash" /> Remove endpoint
-      </div>
+      </button>
     </>
   );
 }

@@ -63,6 +63,18 @@ export function masterState(gw: GatewayView | null): MasterState {
   return { tone: "off", label: "Stopped", sub: count ? `${count} network${count === 1 ? "" : "s"} configured` : "Press to start", actions };
 }
 
+// healthWord turns the same coarse signals healthClass reads into a plain-text
+// state word — the accessible name for a health dot (whose colour + motion are
+// otherwise the only cue) and the visible verdict on a status row. Kept beside
+// healthClass so the word and the animation can never disagree: "off" →
+// Stopped, a slow/unhealthy running endpoint → Degraded, not-serviceable while
+// running → Unserviceable, and a still (stable) dot → Healthy.
+export function healthWord(input: { running: boolean; serviceable: boolean; slowRate?: number }): string {
+  if (!input.running) return "Stopped";
+  if (!input.serviceable) return "Unserviceable";
+  return healthClass(input) === "stable" ? "Healthy" : "Degraded";
+}
+
 export type HealthClass = "stable" | "occasional" | "frequent" | "off";
 
 // healthClass turns coarse signals into the dot's motion. Stillness = health, so

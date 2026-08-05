@@ -1,4 +1,4 @@
-import { render, cleanup } from "@testing-library/react";
+import { render, screen, cleanup } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
 import { HealthDot } from "./HealthDot";
 
@@ -27,5 +27,21 @@ describe("HealthDot", () => {
     expect(a.querySelector(".p-dot")).toHaveClass("frequent");
     const { container: b } = render(<HealthDot running={true} serviceable={false} />);
     expect(b.querySelector(".p-dot")).toHaveClass("frequent");
+  });
+
+  // a11y: the dot is colour + motion only, so it must carry a text state word
+  // (role="img" + aria-label) that a screen reader can announce.
+  it("exposes its state as an accessible name, not colour/motion alone", () => {
+    render(<HealthDot running={true} serviceable={true} slowRate={0.05} />);
+    expect(screen.getByRole("img", { name: "Healthy" })).toBeInTheDocument();
+    cleanup();
+    render(<HealthDot running={true} serviceable={true} slowRate={0.6} />);
+    expect(screen.getByRole("img", { name: "Degraded" })).toBeInTheDocument();
+    cleanup();
+    render(<HealthDot running={false} serviceable={true} />);
+    expect(screen.getByRole("img", { name: "Stopped" })).toBeInTheDocument();
+    cleanup();
+    render(<HealthDot running={true} serviceable={false} />);
+    expect(screen.getByRole("img", { name: "Unserviceable" })).toBeInTheDocument();
   });
 });

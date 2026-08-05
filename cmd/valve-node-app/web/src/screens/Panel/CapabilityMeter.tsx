@@ -18,11 +18,19 @@ const CAP_ICON: Record<string, IconName> = {
 };
 
 // CapabilityDots is the small unlabelled meter used on list rows (capsHtml).
+// Each glyph is icon + colour only, so it carries its meaning as an accessible
+// name — role="img" + aria-label "HTTP: supported" / "Trace: unavailable".
 export function CapabilityDots({ cells }: { cells: CapCell[] }) {
   return (
     <span className="p-caps">
       {cells.map((c) => (
-        <Icon key={c.key} name={CAP_ICON[c.key]} className={`p-i${c.hot ? " hot" : c.lit ? " on" : ""}`} />
+        <Icon
+          key={c.key}
+          name={CAP_ICON[c.key]}
+          className={`p-i${c.hot ? " hot" : c.lit ? " on" : ""}`}
+          role="img"
+          aria-label={`${c.label}: ${c.lit ? "supported" : "unavailable"}`}
+        />
       ))}
     </span>
   );
@@ -38,6 +46,9 @@ export function CapabilityMeter({ statuses }: { statuses: Record<string, string>
         <span key={c.key} className={`p-capitem${c.lit ? " lit" : ""}`}>
           <Icon name={CAP_ICON[c.key]} />
           {c.label}
+          {/* lit/unlit is otherwise colour-only; a visually-hidden word makes
+              the state audible without changing the meter's look. */}
+          <span className="p-vh">: {c.lit ? "supported" : "unavailable"}</span>
         </span>
       ))}
     </div>

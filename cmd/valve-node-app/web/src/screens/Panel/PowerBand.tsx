@@ -53,7 +53,7 @@ export function PowerBand({
 
   return (
     <>
-      <div className={`p-power${busy ? " busy" : ""}`} onClick={onPower}>
+      <button type="button" className={`p-power${busy ? " busy" : ""}`} disabled={!!busy} onClick={onPower}>
         <div className={`p-pbtn ${master.tone}`}>
           <Icon name="power" />
         </div>
@@ -64,12 +64,12 @@ export function PowerBand({
           </div>
           {master.tone === "blocked" && gw.hint ? <div className="p-ps">{gw.hint}</div> : null}
           {actionErr ? (
-            <div className="p-ps" style={{ color: "var(--red)" }}>
+            <div className="p-ps" role="alert" style={{ color: "var(--red)" }}>
               {actionErr}
             </div>
           ) : null}
         </div>
-      </div>
+      </button>
       {chips.length > 0 ? (
         <div className="p-chips">
           {chips.map((a) => (

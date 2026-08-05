@@ -50,6 +50,13 @@ describe("ListView", () => {
     expect(onOpenNetwork).toHaveBeenCalledWith(1);
   });
 
+  // a11y: rows are real, keyboard-focusable <button>s now, not <div onClick>.
+  it("renders each network row and the add-a-network row as buttons", () => {
+    render(<ListView gw={makeGateway()} health={undefined} busy={null} actionErr={null} setupLog={[]} {...handlers} />);
+    expect(screen.getByRole("button", { name: /Ethereum/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Add a network/ })).toBeInTheDocument();
+  });
+
   it("shows the one-click 'Set up my endpoint' hero when there is no gateway", () => {
     render(<ListView gw={null} health={undefined} busy={null} actionErr={null} setupLog={[]} {...handlers} />);
     expect(screen.getByText("Set up my endpoint")).toBeInTheDocument();

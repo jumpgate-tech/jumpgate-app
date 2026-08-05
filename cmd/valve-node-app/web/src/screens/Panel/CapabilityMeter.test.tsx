@@ -18,8 +18,20 @@ describe("CapabilityMeter", () => {
 
   it("renders all four cells in fixed order", () => {
     render(<CapabilityMeter statuses={{}} />);
-    const labels = screen.getAllByText(/HTTP|WS|Archive|Trace/).map((n) => n.textContent);
+    // The cell's visible label is its direct text node; the state word lives in
+    // a separate visually-hidden <span>, so read the label node specifically.
+    const labels = screen
+      .getAllByText(/^(HTTP|WS|Archive|Trace)$/)
+      .map((n) => Array.from(n.childNodes).find((c) => c.nodeType === Node.TEXT_NODE)?.textContent);
     expect(labels).toEqual(["HTTP", "WS", "Archive", "Trace"]);
+  });
+
+  // a11y: lit/unlit is otherwise colour-only, so a visually-hidden state word
+  // carries it to a screen reader.
+  it("adds a visually-hidden state word to each cell", () => {
+    render(<CapabilityMeter statuses={{ http: "supported" }} />);
+    expect(screen.getByText(": supported")).toBeInTheDocument();
+    expect(screen.getAllByText(": unavailable")).toHaveLength(3);
   });
 });
 
@@ -27,6 +39,14 @@ describe("CapabilityDots", () => {
   it("renders one icon per cell (the dim list-row meter)", () => {
     const { container } = render(<CapabilityDots cells={capabilityCells({})} />);
     expect(container.querySelectorAll(".p-caps .p-i")).toHaveLength(4);
+  });
+
+  // a11y: the glyphs are icon + colour only, so each carries a name + state
+  // accessible name a screen reader can read.
+  it("labels each cell with its name and state", () => {
+    render(<CapabilityDots cells={capabilityCells({ http: "supported" })} />);
+    expect(screen.getByRole("img", { name: "HTTP: supported" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Trace: unavailable" })).toBeInTheDocument();
   });
 });
 
