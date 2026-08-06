@@ -462,6 +462,11 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// over the whole fleet and are addressed top-level — see gateways.go.
 	s.registerGatewayRoutes(mux)
 
+	// The WireGuard overlays (bring-your-own VPN), addressed top-level like
+	// gateways: an overlay names the host it runs ON, rather than belonging to
+	// one — see vpn.go.
+	s.registerVPNRoutes(mux)
+
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 }

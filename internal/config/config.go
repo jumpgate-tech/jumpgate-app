@@ -128,6 +128,15 @@ type VPN struct {
 	// name it made up would then be the name teardown has to guess.
 	Interface string `json:"interface,omitempty"`
 
+	// TargetID is the machine the overlay is brought up ON. Empty means the
+	// host running this app itself — the desktop case, where Jumpgate routes a
+	// user's own computer through the tunnel. A named target (one of
+	// Config.Targets) is the fleet case: the overlay comes up on a gateway box
+	// so its address feeds the same overlay grading a self-hosted node does.
+	// It is WHERE the tunnel runs, not what it is, so it lives here as one
+	// field rather than splitting VPN into local and remote kinds.
+	TargetID string `json:"targetId,omitempty"`
+
 	// Config is the raw WireGuard `.conf` text, INCLUDING the interface private
 	// key. It is a secret and lives here for the same reason AIKey and
 	// ProviderKeys do: config.json is written mode 0600, and — like those — the
