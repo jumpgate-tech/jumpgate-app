@@ -94,12 +94,66 @@ type Gateway struct {
 	Config catalog.GatewayConfig `json:"config"`
 }
 
+// VPN is one WireGuard overlay the operator has configured — a bring-your-own
+// provider config plus the local knobs for how it is applied.
+//
+// Config is the raw provider-neutral `.conf` text (Proton, Mullvad, a
+// self-hosted mesh, …) stored VERBATIM. config does not parse, validate, or
+// render it — that is internal/vpn's job (ParseConfig/Validate/Render), the same
+// division of labour every other field here follows: config knows how to read
+// and write the file safely and nothing about what the bytes mean. Storing the
+// text rather than a parsed struct also keeps the exact `.conf` an operator
+// pasted, comments and ordering included, so a round-trip never quietly rewrites
+// their config.
+//
+// WHY a list (VPNs) and not one field: the product is provider-neutral by
+// design (see internal/vpn's Provider seam), and an operator may hold several
+// overlays at once — a Proton exit for one route, a self-hosted mesh for
+// another — so each is its own entry keyed by a stable ID, exactly as Gateways
+// are.
+type VPN struct {
+	// ID is stable and names the overlay wherever it is selected — the API,
+	// the panel, the interface state. Chosen once at creation, never derived
+	// from anything mutable (an endpoint or a key can change; the ID must not).
+	ID string `json:"id"`
+
+	// Provider is a display/telemetry label only ("proton", "mullvad",
+	// "bring-your-own", …). It selects no behaviour by itself — the Config text
+	// is what actually brings the tunnel up — so an unknown label is not an
+	// error here, it is just what gets shown.
+	Provider string `json:"provider,omitempty"`
+
+	// Interface is the OS interface name to bring up, e.g. "jumpgate0". Empty
+	// means the caller chooses a default; config does not invent one, because a
+	// name it made up would then be the name teardown has to guess.
+	Interface string `json:"interface,omitempty"`
+
+	// Config is the raw WireGuard `.conf` text, INCLUDING the interface private
+	// key. It is a secret and lives here for the same reason AIKey and
+	// ProviderKeys do: config.json is written mode 0600, and — like those — the
+	// API never returns it (a settings response reports that an overlay is
+	// configured, never its bytes).
+	Config string `json:"config"`
+
+	// Autostart brings this overlay up when the app starts, rather than waiting
+	// for an operator to switch it on. Off by default: a tunnel that comes up on
+	// its own can silently reroute every upstream, so opting in is deliberate.
+	Autostart bool `json:"autostart,omitempty"`
+}
+
 // Config is valve-node-app's persisted local state.
 type Config struct {
 	Targets []Target `json:"targets"`
 
 	// Gateways are the eRPC instances, each naming the target it runs on.
 	Gateways []Gateway `json:"gateways,omitempty"`
+
+	// VPNs are the WireGuard overlays the operator has configured. Each carries
+	// a bring-your-own `.conf`; internal/vpn parses and applies them. When one
+	// is up, its interface addresses are the kind of private overlay the
+	// security checklist grades as a pass — see TrustedOverlays, which is where
+	// those CIDRs are declared for grading.
+	VPNs []VPN `json:"vpns,omitempty"`
 
 	// Orphans are containers a merge stopped managing but did NOT stop. They
 	// are stored rather than recomputed: migrate() runs in memory and is only
@@ -177,6 +231,16 @@ func (c Config) FindGateway(id string) (Gateway, bool) {
 		}
 	}
 	return Gateway{}, false
+}
+
+// FindVPN returns the VPN overlay with this id.
+func (c Config) FindVPN(id string) (VPN, bool) {
+	for _, v := range c.VPNs {
+		if v.ID == id {
+			return v, true
+		}
+	}
+	return VPN{}, false
 }
 
 // GatewaysOn returns the gateways placed on a target, in config order.
