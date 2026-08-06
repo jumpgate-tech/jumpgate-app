@@ -99,6 +99,111 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 	}
 }
 
+// A pasted WireGuard `.conf` — comments, blank lines and a private key. The
+// point of the test is that config gives it back byte-for-byte.
+const sampleWGConf = `[Interface]
+# Bouncing = 3
+PrivateKey = QFhTdU5rZXlQcml2YXRlS2V5UHJpdmF0ZUtleVByaXY=
+Address = 10.2.0.2/32
+DNS = 10.2.0.1
+
+[Peer]
+PublicKey = eFRJQkE1cHVibGljS2V5cHVibGljS2V5cHVibGljS2U=
+AllowedIPs = 0.0.0.0/0
+Endpoint = 203.0.113.7:51820
+`
+
+func TestVPNRoundTripsVerbatim(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	want := Config{
+		VPNs: []VPN{
+			{ID: "proton-us", Provider: "proton", Interface: "jumpgate0", Config: sampleWGConf, Autostart: true},
+			{ID: "mesh", Config: "[Interface]\nPrivateKey = k\nAddress = 10.9.0.5\n[Peer]\nPublicKey = p\nEndpoint = h:1\n"},
+		},
+	}
+	if err := want.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got.VPNs) != 2 {
+		t.Fatalf("VPNs = %+v, want 2 entries", got.VPNs)
+	}
+	v := got.VPNs[0]
+	if v.ID != "proton-us" || v.Provider != "proton" || v.Interface != "jumpgate0" || !v.Autostart {
+		t.Errorf("VPNs[0] metadata = %+v, want proton-us/proton/jumpgate0/autostart", v)
+	}
+	// The whole point: the `.conf` — private key, comment, blank line and all —
+	// survives a save/load unchanged. internal/vpn owns parsing; config only
+	// has to not corrupt the bytes.
+	if v.Config != sampleWGConf {
+		t.Errorf("stored config was rewritten:\n got: %q\nwant: %q", v.Config, sampleWGConf)
+	}
+}
+
+// An overlay's `.conf` holds a private key, so it must land in a 0600 file for
+// the same reason AIKey does. TestSaveWritesMode0600 covers the file mode; this
+// pins that a VPN config is a thing that actually goes into it.
+func TestVPNSecretStoredInPrivateFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	c := Config{VPNs: []VPN{{ID: "proton-us", Config: sampleWGConf}}}
+	if err := c.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	path := filepath.Join(home, ".valve-node-app", "config.json")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("config.json holding a VPN key has mode %o, want 0600", perm)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(data), "PrivateKey") {
+		t.Errorf("expected the WireGuard config (with its key) to be persisted")
+	}
+}
+
+func TestFindVPN(t *testing.T) {
+	c := Config{VPNs: []VPN{{ID: "proton-us"}, {ID: "mesh"}}}
+
+	if v, ok := c.FindVPN("mesh"); !ok || v.ID != "mesh" {
+		t.Errorf("FindVPN(mesh) = %+v, %v; want the mesh overlay", v, ok)
+	}
+	if _, ok := c.FindVPN("nope"); ok {
+		t.Errorf("FindVPN(nope) reported found for an id that isn't configured")
+	}
+}
+
+// A file with no vpns field loads as no overlays and, once re-saved, does not
+// grow an empty "vpns" key — VPNs is omitempty precisely so an operator who
+// never touched a VPN never sees the field appear.
+func TestVPNsOmittedWhenEmpty(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := (Config{AIProvider: "groq"}).Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".valve-node-app", "config.json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(data), "vpns") {
+		t.Errorf("config.json wrote a vpns key for a config with no overlays:\n%s", data)
+	}
+}
+
 func TestSaveWritesMode0600(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
