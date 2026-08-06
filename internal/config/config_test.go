@@ -118,7 +118,7 @@ func TestVPNRoundTripsVerbatim(t *testing.T) {
 
 	want := Config{
 		VPNs: []VPN{
-			{ID: "proton-us", Provider: "proton", Interface: "jumpgate0", Config: sampleWGConf, Autostart: true},
+			{ID: "proton-us", Provider: "proton", Interface: "jumpgate0", TargetID: "box1", Config: sampleWGConf, Autostart: true},
 			{ID: "mesh", Config: "[Interface]\nPrivateKey = k\nAddress = 10.9.0.5\n[Peer]\nPublicKey = p\nEndpoint = h:1\n"},
 		},
 	}
@@ -134,8 +134,8 @@ func TestVPNRoundTripsVerbatim(t *testing.T) {
 		t.Fatalf("VPNs = %+v, want 2 entries", got.VPNs)
 	}
 	v := got.VPNs[0]
-	if v.ID != "proton-us" || v.Provider != "proton" || v.Interface != "jumpgate0" || !v.Autostart {
-		t.Errorf("VPNs[0] metadata = %+v, want proton-us/proton/jumpgate0/autostart", v)
+	if v.ID != "proton-us" || v.Provider != "proton" || v.Interface != "jumpgate0" || v.TargetID != "box1" || !v.Autostart {
+		t.Errorf("VPNs[0] metadata = %+v, want proton-us/proton/jumpgate0/box1/autostart", v)
 	}
 	// The whole point: the `.conf` — private key, comment, blank line and all —
 	// survives a save/load unchanged. internal/vpn owns parsing; config only
