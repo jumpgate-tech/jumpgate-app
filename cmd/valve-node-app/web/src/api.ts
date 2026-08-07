@@ -1317,6 +1317,193 @@ export function putSettings(body: PutSettingsRequest): Promise<Settings> {
 }
 
 // ---------------------------------------------------------------------
+// VPN: BYO overlays + provisioned WireGuard servers
+// (internal/server VPN routes)
+//
+// These response structs carry explicit json tags, so the field names below
+// are the tagged lowerCamelCase names — matching the shipped wire contract.
+// The 204-returning routes (delete/down/revoke) use raw fetch with an res.ok
+// check rather than request<T>, the same split wipeContainer/deleteTarget draw.
+// ---------------------------------------------------------------------
+
+export interface VpnView {
+  id: string;
+  provider: string;
+  interface: string;
+  targetId: string;
+  autostart: boolean;
+  configured: boolean;
+  valid: boolean;
+  error?: string;
+  endpoints: string[];
+  overlay: string[];
+  peers: number;
+}
+
+export interface VpnStatus {
+  id: string;
+  up: boolean;
+  interface: string;
+  provider: string;
+  addresses: string[];
+  peers: number;
+  handshaked: boolean;
+  lastHandshake: number;
+}
+
+export interface VpnPeerView {
+  name: string;
+  publicKey: string;
+  allowedIp: string;
+}
+
+export interface VpnServerView {
+  id: string;
+  targetId: string;
+  interface: string;
+  address: string;
+  listenPort: number;
+  publicKey: string;
+  endpoint: string;
+  peers: VpnPeerView[];
+}
+
+export interface VpnServerProvisionResult {
+  server: VpnServerView;
+  firewallHint: string;
+  endpointConfigured: boolean;
+}
+
+export interface VpnEnrollResult {
+  name: string;
+  publicKey: string;
+  allowedIp: string;
+  config: string;
+}
+
+// ---- BYO overlays -------------------------------------------------------
+
+export function getVpns(): Promise<VpnView[]> {
+  return request<VpnView[]>("/api/vpns");
+}
+
+// SaveVpnRequest is the upsert body. Only id is required; the rest describe
+// or update an overlay's binding, config, and autostart.
+export interface SaveVpnRequest {
+  id: string;
+  provider?: string;
+  interface?: string;
+  targetId?: string;
+  config?: string;
+  autostart?: boolean;
+}
+
+export function saveVpn(body: SaveVpnRequest): Promise<VpnView> {
+  return request<VpnView>("/api/vpns", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteVpn(id: string): Promise<void> {
+  const res = await fetch(`/api/vpns/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new ApiError(res.status, res.statusText || `HTTP ${res.status}`);
+  }
+}
+
+export function getVpnStatus(id: string): Promise<VpnStatus> {
+  return request<VpnStatus>(`/api/vpns/${encodeURIComponent(id)}/status`);
+}
+
+export function vpnUp(id: string): Promise<VpnStatus> {
+  return request<VpnStatus>(`/api/vpns/${encodeURIComponent(id)}/up`, { method: "POST" });
+}
+
+export async function vpnDown(id: string): Promise<void> {
+  const res = await fetch(`/api/vpns/${encodeURIComponent(id)}/down`, { method: "POST" });
+  if (!res.ok) {
+    throw new ApiError(res.status, res.statusText || `HTTP ${res.status}`);
+  }
+}
+
+// ---- provisioned servers ------------------------------------------------
+
+export function getVpnServers(): Promise<VpnServerView[]> {
+  return request<VpnServerView[]>("/api/vpn-servers");
+}
+
+// ProvisionVpnServerRequest describes a WireGuard server to stand up. Only id
+// is required; the rest override the interface, address, port, and endpoint.
+export interface ProvisionVpnServerRequest {
+  id: string;
+  targetId?: string;
+  interface?: string;
+  address?: string;
+  listenPort?: number;
+  endpointHost?: string;
+}
+
+export function provisionVpnServer(
+  body: ProvisionVpnServerRequest,
+): Promise<VpnServerProvisionResult> {
+  return request<VpnServerProvisionResult>("/api/vpn-servers", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+}
+
+export function getVpnServer(id: string): Promise<VpnServerView> {
+  return request<VpnServerView>(`/api/vpn-servers/${encodeURIComponent(id)}`);
+}
+
+export async function deleteVpnServer(id: string): Promise<void> {
+  const res = await fetch(`/api/vpn-servers/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new ApiError(res.status, res.statusText || `HTTP ${res.status}`);
+  }
+}
+
+export function getVpnServerStatus(id: string): Promise<VpnStatus> {
+  return request<VpnStatus>(`/api/vpn-servers/${encodeURIComponent(id)}/status`);
+}
+
+// EnrollVpnDeviceRequest adds one peer (device) to a server. The returned
+// VpnEnrollResult carries the peer's full client config — the one time it is
+// ever emitted — so callers must surface it, not discard it.
+export interface EnrollVpnDeviceRequest {
+  name: string;
+  dns?: string;
+  fullTunnel?: boolean;
+  allowedIps?: string;
+  endpointHost?: string;
+}
+
+export function enrollVpnDevice(
+  id: string,
+  body: EnrollVpnDeviceRequest,
+): Promise<VpnEnrollResult> {
+  return request<VpnEnrollResult>(`/api/vpn-servers/${encodeURIComponent(id)}/peers`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+}
+
+export async function revokeVpnDevice(id: string, publicKey: string): Promise<void> {
+  const res = await fetch(`/api/vpn-servers/${encodeURIComponent(id)}/peers/remove`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ publicKey }),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, res.statusText || `HTTP ${res.status}`);
+  }
+}
+
+// ---------------------------------------------------------------------
 // fetch plumbing
 // ---------------------------------------------------------------------
 
