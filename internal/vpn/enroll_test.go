@@ -78,27 +78,27 @@ func TestGenerateKey_RealRandDiffers(t *testing.T) {
 func TestNextPeerIP(t *testing.T) {
 	// .1 is the server, .2 and .3 are taken (one with a mask, one without) —
 	// the next free host is .4.
-	got, err := nextPeerIP("10.9.0.1/24", []string{"10.9.0.2/32", "10.9.0.3"})
+	got, err := NextPeerIP("10.9.0.1/24", []string{"10.9.0.2/32", "10.9.0.3"})
 	if err != nil {
-		t.Fatalf("nextPeerIP: %v", err)
+		t.Fatalf("NextPeerIP: %v", err)
 	}
 	if got != "10.9.0.4/32" {
-		t.Errorf("nextPeerIP = %q, want 10.9.0.4/32", got)
+		t.Errorf("NextPeerIP = %q, want 10.9.0.4/32", got)
 	}
 
 	// The server's own address is skipped even when nothing else is taken:
 	// first free is .2, not .1.
-	got, err = nextPeerIP("10.9.0.1/24", nil)
+	got, err = NextPeerIP("10.9.0.1/24", nil)
 	if err != nil {
-		t.Fatalf("nextPeerIP (empty taken): %v", err)
+		t.Fatalf("NextPeerIP (empty taken): %v", err)
 	}
 	if got != "10.9.0.2/32" {
-		t.Errorf("nextPeerIP with no taken = %q, want 10.9.0.2/32 (server .1 skipped)", got)
+		t.Errorf("NextPeerIP with no taken = %q, want 10.9.0.2/32 (server .1 skipped)", got)
 	}
 
 	// A /30 has host addresses .1 and .2 (.0 network, .3 broadcast). Server is
 	// .1, .2 is taken => exhausted.
-	if _, err := nextPeerIP("10.0.0.1/30", []string{"10.0.0.2"}); err == nil {
+	if _, err := NextPeerIP("10.0.0.1/30", []string{"10.0.0.2"}); err == nil {
 		t.Errorf("expected exhaustion error for a fully-taken /30")
 	}
 }
@@ -135,6 +135,46 @@ func TestAddPeer_FailsWhenPeerAbsentDespiteExit0(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("AddPeer reported success even though the dump does not list the peer")
+	}
+}
+
+func TestRemovePeer_HappyPath(t *testing.T) {
+	pub := testKey(0x44)
+	// After removal, the dump lists only the interface line — the peer is gone.
+	f := newFake().script("wg show", executor.Result{ExitCode: 0, Stdout: "PRIVKEY\tSRVPUB\t51820\toff\n"})
+
+	if err := RemovePeer(context.Background(), f, "jumpgate0", pub); err != nil {
+		t.Fatalf("RemovePeer: %v", err)
+	}
+	if !f.called("wg set 'jumpgate0' peer '" + pub + "' remove") {
+		t.Errorf("wg set ... remove was not invoked; calls=%v", f.calls)
+	}
+	if !f.called("wg-quick save 'jumpgate0'") {
+		t.Errorf("wg-quick save was not invoked to persist the removal; calls=%v", f.calls)
+	}
+}
+
+// Verify-by-running: `wg set ... remove` exits 0 but the peer is STILL in the
+// dump. RemovePeer must fail — a revoke that left the device authorized is the
+// worst outcome.
+func TestRemovePeer_FailsWhenStillPresentDespiteExit0(t *testing.T) {
+	pub := testKey(0x55)
+	dump := "PRIVKEY\tSRVPUB\t51820\toff\n" +
+		pub + "\t(none)\t203.0.113.7:51820\t10.9.0.2/32\t0\t0\t0\t0\n"
+	f := newFake().script("wg show", executor.Result{ExitCode: 0, Stdout: dump})
+
+	if err := RemovePeer(context.Background(), f, "jumpgate0", pub); err == nil {
+		t.Fatalf("RemovePeer reported success even though the peer is still present")
+	}
+}
+
+func TestRemovePeer_RejectsBadKeyWithoutRunning(t *testing.T) {
+	f := newFake()
+	if err := RemovePeer(context.Background(), f, "jumpgate0", "not-a-key"); err == nil {
+		t.Errorf("expected RemovePeer to reject a malformed public key")
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("RemovePeer ran %d command(s) before rejecting a bad key; want 0: %v", len(f.calls), f.calls)
 	}
 }
 

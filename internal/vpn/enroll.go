@@ -51,14 +51,14 @@ func generateKeyFrom(rand io.Reader) (PeerKey, error) {
 	}, nil
 }
 
-// nextPeerIP returns the next free host address, as "x.x.x.x/32", within the
+// NextPeerIP returns the next free host address, as "x.x.x.x/32", within the
 // server's subnet — skipping the network address, the broadcast address, the
 // server's own address, and anything in `taken`. serverCIDR looks like
 // "10.9.0.1/24". Entries in `taken` are accepted with OR without a /mask, since
 // callers assemble that list from wherever addresses were recorded (a bare IP,
 // a /32 from an AllowedIPs line). Errors if the subnet is exhausted — better a
 // loud failure than silently reusing an address and blackholing a device.
-func nextPeerIP(serverCIDR string, taken []string) (string, error) {
+func NextPeerIP(serverCIDR string, taken []string) (string, error) {
 	serverIP, ipnet, err := net.ParseCIDR(strings.TrimSpace(serverCIDR))
 	if err != nil {
 		return "", fmt.Errorf("vpn: server address %q must be a CIDR like 10.9.0.1/24: %w", serverCIDR, err)
@@ -205,6 +205,47 @@ func AddPeer(ctx context.Context, exec executor.Executor, p AddPeerParams) error
 	}
 	if !dumpHasPeer(res.Stdout, p.PeerPublicKey) {
 		return fmt.Errorf("vpn: wg set reported success but peer %q is not present on %q", p.PeerPublicKey, p.Iface)
+	}
+	return nil
+}
+
+// RemovePeer revokes a device: removes it from the running server, persists the
+// removal so it does not come back on a restart, and VERIFIES it is gone. It is
+// idempotent — revoking a peer that is not there is not an error, because the
+// end state (that device cannot connect) is exactly what was asked for. The one
+// shell-bound value, the public key, is validated first for the same reason
+// AddPeer validates it.
+func RemovePeer(ctx context.Context, exec executor.Executor, iface, peerPublicKey string) error {
+	if !validIfaceName(iface) {
+		return fmt.Errorf("vpn: interface name %q is invalid — up to 15 of letters, digits, dot, dash or underscore", iface)
+	}
+	if err := validateWGKey(peerPublicKey); err != nil {
+		return fmt.Errorf("vpn: peer public key: %w", err)
+	}
+
+	remove := fmt.Sprintf("wg set %s peer %s remove", shellArg(iface), shellArg(peerPublicKey))
+	if res, err := exec.Run(ctx, remove, nil); err != nil {
+		return fmt.Errorf("vpn: wg set peer remove: %w", err)
+	} else if res.ExitCode != 0 {
+		return fmt.Errorf("vpn: wg set peer remove exited %d: %s", res.ExitCode, firstLine(res.Stderr))
+	}
+	if res, err := exec.Run(ctx, "wg-quick save "+shellArg(iface), nil); err != nil {
+		return fmt.Errorf("vpn: wg-quick save: %w", err)
+	} else if res.ExitCode != 0 {
+		return fmt.Errorf("vpn: wg-quick save exited %d: %s", res.ExitCode, firstLine(res.Stderr))
+	}
+
+	// VERIFY the peer is really gone — a revoke that silently left the device
+	// authorized is the worst possible outcome of this call.
+	res, err := exec.Run(ctx, "wg show "+shellArg(iface)+" dump", nil)
+	if err != nil {
+		return fmt.Errorf("vpn: wg show dump: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("vpn: wg show dump exited %d: %s", res.ExitCode, firstLine(res.Stderr))
+	}
+	if dumpHasPeer(res.Stdout, peerPublicKey) {
+		return fmt.Errorf("vpn: wg set peer remove reported success but peer %q is still present on %q", peerPublicKey, iface)
 	}
 	return nil
 }
