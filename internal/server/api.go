@@ -467,6 +467,10 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// one — see vpn.go.
 	s.registerVPNRoutes(mux)
 
+	// The provisioned WireGuard servers (the "pick a device" easy button) and
+	// the devices enrolled on them — see vpnserver.go.
+	s.registerVPNServerRoutes(mux)
+
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 }
