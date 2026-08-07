@@ -150,6 +150,63 @@ type VPN struct {
 	Autostart bool `json:"autostart,omitempty"`
 }
 
+// VPNServer is a WireGuard server this app PROVISIONED on one of its machines —
+// the "provision on a device" half of the easy button, as opposed to a VPN
+// (above), which is a bring-your-own client .conf.
+//
+// It is a separate type from VPN, not a mode of it, for the same reason
+// Target.Wire and Target.Devnet are separate: the two shapes barely overlap and
+// collapsing them would mean a struct half of whose fields are always ignored.
+// The decisive difference is the secret. A VPN carries a pasted .conf INCLUDING
+// its private key; a VPNServer carries NO private key at all — the server's key
+// is generated on the host and stays there (see vpn.ProvisionServer), and each
+// peer's private key is handed to its device once at enrollment and never
+// stored. So everything here is safe to persist and safe to return over the
+// API: public keys, addresses, ports, and the overlay IPs handed out.
+type VPNServer struct {
+	// ID is stable and names the server wherever it is selected.
+	ID string `json:"id"`
+
+	// TargetID is the machine the server runs ON. Empty means the host running
+	// this app (the desktop case); a named target is a fleet box reached over
+	// SSH. Same meaning as VPN.TargetID.
+	TargetID string `json:"targetId,omitempty"`
+
+	// Interface is the OS interface the server listens on, e.g. "jumpgate0".
+	Interface string `json:"interface"`
+
+	// Address is the server's own overlay address WITH mask, e.g. "10.9.0.1/24".
+	// Its subnet is the pool peers are allocated from.
+	Address string `json:"address"`
+
+	// ListenPort is the UDP port devices dial.
+	ListenPort int `json:"listenPort"`
+
+	// PublicKey is the server's public key — NOT secret; it is exactly what a
+	// device needs to talk to the server, and appears in every client config.
+	PublicKey string `json:"publicKey"`
+
+	// Endpoint is the host:port devices dial (the machine's reachable address
+	// plus ListenPort). Stored because the machine's public address is not
+	// derivable from anything else this app holds.
+	Endpoint string `json:"endpoint"`
+
+	// Peers are the devices enrolled on this server. Only the public half of
+	// each device's identity lives here (public key + assigned overlay IP); the
+	// device's private key is never stored — it was delivered to the device once,
+	// at enrollment, and re-issuing means re-enrolling.
+	Peers []VPNPeer `json:"peers,omitempty"`
+}
+
+// VPNPeer is one enrolled device on a VPNServer. It holds nothing secret: a
+// name, the device's PUBLIC key, and the overlay address the server routes to
+// it. The device's private key is deliberately absent — see VPNServer.
+type VPNPeer struct {
+	Name      string `json:"name"`
+	PublicKey string `json:"publicKey"`
+	AllowedIP string `json:"allowedIp"` // the /32 overlay address assigned to this device
+}
+
 // Config is valve-node-app's persisted local state.
 type Config struct {
 	Targets []Target `json:"targets"`
@@ -163,6 +220,12 @@ type Config struct {
 	// security checklist grades as a pass — see TrustedOverlays, which is where
 	// those CIDRs are declared for grading.
 	VPNs []VPN `json:"vpns,omitempty"`
+
+	// VPNServers are the WireGuard servers this app has provisioned on its
+	// machines, each with the devices enrolled on it. Distinct from VPNs (which
+	// are bring-your-own client configs) because a provisioned server holds no
+	// private key — see VPNServer.
+	VPNServers []VPNServer `json:"vpnServers,omitempty"`
 
 	// Orphans are containers a merge stopped managing but did NOT stop. They
 	// are stored rather than recomputed: migrate() runs in memory and is only
@@ -250,6 +313,16 @@ func (c Config) FindVPN(id string) (VPN, bool) {
 		}
 	}
 	return VPN{}, false
+}
+
+// FindVPNServer returns the provisioned server with this id.
+func (c Config) FindVPNServer(id string) (VPNServer, bool) {
+	for _, s := range c.VPNServers {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return VPNServer{}, false
 }
 
 // GatewaysOn returns the gateways placed on a target, in config order.

@@ -204,6 +204,97 @@ func TestVPNsOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestVPNServerRoundTrips(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	want := Config{
+		VPNServers: []VPNServer{{
+			ID:         "home",
+			TargetID:   "box1",
+			Interface:  "jumpgate0",
+			Address:    "10.9.0.1/24",
+			ListenPort: 51820,
+			PublicKey:  "c2VydmVyUHVibGljS2V5c2VydmVyUHVibGljS2V5PQ==",
+			Endpoint:   "vpn.example.com:51820",
+			Peers: []VPNPeer{
+				{Name: "laptop", PublicKey: "bGFwdG9wUHVibGljS2V5bGFwdG9wUHVibGljS2U9", AllowedIP: "10.9.0.2/32"},
+				{Name: "phone", PublicKey: "cGhvbmVQdWJsaWNLZXlwaG9uZVB1YmxpY0tleT0=", AllowedIP: "10.9.0.3/32"},
+			},
+		}},
+	}
+	if err := want.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got.VPNServers) != 1 {
+		t.Fatalf("VPNServers = %+v, want 1", got.VPNServers)
+	}
+	s := got.VPNServers[0]
+	if s.ID != "home" || s.PublicKey != want.VPNServers[0].PublicKey || s.ListenPort != 51820 || s.Endpoint != "vpn.example.com:51820" {
+		t.Errorf("server = %+v, want the saved one", s)
+	}
+	if len(s.Peers) != 2 || s.Peers[0].Name != "laptop" || s.Peers[1].AllowedIP != "10.9.0.3/32" {
+		t.Errorf("peers = %+v, want laptop + phone", s.Peers)
+	}
+}
+
+// The type must have nowhere to put a private key: a provisioned server keeps
+// its key on the host and each device's key on the device, so persisting one
+// would be a leak of a secret this app went out of its way never to hold. This
+// pins that the serialised shape carries no private-key field.
+func TestVPNServerPersistsNoPrivateKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	c := Config{VPNServers: []VPNServer{{
+		ID: "home", Interface: "jumpgate0", Address: "10.9.0.1/24", ListenPort: 51820,
+		PublicKey: "c2VydmVyUHVibGljS2V5c2VydmVyUHVibGljS2V5PQ==", Endpoint: "h:51820",
+		Peers: []VPNPeer{{Name: "laptop", PublicKey: "cHVibGlja2V5cHVibGlja2V5cHVibGlja2V5cHU9", AllowedIP: "10.9.0.2/32"}},
+	}}}
+	if err := c.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".valve-node-app", "config.json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(strings.ToLower(string(data)), "privatekey") {
+		t.Errorf("config.json for a provisioned server contains a private key field:\n%s", data)
+	}
+}
+
+func TestFindVPNServer(t *testing.T) {
+	c := Config{VPNServers: []VPNServer{{ID: "home"}, {ID: "fleet"}}}
+	if s, ok := c.FindVPNServer("fleet"); !ok || s.ID != "fleet" {
+		t.Errorf("FindVPNServer(fleet) = %+v, %v; want the fleet server", s, ok)
+	}
+	if s, ok := c.FindVPNServer("home"); !ok || s.ID != "home" {
+		t.Errorf("FindVPNServer(home) = %+v, %v; want the home server", s, ok)
+	}
+	if _, ok := c.FindVPNServer("nope"); ok {
+		t.Errorf("FindVPNServer(nope) reported found")
+	}
+}
+
+func TestVPNServersOmittedWhenEmpty(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := (Config{AIProvider: "groq"}).Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".valve-node-app", "config.json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(data), "vpnServers") {
+		t.Errorf("wrote a vpnServers key for a config with none:\n%s", data)
+	}
+}
+
 func TestSaveWritesMode0600(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
