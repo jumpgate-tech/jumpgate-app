@@ -2211,3 +2211,282 @@ table.an-errors td {
   color: var(--bg);
   font-weight: 600;
 }
+
+/* --- #/vpn: Private access -------------------------------------------------
+   Feature-specific pieces built from the same vocabulary as the rest of the
+   app (flat cards, badge kinds, the strip left-rule). Only the shapes that had
+   no existing class are added here; everything else reuses card/badge/strip/
+   stat-list/service-head. */
+
+/* textarea was never styled (only input[type=text|password] and select were),
+   so the BYO .conf paste box needs the same field treatment plus room to
+   grow. */
+textarea {
+  display: block;
+  width: 100%;
+  margin-top: 0.25rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.45rem 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  resize: vertical;
+  min-height: 7em;
+}
+
+textarea:focus {
+  outline: 1px solid var(--accent);
+}
+
+/* the badge cluster on a server/overlay card header */
+.head-badges {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* two-line radios: a title with a muted explanatory sub-line under it */
+.radio-sub {
+  display: block;
+  color: var(--fg-muted);
+  font-size: 0.8rem;
+}
+
+/* the two-mode entry picker */
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 0.85rem;
+  margin: 0.75rem 0;
+}
+
+.mode-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1rem 1.1rem;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.mode-card:hover {
+  border-color: var(--accent);
+}
+
+.mode-card.recommended {
+  border-left: 3px solid var(--accent);
+}
+
+.mode-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.mode-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.mode-head strong {
+  font-size: 1rem;
+}
+
+.mode-card p {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+}
+
+.mode-foot {
+  margin-top: 0.5rem;
+  color: var(--fg-muted);
+  font-size: 0.78rem;
+}
+
+.mode-card.recommended .mode-foot {
+  color: var(--accent);
+}
+
+/* a key row that must scroll rather than wrap the page sideways */
+.keybox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.keybox code {
+  flex: 1;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  padding: 0.2rem 0;
+}
+
+/* the one-time enrollment handoff */
+.handoff {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.conf-wrap {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.conf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.conf-block {
+  margin: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* enrolled-device rows: a grid that collapses to two columns on narrow
+   widths so the page never scrolls sideways */
+.peers-head,
+.peer-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(7rem, auto) minmax(10rem, 1.4fr) auto;
+  column-gap: 0.75rem;
+}
+
+.peers-head {
+  padding: 0.3rem 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.peer-row {
+  align-items: center;
+  row-gap: 0.2rem;
+  padding: 0.45rem 0.4rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.peer-row:hover {
+  background: var(--bg);
+}
+
+.peer-name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  min-width: 0;
+}
+
+.peer-ip {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.peer-key {
+  color: var(--fg-muted);
+  font-size: 0.78rem;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.peer-acts {
+  text-align: right;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .peers-head,
+  .peer-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .peers-head span:nth-child(2),
+  .peers-head span:nth-child(3) {
+    display: none;
+  }
+
+  .peer-ip,
+  .peer-key {
+    grid-column: 1 / -1;
+  }
+}
+
+/* the BYO up/down toggle switch */
+.sw {
+  width: 38px;
+  height: 22px;
+  border-radius: 12px;
+  position: relative;
+  flex: 0 0 auto;
+  background: var(--border);
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  transition: 0.18s;
+}
+
+.sw.on {
+  background: var(--accent);
+}
+
+.sw::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: 0.18s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.sw.on::after {
+  left: 18px;
+}
+
+/* the endpoint-not-set inline prompt */
+.endpoint-fix {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+
+.endpoint-fix label {
+  flex: 1 1 16rem;
+  margin: 0;
+}
+
+.endpoint-fix input {
+  margin-top: 0.25rem;
+}

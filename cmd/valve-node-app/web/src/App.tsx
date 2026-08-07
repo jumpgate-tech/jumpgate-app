@@ -4,12 +4,14 @@ import { Rpc } from "./screens/Rpc/Rpc";
 import { Security } from "./screens/Security/Security";
 import { Diagnostics } from "./screens/Diagnostics/Diagnostics";
 import { Settings } from "./screens/Settings/Settings";
+import { PrivateAccess } from "./screens/PrivateAccess/PrivateAccess";
 import { Targets } from "./screens/Targets/Targets";
 import { Analytics } from "./screens/Analytics/Analytics";
 import { Machine } from "./screens/Machine/Machine";
 
 const NAV = [
   { to: "#/rpc", nav: "rpc", label: "RPC" },
+  { to: "#/vpn", nav: "vpn", label: "Private access" },
   { to: "#/targets", nav: "targets", label: "Machines" },
   { to: "#/settings", nav: "settings", label: "Settings" },
 ];
@@ -56,6 +58,7 @@ export function App() {
           <Route path="/" element={<Panel />} />
           <Route path="/panel" element={<Panel />} />
           <Route path="/rpc" element={<Rpc />} />
+          <Route path="/vpn" element={<PrivateAccess />} />
           <Route path="/targets" element={<Targets />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/machine/:id" element={<Machine />} />
