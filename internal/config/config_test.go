@@ -295,6 +295,31 @@ func TestVPNServersOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestTrustedOverlayCIDRs(t *testing.T) {
+	c := Config{
+		TrustedOverlays: []string{"10.50.0.0/24", "10.9.0.0/24"},
+		VPNServers: []VPNServer{
+			{ID: "home", Address: "10.9.0.1/24"},   // network 10.9.0.0/24 — dup of a declared one
+			{ID: "fleet", Address: "10.20.0.1/16"},  // network 10.20.0.0/16 — new
+			{ID: "broken", Address: "not-a-cidr"},   // skipped, not fatal
+		},
+	}
+	got := c.TrustedOverlayCIDRs()
+
+	// Declared ones are kept, provisioned subnets are folded in as their
+	// NETWORK (host bits dropped), the shared range appears once, the malformed
+	// one is skipped.
+	want := map[string]bool{"10.50.0.0/24": true, "10.9.0.0/24": true, "10.20.0.0/16": true}
+	if len(got) != len(want) {
+		t.Fatalf("TrustedOverlayCIDRs = %v, want the 3 unique networks %v", got, want)
+	}
+	for _, cidr := range got {
+		if !want[cidr] {
+			t.Errorf("unexpected CIDR %q in %v", cidr, got)
+		}
+	}
+}
+
 func TestSaveWritesMode0600(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

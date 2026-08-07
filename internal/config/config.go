@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -313,6 +314,48 @@ func (c Config) FindVPN(id string) (VPN, bool) {
 		}
 	}
 	return VPN{}, false
+}
+
+// TrustedOverlayCIDRs is the full set of private-overlay networks the security
+// grading should treat as authenticated — the operator's declared
+// TrustedOverlays PLUS the subnet of every WireGuard server this app has
+// PROVISIONED.
+//
+// The second part is the ingress link: if Jumpgate stood up a server on
+// 10.9.0.1/24, then a gateway on that box bound to its overlay address is
+// reachable only over that authenticated tunnel — exactly the "private overlay"
+// bindAddrTier already grades as a pass. Deriving it from the provisioned server
+// means the operator does not have to also hand-declare the same range in
+// TrustedOverlays (and then keep the two in sync) just to stop the checklist
+// warning about an ingress the app itself set up.
+//
+// A server address that does not parse is skipped rather than fatal — grading
+// is advisory, and a malformed stored address should not take the checklist
+// down. Results are de-duplicated so a range that is both declared and
+// provisioned appears once.
+func (c Config) TrustedOverlayCIDRs() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(cidr string) {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" || seen[cidr] {
+			return
+		}
+		seen[cidr] = true
+		out = append(out, cidr)
+	}
+	for _, o := range c.TrustedOverlays {
+		add(o)
+	}
+	for _, s := range c.VPNServers {
+		// The server address is a host CIDR (10.9.0.1/24); grading wants the
+		// network it sits on (10.9.0.0/24), so a bind anywhere on that overlay —
+		// the server's own address or a peer's — grades as overlay.
+		if _, ipnet, err := net.ParseCIDR(strings.TrimSpace(s.Address)); err == nil {
+			add(ipnet.String())
+		}
+	}
+	return out
 }
 
 // FindVPNServer returns the provisioned server with this id.

@@ -1343,12 +1343,15 @@ func (s *Server) handleFirewall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Grade binds to the operator's declared private overlays (WireGuard,
-	// Tailscale, etc.) as overlay rather than LAN. A config load error here is
-	// non-fatal: fall back to no declared overlays (still conservative).
+	// Grade binds to private overlays (WireGuard, Tailscale, etc.) as overlay
+	// rather than LAN. This includes both the operator's declared overlays AND
+	// the subnet of any WireGuard server this app provisioned — so a gateway
+	// bound on a Jumpgate-set-up overlay is recognized as private ingress, not
+	// warned about. A config load error here is non-fatal: fall back to no
+	// declared overlays (still conservative).
 	var overlayCIDRs []string
 	if cfg, cerr := s.loadConfig(); cerr == nil {
-		overlayCIDRs = cfg.TrustedOverlays
+		overlayCIDRs = cfg.TrustedOverlayCIDRs()
 	}
 	overlays := ops.ParseOverlayCIDRs(overlayCIDRs)
 
