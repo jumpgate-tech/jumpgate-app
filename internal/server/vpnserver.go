@@ -31,6 +31,10 @@ func (s *Server) registerVPNServerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/vpn-servers/{id}", s.handleVPNServerGet)
 	mux.HandleFunc("DELETE /api/vpn-servers/{id}", s.handleVPNServerDelete)
 	mux.HandleFunc("GET /api/vpn-servers/{id}/status", s.handleVPNServerStatus)
+	// Disconnect (bring the interface down, keep the conf/key/record so a
+	// reconnect brings the same identity back) vs the wipe that DELETE does.
+	mux.HandleFunc("POST /api/vpn-servers/{id}/down", s.handleVPNServerDown)
+	mux.HandleFunc("POST /api/vpn-servers/{id}/up", s.handleVPNServerUp)
 	// Enroll a device. The literal "peers" is more specific than nothing here —
 	// there is no {action} wildcard on this tree — so these are unambiguous.
 	mux.HandleFunc("POST /api/vpn-servers/{id}/peers", s.handleVPNServerEnroll)
@@ -272,31 +276,59 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 // DELETE /api/vpn-servers/{id}
 // ---------------------------------------------------------------------
 
-// handleVPNServerDelete forgets the server's record. Like every other delete in
-// this app, it does not tear down what a single request cannot both find and
-// verify: the interface on the host is left running (bring it down first if you
-// want it gone). The 204 means the record is gone, not that an interface was
-// removed.
+// handleVPNServerDelete WIPES a provisioned server: it tears down the host
+// (DeprovisionServer — the exact reverse of provision: interface down, conf and
+// key removed, verified gone) and THEN forgets the record. This is the "does the
+// opposite of the buildup" delete, unlike the gateway delete's "never stop what
+// we didn't start" — here the app DID start it, so wiping should reverse it.
+//
+// If the host teardown fails (e.g. the box is unreachable), it returns 502 and
+// KEEPS the record, so a server that might still be up is not silently forgotten
+// — with ?force=true to forget the record anyway when the host is gone for good.
 func (s *Server) handleVPNServerDelete(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	_, err := s.updateConfig(func(c *config.Config) error {
-		kept := c.VPNServers[:0]
-		found := false
-		for _, sv := range c.VPNServers {
-			if sv.ID == id {
-				found = true
-				continue
-			}
-			kept = append(kept, sv)
+	cfg, sv, ok := s.vpnServerByID(w, r)
+	if !ok {
+		return
+	}
+	force := r.URL.Query().Get("force") == "true"
+
+	// Tear the host down. Resolve the executor inline (not via hostExecutor,
+	// which writes its own error) so the ?force path can forget the record even
+	// when the host is unresolvable, without double-writing the response.
+	teardownErr := ""
+	t := config.Target{ID: "local", Mode: "local"}
+	if strings.TrimSpace(sv.TargetID) != "" {
+		if ft, ok := findTarget(cfg, sv.TargetID); ok {
+			t = ft
+		} else {
+			teardownErr = fmt.Sprintf("machine %q is not registered", sv.TargetID)
 		}
-		if !found {
-			return fmt.Errorf("no provisioned server %q", id)
+	}
+	if teardownErr == "" {
+		if ex, err := s.getExecutor(t); err != nil {
+			teardownErr = err.Error()
+		} else if err := vpn.DeprovisionServer(r.Context(), ex, sv.Interface); err != nil {
+			teardownErr = err.Error()
+		}
+	}
+	if teardownErr != "" && !force {
+		writeErrorDetail(w, http.StatusBadGateway,
+			"could not tear the server down on its host: "+teardownErr,
+			"the record was kept so it is not lost; retry, or delete with ?force=true to forget it anyway", "")
+		return
+	}
+
+	if _, err := s.updateConfig(func(c *config.Config) error {
+		kept := c.VPNServers[:0]
+		for _, x := range c.VPNServers {
+			if x.ID != sv.ID {
+				kept = append(kept, x)
+			}
 		}
 		c.VPNServers = kept
 		return nil
-	})
-	if err != nil {
-		writeErrorDetail(w, http.StatusNotFound, err.Error(), "", codeVPNServerNotFound)
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -320,6 +352,55 @@ func (s *Server) handleVPNServerStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	writeJSON(w, http.StatusOK, vpnStatusViewFrom(sv.ID, st))
+}
+
+// ---------------------------------------------------------------------
+// POST /api/vpn-servers/{id}/down   (disconnect — reversible)
+// ---------------------------------------------------------------------
+
+// handleVPNServerDown brings the interface down but LEAVES the conf, key and
+// record in place — a disconnect, not a wipe. Enrolled devices stay enrolled; a
+// reconnect (POST .../up) brings the same server identity back.
+func (s *Server) handleVPNServerDown(w http.ResponseWriter, r *http.Request) {
+	cfg, sv, ok := s.vpnServerByID(w, r)
+	if !ok {
+		return
+	}
+	ex, ok := s.hostExecutor(w, cfg, sv.TargetID)
+	if !ok {
+		return
+	}
+	if err := (vpn.WgQuick{Exec: ex, Iface: sv.Interface}).Down(r.Context()); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	st, _ := (vpn.WgQuick{Exec: ex, Iface: sv.Interface}).Status(r.Context())
+	writeJSON(w, http.StatusOK, vpnStatusViewFrom(sv.ID, st))
+}
+
+// ---------------------------------------------------------------------
+// POST /api/vpn-servers/{id}/up   (reconnect)
+// ---------------------------------------------------------------------
+
+// handleVPNServerUp brings a disconnected server back up from its EXISTING conf
+// via StartServer — not a re-provision, so its identity and every enrolled peer
+// survive the disconnect/reconnect (re-provisioning would overwrite the conf and
+// drop the peers).
+func (s *Server) handleVPNServerUp(w http.ResponseWriter, r *http.Request) {
+	cfg, sv, ok := s.vpnServerByID(w, r)
+	if !ok {
+		return
+	}
+	ex, ok := s.hostExecutor(w, cfg, sv.TargetID)
+	if !ok {
+		return
+	}
+	if err := vpn.StartServer(r.Context(), ex, sv.Interface); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	st, _ := (vpn.WgQuick{Exec: ex, Iface: sv.Interface}).Status(r.Context())
 	writeJSON(w, http.StatusOK, vpnStatusViewFrom(sv.ID, st))
 }
 

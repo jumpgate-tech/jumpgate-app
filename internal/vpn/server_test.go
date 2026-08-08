@@ -124,6 +124,54 @@ func TestProvisionServer_FailsWhenWireGuardMissingAndNoApt(t *testing.T) {
 	}
 }
 
+func TestStartServer_BringsUpExistingConfWithoutRewriting(t *testing.T) {
+	f := newFake().script("wg show", executor.Result{ExitCode: 0, Stdout: wgDumpUp})
+	if err := StartServer(context.Background(), f, "jumpgate0"); err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	if !f.called("wg-quick up 'jumpgate0'") {
+		t.Errorf("did not bring the interface up; calls=%v", f.calls)
+	}
+	// The whole point: it must NOT rewrite the conf (no printf), or it would drop
+	// peers that wg-quick save persisted.
+	if f.called("printf") {
+		t.Errorf("StartServer rewrote the conf — that clobbers enrolled peers; calls=%v", f.calls)
+	}
+}
+
+func TestStartServer_FailsWhenNoConf(t *testing.T) {
+	f := newFake().script("test -f", executor.Result{ExitCode: 1})
+	if err := StartServer(context.Background(), f, "jumpgate0"); err == nil {
+		t.Fatalf("expected error when there is no conf to bring up")
+	}
+	if f.called("wg-quick up") {
+		t.Errorf("tried to bring up a server with no conf")
+	}
+}
+
+func TestDeprovisionServer_DownRemoveVerify(t *testing.T) {
+	// After teardown, wg show reports the interface absent (exit 1).
+	f := newFake().script("wg show", executor.Result{ExitCode: 1, Stderr: "No such device"})
+	if err := DeprovisionServer(context.Background(), f, "jumpgate0"); err != nil {
+		t.Fatalf("DeprovisionServer: %v", err)
+	}
+	if !f.called("wg-quick down 'jumpgate0'") {
+		t.Errorf("did not bring the interface down; calls=%v", f.calls)
+	}
+	if !f.called("rm -f") || !f.called("jumpgate0.conf") || !f.called("jumpgate0.privatekey") {
+		t.Errorf("did not remove conf+key; calls=%v", f.calls)
+	}
+}
+
+// The load-bearing verify: teardown ran but wg show still reports the interface
+// up → must FAIL, not silently claim the wipe worked.
+func TestDeprovisionServer_FailsIfStillUp(t *testing.T) {
+	f := newFake().script("wg show", executor.Result{ExitCode: 0, Stdout: wgDumpUp})
+	if err := DeprovisionServer(context.Background(), f, "jumpgate0"); err == nil {
+		t.Fatalf("expected error when the interface is still up after deprovision")
+	}
+}
+
 func TestProvisionServer_RejectsBadParams(t *testing.T) {
 	cases := map[string]ServerParams{
 		"empty iface": {Iface: "", Address: "10.9.0.1/24", ListenPort: 51820},

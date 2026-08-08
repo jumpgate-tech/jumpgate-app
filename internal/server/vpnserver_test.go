@@ -19,6 +19,7 @@ import (
 // RANDOM key each enrollment generates — a static script cannot predict that.
 type wgHostFake struct {
 	mu         sync.Mutex
+	up         bool // whether the interface is currently up (wg-quick up/down toggle it)
 	peers      map[string]bool
 	serverPub  string
 	listenPort string
@@ -44,9 +45,21 @@ func (f *wgHostFake) Run(_ context.Context, cmd string, _ *executor.RunOpts) (ex
 		return executor.Result{ExitCode: 0}, nil // wireguard-tools present
 	case strings.Contains(cmd, "wg pubkey"):
 		return executor.Result{Stdout: f.serverPub + "\n"}, nil
+	case strings.Contains(cmd, "wg-quick up"):
+		f.setUp(true)
+		return executor.Result{ExitCode: 0}, nil
+	case strings.Contains(cmd, "wg-quick down"):
+		f.setUp(false)
+		return executor.Result{ExitCode: 0}, nil
 	case strings.Contains(cmd, "wg show") && strings.Contains(cmd, "listen-port"):
+		if !f.isUp() {
+			return executor.Result{ExitCode: 1}, nil
+		}
 		return executor.Result{Stdout: f.listenPort + "\n"}, nil
 	case strings.Contains(cmd, "wg show") && strings.Contains(cmd, "dump"):
+		if !f.isUp() {
+			return executor.Result{ExitCode: 1}, nil // interface absent
+		}
 		return executor.Result{Stdout: f.dump()}, nil
 	case strings.Contains(cmd, "wg set") && strings.Contains(cmd, " remove"):
 		f.setPeer(peerArg(cmd), false)
@@ -55,8 +68,21 @@ func (f *wgHostFake) Run(_ context.Context, cmd string, _ *executor.RunOpts) (ex
 		f.setPeer(peerArg(cmd), true)
 		return executor.Result{ExitCode: 0}, nil
 	default:
-		return executor.Result{ExitCode: 0}, nil // wg genkey, wg-quick up/down/save, printf, etc.
+		return executor.Result{ExitCode: 0}, nil // wg genkey, wg-quick save, printf, rm, etc.
 	}
+}
+
+func (f *wgHostFake) setUp(v bool) { f.mu.Lock(); f.up = v; f.mu.Unlock() }
+func (f *wgHostFake) isUp() bool   { f.mu.Lock(); defer f.mu.Unlock(); return f.up }
+func (f *wgHostFake) called(substr string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.calls {
+		if strings.Contains(c, substr) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *wgHostFake) dump() string {
@@ -245,17 +271,60 @@ func TestVPNServerRevoke(t *testing.T) {
 	}
 }
 
-func TestVPNServerDelete(t *testing.T) {
-	a, _ := newVPNServerTestServer(t)
+// Disconnect (down) brings the interface down but keeps the record, so a
+// reconnect (up) brings the same server back.
+func TestVPNServerDisconnectAndReconnect(t *testing.T) {
+	a, host := newVPNServerTestServer(t)
 	provision(t, a, map[string]any{"id": "home"})
+	if !host.isUp() {
+		t.Fatalf("host should be up after provision")
+	}
+
+	res := a.do(t, "POST", "/api/vpn-servers/home/down", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("down: got %d, want 200", res.StatusCode)
+	}
+	res.Body.Close()
+	if host.isUp() {
+		t.Errorf("host still up after disconnect")
+	}
+	// Record is kept.
+	if len(decodeJSON[[]vpnServerView](t, a.do(t, "GET", "/api/vpn-servers", nil))) != 1 {
+		t.Errorf("disconnect removed the record; it should only bring the tunnel down")
+	}
+
+	res = a.do(t, "POST", "/api/vpn-servers/home/up", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("up: got %d, want 200", res.StatusCode)
+	}
+	res.Body.Close()
+	if !host.isUp() {
+		t.Errorf("host not up after reconnect")
+	}
+}
+
+// Wipe (DELETE) is the reverse of buildup: it tears the host down AND forgets
+// the record — not the forget-only delete the gateway uses.
+func TestVPNServerWipeTearsDownHostAndForgets(t *testing.T) {
+	a, host := newVPNServerTestServer(t)
+	provision(t, a, map[string]any{"id": "home"})
+	if !host.isUp() {
+		t.Fatalf("host should be up after provision")
+	}
+
 	res := a.do(t, "DELETE", "/api/vpn-servers/home", nil)
 	res.Body.Close()
 	if res.StatusCode != http.StatusNoContent {
-		t.Fatalf("delete: got %d, want 204", res.StatusCode)
+		t.Fatalf("wipe: got %d, want 204", res.StatusCode)
 	}
-	list := decodeJSON[[]vpnServerView](t, a.do(t, "GET", "/api/vpn-servers", nil))
-	if len(list) != 0 {
-		t.Errorf("list after delete = %+v, want empty", list)
+	if host.isUp() {
+		t.Errorf("wipe forgot the record but left the interface UP on the host")
+	}
+	if !host.called("rm -f") {
+		t.Errorf("wipe did not remove the conf/key on the host; calls=%v", host.calls)
+	}
+	if len(decodeJSON[[]vpnServerView](t, a.do(t, "GET", "/api/vpn-servers", nil))) != 0 {
+		t.Errorf("record still present after wipe")
 	}
 }
 
@@ -267,6 +336,8 @@ func TestVPNServerRoutesRequireToken(t *testing.T) {
 		{"GET", "/api/vpn-servers/x"},
 		{"DELETE", "/api/vpn-servers/x"},
 		{"GET", "/api/vpn-servers/x/status"},
+		{"POST", "/api/vpn-servers/x/down"},
+		{"POST", "/api/vpn-servers/x/up"},
 		{"POST", "/api/vpn-servers/x/peers"},
 		{"POST", "/api/vpn-servers/x/peers/remove"},
 	}
