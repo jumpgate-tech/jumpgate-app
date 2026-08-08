@@ -1470,6 +1470,20 @@ export function getVpnServerStatus(id: string): Promise<VpnStatus> {
   return request<VpnStatus>(`/api/vpn-servers/${encodeURIComponent(id)}/status`);
 }
 
+// vpnServerDown disconnects a provisioned server: the interface goes down but
+// the conf, key and every enrolled peer are LEFT in place. Reversible with
+// vpnServerUp. Returns the server's status after the interface is down.
+export function vpnServerDown(id: string): Promise<VpnStatus> {
+  return request<VpnStatus>(`/api/vpn-servers/${encodeURIComponent(id)}/down`, { method: "POST" });
+}
+
+// vpnServerUp reconnects a disconnected server from its existing conf — its
+// identity and enrolled peers survive the round trip (this is not a
+// re-provision). Returns the server's status after it comes back up.
+export function vpnServerUp(id: string): Promise<VpnStatus> {
+  return request<VpnStatus>(`/api/vpn-servers/${encodeURIComponent(id)}/up`, { method: "POST" });
+}
+
 // EnrollVpnDeviceRequest adds one peer (device) to a server. The returned
 // VpnEnrollResult carries the peer's full client config — the one time it is
 // ever emitted — so callers must surface it, not discard it.

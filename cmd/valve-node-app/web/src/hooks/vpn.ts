@@ -131,6 +131,23 @@ export function useRevokeVpnDevice() {
   });
 }
 
+// useVpnServerAction disconnects ("down") or reconnects ("up") a provisioned
+// server. A disconnect leaves the conf, key and enrolled peers in place; a
+// reconnect brings the same identity back from that conf — neither changes the
+// peer list, but both flip the server's up/handshake reading, so the server
+// list and the acted-on server's status are invalidated. Both return a
+// VpnStatus, but callers read status from a fresh useVpnServerStatus poll.
+export function useVpnServerAction() {
+  const qc = useQueryClient();
+  return useMutation<api.VpnStatus, Error, { id: string; action: "up" | "down" }>({
+    mutationFn: ({ id, action }) => (action === "up" ? api.vpnServerUp(id) : api.vpnServerDown(id)),
+    onSuccess: (_data, { id }) => {
+      void qc.invalidateQueries({ queryKey: ["vpnServers"] });
+      void qc.invalidateQueries({ queryKey: ["vpnServerStatus", id] });
+    },
+  });
+}
+
 // useDeleteVpnServer tears a provisioned server down.
 export function useDeleteVpnServer() {
   const qc = useQueryClient();
