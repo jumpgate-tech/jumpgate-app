@@ -68,6 +68,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Bring up any overlays the operator marked "start with the app". Runs off
+	// the serving path in its own goroutine: an autostart overlay on an
+	// unreachable box must never delay the UI coming up, and one overlay failing
+	// must not stop the others — AutostartOverlays returns per-overlay results,
+	// which we log and otherwise let be.
+	go func() {
+		for _, r := range s.AutostartOverlays(ctx) {
+			if r.Err != nil {
+				log.Printf("valve-node-app: autostart overlay %q: %v", r.ID, r.Err)
+			} else {
+				log.Printf("valve-node-app: autostart overlay %q is up", r.ID)
+			}
+		}
+	}()
+
 	// Launched by double-clicking the macOS .app bundle, the OS passes no
 	// flags — so a bundled build enters tray mode on its own. An explicit
 	// --tray still works for running the tray binary straight from a shell.

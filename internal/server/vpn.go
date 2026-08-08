@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -199,6 +200,68 @@ func (s *Server) vpnExecutor(w http.ResponseWriter, cfg config.Config, v config.
 		return nil, "", false
 	}
 	return ex, ifaceOf(v), true
+}
+
+// ---------------------------------------------------------------------
+// Autostart (run at process start, not over HTTP)
+// ---------------------------------------------------------------------
+
+// AutostartResult reports one overlay's autostart outcome. Err is nil when the
+// interface was brought up AND verified present; otherwise it carries why.
+type AutostartResult struct {
+	ID  string
+	Err error
+}
+
+// AutostartOverlays brings up every stored BYO overlay marked Autostart, at
+// process start. It is best-effort and independent: one overlay's failure (an
+// unreachable box, a stale config) never blocks the others, and none of them
+// blocks the server — the caller runs this off the serving path and logs the
+// results. Overlays without Autostart are left alone; the operator brings those
+// up by hand. Provisioned servers are not covered here — a wg-quick server conf
+// persists on its host and comes back via the host's own systemd on reboot, so
+// this app does not re-run it.
+func (s *Server) AutostartOverlays(ctx context.Context) []AutostartResult {
+	cfg, err := s.loadConfig()
+	if err != nil {
+		return []AutostartResult{{Err: fmt.Errorf("load config: %w", err)}}
+	}
+	var out []AutostartResult
+	for _, v := range cfg.VPNs {
+		if !v.Autostart {
+			continue
+		}
+		out = append(out, AutostartResult{ID: v.ID, Err: s.bringUpOverlay(ctx, cfg, v)})
+	}
+	return out
+}
+
+// bringUpOverlay resolves an overlay's host and brings its interface up,
+// verifying it actually came up (WgQuick.Up checks `wg show`, not just the exit
+// code). It is the non-HTTP twin of handleVPNUp + vpnExecutor, so autostart and
+// the API start an overlay by the exact same path.
+func (s *Server) bringUpOverlay(ctx context.Context, cfg config.Config, v config.VPN) error {
+	prov, err := vpn.NewStaticProvider(v.Provider, v.Config)
+	if err != nil {
+		return fmt.Errorf("stored config is not usable: %w", err)
+	}
+	t := config.Target{ID: "local", Mode: "local"}
+	if strings.TrimSpace(v.TargetID) != "" {
+		ft, ok := findTarget(cfg, v.TargetID)
+		if !ok {
+			return fmt.Errorf("runs on machine %q, which is not registered", v.TargetID)
+		}
+		t = ft
+	}
+	ex, err := s.getExecutor(t)
+	if err != nil {
+		return err
+	}
+	tun := vpn.WgQuick{Exec: ex, Iface: ifaceOf(v), Provider: prov}
+	if _, err := tun.Up(ctx); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------
