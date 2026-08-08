@@ -127,6 +127,82 @@ func ProvisionServer(ctx context.Context, exec executor.Executor, p ServerParams
 	}, nil
 }
 
+// DeprovisionServer is the exact reverse of ProvisionServer: it brings the
+// interface down and removes the server's on-host config and private key, then
+// VERIFIES the interface is gone. This is the teardown behind a "wipe" — after
+// it, the host is as it was before provisioning (no WireGuard left for this
+// iface).
+//
+// It is idempotent: wiping a server that is already down/absent is not an error,
+// because the end state (gone) is exactly what was asked for. That is the
+// counterpart to "disconnect" (just `wg-quick down`, which leaves the conf and
+// key in place so a reconnect brings the same identity back up) — deprovision
+// removes them, so a later provision on the same iface mints a NEW key.
+func DeprovisionServer(ctx context.Context, exec executor.Executor, iface string) error {
+	if !validIfaceName(iface) {
+		return fmt.Errorf("vpn: interface name %q is invalid", iface)
+	}
+	// Bring it down (Down already treats "not a WireGuard interface" as success).
+	if err := (WgQuick{Exec: exec, Iface: iface}).Down(ctx); err != nil {
+		return err
+	}
+	// Remove the conf and the key. rm -f so an already-absent file is fine.
+	rm := "rm -f " + shellArg(serverConfPath(iface)) + " " + shellArg(serverKeyPath(iface))
+	if res, err := exec.Run(ctx, rm, nil); err != nil {
+		return fmt.Errorf("vpn: removing server files: %w", err)
+	} else if res.ExitCode != 0 {
+		return fmt.Errorf("vpn: removing server files exited %d: %s", res.ExitCode, firstLine(res.Stderr))
+	}
+	// VERIFY the interface is really gone — a wipe that left the tunnel up is the
+	// worst outcome (this app reports success only over a confirmed end state).
+	st, err := (WgQuick{Exec: exec, Iface: iface}).Status(ctx)
+	if err != nil {
+		return err
+	}
+	if st.Up {
+		return fmt.Errorf("vpn: deprovision ran but interface %q is still up", iface)
+	}
+	return nil
+}
+
+// StartServer brings an already-provisioned server back UP from its existing
+// on-host conf — the reverse of a disconnect (Down). Crucially, unlike
+// ProvisionServer it does NOT rewrite the conf, so peers enrolled since
+// provisioning (which AddPeer persisted with `wg-quick save`) survive a
+// disconnect/reconnect. Reconnecting through ProvisionServer instead would
+// overwrite the conf with the peerless template and silently drop every device.
+//
+// It refuses when there is no conf to bring up (a wiped server) rather than
+// quietly minting a fresh, peerless, new-keyed server in its place. Verifies the
+// interface actually came up.
+func StartServer(ctx context.Context, exec executor.Executor, iface string) error {
+	if !validIfaceName(iface) {
+		return fmt.Errorf("vpn: interface name %q is invalid", iface)
+	}
+	if res, err := exec.Run(ctx, "test -f "+shellArg(serverConfPath(iface)), nil); err != nil {
+		return fmt.Errorf("vpn: checking for server config: %w", err)
+	} else if res.ExitCode != 0 {
+		return fmt.Errorf("vpn: no config for %q on the host — nothing to bring up (re-provision instead)", iface)
+	}
+	// Down first (idempotent) in case it is half-up, then up from the existing conf.
+	_ = (WgQuick{Exec: exec, Iface: iface}).Down(ctx)
+	res, err := exec.Run(ctx, "wg-quick up "+shellArg(iface), nil)
+	if err != nil {
+		return fmt.Errorf("vpn: wg-quick up: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("vpn: wg-quick up exited %d: %s", res.ExitCode, firstLine(res.Stderr))
+	}
+	st, err := (WgQuick{Exec: exec, Iface: iface}).Status(ctx)
+	if err != nil {
+		return err
+	}
+	if !st.Up {
+		return fmt.Errorf("vpn: wg-quick up reported success but interface %q is not present", iface)
+	}
+	return nil
+}
+
 // requireRoot fails early, with an actionable message, when the target is not
 // root — the same stance setup's preflight takes, and for the same reasons:
 // writing /etc/wireguard and running wg-quick both need it.
