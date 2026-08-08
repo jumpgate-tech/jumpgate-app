@@ -27,6 +27,7 @@ import {
   useProvisionVpnServer,
   useEnrollVpnDevice,
   useRevokeVpnDevice,
+  useVpnServerAction,
   useDeleteVpnServer,
 } from "../../hooks/vpn";
 import { useTargets } from "../../hooks/target";
@@ -93,6 +94,7 @@ function ServerCard({ server, firewallHint }: { server: api.VpnServerView; firew
   const statusQ = useVpnServerStatus(server.id, true);
   const enroll = useEnrollVpnDevice();
   const revoke = useRevokeVpnDevice();
+  const action = useVpnServerAction();
   const del = useDeleteVpnServer();
   const setEndpoint = useProvisionVpnServer();
 
@@ -108,6 +110,7 @@ function ServerCard({ server, firewallHint }: { server: api.VpnServerView; firew
 
   const endpointSet = server.endpoint !== "";
   const status = statusQ.data;
+  const up = status?.up ?? false;
   const hint = localHint ?? firewallHint ?? `ufw allow ${server.listenPort}/udp`;
   const machine = server.targetId || "this machine";
 
@@ -148,8 +151,27 @@ function ServerCard({ server, firewallHint }: { server: api.VpnServerView; firew
     }
   }
 
+  // handleToggle disconnects an up server or reconnects a down one. A
+  // disconnect is reversible — the conf, key and enrolled devices stay put — so
+  // it needs no confirm; reconnecting brings the same identity back.
+  async function handleToggle() {
+    setError(null);
+    try {
+      await action.mutateAsync({ id: server.id, action: up ? "down" : "up" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function handleRemove() {
-    if (!window.confirm(`Remove server ${server.id}? Every enrolled device loses access.`)) return;
+    if (
+      !window.confirm(
+        `Wipe server ${server.id}? This tears the interface down on ${machine} and deletes its conf and key ` +
+          `from the host — every enrolled device loses access and cannot be reconnected. To pause it instead, ` +
+          `use Disconnect.`,
+      )
+    )
+      return;
     setError(null);
     try {
       await del.mutateAsync(server.id);
@@ -394,8 +416,22 @@ function ServerCard({ server, firewallHint }: { server: api.VpnServerView; firew
       {error && <p className="error">{error}</p>}
 
       <div className="card-actions">
+        {/*
+          Two distinct teardowns. Disconnect is reversible — it drops the
+          interface but keeps the conf, key and enrolled devices, so Reconnect
+          brings the exact same server back. Wipe is terminal — it deletes the
+          conf and key from the host, so enrolled devices can never reconnect.
+        */}
+        <button
+          type="button"
+          className="btn"
+          disabled={action.isPending}
+          onClick={() => void handleToggle()}
+        >
+          {action.isPending ? (up ? "Disconnecting…" : "Reconnecting…") : up ? "Disconnect" : "Reconnect"}
+        </button>
         <button type="button" className="btn btn-danger" disabled={del.isPending} onClick={() => void handleRemove()}>
-          Remove server
+          {del.isPending ? "Wiping…" : "Wipe server"}
         </button>
       </div>
     </div>
