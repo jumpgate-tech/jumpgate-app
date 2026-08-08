@@ -180,6 +180,7 @@ type apiTestServer struct {
 	token  string
 	fakeAI *fakeAIProvider
 	home   string
+	srv    *Server // the server under test, for exercising non-HTTP methods (e.g. autostart)
 }
 
 func newAPITestServer(t *testing.T) *apiTestServer {
@@ -227,7 +228,7 @@ func newAPITestServerCfg(t *testing.T, newExec func(config.Target) (executor.Exe
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	return &apiTestServer{ts: ts, token: token, fakeAI: fake, home: home}
+	return &apiTestServer{ts: ts, token: token, fakeAI: fake, home: home, srv: s}
 }
 
 func (a *apiTestServer) do(t *testing.T, method, path string, body any) *http.Response {
