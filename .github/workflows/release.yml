@@ -112,3 +112,32 @@ jobs:
           files: |
             dist/*.zip
             dist/*.tar.gz
+
+  # ---- unified checksums covering headless binaries AND desktop apps -------
+  # goreleaser only checksums the headless jumpgate_* binaries; the desktop
+  # apps the landing page links to are attached afterward. This job merges
+  # both sets into one checksums.txt so every download is verifiable.
+  checksums:
+    needs: [binaries, desktop]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: jumpgate-*
+          path: desktop
+          merge-multiple: true
+      - name: Build and publish a unified checksums.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # goreleaser already published checksums.txt for the headless binaries
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p checksums.txt -O goreleaser.txt
+          # add the desktop apps (the files the landing buttons link to), bare filenames
+          ( cd desktop && sha256sum * ) | sort -k2 > desktop.txt
+          cat goreleaser.txt desktop.txt | sort -k2 -u > checksums.txt
+          echo "=== unified checksums.txt ==="; cat checksums.txt
+          gh release upload "$TAG" checksums.txt -R "$GITHUB_REPOSITORY" --clobber
