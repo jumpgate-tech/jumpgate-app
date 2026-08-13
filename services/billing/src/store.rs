@@ -30,6 +30,18 @@ pub struct StoredKey {
     pub expires_at: Option<i64>,
 }
 
+/// One `audit_log` row, newest-first when read. Safe to return to the admin
+/// surface: it holds no secret and no key hash.
+#[derive(Debug, Clone)]
+pub struct AuditRow {
+    pub id: i64,
+    pub ts: i64,
+    pub actor: String,
+    pub action: String,
+    pub target: Option<String>,
+    pub detail: Option<String>,
+}
+
 /// The current unix time in seconds.
 pub(crate) fn unix_now() -> i64 {
     SystemTime::now()
@@ -231,6 +243,32 @@ impl Store {
         Ok(n)
     }
 
+    /// Update the mutable fields of one key row. It never touches the id, the
+    /// hash, `created_at`, or `disabled_at`; those change through their own paths
+    /// (rotate, revoke). Returns the number of rows changed, so the caller can
+    /// tell an unknown id (0) from a real update (1).
+    pub fn update_key_fields(&self, k: &StoredKey) -> Result<usize> {
+        let n = self.conn.execute(
+            "UPDATE project_key SET \
+                 label = ?2, account_address = ?3, credit_exempt = ?4, \
+                 allow_trace = ?5, rate_unlimited = ?6, per_second_limit = ?7, \
+                 per_day_limit = ?8, expires_at = ?9 \
+             WHERE id = ?1",
+            params![
+                k.id,
+                k.label,
+                k.account_address,
+                k.credit_exempt,
+                k.allow_trace,
+                k.rate_unlimited,
+                k.per_second_limit,
+                k.per_day_limit,
+                k.expires_at,
+            ],
+        )?;
+        Ok(n)
+    }
+
     /// Swap the stored hash for a rotated key. Returns the number of rows
     /// changed.
     pub fn update_key_hash(&self, id: &str, key_hash: &[u8]) -> Result<usize> {
@@ -280,6 +318,30 @@ impl Store {
             params![unix_now(), actor, action, target, detail],
         )?;
         Ok(())
+    }
+
+    /// Read the audit trail, newest first, capped at `limit` rows. The admin
+    /// surface reads this. It returns no secret.
+    pub fn read_audit(&self, limit: i64) -> Result<Vec<AuditRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, ts, actor, action, target, detail \
+             FROM audit_log ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok(AuditRow {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                actor: row.get(2)?,
+                action: row.get(3)?,
+                target: row.get(4)?,
+                detail: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 }
 

@@ -17,6 +17,10 @@ pub enum Error {
     RangeInverted { from: u64, to: u64 },
     #[error("block range too wide: {span} blocks exceeds the cap of {cap}")]
     RangeTooWide { span: u64, cap: u64 },
+    #[error("admin address {0} is not a loopback address; the admin API binds loopback only")]
+    AddrNotLoopback(std::net::SocketAddr),
+    #[error("the admin bearer token is missing or empty; set JUMPGATE_ADMIN_TOKEN")]
+    MissingAdminToken,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

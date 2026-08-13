@@ -5,15 +5,19 @@
 //! `JUMPGATE_KEY_PEPPER` and never has a default; an empty pepper is a hard
 //! error. The pepper lives beside the signer secret, never in the database.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::exit;
 
+use billing::admin::{self, AppState};
 use billing::keys::{KeyConfig, KeyManager, Rate};
 use billing::pricing::PriceBook;
 use billing::store::Store;
 
 const DEFAULT_DB: &str = "jumpgate-billing.db";
 const PEPPER_ENV: &str = "JUMPGATE_KEY_PEPPER";
+const ADMIN_TOKEN_ENV: &str = "JUMPGATE_ADMIN_TOKEN";
+const DEFAULT_ADMIN_ADDR: &str = "127.0.0.1:8787";
 
 fn main() {
     if let Err(e) = run() {
@@ -28,6 +32,7 @@ fn run() -> billing::Result<()> {
         Some("init") => cmd_init(args),
         Some("keys") => cmd_keys(args),
         Some("price") => cmd_price(args),
+        Some("serve") => cmd_serve(args),
         _ => {
             usage();
             exit(2);
@@ -243,6 +248,47 @@ fn price_set(args: &[String]) -> billing::Result<()> {
     Ok(())
 }
 
+/// Read the admin bearer token from the environment. Fail hard when it is unset
+/// or empty; never default it, or the admin gate opens by default (finding S9).
+fn admin_token() -> billing::Result<String> {
+    match std::env::var(ADMIN_TOKEN_ENV) {
+        Ok(v) if !v.is_empty() => Ok(v),
+        _ => {
+            eprintln!("error: set {ADMIN_TOKEN_ENV} to a non-empty value");
+            exit(1);
+        }
+    }
+}
+
+/// Serve the admin API on a loopback address. This is the one async command, so
+/// `main` stays synchronous: it builds a tokio runtime and blocks on the server.
+/// It reads the pepper (for the key manager) and the admin token (fail closed).
+fn cmd_serve(args: impl Iterator<Item = String>) -> billing::Result<()> {
+    let rest: Vec<String> = args.collect();
+    let flags = Flags::parse(&rest);
+
+    let addr_str = flags.addr.as_deref().unwrap_or(DEFAULT_ADMIN_ADDR);
+    let addr: SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => {
+            eprintln!("error: --addr must be an IP:port, got {addr_str:?}");
+            exit(2);
+        }
+    };
+
+    let pepper = pepper()?;
+    let token = admin_token()?;
+
+    // The key manager and the price book each need their own connection to the
+    // same file. WAL mode lets the two connections share the database.
+    let km = KeyManager::new(Store::open(&flags.db)?, &pepper)?;
+    let pb = PriceBook::new(Store::open(&flags.db)?)?;
+    let state = AppState::new(km, pb, token)?;
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(admin::serve(addr, state))
+}
+
 /// The parsed flags shared across the keys commands. Hand-rolled to keep the
 /// dependency set minimal, matching the existing CLI style.
 #[derive(Default)]
@@ -258,6 +304,7 @@ struct Flags {
     per_second: Option<i64>,
     per_day: Option<i64>,
     expires_at: Option<i64>,
+    addr: Option<String>,
 }
 
 impl Flags {
@@ -282,6 +329,7 @@ impl Flags {
                     f.expires_at = Some(parse_int(&next_value(&mut it, "--expires-at")))
                 }
                 "--chain" => f.chain = Some(parse_int(&next_value(&mut it, "--chain"))),
+                "--addr" => f.addr = Some(next_value(&mut it, "--addr")),
                 other if other.starts_with("--") => {
                     eprintln!("error: unknown flag {other}");
                     exit(2);
@@ -334,5 +382,7 @@ fn usage() {
     eprintln!("  billing price list  [--db path]");
     eprintln!("  billing price get <method> [--chain N] [--db path]");
     eprintln!("  billing price set <method> <credits> [--chain N] [--db path]");
-    eprintln!("  ({PEPPER_ENV} must be set for every keys command)");
+    eprintln!("  billing serve [--db path] [--addr 127.0.0.1:8787]");
+    eprintln!("  ({PEPPER_ENV} must be set for every keys command and for serve)");
+    eprintln!("  ({ADMIN_TOKEN_ENV} must be set for serve; the admin API binds loopback only)");
 }

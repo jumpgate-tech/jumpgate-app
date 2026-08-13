@@ -4,6 +4,7 @@
 //! price lookup. Later steps add the key manager, the admin API, and the
 //! metering hot path. See docs/design/billing-admin.md.
 
+pub mod admin;
 pub mod error;
 pub mod keys;
 pub mod pricing;
