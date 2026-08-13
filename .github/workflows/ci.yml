@@ -47,3 +47,25 @@ jobs:
         run: |
           GOOS=windows go build ./...
           GOOS=darwin go build ./...
+
+  # The Rust billing service. It is a standalone crate under services/billing,
+  # invisible to the Go tooling above, so it needs its own gate.
+  billing:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/billing
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add rustfmt and clippy
+        run: rustup component add rustfmt clippy
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: cargo test
+        run: cargo test --locked
