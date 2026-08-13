@@ -53,7 +53,7 @@ Budget target on the 512 MB box:
 The service is one binary with three planes:
 
 1. **Data plane (the metering proxy).** It listens on the public edge, resolves
-   the `vk_` key, weights the method, debits the account balance in SQLite, and
+   the `jg_` key, weights the method, debits the account balance in SQLite, and
    forwards the request to eRPC at `http://127.0.0.1:4000`. This plane is the
    metering source. See section 4.
 2. **Admin plane.** A localhost or mTLS API that issues, rotates, and revokes
@@ -63,7 +63,7 @@ The service is one binary with three planes:
    that touches a chain, and it never runs on the hot path. See section 5.
 
 ```
-client --vk_ key--> [Jumpgate proxy : auth + meter + debit] --> eRPC :4000
+client --jg_ key--> [Jumpgate proxy : auth + meter + debit] --> eRPC :4000
                               |                    ^
                               v                    |
                         SQLite (WAL)        deposit watcher / settle worker --> chain
@@ -103,7 +103,7 @@ The proxy is the single source of truth for usage. For each request it does:
 1. **Authenticate.** Read `x-api-key`. Hash it with SHA-256. Look up the hash in
    an in-memory map (loaded from SQLite at boot, refreshed on change). Fail
    **closed** on an unknown key. The only exception is the published public key
-   `vk_demo`, which maps to a per-IP public tier.
+   `jg_demo`, which maps to a per-IP public tier.
 2. **Authorize.** Check origin, method, network, and IP rules against the
    resolved `KeyConfig`. Reject on a policy miss.
 3. **Price.** Look up the method cost in credits from an in-memory price map.
@@ -245,7 +245,7 @@ meter hardcoding a copy of the api key helpers) disappears by construction.
 Bind it to localhost, or require mTLS if it must be remote. Gate every call with
 a bearer token from `$JUMPGATE_ADMIN_KEY`. Fail closed.
 
-- `POST /admin/keys` — issue a key. Return the raw `vk_` value once. Store only
+- `POST /admin/keys` — issue a key. Return the raw `jg_` value once. Store only
   the hash.
 - `POST /admin/keys/:id/rotate` — issue a new value. Keep the old value valid
   until a short TTL, then soft-delete. This lets a client roll a key with no
@@ -293,7 +293,7 @@ process unless it is protected.
   its default-open failure mode. That is a security win, not only a memory win.
 - **Disk.** Prefer full-disk encryption on the VPS. At minimum keep the DB file
   out of any backup that leaves the box unencrypted.
-- **`vk_demo` is public by design.** It is a published constant. It is not
+- **`jg_demo` is public by design.** It is a published constant. It is not
   redacted and not billed. Keep it clearly separated from real keys, and keep it
   on the per-IP rate-limited public tier so it cannot drain an account.
 
@@ -319,7 +319,7 @@ process unless it is protected.
   Redis `cps` bucket. The in-process token bucket has no external key and no TTL,
   so it cannot wedge that way.
 - **Auth fails open.** The monorepo API middleware fails open for public routes.
-  A billing gate must fail **closed** on an unknown key, with `vk_demo` as the
+  A billing gate must fail **closed** on an unknown key, with `jg_demo` as the
   one explicit public exception.
 - **SQLite write contention.** WAL mode plus short transactions handle this tier.
   If write volume ever outgrows one writer, batch debits per short interval

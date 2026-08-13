@@ -17,7 +17,7 @@ decisions.
 ### Metered API keys and billing
 
 Jumpgate runs one small Rust service on a 512 MB VPS beside eRPC. The service
-issues `vk_` keys, meters RPC usage at a proxy, and debits a prepaid balance in
+issues `jg_` keys, meters RPC usage at a proxy, and debits a prepaid balance in
 one embedded SQLite file. The proxy is the only ingress to eRPC, and eRPC binds
 loopback behind a host firewall, so no client can reach `:4000` and skip the
 meter. Value is anchored on-chain in a non-custodial escrow contract, metered
@@ -80,7 +80,7 @@ claim, but not for the first honest cut.
 | S9 | Admin plane weak | Write an append-only audit log for every admin mutation, with actor and timestamp. Put high-risk mutations (pricing, `credit_exempt`, rebinding) behind a stronger control than the read/issue bearer. Require mTLS even on the same box. Update the in-memory key map synchronously on revoke or rotate. | Gate |
 | S10 | Secret paging leaks signer and token | `mlock` the signer key and admin token; mark them `MADV_DONTDUMP`; disable core dumps. Disable swap, or use encrypted swap. Deliver the admin token by file or `systemd LoadCredential`, never a plain `Environment=`. Set `-wal`, `-shm`, `-journal`, and the directory to `0600`, owned by the service user. State that provider disk encryption does not protect against the provider or operator. | Gate |
 | S11 | Key leakage on the wire and in logs | Terminate TLS on the data plane; refuse plaintext. Accept the key only in the header; reject keys in the URL; redact key-shaped tokens from all logs. | Gate |
-| S12 | Unsalted SHA-256 | Generate `vk_` keys with at least 128 bits of CSPRNG entropy. Use HMAC-SHA256 with a server-side pepper stored beside the signer secret, never in the DB. | Gate |
+| S12 | Unsalted SHA-256 | Generate `jg_` keys with at least 128 bits of CSPRNG entropy. Use HMAC-SHA256 with a server-side pepper stored beside the signer secret, never in the DB. | Gate |
 | S13 | Binding signature replay | Use EIP-712 typed data with an explicit domain (chain id, contract), the key id, the account, a nonce, and an expiry. Reject a reused nonce or an expired message. | Gate |
 | S14 | Exempt keys skip the escrow floor | Keep a hard rate and concurrency cap on exempt keys. Scope each exempt key to origins or IPs and a short expiry. Keep the count near zero. | Gate |
 | S15 | Box-level DoS breaks metering | Cap body size, batch size, concurrent connections, and WS subscriptions. Fail closed on a debit write error. Add a watchdog and back-pressure so a write stall degrades to rejects, not to unmetered forwards or an OOM kill. | Gate |
@@ -143,7 +143,7 @@ lands. Slice B2 makes the non-custodial claim true.
   single `musl` binary. Bind eRPC to loopback; add the host firewall rule; add the
   startup self-check that refuses to boot if eRPC answers off-loopback. Covers S3.
 - **B1.2. Auth and key store.** HMAC-SHA256 with a server-side pepper; 128-bit
-  CSPRNG keys; header-only key; fail closed on unknown; `vk_demo` public tier.
+  CSPRNG keys; header-only key; fail closed on unknown; `jg_demo` public tier.
   Covers S11 (header-only), S12.
 - **B1.3. Pricing and normalization.** In-memory price map; normalize the method
   name the way eRPC dispatches before lookup; reject unknown methods on paid keys;
