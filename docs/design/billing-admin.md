@@ -45,7 +45,7 @@ operator ──> Jumpgate app (Go)  ──loopback + mTLS──>  billing servic
 
 A key is one row. There is no count limit in the schema or the API. The service
 generates the value from 128 bits of CSPRNG entropy, formats it as
-`vk_<base58>`, and returns the raw value **once**. It stores only
+`jg_<base58>`, and returns the raw value **once**. It stores only
 `HMAC-SHA256(pepper, key)` — never the raw key, never a plain SHA-256 (findings
 S12). The pepper lives beside the signer secret, never in the database.
 
@@ -67,7 +67,7 @@ Each key carries a reduced `KeyConfig` (the thin form of the monorepo shape):
 - `ip_rules` — allow or deny by CIDR.
 - `rate` — per-second and per-day limits, or **unlimited** (no throttle).
   Operator-created keys default to unlimited rate. The prepaid balance is then
-  the only limit. The public `vk_demo` tier keeps its per-IP limit (finding S14).
+  the only limit. The public `jg_demo` tier keeps its per-IP limit (finding S14).
 - `credit_exempt` — skip the balance debit. Off by default. An exempt key still
   keeps a hard rate and concurrency cap and a short expiry (finding S14).
 - `allow_trace` — permit the trace and debug namespaces. Off by default.
@@ -142,7 +142,7 @@ starting point the operator can reshape per box.
 
 ## 5. Admin API (the surface the app and CLI call)
 
-- `POST   /admin/keys` — create a key. Return the raw `vk_` value once. Accept a
+- `POST   /admin/keys` — create a key. Return the raw `jg_` value once. Accept a
   `KeyConfig`. No count limit.
 - `GET    /admin/keys` — list keys (hash id, label, config, usage), never the raw value.
 - `PATCH  /admin/keys/:id` — change the config (origins, methods, rate, expiry, flags).
@@ -182,5 +182,5 @@ slice (B1.4) and the deposit source decision (D3).
   managed, so this slice does not wait on it.
 - **Very large key fleets.** Is a preload map enough for the first cut, or does a
   target workload need a lazy cache from day one? Default to the preload map.
-- **Public tier.** Keep the single published `vk_demo` key on a per-IP rate limit,
+- **Public tier.** Keep the single published `jg_demo` key on a per-IP rate limit,
   separate from real keys (finding S14). Confirm the public tier stays on.
