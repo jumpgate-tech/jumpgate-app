@@ -5,6 +5,7 @@
 //! metering hot path. See docs/design/billing-admin.md.
 
 pub mod error;
+pub mod keys;
 pub mod pricing;
 pub mod store;
 

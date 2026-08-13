@@ -5,12 +5,38 @@
 //! API, and the hot path build on top of it.
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::Result;
 use crate::pricing;
+
+/// One `project_key` row, with the hash. The store owns the hash; higher layers
+/// hold the public id instead. Never log or return `key_hash`.
+#[derive(Debug, Clone)]
+pub struct StoredKey {
+    pub id: String,
+    pub key_hash: Vec<u8>,
+    pub label: String,
+    pub account_address: Option<String>,
+    pub credit_exempt: bool,
+    pub allow_trace: bool,
+    pub rate_unlimited: bool,
+    pub per_second_limit: Option<i64>,
+    pub per_day_limit: Option<i64>,
+    pub created_at: i64,
+    pub disabled_at: Option<i64>,
+    pub expires_at: Option<i64>,
+}
+
+/// The current unix time in seconds.
+pub(crate) fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// Bump this when the schema changes. It is written to `PRAGMA user_version`.
 const SCHEMA_VERSION: i64 = 1;
@@ -69,12 +95,7 @@ impl Store {
     /// Precedence: exact (method, chain), then (method, any), then the default
     /// row for the chain, then the global default, then `DEFAULT_CU`.
     pub fn price_of(&self, method: &str, chain_id: i64) -> Result<i64> {
-        let lookups = [
-            (method, chain_id),
-            (method, 0),
-            ("*", chain_id),
-            ("*", 0),
-        ];
+        let lookups = [(method, chain_id), (method, 0), ("*", chain_id), ("*", 0)];
         for (m, c) in lookups {
             if let Some(price) = self.lookup_price(m, c)? {
                 return Ok(price);
@@ -103,6 +124,147 @@ impl Store {
             .query_row("SELECT COUNT(*) FROM method_pricing", [], |row| row.get(0))?;
         Ok(n)
     }
+
+    // --- API keys ---------------------------------------------------------
+
+    /// Insert one key row. The caller supplies the hash; the store never sees
+    /// the raw key.
+    pub fn insert_key(&self, k: &StoredKey) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO project_key \
+             (id, key_hash, label, account_address, credit_exempt, allow_trace, \
+              rate_unlimited, per_second_limit, per_day_limit, created_at, \
+              disabled_at, expires_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                k.id,
+                k.key_hash,
+                k.label,
+                k.account_address,
+                k.credit_exempt,
+                k.allow_trace,
+                k.rate_unlimited,
+                k.per_second_limit,
+                k.per_day_limit,
+                k.created_at,
+                k.disabled_at,
+                k.expires_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load every key row. The key manager builds its in-memory map from this at
+    /// boot.
+    pub fn load_all_keys(&self) -> Result<Vec<StoredKey>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, key_hash, label, account_address, credit_exempt, allow_trace, \
+                    rate_unlimited, per_second_limit, per_day_limit, created_at, \
+                    disabled_at, expires_at \
+             FROM project_key",
+        )?;
+        let rows = stmt.query_map([], row_to_key)?;
+        let mut keys = Vec::new();
+        for row in rows {
+            keys.push(row?);
+        }
+        Ok(keys)
+    }
+
+    /// Load one key row by public id.
+    pub fn load_key(&self, id: &str) -> Result<Option<StoredKey>> {
+        let key = self
+            .conn
+            .query_row(
+                "SELECT id, key_hash, label, account_address, credit_exempt, allow_trace, \
+                        rate_unlimited, per_second_limit, per_day_limit, created_at, \
+                        disabled_at, expires_at \
+                 FROM project_key WHERE id = ?1",
+                params![id],
+                row_to_key,
+            )
+            .optional()?;
+        Ok(key)
+    }
+
+    /// Mark a key revoked. Returns the number of rows changed, so the caller can
+    /// tell an unknown id (0) from a real revoke (1).
+    pub fn set_key_disabled(&self, id: &str, ts: i64) -> Result<usize> {
+        let n = self.conn.execute(
+            "UPDATE project_key SET disabled_at = ?2 WHERE id = ?1",
+            params![id, ts],
+        )?;
+        Ok(n)
+    }
+
+    /// Swap the stored hash for a rotated key. Returns the number of rows
+    /// changed.
+    pub fn update_key_hash(&self, id: &str, key_hash: &[u8]) -> Result<usize> {
+        let n = self.conn.execute(
+            "UPDATE project_key SET key_hash = ?2 WHERE id = ?1",
+            params![id, key_hash],
+        )?;
+        Ok(n)
+    }
+
+    /// Insert one per-key constraint row (origin, method rule, network, IP rule).
+    pub fn insert_constraint(&self, key_id: &str, kind: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO key_constraint (key_id, kind, value) VALUES (?1, ?2, ?3)",
+            params![key_id, kind, value],
+        )?;
+        Ok(())
+    }
+
+    /// List the (kind, value) constraints for a key.
+    pub fn list_key_constraints(&self, key_id: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT kind, value FROM key_constraint WHERE key_id = ?1")?;
+        let rows = stmt.query_map(params![key_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Append one audit row. Every key mutation writes one. The trail is
+    /// append-only.
+    pub fn append_audit(
+        &self,
+        actor: &str,
+        action: &str,
+        target: Option<&str>,
+        detail: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO audit_log (ts, actor, action, target, detail) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![unix_now(), actor, action, target, detail],
+        )?;
+        Ok(())
+    }
+}
+
+/// Map one SQL row to a `StoredKey`.
+fn row_to_key(row: &rusqlite::Row) -> rusqlite::Result<StoredKey> {
+    Ok(StoredKey {
+        id: row.get(0)?,
+        key_hash: row.get(1)?,
+        label: row.get(2)?,
+        account_address: row.get(3)?,
+        credit_exempt: row.get(4)?,
+        allow_trace: row.get(5)?,
+        rate_unlimited: row.get(6)?,
+        per_second_limit: row.get(7)?,
+        per_day_limit: row.get(8)?,
+        created_at: row.get(9)?,
+        disabled_at: row.get(10)?,
+        expires_at: row.get(11)?,
+    })
 }
 
 /// Restrict a file to the owner (0600). A co-tenant process must not read the DB.
@@ -126,7 +288,10 @@ mod tests {
     fn seeds_the_default_table() {
         let store = Store::open_in_memory().unwrap();
         // one row per default entry
-        assert_eq!(store.price_count().unwrap(), pricing::DEFAULT_PRICES.len() as i64);
+        assert_eq!(
+            store.price_count().unwrap(),
+            pricing::DEFAULT_PRICES.len() as i64
+        );
     }
 
     #[test]
@@ -168,6 +333,9 @@ mod tests {
              VALUES ('eth_call', 5, 0)",
             [],
         );
-        assert!(bad.is_err(), "the CHECK constraint must reject a zero price");
+        assert!(
+            bad.is_err(),
+            "the CHECK constraint must reject a zero price"
+        );
     }
 }
