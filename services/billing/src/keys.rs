@@ -62,6 +62,18 @@ pub struct KeyConfig {
     pub ip_deny: Vec<String>,
 }
 
+/// The mutable fields of a key, for [`KeyManager::update`]. A `None` field is
+/// left as it is. Constraint edits (origins, methods, networks, IPs) are not
+/// here yet; the admin API documents them as a follow-up.
+#[derive(Debug, Clone, Default)]
+pub struct KeyPatch {
+    pub label: Option<String>,
+    pub credit_exempt: Option<bool>,
+    pub allow_trace: Option<bool>,
+    pub rate: Option<Rate>,
+    pub expires_at: Option<i64>,
+}
+
 /// A key as seen by admin reads and the hot path. It holds no secret and no
 /// hash. The hash is the map key; it never leaves the manager.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,6 +210,72 @@ impl KeyManager {
             .map(KeyRecord::from_stored)
             .collect();
         Ok(keys)
+    }
+
+    /// Update the mutable fields of a key: label, `credit_exempt`,
+    /// `allow_trace`, rate, and expiry. It writes the row, writes an audit row,
+    /// then refreshes the in-memory map so the change is live at once. It returns
+    /// the updated record.
+    ///
+    /// The hash never changes here, so the map key stays the same. A revoked key
+    /// is not in the map; the row still updates, and the key stays revoked.
+    pub fn update(&self, id: &str, patch: KeyPatch) -> Result<KeyRecord> {
+        let mut stored = self
+            .store
+            .load_key(id)?
+            .ok_or_else(|| Error::KeyNotFound(id.to_string()))?;
+
+        if let Some(label) = patch.label {
+            stored.label = label;
+        }
+        if let Some(exempt) = patch.credit_exempt {
+            stored.credit_exempt = exempt;
+        }
+        if let Some(trace) = patch.allow_trace {
+            stored.allow_trace = trace;
+        }
+        if let Some(rate) = patch.rate {
+            match rate {
+                Rate::Unlimited => {
+                    stored.rate_unlimited = true;
+                    stored.per_second_limit = None;
+                    stored.per_day_limit = None;
+                }
+                Rate::Limited {
+                    per_second,
+                    per_day,
+                } => {
+                    stored.rate_unlimited = false;
+                    stored.per_second_limit = Some(per_second);
+                    stored.per_day_limit = Some(per_day);
+                }
+            }
+        }
+        if let Some(expires_at) = patch.expires_at {
+            stored.expires_at = Some(expires_at);
+        }
+
+        // Database first, then the map, so a failed write never leaves the map
+        // ahead of the store.
+        self.store.update_key_fields(&stored)?;
+        self.store
+            .append_audit(ACTOR, "key.update", Some(id), None)?;
+
+        let record = KeyRecord::from_stored(&stored);
+        let hash = to_hash(&stored.key_hash);
+        let mut map = self.map.write().expect("key map lock");
+        // Refresh only a live entry. A revoked key stays out of the hot map.
+        if map.contains_key(&hash) {
+            map.insert(hash, record.clone());
+        }
+        Ok(record)
+    }
+
+    /// Read the append-only audit trail, newest first, capped at `limit` rows.
+    /// The admin surface reads this through the manager, so the store stays
+    /// encapsulated.
+    pub fn read_audit(&self, limit: i64) -> Result<Vec<crate::store::AuditRow>> {
+        self.store.read_audit(limit)
     }
 
     /// Resolve a raw key to its record. This is the hot path: it hashes the key

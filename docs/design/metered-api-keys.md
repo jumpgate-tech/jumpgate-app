@@ -243,7 +243,7 @@ meter hardcoding a copy of the api key helpers) disappears by construction.
 ### 7.1 Admin API
 
 Bind it to localhost, or require mTLS if it must be remote. Gate every call with
-a bearer token from `$JUMPGATE_ADMIN_KEY`. Fail closed.
+a bearer token from `$JUMPGATE_ADMIN_TOKEN`. Fail closed.
 
 - `POST /admin/keys` — issue a key. Return the raw `jg_` value once. Store only
   the hash.
@@ -287,7 +287,7 @@ process unless it is protected.
   an `age`-encrypted file loaded into memory at boot. Never write it to the
   SQLite database. Its blast radius is already bounded by the escrow model, but
   protect it anyway.
-- **The admin bearer token** lives in `$JUMPGATE_ADMIN_KEY`, injected by the
+- **The admin bearer token** lives in `$JUMPGATE_ADMIN_TOKEN`, injected by the
   service manager, never committed and never in the DB.
 - **No Redis.** Removing Redis removes a second network-listening data store and
   its default-open failure mode. That is a security win, not only a memory win.
