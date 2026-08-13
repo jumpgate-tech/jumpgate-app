@@ -125,6 +125,40 @@ impl Store {
         Ok(n)
     }
 
+    /// Insert one price row, or overwrite the credits when the (method, chain_id)
+    /// row exists. The caller rejects a non-positive price first; the CHECK is the
+    /// last line of defence, not the gate.
+    pub fn upsert_price(&self, method: &str, chain_id: i64, credits: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO method_pricing (method, chain_id, credits_per_request) \
+             VALUES (?1, ?2, ?3) \
+             ON CONFLICT(method, chain_id) \
+             DO UPDATE SET credits_per_request = excluded.credits_per_request",
+            params![method, chain_id, credits],
+        )?;
+        Ok(())
+    }
+
+    /// Load every price row as (method, chain_id, credits). The price book builds
+    /// its in-memory map from this at boot.
+    pub fn all_prices(&self) -> Result<Vec<(String, i64, i64)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT method, chain_id, credits_per_request FROM method_pricing")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     // --- API keys ---------------------------------------------------------
 
     /// Insert one key row. The caller supplies the hash; the store never sees

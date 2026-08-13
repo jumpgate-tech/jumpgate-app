@@ -11,6 +11,12 @@ pub enum Error {
     KeyNotFound(String),
     #[error("the key pepper is missing or empty")]
     MissingPepper,
+    #[error("invalid price: credits must be positive, got {0}")]
+    InvalidPrice(i64),
+    #[error("block range inverted: to {to} is below from {from}")]
+    RangeInverted { from: u64, to: u64 },
+    #[error("block range too wide: {span} blocks exceeds the cap of {cap}")]
+    RangeTooWide { span: u64, cap: u64 },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

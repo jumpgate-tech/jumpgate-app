@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::process::exit;
 
 use billing::keys::{KeyConfig, KeyManager, Rate};
+use billing::pricing::PriceBook;
 use billing::store::Store;
 
 const DEFAULT_DB: &str = "jumpgate-billing.db";
@@ -26,6 +27,7 @@ fn run() -> billing::Result<()> {
     match args.next().as_deref() {
         Some("init") => cmd_init(args),
         Some("keys") => cmd_keys(args),
+        Some("price") => cmd_price(args),
         _ => {
             usage();
             exit(2);
@@ -171,12 +173,84 @@ fn keys_rotate(args: &[String]) -> billing::Result<()> {
     Ok(())
 }
 
+fn cmd_price(mut args: impl Iterator<Item = String>) -> billing::Result<()> {
+    let sub = args.next();
+    let rest: Vec<String> = args.collect();
+    match sub.as_deref() {
+        Some("list") => price_list(&rest),
+        Some("get") => price_get(&rest),
+        Some("set") => price_set(&rest),
+        _ => {
+            usage();
+            exit(2);
+        }
+    }
+}
+
+/// Open the price book for a price command. Unlike the key commands, pricing
+/// needs no pepper; it only reads and writes the store.
+fn open_book(flags: &Flags) -> billing::Result<PriceBook> {
+    let store = Store::open(&flags.db)?;
+    PriceBook::new(store)
+}
+
+fn price_list(args: &[String]) -> billing::Result<()> {
+    let flags = Flags::parse(args);
+    let book = open_book(&flags)?;
+    let rows = book.all_prices();
+    println!("{} price row(s):", rows.len());
+    for (method, chain, credits) in rows {
+        let scope = if chain == 0 {
+            "any".to_string()
+        } else {
+            chain.to_string()
+        };
+        println!("  {method:<40}  chain={scope:<8}  {credits} credits");
+    }
+    Ok(())
+}
+
+fn price_get(args: &[String]) -> billing::Result<()> {
+    let flags = Flags::parse(args);
+    let method = flags.positionals.first().cloned().unwrap_or_else(|| {
+        eprintln!("usage: billing price get <method> [--chain N] [--db path]");
+        exit(2);
+    });
+    let chain = flags.chain.unwrap_or(0);
+    let book = open_book(&flags)?;
+    let (canonical, credits) = book.price_of_normalized(&method, chain);
+    match canonical {
+        Some(name) => println!("{name} (chain {chain}) = {credits} credits"),
+        None => {
+            println!("{method} is not a known priced method; default = {credits} credits")
+        }
+    }
+    Ok(())
+}
+
+fn price_set(args: &[String]) -> billing::Result<()> {
+    let flags = Flags::parse(args);
+    if flags.positionals.len() < 2 {
+        eprintln!("usage: billing price set <method> <credits> [--chain N] [--db path]");
+        exit(2);
+    }
+    let method = flags.positionals[0].clone();
+    let credits = parse_int(&flags.positionals[1]);
+    let chain = flags.chain.unwrap_or(0);
+    let book = open_book(&flags)?;
+    book.set_price(&method, chain, credits)?;
+    println!("set {method} (chain {chain}) = {credits} credits");
+    Ok(())
+}
+
 /// The parsed flags shared across the keys commands. Hand-rolled to keep the
 /// dependency set minimal, matching the existing CLI style.
 #[derive(Default)]
 struct Flags {
     db: PathBuf,
     positional: Option<String>,
+    positionals: Vec<String>,
+    chain: Option<i64>,
     label: Option<String>,
     account: Option<String>,
     exempt: bool,
@@ -207,11 +281,20 @@ impl Flags {
                 "--expires-at" => {
                     f.expires_at = Some(parse_int(&next_value(&mut it, "--expires-at")))
                 }
+                "--chain" => f.chain = Some(parse_int(&next_value(&mut it, "--chain"))),
                 other if other.starts_with("--") => {
                     eprintln!("error: unknown flag {other}");
                     exit(2);
                 }
-                other => f.positional = Some(other.to_string()),
+                other => {
+                    // Keep the first positional in `positional` for the key
+                    // commands, and collect every positional for the price
+                    // commands (method, credits).
+                    if f.positional.is_none() {
+                        f.positional = Some(other.to_string());
+                    }
+                    f.positionals.push(other.to_string());
+                }
             }
         }
         f
@@ -248,5 +331,8 @@ fn usage() {
     eprintln!("  billing keys list   [--db path]");
     eprintln!("  billing keys revoke <id> [--db path]");
     eprintln!("  billing keys rotate <id> [--db path]");
+    eprintln!("  billing price list  [--db path]");
+    eprintln!("  billing price get <method> [--chain N] [--db path]");
+    eprintln!("  billing price set <method> <credits> [--chain N] [--db path]");
     eprintln!("  ({PEPPER_ENV} must be set for every keys command)");
 }
