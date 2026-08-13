@@ -838,6 +838,164 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unknown_id_mutations_return_404_and_leak_no_secret() {
+        let (app, path) = test_app("notfound");
+
+        // Rotate an unknown id.
+        let rot = HttpRequest::builder()
+            .method("POST")
+            .uri("/admin/keys/k_missing/rotate")
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap();
+        let (status, body) = send(&app, rot).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let text = body.to_string();
+        assert!(
+            !text.contains(TOKEN),
+            "the 404 body must not leak the token"
+        );
+        assert!(
+            !text.contains("jg_"),
+            "the 404 body must not leak a raw key"
+        );
+
+        // Revoke an unknown id.
+        let del = HttpRequest::builder()
+            .method("DELETE")
+            .uri("/admin/keys/k_missing")
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap();
+        let (status, _) = send(&app, del).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Patch an unknown id.
+        let (status, _) = send(
+            &app,
+            json_req(
+                "PATCH",
+                "/admin/keys/k_missing",
+                TOKEN,
+                json!({ "label": "x" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn non_positive_price_is_a_400() {
+        let (app, path) = test_app("badprice");
+        // A negative price is rejected before any write, mapped to 400.
+        let (status, _) = send(
+            &app,
+            json_req(
+                "PUT",
+                "/admin/pricing/eth_call",
+                TOKEN,
+                json!({ "credits": -5 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn malformed_json_is_a_client_error_not_a_500() {
+        let (app, path) = test_app("badjson");
+        let req = HttpRequest::builder()
+            .method("POST")
+            .uri("/admin/keys")
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{ not valid json "))
+            .unwrap();
+        // The rejection body is plain text, so read it directly rather than
+        // through the JSON-parsing `send` helper.
+        let res = app.clone().oneshot(req).await.unwrap();
+        let status = res.status();
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            status.is_client_error(),
+            "malformed JSON must be a 4xx, got {status}"
+        );
+        assert_ne!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            !text.contains(TOKEN),
+            "the error body must not leak the token"
+        );
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn set_pricing_for_a_specific_chain_via_query() {
+        let (app, path) = test_app("chainprice");
+
+        // Set a per-chain override for chain 369.
+        let (status, body) = send(
+            &app,
+            json_req(
+                "PUT",
+                "/admin/pricing/eth_call?chain=369",
+                TOKEN,
+                json!({ "credits": 44 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["chain_id"], 369);
+        assert_eq!(body["credits"], 44);
+
+        // The per-chain row lists, and the any-chain default stays at 20.
+        let (_, body) = send(&app, get("/admin/pricing", Some(TOKEN))).await;
+        let rows = body.as_array().unwrap();
+        let per_chain = rows
+            .iter()
+            .find(|p| p["method"] == "eth_call" && p["chain_id"] == 369)
+            .expect("the per-chain row must list");
+        assert_eq!(per_chain["credits"], 44);
+        let any_chain = rows
+            .iter()
+            .find(|p| p["method"] == "eth_call" && p["chain_id"] == 0)
+            .expect("the any-chain default row must still list");
+        assert_eq!(
+            any_chain["credits"], 20,
+            "the per-chain set must not touch the any-chain default"
+        );
+
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn audit_limit_is_clamped() {
+        let (app, path) = test_app("auditclamp");
+        // Two creates leave at least two audit rows.
+        create_key(&app, "one").await;
+        create_key(&app, "two").await;
+
+        // limit=0 clamps up to 1, so exactly the newest row returns.
+        let (status, body) = send(&app, get("/admin/audit?limit=0", Some(TOKEN))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body.as_array().unwrap().len(),
+            1,
+            "limit=0 must clamp up to 1"
+        );
+
+        // A limit above the hard cap is accepted (clamped) and still returns rows.
+        let (status, body) = send(&app, get("/admin/audit?limit=99999", Some(TOKEN))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.as_array().unwrap().len() >= 2);
+
+        remove_db(&path);
+    }
+
+    #[tokio::test]
     async fn usage_is_not_implemented() {
         let (app, path) = test_app("usage");
         let (id, _) = create_key(&app, "usage-key").await;
