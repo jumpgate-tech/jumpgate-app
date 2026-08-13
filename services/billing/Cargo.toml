@@ -19,6 +19,11 @@ path = "src/main.rs"
 # box needs no system SQLite and a musl static build stays self-contained.
 rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror = "1"
+# Key crypto: CSPRNG bytes, keyed HMAC hashing, and base58 formatting.
+rand = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+bs58 = "0.5"
 
 [profile.release]
 # small, flat binary for the 512 MB VPS
