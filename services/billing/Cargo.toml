@@ -1,0 +1,28 @@
+[package]
+name = "billing"
+version = "0.1.0"
+edition = "2021"
+description = "Jumpgate metered API-key and billing service"
+license = "MIT"
+publish = false
+
+[lib]
+name = "billing"
+path = "src/lib.rs"
+
+[[bin]]
+name = "billing"
+path = "src/main.rs"
+
+[dependencies]
+# rusqlite links SQLite in-process. "bundled" compiles it from source, so the
+# box needs no system SQLite and a musl static build stays self-contained.
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = "1"
+
+[profile.release]
+# small, flat binary for the 512 MB VPS
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
