@@ -566,4 +566,141 @@ mod tests {
             _ => panic!("an empty pepper must be rejected"),
         }
     }
+
+    #[test]
+    fn a_past_expiry_fails_authentication() {
+        // Expiry is a distinct gate from revoke. The key is not revoked, so it
+        // sits in the hot map, but `is_active` rejects it live at authenticate.
+        let km = manager();
+        let past = unix_now() - 60;
+        let cfg = KeyConfig {
+            label: "expired".into(),
+            expires_at: Some(past),
+            ..Default::default()
+        };
+        let (_, raw) = km.create(cfg).unwrap();
+        assert!(
+            km.authenticate(&raw).is_none(),
+            "a key past its expiry must fail closed"
+        );
+    }
+
+    #[test]
+    fn a_future_expiry_still_authenticates() {
+        let km = manager();
+        let future = unix_now() + 3600;
+        let cfg = KeyConfig {
+            label: "not-yet".into(),
+            expires_at: Some(future),
+            ..Default::default()
+        };
+        let (id, raw) = km.create(cfg).unwrap();
+        let record = km
+            .authenticate(&raw)
+            .expect("a key before its expiry must resolve");
+        assert_eq!(record.id, id);
+        assert_eq!(record.expires_at, Some(future));
+    }
+
+    #[test]
+    fn a_limited_rate_survives_create_and_read_back() {
+        // The rate must not be silently coerced to Unlimited on the way through
+        // the store and back.
+        let km = manager();
+        let rate = Rate::Limited {
+            per_second: 50,
+            per_day: 100_000,
+        };
+        let cfg = KeyConfig {
+            label: "throttled".into(),
+            rate: rate.clone(),
+            ..Default::default()
+        };
+        let (id, raw) = km.create(cfg).unwrap();
+
+        // Through the hot map.
+        assert_eq!(km.authenticate(&raw).unwrap().rate, rate);
+
+        // Through the database round-trip.
+        let listed = km.list().unwrap();
+        let row = listed.iter().find(|k| k.id == id).unwrap();
+        assert_eq!(row.rate, rate);
+    }
+
+    #[test]
+    fn constraints_persist_and_read_back() {
+        let km = manager();
+        let cfg = KeyConfig {
+            label: "constrained".into(),
+            origins: vec!["https://app.example".into()],
+            method_allow: vec!["eth_call".into()],
+            method_block: vec!["debug_traceTransaction".into()],
+            networks: vec!["1".into()],
+            ip_allow: vec!["10.0.0.1".into()],
+            ip_deny: vec!["10.0.0.2".into()],
+            ..Default::default()
+        };
+        let (id, _) = km.create(cfg).unwrap();
+
+        let mut got = km.store.list_key_constraints(&id).unwrap();
+        got.sort();
+        let mut want = vec![
+            ("ip_allow".to_string(), "10.0.0.1".to_string()),
+            ("ip_deny".to_string(), "10.0.0.2".to_string()),
+            ("method_allow".to_string(), "eth_call".to_string()),
+            (
+                "method_block".to_string(),
+                "debug_traceTransaction".to_string(),
+            ),
+            ("network".to_string(), "1".to_string()),
+            ("origin".to_string(), "https://app.example".to_string()),
+        ];
+        want.sort();
+        assert_eq!(got, want, "every (kind, value) pair must round-trip");
+    }
+
+    #[test]
+    fn update_patches_label_flag_and_rate() {
+        let km = manager();
+        let (id, raw) = km
+            .create(KeyConfig {
+                label: "before".into(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let new_rate = Rate::Limited {
+            per_second: 10,
+            per_day: 1000,
+        };
+        let patch = KeyPatch {
+            label: Some("after".into()),
+            credit_exempt: Some(true),
+            rate: Some(new_rate.clone()),
+            ..Default::default()
+        };
+        let record = km.update(&id, patch).unwrap();
+
+        // The returned record reflects the patch.
+        assert_eq!(record.label, "after");
+        assert!(record.credit_exempt);
+        assert_eq!(record.rate, new_rate);
+
+        // The hot map reflects it: the same raw key resolves to the new record.
+        let live = km.authenticate(&raw).unwrap();
+        assert_eq!(live.label, "after");
+        assert!(live.credit_exempt);
+        assert_eq!(live.rate, new_rate);
+
+        // The database reflects it: list returns the patched record.
+        let listed = km.list().unwrap();
+        let row = listed.iter().find(|k| k.id == id).unwrap();
+        assert_eq!(row.label, "after");
+        assert!(row.credit_exempt);
+        assert_eq!(row.rate, new_rate);
+
+        // Known follow-up: `KeyPatch` cannot CLEAR an expiry. `expires_at: None`
+        // means "leave unchanged", and there is no sentinel to set the column
+        // back to NULL. Clearing an expiry needs a new patch shape.
+    }
 }

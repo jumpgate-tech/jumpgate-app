@@ -387,4 +387,30 @@ mod tests {
             Err(Error::RangeTooWide { .. })
         ));
     }
+
+    #[test]
+    fn getlogs_cap_boundary_reports_span_and_cap() {
+        let base = 75;
+        // Exactly the cap succeeds and carries the full-window surcharge.
+        let at_cap = getlogs_credits(base, 0, GETLOGS_MAX_RANGE_BLOCKS).unwrap();
+        assert_eq!(at_cap, base + (GETLOGS_MAX_RANGE_BLOCKS / 1000) as i64);
+
+        // One block past the cap reports the exact span and cap it rejected.
+        match getlogs_credits(base, 0, GETLOGS_MAX_RANGE_BLOCKS + 1) {
+            Err(Error::RangeTooWide { span, cap }) => {
+                assert_eq!(span, GETLOGS_MAX_RANGE_BLOCKS + 1);
+                assert_eq!(cap, GETLOGS_MAX_RANGE_BLOCKS);
+            }
+            other => panic!("expected RangeTooWide, got {other:?}"),
+        }
+
+        // An inverted range reports the from and to it rejected.
+        match getlogs_credits(base, 100, 50) {
+            Err(Error::RangeInverted { from, to }) => {
+                assert_eq!(from, 100);
+                assert_eq!(to, 50);
+            }
+            other => panic!("expected RangeInverted, got {other:?}"),
+        }
+    }
 }

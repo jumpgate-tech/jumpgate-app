@@ -434,4 +434,39 @@ mod tests {
             "the CHECK constraint must reject a zero price"
         );
     }
+
+    #[test]
+    fn read_audit_is_newest_first_and_honours_the_limit() {
+        let store = Store::open_in_memory().unwrap();
+        // Append in a known order. `id` is the tie-breaker the read sorts on.
+        store
+            .append_audit("operator", "a.one", Some("t1"), None)
+            .unwrap();
+        store
+            .append_audit("operator", "a.two", Some("t2"), None)
+            .unwrap();
+        store
+            .append_audit("operator", "a.three", Some("t3"), None)
+            .unwrap();
+
+        // Newest first: the last write leads, and the ids strictly descend.
+        let all = store.read_audit(100).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].action, "a.three");
+        assert_eq!(all[1].action, "a.two");
+        assert_eq!(all[2].action, "a.one");
+        assert!(
+            all[0].id > all[1].id && all[1].id > all[2].id,
+            "ids must descend newest-first"
+        );
+
+        // The limit truncates to the newest rows.
+        let two = store.read_audit(2).unwrap();
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[0].action, "a.three");
+        assert_eq!(two[1].action, "a.two");
+
+        // A limit above the row count returns every row, not an error.
+        assert_eq!(store.read_audit(1000).unwrap().len(), 3);
+    }
 }
