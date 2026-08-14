@@ -141,6 +141,13 @@ func TestDefaultTLSHostname(t *testing.T) {
 	if other := DefaultTLSHostname("default", "machine-b"); other == got {
 		t.Errorf("two installs got the same name %q — two machines would serve different certificates for it", got)
 	}
+	// The per-install tag must carry enough entropy not to collide at scale:
+	// 8 bytes -> 16 hex chars (64 bits). Guards against shrinking it back to the
+	// old 24-bit tag, which collided by the birthday bound at ~4k installs.
+	tag := strings.TrimSuffix(strings.TrimPrefix(got, "default-"), "."+DefaultTLSDomain)
+	if len(tag) < 16 {
+		t.Errorf("per-install tag %q is %d chars; want >= 16 hex (64 bits)", tag, len(tag))
+	}
 
 	// A gateway id may contain dots and underscores; a DNS label may not.
 	if got := DefaultTLSHostname("edge_1.eu", "seed"); strings.Contains(strings.TrimSuffix(got, "."+DefaultTLSDomain), ".") ||
