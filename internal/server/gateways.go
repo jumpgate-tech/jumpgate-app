@@ -32,12 +32,15 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -1350,6 +1353,11 @@ func (s *Server) handleGatewayPutConfig(w http.ResponseWriter, r *http.Request) 
 	// gap the one-click setup flow (home.ts/panel.ts) hit: it builds the same
 	// internalTLSConfig(networks) twice, once for create and once for this PUT,
 	// and only create used to fill the hostname in.
+	// Whether the client explicitly chose a hostname — captured BEFORE
+	// defaultTLSHostname fills an empty one, so the store step below can keep the
+	// gateway's existing hostname when the client left the choice to us. A URL
+	// handed to a wallet must never rotate on an unrelated config change.
+	clientSentHostname := gwCfg.TLS != nil && strings.TrimSpace(gwCfg.TLS.Hostname) != ""
 	defaultTLSHostname(&gwCfg, gid)
 	// Before validation, because an unfilled ${...} slot is not a URL eRPC
 	// could ever dial, and the operator should be told which key is missing
@@ -1381,6 +1389,18 @@ func (s *Server) handleGatewayPutConfig(w http.ResponseWriter, r *http.Request) 
 		for i := range c.Gateways {
 			if c.Gateways[i].ID != gid {
 				continue
+			}
+			// Keep the stored hostname when the client didn't choose one, so an
+			// already-shared URL never changes. installSeed is stable now too, so
+			// a fresh derivation would match — this also protects gateways created
+			// before that fix, whose hostname was derived from the old volatile seed.
+			if !clientSentHostname {
+				if old := c.Gateways[i].Config.TLS; old != nil && strings.TrimSpace(old.Hostname) != "" {
+					if gwCfg.TLS == nil {
+						gwCfg.TLS = &catalog.GatewayTLS{}
+					}
+					gwCfg.TLS.Hostname = old.Hostname
+				}
 			}
 			c.Gateways[i].Config = gwCfg
 			return nil
@@ -1989,14 +2009,55 @@ func defaultTLSHostname(g *catalog.GatewayConfig, gatewayID string) {
 	}
 }
 
-// installSeed identifies THIS install. The machine's own hostname plus the
-// state directory is enough: it is stable across restarts, needs nothing
-// stored, and two installs on one machine (different $HOME) still differ.
-var installSeed = sync.OnceValue(func() string {
+// installSeed identifies THIS install — the stable per-install tag baked into a
+// gateway's default TLS hostname. It is a random id generated ONCE and persisted
+// in the state dir.
+//
+// It must NOT depend on the machine hostname: os.Hostname() churns on macOS
+// (DHCP / mDNS renames), and when it changed a re-provision re-derived a new
+// hostname hash, silently rotating a gateway's URL out from under anyone it had
+// been shared with. A persisted random id is stable forever, and two installs
+// on one machine (different $HOME → different state dir → different id file)
+// still differ.
+var installSeed = sync.OnceValue(installID)
+
+// installIDFile is the file the per-install id lives in, inside config.Dir().
+const installIDFile = "install-id"
+
+// installID returns the persisted per-install id, generating and storing it on
+// first use. If the state dir can't be read or written it falls back to the
+// legacy machine-hostname seed — stable within a run, and the write is retried
+// next run — rather than a fresh random each call, which would itself churn.
+func installID() string {
+	dir, err := config.Dir()
+	if err != nil {
+		return legacyInstallSeed()
+	}
+	path := filepath.Join(dir, installIDFile)
+	if b, rerr := os.ReadFile(path); rerr == nil {
+		if s := strings.TrimSpace(string(b)); s != "" {
+			return s
+		}
+	}
+	buf := make([]byte, 16)
+	if _, rerr := rand.Read(buf); rerr != nil {
+		return legacyInstallSeed()
+	}
+	id := hex.EncodeToString(buf)
+	if mkerr := os.MkdirAll(dir, 0o700); mkerr == nil {
+		_ = os.WriteFile(path, []byte(id+"\n"), 0o600) // best-effort; retried next run
+	}
+	return id
+}
+
+// legacyInstallSeed is the old machine-hostname seed, kept ONLY as a fallback
+// when the id file is unavailable. It is stable within a process run; its churn
+// across runs is the exact bug installID fixes, so it is never the primary path.
+func legacyInstallSeed() string {
 	name, _ := os.Hostname()
 	dir, _ := config.Dir()
 	return name + "\x00" + dir
-})
+}
 
 // ---------------------------------------------------------------------
 // GET /api/chainlist/{chainId}
