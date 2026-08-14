@@ -64,12 +64,17 @@ export function CapsBand({
   busy,
   err,
   hasData,
+  running,
 }: {
   statuses: Record<string, string>;
   busy: boolean;
   err: string | null;
   hasData: boolean;
+  running: boolean;
 }) {
+  // A stopped gateway can't answer a capability probe — say so instead of
+  // running it and showing a raw connection error.
+  if (!running) return <div className="p-caprow" style={{ color: "var(--dim2)" }}>Start the gateway to check capabilities.</div>;
   if (busy && !hasData) return <div className="p-caprow" style={{ color: "var(--dim2)" }}>probing…</div>;
   if (err && !hasData) return <div className="p-caprow p-caperr">Couldn't check capabilities — {err}</div>;
   return <CapabilityMeter statuses={statuses} />;

@@ -95,7 +95,11 @@ export function Panel() {
   const gid = gw?.id;
 
   const health = useGatewayHealth(gid, !!gid);
-  const capsEnabled = !!gid && (view.name === "network" || view.name === "endpoint");
+  // Only probe capabilities on a RUNNING gateway — a stopped one can't answer,
+  // and probing it just yields a raw connection error. CapsBand shows a "start
+  // the gateway" placeholder in that case.
+  const capsEnabled =
+    !!gid && gw?.status.State === "running" && (view.name === "network" || view.name === "endpoint");
   const caps = useGatewayCapabilities(gid, capsEnabled);
 
   const actionMut = useGatewayAction();

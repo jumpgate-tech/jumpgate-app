@@ -51,18 +51,25 @@ describe("CapabilityDots", () => {
 });
 
 describe("CapsBand", () => {
+  it("tells the operator to start the gateway when it is stopped", () => {
+    render(<CapsBand statuses={{}} busy={false} err={"socket refused"} hasData={false} running={false} />);
+    expect(screen.getByText(/Start the gateway/)).toBeInTheDocument();
+    // The raw probe error is NOT shown for a stopped gateway.
+    expect(screen.queryByText(/Couldn't check capabilities/)).not.toBeInTheDocument();
+  });
+
   it("shows 'probing…' only on the first fetch (busy, no data yet)", () => {
-    render(<CapsBand statuses={{}} busy={true} err={null} hasData={false} />);
+    render(<CapsBand statuses={{}} busy={true} err={null} hasData={false} running={true} />);
     expect(screen.getByText("probing…")).toBeInTheDocument();
   });
 
   it("shows the probe error when it failed with no data", () => {
-    render(<CapsBand statuses={{}} busy={false} err={"socket refused"} hasData={false} />);
+    render(<CapsBand statuses={{}} busy={false} err={"socket refused"} hasData={false} running={true} />);
     expect(screen.getByText(/Couldn't check capabilities/)).toHaveTextContent("socket refused");
   });
 
   it("shows the meter (previous verdict) once there is data, even while refetching", () => {
-    render(<CapsBand statuses={{ http: "supported" }} busy={true} err={null} hasData={true} />);
+    render(<CapsBand statuses={{ http: "supported" }} busy={true} err={null} hasData={true} running={true} />);
     expect(screen.queryByText("probing…")).not.toBeInTheDocument();
     expect(screen.getByText("HTTP").closest(".p-capitem")).toHaveClass("lit");
   });
