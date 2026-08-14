@@ -165,7 +165,7 @@ func TestEvaluate(t *testing.T) {
 	tests := []struct {
 		name                    string
 		current, latest         string
-		releaseURL, skip        string
+		releaseURL              string
 		wantUpdateAvailable     bool
 		wantCurrent, wantLatest string
 		wantReleaseURL          string
@@ -175,7 +175,6 @@ func TestEvaluate(t *testing.T) {
 			current:             "0.3.0",
 			latest:              "0.4.0",
 			releaseURL:          "https://example/rel",
-			skip:                "",
 			wantUpdateAvailable: true,
 			wantCurrent:         "0.3.0",
 			wantLatest:          "0.4.0",
@@ -221,28 +220,10 @@ func TestEvaluate(t *testing.T) {
 			wantCurrent:         "0.3.0",
 			wantLatest:          "",
 		},
-		{
-			name:                "skip suppresses through v-normalization",
-			current:             "0.3.0",
-			latest:              "0.4.0",
-			skip:                "v0.4.0",
-			wantUpdateAvailable: false,
-			wantCurrent:         "0.3.0",
-			wantLatest:          "0.4.0",
-		},
-		{
-			name:                "newer than skip is available again",
-			current:             "0.3.0",
-			latest:              "0.5.0",
-			skip:                "v0.4.0",
-			wantUpdateAvailable: true,
-			wantCurrent:         "0.3.0",
-			wantLatest:          "0.5.0",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Evaluate(tt.current, tt.latest, tt.releaseURL, tt.skip)
+			got := Evaluate(tt.current, tt.latest, tt.releaseURL)
 			if got.UpdateAvailable != tt.wantUpdateAvailable {
 				t.Errorf("UpdateAvailable = %v, want %v", got.UpdateAvailable, tt.wantUpdateAvailable)
 			}

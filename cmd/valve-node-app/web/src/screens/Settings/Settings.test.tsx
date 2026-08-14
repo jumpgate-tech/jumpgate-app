@@ -12,6 +12,7 @@ vi.mock("../../api", async () => {
     ...actual,
     getSettings: vi.fn(),
     putSettings: vi.fn(),
+    getUpdate: vi.fn(),
   };
 });
 
@@ -50,6 +51,16 @@ function aiProviderSelect(): HTMLSelectElement {
 beforeEach(() => {
   vi.mocked(api.getSettings).mockReset();
   vi.mocked(api.putSettings).mockReset();
+  // The Settings page pulls update status on mount; a benign default keeps
+  // these AI/provider-key tests from touching a real fetch.
+  vi.mocked(api.getUpdate).mockReset();
+  vi.mocked(api.getUpdate).mockResolvedValue({
+    current: "dev",
+    latest: "",
+    updateAvailable: false,
+    releaseUrl: "",
+    notifyEnabled: true,
+  });
 });
 afterEach(cleanup);
 

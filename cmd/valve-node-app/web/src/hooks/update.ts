@@ -1,31 +1,22 @@
-// React Query hooks over api.ts's update-check surface — the App shell's
-// update banner data layer. The server caches the GitHub result itself (see
-// internal/server/update.go), so a modest client poll here is cheap.
-import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+// React Query hook over api.ts's update-check surface. Two callers:
+//   - the App-shell banner uses useUpdate() (no refresh), which the server
+//     answers without a GitHub call when notices are off — so a "don't prompt
+//     me" install makes no background request.
+//   - the Settings page uses useUpdate(true), a manual pull that always asks
+//     GitHub, and drives its "Check for updates" button with refetch().
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import * as api from "../api";
 
-// useUpdate reads the current update status. It polls hourly — a new release is
-// rare, and the server answers from its own cache anyway, so a tight interval
-// would buy nothing. A failed request is not retried on a loop: the status
-// itself already carries checkError, so surfacing that beats React Query hiding
-// a transient failure behind background retries.
-export function useUpdate(): UseQueryResult<api.Update> {
+// useUpdate reads the update status. Pass refresh=true to force a live check.
+// It does not poll — a new release is rare, and the check runs on mount (and on
+// the Settings button's refetch). A failed request is not retried on a loop:
+// the status carries checkError, so surfacing it beats hiding a transient
+// failure behind background retries.
+export function useUpdate(refresh = false): UseQueryResult<api.Update> {
   return useQuery({
-    queryKey: ["update"],
-    queryFn: () => api.getUpdate(),
-    refetchInterval: 60 * 60 * 1000,
+    queryKey: ["update", refresh],
+    queryFn: () => api.getUpdate(refresh),
     retry: false,
-  });
-}
-
-// useSkipUpdate records the skipped version and seeds the cache with the fresh
-// status the POST returns, so the banner hides at once without a second GET.
-export function useSkipUpdate() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (version: string) => api.skipUpdate(version),
-    onSuccess: (updated) => {
-      qc.setQueryData(["update"], updated);
-    },
+    refetchOnWindowFocus: false,
   });
 }
