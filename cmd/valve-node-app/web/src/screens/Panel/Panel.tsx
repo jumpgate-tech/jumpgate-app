@@ -113,7 +113,10 @@ export function Panel() {
     setProvisionTargetId(null);
     setBusy(null);
     if (ev.err) setActionErr(`Provisioning failed: ${ev.err}`);
-    if (captureLogRef.current) setSetupLog([]);
+    // Keep the setup log on an ERROR finish — the "Preparing… / Creating… /
+    // Starting…" narration and streamed step lines are exactly the diagnostic
+    // context the operator needs. Only a clean finish clears it.
+    if (captureLogRef.current && !ev.err) setSetupLog([]);
     captureLogRef.current = false;
     const done = onDoneRef.current;
     onDoneRef.current = undefined;
@@ -277,12 +280,12 @@ export function Panel() {
           })),
         });
       } catch (e) {
-        fail(`Could not read valve's set for chain ${chainId}: ${message(e)}`, hint(e));
+        fail(`Could not read the curated endpoint set for chain ${chainId}: ${message(e)}`, hint(e));
         return;
       }
     }
     if (networks.length === 0) {
-      fail("valve has no measured endpoints for Ethereum or PulseChain right now, so there was nothing to add.");
+      fail("There are no measured public endpoints for Ethereum or PulseChain right now, so there was nothing to add.");
       return;
     }
     try {
@@ -377,7 +380,7 @@ export function Panel() {
     if (urls.length === 0) {
       setBusy(null);
       setActionErr(
-        `No public endpoints answered for chain ${chainId} right now — add one by hand from its network screen.`,
+        `No public endpoints answered for chain ${chainId} right now, so it wasn't added. Try again in a moment.`,
       );
       return;
     }
@@ -545,8 +548,12 @@ export function Panel() {
   function body() {
     if (gwQuery.isError) {
       return (
-        <div className="p-band" style={{ padding: 16, color: "var(--red)" }}>
-          {message(gwQuery.error)}
+        <div className="p-band p-empty">
+          <div className="p-emptytitle">Couldn&apos;t load your gateway</div>
+          <div className="p-emptysub">{message(gwQuery.error)}</div>
+          <button type="button" className="btn" style={{ marginTop: 12 }} onClick={() => void gwQuery.refetch()}>
+            Retry
+          </button>
         </div>
       );
     }
@@ -647,7 +654,18 @@ export function Panel() {
     <>
       <Sprite />
       <div className="p-wrap">
-        <div className="p-panel">{body()}</div>
+        <div className="p-panel">
+          {view.name !== "list" && (busy || actionErr) ? (
+            <div className="p-band p-provision" role={actionErr && !busy ? "alert" : "status"}>
+              {busy ? (
+                <span className="p-emptysub">Applying changes…</span>
+              ) : (
+                <span className="p-provision-err">{actionErr}</span>
+              )}
+            </div>
+          ) : null}
+          {body()}
+        </div>
       </div>
       {renderDialog()}
     </>
