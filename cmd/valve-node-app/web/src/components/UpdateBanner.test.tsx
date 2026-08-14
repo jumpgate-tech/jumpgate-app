@@ -11,7 +11,6 @@ vi.mock("../api", async () => {
   return {
     ...actual,
     getUpdate: vi.fn(),
-    skipUpdate: vi.fn(),
   };
 });
 
@@ -20,7 +19,7 @@ const AVAILABLE: Update = {
   latest: "v0.4.0",
   updateAvailable: true,
   releaseUrl: "https://example.test/releases/v0.4.0",
-  checkEnabled: true,
+  notifyEnabled: true,
 };
 
 function renderBanner() {
@@ -35,7 +34,6 @@ function renderBanner() {
 
 beforeEach(() => {
   vi.mocked(api.getUpdate).mockReset();
-  vi.mocked(api.skipUpdate).mockReset();
 });
 afterEach(cleanup);
 
@@ -43,7 +41,13 @@ describe("UpdateBanner", () => {
   it("shows nothing when no update is available", async () => {
     vi.mocked(api.getUpdate).mockResolvedValue({ ...AVAILABLE, updateAvailable: false });
     renderBanner();
-    // Give the query a tick to resolve, then assert the banner stayed away.
+    await waitFor(() => expect(api.getUpdate).toHaveBeenCalled());
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("stays hidden when notices are off, even if an update exists", async () => {
+    vi.mocked(api.getUpdate).mockResolvedValue({ ...AVAILABLE, notifyEnabled: false });
+    renderBanner();
     await waitFor(() => expect(api.getUpdate).toHaveBeenCalled());
     expect(screen.queryByRole("status")).toBeNull();
   });
@@ -57,21 +61,11 @@ describe("UpdateBanner", () => {
     expect(link).toHaveAttribute("href", "https://example.test/releases/v0.4.0");
   });
 
-  it("dismisses for the session without recording a skip", async () => {
+  it("dismisses for the session", async () => {
     vi.mocked(api.getUpdate).mockResolvedValue(AVAILABLE);
     renderBanner();
     await screen.findByRole("status");
     fireEvent.click(screen.getByText("Dismiss"));
     expect(screen.queryByRole("status")).toBeNull();
-    expect(api.skipUpdate).not.toHaveBeenCalled();
-  });
-
-  it("skips the offered version", async () => {
-    vi.mocked(api.getUpdate).mockResolvedValue(AVAILABLE);
-    vi.mocked(api.skipUpdate).mockResolvedValue({ ...AVAILABLE, updateAvailable: false });
-    renderBanner();
-    await screen.findByRole("status");
-    fireEvent.click(screen.getByText("Skip this version"));
-    await waitFor(() => expect(api.skipUpdate).toHaveBeenCalledWith("v0.4.0"));
   });
 });

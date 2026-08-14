@@ -1,13 +1,17 @@
-// This file implements the update-notification surface: GET /api/update
-// reports whether a newer release exists, and POST /api/update/skip records a
-// version the operator does not want to be nagged about. The app never
-// installs anything itself here — it only tells the operator and points at the
+// This file implements the update surface. GET /api/update reports whether a
+// newer release exists. It has two modes, folded into one endpoint:
+//   - Proactive: when notices are on, the server checks in the background and
+//     the UI shows a banner. The banner loads this endpoint with no refresh.
+//   - On demand: the Settings page loads it with ?refresh=1, which always asks
+//     GitHub now — even when notices are off ("don't prompt me"). That is how
+//     the operator pulls the latest version without being nagged.
+//
+// The app never installs anything here — it only reports and links to the
 // release page.
 package server
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -23,9 +27,10 @@ type updateSource interface {
 	Latest(ctx context.Context) (updatecheck.Release, error)
 }
 
-// updateCheckInterval bounds how often the server asks GitHub. GitHub's
-// unauthenticated API allows 60 requests an hour per IP, and a new release is
-// rare, so one check every few hours is plenty and leaves the budget alone.
+// updateCheckInterval bounds how often the server asks GitHub on the proactive
+// path. GitHub's unauthenticated API allows 60 requests an hour per IP, and a
+// new release is rare, so one check every few hours is plenty. A manual refresh
+// bypasses this window.
 const updateCheckInterval = 6 * time.Hour
 
 // updateFetchTimeout caps one live check so a slow or unreachable GitHub can
@@ -39,13 +44,14 @@ type updateResponse struct {
 	UpdateAvailable bool   `json:"updateAvailable"`
 	ReleaseURL      string `json:"releaseUrl"`
 
-	// CheckEnabled is false when the operator turned the check off. The UI
-	// still shows the running version, but never a newer one.
-	CheckEnabled bool `json:"checkEnabled"`
+	// NotifyEnabled is false when the operator chose "don't prompt me". The
+	// banner shows only when this is true; the Settings page shows the status
+	// either way (it pulls with ?refresh=1).
+	NotifyEnabled bool `json:"notifyEnabled"`
 
 	// CheckError carries the reason the last check failed (offline, rate
 	// limited), so the UI can say "could not check" rather than "up to date".
-	// Empty when the last check succeeded or the check is disabled.
+	// Empty when the last check succeeded or no check was made.
 	CheckError string `json:"checkError,omitempty"`
 }
 
@@ -58,16 +64,17 @@ func (s *Server) clock() time.Time {
 	return time.Now()
 }
 
-// latestRelease returns the newest release, from the cache when it is fresher
-// than updateCheckInterval and by asking GitHub otherwise. The second return
-// value is the last check's error text ("" on success). A failed check keeps
-// whatever release was last cached, so one offline moment does not erase a
-// known-good answer.
-func (s *Server) latestRelease(ctx context.Context) (updatecheck.Release, string) {
+// latestRelease returns the newest release. When force is false it serves the
+// cache while it is fresher than updateCheckInterval; when force is true (a
+// manual refresh) it always asks GitHub now. The second return value is the
+// last check's error text ("" on success). A failed check keeps whatever
+// release was last cached, so one offline moment does not erase a known-good
+// answer.
+func (s *Server) latestRelease(ctx context.Context, force bool) (updatecheck.Release, string) {
 	s.updMu.Lock()
 	defer s.updMu.Unlock()
 
-	if s.updHasCache && s.clock().Sub(s.updAt) < updateCheckInterval {
+	if !force && s.updHasCache && s.clock().Sub(s.updAt) < updateCheckInterval {
 		return s.updCache, s.updErr
 	}
 
@@ -86,35 +93,29 @@ func (s *Server) latestRelease(ctx context.Context) (updatecheck.Release, string
 	return rel, ""
 }
 
-// PrimeUpdateCheck warms the cache once, in the background, so the first UI
-// poll answers instantly instead of blocking on a GitHub round-trip. It
-// respects the disabled setting and swallows the result — a failed check is
-// reported through GET /api/update, never here. main calls it after the
-// server starts.
+// PrimeUpdateCheck warms the cache once, in the background, so the banner's
+// first load answers instantly. It is the ONLY background call, and it runs
+// only when notices are on — "don't prompt me" means the app makes no
+// unprompted call to GitHub at all. main calls it after the server starts.
 func (s *Server) PrimeUpdateCheck(ctx context.Context) {
 	cfg, err := config.Load()
-	if err != nil || cfg.UpdateCheckDisabled {
+	if err != nil || cfg.UpdateNotifyDisabled {
 		return
 	}
-	_, _ = s.latestRelease(ctx)
+	_, _ = s.latestRelease(ctx, false)
 }
 
-// buildUpdateResponse assembles the response for the current config and the
-// (possibly cached) release. It is the one place that folds the disabled
-// setting, the skip version, and the running version together, so GET and the
-// skip POST cannot answer differently.
+// buildUpdateResponse assembles the response from the current config and the
+// (possibly cached) release. NotifyEnabled mirrors the setting; the version
+// comparison is the same whether the caller is the banner or the Settings page.
 func buildUpdateResponse(cfg config.Config, rel updatecheck.Release, checkErr string) updateResponse {
-	current := buildinfo.Version()
-	if cfg.UpdateCheckDisabled {
-		return updateResponse{Current: current, CheckEnabled: false}
-	}
-	st := updatecheck.Evaluate(current, rel.Version, rel.URL, cfg.UpdateSkipVersion)
+	st := updatecheck.Evaluate(buildinfo.Version(), rel.Version, rel.URL)
 	return updateResponse{
 		Current:         st.Current,
 		Latest:          st.Latest,
 		UpdateAvailable: st.UpdateAvailable,
 		ReleaseURL:      st.ReleaseURL,
-		CheckEnabled:    true,
+		NotifyEnabled:   !cfg.UpdateNotifyDisabled,
 		CheckError:      checkErr,
 	}
 }
@@ -125,47 +126,21 @@ func (s *Server) handleGetUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if cfg.UpdateCheckDisabled {
-		// Disabled means "do not reach GitHub", so answer from the config
-		// alone — no network, no cache read.
+
+	refresh := isTruthyParam(r.URL.Query().Get("refresh"))
+
+	// "Don't prompt me" and no manual refresh: this is the banner's background
+	// load, so make NO call to GitHub. Answer from the config alone.
+	if cfg.UpdateNotifyDisabled && !refresh {
 		writeJSON(w, http.StatusOK, buildUpdateResponse(cfg, updatecheck.Release{}, ""))
 		return
 	}
-	rel, checkErr := s.latestRelease(r.Context())
+
+	rel, checkErr := s.latestRelease(r.Context(), refresh)
 	writeJSON(w, http.StatusOK, buildUpdateResponse(cfg, rel, checkErr))
 }
 
-type skipUpdateRequest struct {
-	Version string `json:"version"`
-}
-
-// handleSkipUpdate records the version the operator wants to skip and answers
-// with the recomputed status. It does NOT hit GitHub — it reuses the cached
-// release, so skipping is instant and offline-safe.
-func (s *Server) handleSkipUpdate(w http.ResponseWriter, r *http.Request) {
-	var req skipUpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if req.Version == "" {
-		writeError(w, http.StatusBadRequest, "version is required")
-		return
-	}
-
-	cfg, err := s.updateConfig(func(c *config.Config) error {
-		c.UpdateSkipVersion = req.Version
-		return nil
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// Recompute from the cache, without a fresh fetch.
-	s.updMu.Lock()
-	rel, checkErr := s.updCache, s.updErr
-	s.updMu.Unlock()
-
-	writeJSON(w, http.StatusOK, buildUpdateResponse(cfg, rel, checkErr))
+// isTruthyParam reports whether a query value means "yes" — "1" or "true".
+func isTruthyParam(v string) bool {
+	return v == "1" || v == "true"
 }

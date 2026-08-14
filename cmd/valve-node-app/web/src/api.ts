@@ -1287,10 +1287,10 @@ export interface Settings {
   // array; callers still coalesce, because an older binary behind a newer
   // bundle would send nothing at all.
   providerKeysSet: string[];
-  // updateCheckEnabled reports whether the app checks GitHub for a newer
-  // release. An older binary behind a newer bundle omits it; the UI treats a
-  // missing value as "on", matching the server default.
-  updateCheckEnabled?: boolean;
+  // updateNotifyEnabled reports whether the app proactively notifies about a
+  // newer release. An older binary behind a newer bundle omits it; the UI
+  // treats a missing value as "on", matching the server default.
+  updateNotifyEnabled?: boolean;
 }
 
 export function getSettings(): Promise<Settings> {
@@ -1310,9 +1310,9 @@ export interface PutSettingsRequest {
   // key. A name must match ^[A-Za-z0-9_]+$; the server rejects the WHOLE
   // request on one bad name, so the error has to reach the operator.
   providerKeys?: Record<string, string>;
-  // updateCheckEnabled toggles the automatic release check. Omit to leave it
+  // updateNotifyEnabled toggles proactive update notices. Omit to leave it
   // unchanged, same rule as every other field here.
-  updateCheckEnabled?: boolean;
+  updateNotifyEnabled?: boolean;
 }
 
 export function putSettings(body: PutSettingsRequest): Promise<Settings> {
@@ -1330,34 +1330,30 @@ export function putSettings(body: PutSettingsRequest): Promise<Settings> {
 export interface Update {
   // current is the running version, e.g. "v0.4.0" or "dev" for a local build.
   current: string;
-  // latest is the newest published release, or "" when the check is disabled
-  // or has not answered yet.
+  // latest is the newest published release, or "" when notices are off and no
+  // manual refresh has been asked for.
   latest: string;
-  // updateAvailable is true only when latest is newer than current AND the
-  // operator has not skipped it. A "dev" build never reports one.
+  // updateAvailable is true only when latest is newer than current. A "dev"
+  // build never reports one.
   updateAvailable: boolean;
   // releaseUrl points at the release page to open. Empty when there is nothing
   // newer to show.
   releaseUrl: string;
-  // checkEnabled is false when the operator turned the check off in Settings.
-  checkEnabled: boolean;
+  // notifyEnabled is false when the operator chose "don't prompt me". The
+  // banner shows only when this is true; the Settings page shows the status
+  // either way, because it pulls with refresh=true.
+  notifyEnabled: boolean;
   // checkError names why the last check failed (offline, rate limited), so the
   // UI can say "could not check" instead of "up to date". Empty on success.
   checkError?: string;
 }
 
-export function getUpdate(): Promise<Update> {
-  return request<Update>("/api/update");
-}
-
-// skipUpdate records a version the operator does not want to be nagged about.
-// The notice returns when a release newer than this one appears.
-export function skipUpdate(version: string): Promise<Update> {
-  return request<Update>("/api/update/skip", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ version }),
-  });
+// getUpdate reads the update status. refresh=true forces a live GitHub check —
+// it is how the Settings page pulls the latest even when notices are off. The
+// banner calls it with no refresh, so a "don't prompt me" install makes no
+// background call.
+export function getUpdate(refresh = false): Promise<Update> {
+  return request<Update>(refresh ? "/api/update?refresh=1" : "/api/update");
 }
 
 // ---------------------------------------------------------------------

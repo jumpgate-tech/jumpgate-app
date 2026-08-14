@@ -160,9 +160,8 @@ func numericAt(parts []string, i int) int {
 }
 
 // Evaluate builds a Status. It marks an update available only when the current
-// version is a real version, the latest version is newer, and the user has not
-// chosen to skip that latest version.
-func Evaluate(current, latest, releaseURL, skip string) Status {
+// version is a real version and the latest version is newer.
+func Evaluate(current, latest, releaseURL string) Status {
 	s := Status{
 		Current:    current,
 		Latest:     latest,
@@ -176,9 +175,6 @@ func Evaluate(current, latest, releaseURL, skip string) Status {
 		return s
 	}
 	if CompareSemver(latest, current) <= 0 {
-		return s
-	}
-	if skip != "" && CompareSemver(latest, skip) == 0 {
 		return s
 	}
 

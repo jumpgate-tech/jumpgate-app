@@ -474,10 +474,9 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 
-	// The update check: is a newer release out, and skip one if the operator
-	// wants. See update.go.
+	// The update check: is a newer release out? ?refresh=1 forces a live check
+	// (the Settings page's manual pull). See update.go.
 	mux.HandleFunc("GET /api/update", s.handleGetUpdate)
-	mux.HandleFunc("POST /api/update/skip", s.handleSkipUpdate)
 }
 
 // ---------------------------------------------------------------------
@@ -1465,11 +1464,11 @@ type settingsResponse struct {
 	// Same rule as AIKeySet.
 	ProviderKeysSet []string `json:"providerKeysSet"`
 
-	// UpdateCheckEnabled reports whether the app checks GitHub for a newer
-	// release. It is the inverse of config.UpdateCheckDisabled — the UI shows a
-	// positive "check automatically" toggle, so the API speaks in the same
-	// direction.
-	UpdateCheckEnabled bool `json:"updateCheckEnabled"`
+	// UpdateNotifyEnabled reports whether the app proactively notifies about a
+	// newer release. It is the inverse of config.UpdateNotifyDisabled — the UI
+	// shows a positive "notify me automatically" toggle, so the API speaks in
+	// the same direction.
+	UpdateNotifyEnabled bool `json:"updateNotifyEnabled"`
 }
 
 // placeholderNamePattern is the name shape chainlist's ${...} slot accepts. It
@@ -1485,8 +1484,8 @@ func settingsResponseFrom(c config.Config) settingsResponse {
 		RefRPCBase: c.RefRPCBase,
 		// Never nil: a nil slice serialises as JSON null, and the UI should be
 		// able to iterate the field without a guard.
-		ProviderKeysSet:    []string{},
-		UpdateCheckEnabled: !c.UpdateCheckDisabled,
+		ProviderKeysSet:     []string{},
+		UpdateNotifyEnabled: !c.UpdateNotifyDisabled,
 	}
 	for name, v := range c.ProviderKeys {
 		if strings.TrimSpace(v) != "" {
@@ -1517,10 +1516,10 @@ type settingsRequest struct {
 	AIKey      *string `json:"aiKey"`
 	RefRPCBase *string `json:"refRpcBase"`
 
-	// UpdateCheckEnabled toggles the automatic release check. A pointer so an
+	// UpdateNotifyEnabled toggles proactive update notices. A pointer so an
 	// omitted field leaves the setting untouched, matching the other fields
-	// here. The server stores the inverse (config.UpdateCheckDisabled).
-	UpdateCheckEnabled *bool `json:"updateCheckEnabled"`
+	// here. The server stores the inverse (config.UpdateNotifyDisabled).
+	UpdateNotifyEnabled *bool `json:"updateNotifyEnabled"`
 
 	// ProviderKeys is a PATCH by placeholder name, not a replacement: a name
 	// with a value sets it, a name with an empty value forgets it, and a name
@@ -1561,8 +1560,8 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		if req.RefRPCBase != nil {
 			c.RefRPCBase = *req.RefRPCBase
 		}
-		if req.UpdateCheckEnabled != nil {
-			c.UpdateCheckDisabled = !*req.UpdateCheckEnabled
+		if req.UpdateNotifyEnabled != nil {
+			c.UpdateNotifyDisabled = !*req.UpdateNotifyEnabled
 		}
 		for name, v := range req.ProviderKeys {
 			name = strings.TrimSpace(name)

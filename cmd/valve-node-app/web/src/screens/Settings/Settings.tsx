@@ -16,6 +16,7 @@ import { useState } from "react";
 import type * as api from "../../api";
 import { Footer } from "../../components/Footer";
 import { useSettings, usePutSettings } from "../../hooks/settings";
+import { useUpdate } from "../../hooks/update";
 import { keyNames } from "./settingsModel";
 import { ProviderKeyRow } from "./ProviderKeyRow";
 
@@ -29,6 +30,10 @@ const PROVIDERS: { value: api.AIProvider; label: string }[] = [
 export function Settings() {
   const settingsQuery = useSettings();
   const putSettings = usePutSettings();
+  // The Settings page pulls update status on demand (refresh=true) — a live
+  // GitHub check even when proactive notices are off. The "Check for updates"
+  // button re-runs it with refetch().
+  const updateStatus = useUpdate(true);
   const current = settingsQuery.data;
   // providerKeysSet NAMES the ${...} placeholders that have a key stored —
   // never the values. Coalesced to [] in case an older binary behind a newer
@@ -39,8 +44,8 @@ export function Settings() {
   const [providerChoice, setProviderChoice] = useState<api.AIProvider | null>(null);
   const [refRpcBase, setRefRpcBase] = useState<string | null>(null);
   // null = untouched this session; fall back to the loaded value. A missing
-  // updateCheckEnabled (older binary) reads as "on", matching the server.
-  const [updateCheckEnabled, setUpdateCheckEnabled] = useState<boolean | null>(null);
+  // updateNotifyEnabled (older binary) reads as "on", matching the server.
+  const [updateNotifyEnabled, setUpdateNotifyEnabled] = useState<boolean | null>(null);
 
   const [aiKeyValue, setAiKeyValue] = useState("");
   const [keyTouched, setKeyTouched] = useState(false);
@@ -73,7 +78,7 @@ export function Settings() {
     };
     // Only send the update toggle when it was touched this session, so a save
     // for an unrelated field leaves the stored value alone.
-    if (updateCheckEnabled !== null) body.updateCheckEnabled = updateCheckEnabled;
+    if (updateNotifyEnabled !== null) body.updateNotifyEnabled = updateNotifyEnabled;
     // Only send aiKey if the user actually touched the field this session —
     // omitting it preserves whatever key is already stored server-side.
     if (keyTouched) body.aiKey = aiKeyValue;
@@ -101,7 +106,7 @@ export function Settings() {
       setNewKeyName("");
       setNewKeyValue("");
       setRefRpcBase(null);
-      setUpdateCheckEnabled(null);
+      setUpdateNotifyEnabled(null);
       setSaved(true);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
@@ -218,21 +223,53 @@ export function Settings() {
 
             <section className="pk-section">
               <h2>Updates</h2>
+              <p className="muted small">
+                You&apos;re on <strong>{updateStatus.data?.current ?? "—"}</strong>.{" "}
+                {updateStatus.isFetching
+                  ? "Checking…"
+                  : updateStatus.data?.checkError
+                    ? "Couldn't reach GitHub to check."
+                    : updateStatus.data?.updateAvailable
+                      ? `Version ${updateStatus.data.latest} is available.`
+                      : updateStatus.data
+                        ? "You're up to date."
+                        : ""}
+              </p>
+              <div className="card-actions">
+                <button
+                  className="btn btn-ghost btn-tiny"
+                  type="button"
+                  disabled={updateStatus.isFetching}
+                  onClick={() => void updateStatus.refetch()}
+                >
+                  {updateStatus.isFetching ? "Checking…" : "Check for updates"}
+                </button>
+                {updateStatus.data?.updateAvailable && updateStatus.data.releaseUrl && (
+                  <a
+                    className="btn btn-primary btn-tiny"
+                    href={updateStatus.data.releaseUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    View release
+                  </a>
+                )}
+              </div>
               <label className="check">
                 <input
                   type="checkbox"
-                  checked={updateCheckEnabled ?? current.updateCheckEnabled ?? true}
+                  checked={updateNotifyEnabled ?? current.updateNotifyEnabled ?? true}
                   onChange={(e) => {
-                    setUpdateCheckEnabled(e.target.checked);
+                    setUpdateNotifyEnabled(e.target.checked);
                     setSaved(false);
                   }}
                 />
-                Check for updates automatically
+                Notify me automatically about updates
               </label>
               <p className="muted small">
-                When on, the app asks GitHub once every few hours whether a newer release exists and shows a
-                notice if so. It never installs anything on its own. Turn it off to stop the app reaching
-                GitHub.
+                When on, the app checks GitHub in the background every few hours and shows a notice if a newer
+                release exists. Turn it off for &quot;don&apos;t prompt me&quot;: no background checks and no
+                notice — you check here whenever you want. It never installs anything on its own.
               </p>
             </section>
 
