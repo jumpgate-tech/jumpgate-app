@@ -64,16 +64,29 @@ func TestGatewayConfig_ProjectIDReachesThePath(t *testing.T) {
 	}
 }
 
-// A generated id has to be STABLE and has to say which tier it came from,
-// because it is the id eRPC labels its counters with — and internal/setup
-// regenerates it independently when joining those counters back to intent. If
-// the two ever disagreed, every request would attribute to nothing.
-func TestGeneratedUpstreamID_NamesTheTier(t *testing.T) {
-	if got := GeneratedUpstreamID(369, true, 1); got != "369-local-1" {
-		t.Errorf("local: got %q", got)
+// A generated id has to be STABLE and READABLE: it names the chain, who the
+// endpoint is, over what protocol, and its position. It is the id eRPC labels
+// its counters with — and internal/setup regenerates it independently when
+// joining those counters back to intent — so the two must agree exactly.
+func TestGeneratedUpstreamID_NamesWhoAndHow(t *testing.T) {
+	// The operator's own upstream reads "local"; the protocol is ws for a
+	// subscription endpoint, http otherwise.
+	if got := GeneratedUpstreamID(369, "http://host.docker.internal:8545", true, 1); got != "369-local-http-1" {
+		t.Errorf("local http: got %q", got)
 	}
-	if got := GeneratedUpstreamID(369, false, 2); got != "369-fallback-2" {
-		t.Errorf("fallback: got %q", got)
+	if got := GeneratedUpstreamID(369, "ws://valve-node-app-devnet:8546", true, 1); got != "369-local-ws-1" {
+		t.Errorf("local ws: got %q", got)
+	}
+	// A public endpoint reads its provider's registrable label.
+	if got := GeneratedUpstreamID(369, "https://eth.drpc.org", false, 2); got != "369-drpc-http-2" {
+		t.Errorf("drpc http: got %q", got)
+	}
+	if got := GeneratedUpstreamID(1, "wss://ethereum-rpc.publicnode.com", false, 3); got != "1-publicnode-ws-3" {
+		t.Errorf("publicnode ws: got %q", got)
+	}
+	// Nothing readable in the endpoint still yields a unique, valid id.
+	if got := GeneratedUpstreamID(1, "http://192.168.1.5:8545", false, 4); got != "1-rpc-http-4" {
+		t.Errorf("bare IP falls back to rpc: got %q", got)
 	}
 }
 

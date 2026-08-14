@@ -214,8 +214,8 @@ func TestIntentsFor_ExplicitUpstreamIDsPassThrough(t *testing.T) {
 // to an upstream nobody can see.
 func TestIntentsFor_EmptyIDGetsExactlyTheGeneratedID(t *testing.T) {
 	n := catalog.GatewayNetwork{ChainID: 369, Upstreams: []catalog.GatewayUpstream{
-		{Local: true}, // position 1, local
-		{},            // position 2, fallback
+		{Local: true, Endpoint: "http://host.docker.internal:8545"}, // position 1, local
+		{Endpoint: "https://eth.drpc.org"},                          // position 2, public
 	}}
 
 	got := IntentsFor(n)
@@ -223,20 +223,20 @@ func TestIntentsFor_EmptyIDGetsExactlyTheGeneratedID(t *testing.T) {
 		t.Fatalf("got %d intents, want 2", len(got))
 	}
 
-	wantLocal := catalog.GeneratedUpstreamID(369, true, 1)
+	wantLocal := catalog.GeneratedUpstreamID(369, "http://host.docker.internal:8545", true, 1)
 	if got[0].Upstream != wantLocal {
 		t.Fatalf("local upstream id: got %q, want %q (catalog.GeneratedUpstreamID's own output)", got[0].Upstream, wantLocal)
 	}
-	if got[0].Upstream != "369-local-1" {
-		t.Fatalf("local upstream id: got %q, want the literal id 369-local-1", got[0].Upstream)
+	if got[0].Upstream != "369-local-http-1" {
+		t.Fatalf("local upstream id: got %q, want the literal id 369-local-http-1", got[0].Upstream)
 	}
 
-	wantFallback := catalog.GeneratedUpstreamID(369, false, 2)
-	if got[1].Upstream != wantFallback {
-		t.Fatalf("fallback upstream id: got %q, want %q", got[1].Upstream, wantFallback)
+	wantPublic := catalog.GeneratedUpstreamID(369, "https://eth.drpc.org", false, 2)
+	if got[1].Upstream != wantPublic {
+		t.Fatalf("public upstream id: got %q, want %q", got[1].Upstream, wantPublic)
 	}
-	if got[1].Upstream != "369-fallback-2" {
-		t.Fatalf("fallback upstream id: got %q, want the literal id 369-fallback-2", got[1].Upstream)
+	if got[1].Upstream != "369-drpc-http-2" {
+		t.Fatalf("public upstream id: got %q, want the literal id 369-drpc-http-2", got[1].Upstream)
 	}
 }
 

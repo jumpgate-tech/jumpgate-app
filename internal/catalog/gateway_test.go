@@ -90,8 +90,10 @@ func TestRenderGatewayConfig_NoLocalUpstreams(t *testing.T) {
 	if got := strings.Count(cfg, "tier:fallback"); got != 0 {
 		t.Errorf("with no local upstream, nothing should be tagged fallback, got %d:\n%s", got, cfg)
 	}
-	// Ids are generated when the caller supplies none, and must be unique.
-	for _, want := range []string{"id: 1-fallback-1", "id: 1-fallback-2"} {
+	// Ids are generated when the caller supplies none: readable (provider +
+	// protocol) and unique (chain + position). Same provider, so the protocol
+	// and position are what keep the two apart.
+	for _, want := range []string{"id: 1-publicnode-http-1", "id: 1-publicnode-ws-2"} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("missing generated id %q:\n%s", want, cfg)
 		}

@@ -137,7 +137,7 @@ func IntentsFor(n catalog.GatewayNetwork) []metrics.Intent {
 			// never named. It has to match: the id in the rendered config is
 			// the id eRPC labels its counters with, so a different guess here
 			// would silently attribute every request to nothing.
-			id = catalog.GeneratedUpstreamID(n.ChainID, u.Local, i+1)
+			id = catalog.GeneratedUpstreamID(n.ChainID, u.Endpoint, u.Local, i+1)
 		}
 		out = append(out, metrics.Intent{Upstream: id, Local: u.Local})
 	}

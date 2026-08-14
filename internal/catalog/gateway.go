@@ -3,6 +3,7 @@ package catalog
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"text/template"
@@ -400,7 +401,7 @@ func RenderGatewayConfig(g GatewayConfig) (string, error) {
 
 			id := u.ID
 			if id == "" {
-				id = GeneratedUpstreamID(n.ChainID, u.Local, i+1)
+				id = GeneratedUpstreamID(n.ChainID, endpoint, u.Local, i+1)
 			}
 			// eRPC keys upstreams by id; a duplicate would silently
 			// shadow rather than error, so catch it here.
@@ -437,21 +438,90 @@ func validUpstreamScheme(endpoint string) bool {
 }
 
 // GeneratedUpstreamID builds a stable id for an upstream the caller did not
-// name. Position is included because a chain can carry several upstreams of
-// the same kind.
+// name — one a person can read: "369-drpc-http-1", "1-publicnode-ws-2",
+// "369-local-http-1". It names the chain, WHO the endpoint is, over WHAT
+// protocol, and its position on the chain.
+//
+// Why every part is there:
+//
+//   - The chain id and the position are what make it UNIQUE. eRPC lists every
+//     upstream in one flat project-level list (see gatewayConfigTemplate), so an
+//     id must be unique across all networks, not just within one; chain+position
+//     guarantees that no matter what the provider/protocol tag resolves to. A
+//     duplicate id would be silently SHADOWED by eRPC, not rejected.
+//
+//   - The provider and protocol are READABILITY, derived from the endpoint. They
+//     never have to be unique, so they can be a best-effort label — the older
+//     "369-fallback-1" told the operator only "some public one", and the traffic
+//     screen keys its rows by exactly this id.
 //
 // It is exported because the id it produces is the id eRPC labels its own
 // request counters with. Anything reading those counters back has to arrive at
-// the same string from the same config, and a second implementation of this
-// rule elsewhere would not fail loudly — it would attribute every request to an
-// upstream nobody can see, and draw a traffic bar of zeroes over a gateway that
-// is working perfectly.
-func GeneratedUpstreamID(chainID int, local bool, pos int) string {
-	kind := "fallback"
-	if local {
-		kind = "local"
+// the same string from the same config (see setup.IntentsFor), so both callers
+// pass the same endpoint and get the same tag — a second, drifting
+// implementation would attribute every request to an upstream nobody can see.
+func GeneratedUpstreamID(chainID int, endpoint string, local bool, pos int) string {
+	return fmt.Sprintf("%d-%s-%d", chainID, upstreamTag(endpoint, local), pos)
+}
+
+// upstreamTag is the "<who>-<protocol>" middle of a generated id. It is
+// decoration, never the source of uniqueness, so anything it cannot read
+// resolves to a plain "rpc-http" rather than failing.
+//
+//   - protocol is "ws" for a ws:// or wss:// endpoint, "http" otherwise — the
+//     distinction a person cares about (a subscription endpoint vs an ordinary
+//     one), not the raw scheme.
+//   - who is "local" for the operator's OWN upstream (a node or devnet they
+//     run), and otherwise the endpoint's registrable label: "drpc" from
+//     eth.drpc.org, "publicnode" from ethereum-rpc.publicnode.com, "valve" from
+//     one.valve.city.
+func upstreamTag(endpoint string, local bool) string {
+	proto := "http"
+	u, err := url.Parse(strings.TrimSpace(endpoint))
+	if err == nil {
+		if s := strings.ToLower(u.Scheme); s == "ws" || s == "wss" {
+			proto = "ws"
+		}
 	}
-	return fmt.Sprintf("%d-%s-%d", chainID, kind, pos)
+	if local {
+		return "local-" + proto
+	}
+	if err == nil {
+		if who := registrableLabel(u.Hostname()); who != "" {
+			return who + "-" + proto
+		}
+	}
+	return "rpc-" + proto
+}
+
+// registrableLabel is the recognisable short name for a host: its second-level
+// domain ("drpc" from eth.drpc.org), sanitised to a DNS-safe token. It returns
+// "" for a bare IP, a single label, or anything that reduces to digits only —
+// none of which name a provider — so the caller can fall back.
+func registrableLabel(host string) string {
+	host = strings.Trim(host, "[]")
+	parts := make([]string, 0, 4)
+	for _, p := range strings.Split(host, ".") {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	if len(parts) < 2 {
+		return ""
+	}
+	label := parts[len(parts)-2]
+	// Keep only [a-z0-9]; an all-digit or empty result is not a provider name.
+	var b strings.Builder
+	for _, r := range strings.ToLower(label) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if out == "" || strings.IndexFunc(out, func(r rune) bool { return r < '0' || r > '9' }) == -1 {
+		return ""
+	}
+	return out
 }
 
 // GatewayForWire builds a single-chain gateway from a node's WireConfig: the
@@ -465,8 +535,11 @@ func GatewayForWire(w WireConfig) GatewayConfig {
 		RecentOnly: !w.Archive,
 	}}
 	for i, url := range w.ERPCUpstreams {
+		// Readable and unique, the same shape GeneratedUpstreamID produces
+		// minus the chain prefix this single-chain gateway does not need:
+		// "pulsechain-http-1", not "fallback-1".
 		ups = append(ups, GatewayUpstream{
-			ID:       fmt.Sprintf("fallback-%d", i+1),
+			ID:       fmt.Sprintf("%s-%d", upstreamTag(url, false), i+1),
 			Endpoint: url,
 		})
 	}

@@ -287,7 +287,9 @@ erpc_network_successful_request_total{network="evm:369",project="main",upstream=
 // over the same generated ids the renderer writes into erpc.yaml, so an
 // unnamed upstream is not misfiled as a stranger.
 func TestHandleGatewayAnalytics_GeneratedUpstreamIDIsRecognisedAsConfigured(t *testing.T) {
-	id := catalog.GeneratedUpstreamID(369, true, 1)
+	// The SAME endpoint the configured upstream below carries, so the generated
+	// id matches what the renderer would write for it.
+	id := catalog.GeneratedUpstreamID(369, "https://rpc.pulsechain.com", true, 1)
 	dump := "process_start_time_seconds 1.7851988e+09\n" +
 		`erpc_upstream_request_total{network="evm:369",project="main",upstream="` + id + `"} 3` + "\n"
 
