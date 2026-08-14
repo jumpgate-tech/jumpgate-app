@@ -43,7 +43,7 @@ export function App() {
       {tray ? null : (
         <header className="topbar">
           <a className="brand" href="#/">
-            valve-node-app
+            Jumpgate
           </a>
           <nav className="nav">
             {NAV.map((n) => (

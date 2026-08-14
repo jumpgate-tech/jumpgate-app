@@ -145,10 +145,60 @@ export function Panel() {
   // provision: create/recreate run the setup plan and follow the placement
   // machine's setup stream (mirrors panel.ts provision). onDone runs once the
   // stream finishes clean and the list has refreshed.
+  // ensureDockerReady makes sure the local Docker engine is up before we try to
+  // provision the gateway container — so the power button never dead-ends on a
+  // raw "docker not found". If Docker is stopped and the app can start it
+  // (macOS), it launches Docker and waits, narrating via `say` when given.
+  // Returns false (and sets actionErr) when Docker can't be made ready.
+  async function ensureDockerReady(say?: (line: string) => void): Promise<boolean> {
+    let st: api.DockerStatus;
+    try {
+      st = await api.getDocker();
+    } catch (e) {
+      setActionErr(`Could not check Docker: ${message(e)}`);
+      return false;
+    }
+    if (st.running) return true;
+    if (!st.present) {
+      setActionErr(
+        st.hint ??
+          "Docker isn't installed on this machine. Install Docker Desktop or OrbStack, or point Jumpgate at a remote machine.",
+      );
+      return false;
+    }
+    if (!st.canStart) {
+      setActionErr(st.hint ?? "Docker is installed but not running. Start the Docker engine, then try again.");
+      return false;
+    }
+    say?.("Starting Docker…");
+    try {
+      await api.startDocker();
+    } catch {
+      // A failed launch call is not fatal — Docker may already be starting;
+      // fall through to the poll and let it settle.
+    }
+    // Poll until the daemon answers. Docker Desktop can take a while to be
+    // ready on a cold start, so give it a generous window (~100s).
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 2500));
+      try {
+        if ((await api.getDocker()).running) return true;
+      } catch {
+        // transient — keep waiting.
+      }
+    }
+    setActionErr("Docker is taking a while to start. Give it a moment, then press Set up again.");
+    return false;
+  }
+
   async function provision(id: string, onDone?: () => void) {
     if (busyRef.current) return;
     setBusy("create");
     setActionErr(null);
+    if (!(await ensureDockerReady())) {
+      setBusy(null);
+      return;
+    }
     onDoneRef.current = onDone;
     captureLogRef.current = false;
     let started: { targetId: string };
@@ -187,17 +237,11 @@ export function Panel() {
       return;
     }
 
-    try {
-      const c = await api.getContainers("local");
-      if (!c.docker.reachable) {
-        fail(
-          c.docker.detail || "A gateway runs as a container, and no Docker engine answered on this machine.",
-          c.docker.hint || "Start Docker Desktop, OrbStack or colima, then try again.",
-        );
-        return;
-      }
-    } catch (e) {
-      fail(`Could not check Docker on this machine: ${message(e)}`, hint(e));
+    // Docker readiness: start it for the operator (macOS) and wait, rather than
+    // failing with "go start Docker yourself". ensureDockerReady sets actionErr
+    // and returns false when Docker can't be made ready.
+    if (!(await ensureDockerReady(say))) {
+      setBusy(null);
       return;
     }
 
@@ -506,7 +550,13 @@ export function Panel() {
         </div>
       );
     }
-    if (gwQuery.isLoading) return null;
+    if (gwQuery.isLoading) {
+      return (
+        <div className="p-band p-empty" aria-busy="true">
+          <div className="p-emptysub">Loading…</div>
+        </div>
+      );
+    }
     if (gw && view.name === "network") {
       return (
         <NetworkView

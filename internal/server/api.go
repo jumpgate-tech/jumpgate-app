@@ -477,6 +477,10 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// The update check: is a newer release out? ?refresh=1 forces a live check
 	// (the Settings page's manual pull). See update.go.
 	mux.HandleFunc("GET /api/update", s.handleGetUpdate)
+
+	// Docker readiness for the one-click gateway (the power button). See docker.go.
+	mux.HandleFunc("GET /api/docker", s.handleDockerStatus)
+	mux.HandleFunc("POST /api/docker/start", s.handleDockerStart)
 }
 
 // ---------------------------------------------------------------------

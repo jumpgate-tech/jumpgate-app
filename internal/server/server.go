@@ -69,6 +69,11 @@ type Config struct {
 	// Injectable for tests (a fake that never touches the network); nil
 	// selects a real updatecheck.Client against buildinfo.ReleaseRepo().
 	Updater updateSource
+
+	// NewLocalExecutor builds an executor for the local machine — the box the
+	// Docker readiness gate probes. Injectable for tests (a fake that scripts
+	// docker probes); nil selects executor.NewLocal.
+	NewLocalExecutor func() executor.Executor
 }
 
 // Server is the valve-node-app local HTTP server.
@@ -109,10 +114,11 @@ type Server struct {
 	chainsCache []chainSummary
 	chainsAt    time.Time
 
-	newExecutor   func(config.Target) (executor.Executor, error)
-	newAIProvider func(id, apiKey, baseURL string) (ai.Provider, error)
-	newChainlist  func() *chainlist.Discoverer
-	verifyTLS     func(ctx context.Context, e executor.Executor, gatewayID string, g catalog.GatewayConfig, dialHost string) (setup.TLSVerification, error)
+	newExecutor      func(config.Target) (executor.Executor, error)
+	newAIProvider    func(id, apiKey, baseURL string) (ai.Provider, error)
+	newChainlist     func() *chainlist.Discoverer
+	newLocalExecutor func() executor.Executor
+	verifyTLS        func(ctx context.Context, e executor.Executor, gatewayID string, g catalog.GatewayConfig, dialHost string) (setup.TLSVerification, error)
 
 	// Update-check state, guarded by updMu. updCache is the last release read
 	// from GitHub, updAt when it was read, updErr the last check's error text,
@@ -152,6 +158,10 @@ func New(cfg Config) *Server {
 	s.updater = cfg.Updater
 	if s.updater == nil {
 		s.updater = updatecheck.New(buildinfo.ReleaseRepo())
+	}
+	s.newLocalExecutor = cfg.NewLocalExecutor
+	if s.newLocalExecutor == nil {
+		s.newLocalExecutor = executor.NewLocal
 	}
 	return s
 }
