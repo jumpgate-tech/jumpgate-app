@@ -143,10 +143,42 @@ pre {
   padding: 1.5rem 1.25rem 3rem;
 }
 /* Tray / tiny-app: no topbar and no page gutter — the panel fills the window
-   (see .p-wrap/.p-panel overrides in panel.css). */
+   (see .p-wrap/.p-panel overrides in panel.css). The content scrolls inside a
+   fixed-height window so the bottom tab bar stays pinned. */
+.shell-tray {
+  height: 100vh;
+}
 .shell-tray .content {
   padding: 0;
   max-width: none;
+  overflow-y: auto;
+}
+/* Non-panel screens in the tray (Machines / RPC / Settings) are normal pages,
+   so give them a gutter back — the panel keeps padding: 0 above. */
+.shell-tray-page .content {
+  padding: 1rem 0.9rem 1.25rem;
+}
+
+/* The desktop app's bottom navigation — the panel drops the browser topbar, so
+   this is how you reach Machines / RPC / Private access / Settings and get back
+   Home. */
+.tray-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+.tray-tabs a {
+  flex: 1;
+  text-align: center;
+  padding: 0.5rem 0.25rem;
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+}
+.tray-tabs a.active {
+  color: var(--accent);
+  background: var(--accent-dim);
 }
 
 .footer {
