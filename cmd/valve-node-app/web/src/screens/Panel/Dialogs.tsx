@@ -33,7 +33,7 @@ export function ConfirmDialog({
   onCancel: () => void;
 }) {
   return (
-    <Modal onClose={onCancel}>
+    <Modal onClose={onCancel} label={title}>
       <h2>{title}</h2>
       <p>{body}</p>
       <div className="modal-actions">
@@ -100,7 +100,7 @@ export function TextInputDialog({
   }
 
   return (
-    <Modal onClose={onCancel}>
+    <Modal onClose={onCancel} label={title}>
       <h2>{title}</h2>
       {hint ? <p className="muted small">{hint}</p> : null}
       <label>

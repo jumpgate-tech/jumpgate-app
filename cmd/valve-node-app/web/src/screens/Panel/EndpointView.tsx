@@ -12,7 +12,7 @@ import { copyToClipboard, fmtInt } from "../../ui";
 import { Icon } from "./icons";
 import { HealthDot } from "./HealthDot";
 import { CapsBand } from "./CapabilityMeter";
-import { singleCapabilities } from "./capsUtil";
+import { singleCapabilities, hasProbeFor } from "./capsUtil";
 
 export function EndpointView({
   gw,
@@ -86,7 +86,10 @@ export function EndpointView({
   }
 
   const capStatuses = singleCapabilities(caps, chainId, upstreamId);
-  const healthWord = !running ? "Stopped" : up.problem ? up.problem : "Healthy";
+  // Use the same verdict word the health dot announces (Stopped / Not serving
+  // / Healthy) rather than the raw backend `problem` string, so the text and
+  // the dot never disagree. The specific problem is kept as a hover title below.
+  const healthWord = !running ? "Stopped" : up.problem ? "Not serving" : "Healthy";
   const healthEntry = (health?.endpoints ?? []).find((e) => e.chainId === chainId && e.upstream === upstreamId);
   const showLag = healthEntry && healthEntry.scored && healthEntry.headLag > 0;
 
@@ -146,7 +149,14 @@ export function EndpointView({
         <div className="p-lblrow">
           <span className="p-seclbl">Capabilities</span>
         </div>
-        <CapsBand statuses={capStatuses} busy={capsBusy} err={capsErr} hasData={!!caps} running={running} />
+        <CapsBand
+          statuses={capStatuses}
+          busy={capsBusy}
+          err={capsErr}
+          hasData={!!caps}
+          running={running}
+          probed={hasProbeFor(caps, chainId, upstreamId)}
+        />
       </div>
 
       <div className="p-band">
@@ -156,17 +166,18 @@ export function EndpointView({
             <button
               type="button"
               className="p-ic dim"
-              title="Re-check capabilities and reload"
+              title={capsBusy ? "Re-checking…" : "Re-check capabilities and reload"}
               aria-label="Re-check capabilities and reload"
+              disabled={capsBusy}
               onClick={onRecheck}
             >
-              <Icon name="refresh" />
+              <Icon name="refresh" className={capsBusy ? "p-spinning" : undefined} />
             </button>
           </span>
         </div>
         <div className="p-srow">
           <span className="p-k">Health</span>
-          <span className="p-v">
+          <span className="p-v" title={running && up.problem ? up.problem : undefined}>
             <HealthDot running={running} serviceable={!up.problem} slowRate={upRate} /> {healthWord}
           </span>
         </div>

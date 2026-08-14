@@ -68,10 +68,10 @@ export function masterState(gw: GatewayView | null): MasterState {
 // otherwise the only cue) and the visible verdict on a status row. Kept beside
 // healthClass so the word and the animation can never disagree: "off" →
 // Stopped, a slow/unhealthy running endpoint → Degraded, not-serviceable while
-// running → Unserviceable, and a still (stable) dot → Healthy.
+// running → Not serving, and a still (stable) dot → Healthy.
 export function healthWord(input: { running: boolean; serviceable: boolean; slowRate?: number }): string {
   if (!input.running) return "Stopped";
-  if (!input.serviceable) return "Unserviceable";
+  if (!input.serviceable) return "Not serving";
   return healthClass(input) === "stable" ? "Healthy" : "Degraded";
 }
 

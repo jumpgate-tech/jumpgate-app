@@ -281,6 +281,12 @@
     transform: rotate(360deg);
   }
 }
+/* The recheck (refresh) glyph spins while a probe is in flight, so pressing it
+   visibly does something even when the previous verdict is kept on screen. */
+.p-spinning {
+  animation: p-spin 0.9s linear infinite;
+  transform-origin: 50% 50%;
+}
 .p-pmeta .p-pl {
   font-weight: 600;
   font-size: 15px;
@@ -845,7 +851,8 @@
     opacity: 0.65;
   }
   .p-power.busy .p-pbtn::after,
-  .p-pbtn.busy::after {
+  .p-pbtn.busy::after,
+  .p-spinning {
     animation: none;
   }
 }
