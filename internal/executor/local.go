@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -67,6 +68,12 @@ func (l *local) Run(ctx context.Context, cmd string, opts *RunOpts) (Result, err
 		return Result{}, l.unsupported
 	}
 	c := exec.CommandContext(ctx, "sh", "-c", cmd)
+	// A macOS app launched from Finder inherits a minimal PATH
+	// (/usr/bin:/bin:/usr/sbin:/sbin) — missing Homebrew and Docker Desktop —
+	// so `command -v docker` fails even when docker works in a terminal. Extend
+	// PATH for local commands so tools are found the same way they are in a
+	// shell. See localEnv.
+	c.Env = localEnv(os.Environ(), runtime.GOOS, os.Getenv("HOME"))
 
 	// See proc_unix.go / proc_windows.go: on unix this runs cmd in its own
 	// process group so ctx cancellation can kill every descendant it spawned,
@@ -163,4 +170,62 @@ func (l *local) ReadFile(_ context.Context, path string) ([]byte, error) {
 
 func (l *local) Close() error {
 	return nil
+}
+
+// localEnv returns env (normally os.Environ()) with PATH extended so local
+// commands find tools a Finder-launched macOS .app would miss. The extra dirs
+// are APPENDED, so an existing PATH entry keeps priority and a user override
+// still wins; a dir that does not exist is harmless, since a PATH lookup just
+// skips it. Taking env/goos/home as arguments keeps it unit-testable from any
+// host OS. Off darwin it returns env unchanged.
+func localEnv(env []string, goos, home string) []string {
+	extra := guiPathDirs(goos, home)
+	if len(extra) == 0 {
+		return env
+	}
+	for i, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			env[i] = "PATH=" + appendMissingDirs(strings.TrimPrefix(kv, "PATH="), extra)
+			return env
+		}
+	}
+	// No PATH in the environment at all (unusual) — set one from the extras.
+	return append(env, "PATH="+strings.Join(extra, ":"))
+}
+
+// guiPathDirs lists the tool locations a macOS app launched from Finder does
+// NOT inherit on PATH: Homebrew (Apple Silicon and Intel), Docker Desktop, and
+// the common Docker-alternative CLIs (OrbStack, Rancher Desktop). Empty off
+// darwin, where a local control plane runs from a normal shell PATH.
+func guiPathDirs(goos, home string) []string {
+	if goos != "darwin" {
+		return nil
+	}
+	dirs := []string{
+		"/opt/homebrew/bin",
+		"/opt/homebrew/sbin",
+		"/usr/local/bin",
+		"/usr/local/sbin",
+		"/Applications/Docker.app/Contents/Resources/bin",
+	}
+	if home != "" {
+		dirs = append(dirs, home+"/.docker/bin", home+"/.orbstack/bin", home+"/.rd/bin")
+	}
+	return dirs
+}
+
+// appendMissingDirs appends each dir not already present in the colon-separated
+// path, preserving order and existing precedence.
+func appendMissingDirs(path string, dirs []string) string {
+	have := make(map[string]bool)
+	for _, p := range strings.Split(path, ":") {
+		have[p] = true
+	}
+	out := path
+	for _, d := range dirs {
+		if !have[d] {
+			out += ":" + d
+		}
+	}
+	return out
 }
