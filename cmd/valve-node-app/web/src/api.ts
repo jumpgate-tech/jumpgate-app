@@ -1357,6 +1357,31 @@ export function getUpdate(refresh = false): Promise<Update> {
 }
 
 // ---------------------------------------------------------------------
+// docker readiness (the local machine that hosts the one-click gateway)
+// ---------------------------------------------------------------------
+
+export interface DockerStatus {
+  // present: a docker CLI is on the local PATH.
+  present: boolean;
+  // running: the daemon answered.
+  running: boolean;
+  // canStart: the app can launch Docker itself (macOS, present but stopped).
+  canStart: boolean;
+  // hint: operator guidance for the current state. Empty when present+running.
+  hint?: string;
+}
+
+export function getDocker(): Promise<DockerStatus> {
+  return request<DockerStatus>("/api/docker");
+}
+
+// startDocker launches Docker Desktop (or OrbStack) on macOS. The daemon takes
+// a while to be ready, so the caller polls getDocker() until running is true.
+export function startDocker(): Promise<{ started: boolean }> {
+  return request<{ started: boolean }>("/api/docker/start", { method: "POST", headers: JSON_HEADERS });
+}
+
+// ---------------------------------------------------------------------
 // VPN: BYO overlays + provisioned WireGuard servers
 // (internal/server VPN routes)
 //

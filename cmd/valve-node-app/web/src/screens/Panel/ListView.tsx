@@ -41,7 +41,7 @@ function PanelHeader({ onOpenSettings }: { onOpenSettings: () => void }) {
   return (
     <div className="p-band p-phead">
       <span className="p-brand">
-        <span className="p-bd"></span> Valve
+        <span className="p-bd"></span> Jumpgate
       </span>
       <span className="p-hright">
         <ThemeToggle />
