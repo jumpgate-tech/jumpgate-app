@@ -48,6 +48,7 @@ export function NetworkView({
   const [tlsBusy, setTlsBusy] = useState(false);
   const [tlsErr, setTlsErr] = useState<string | null>(null);
   const [copyFlash, setCopyFlash] = useState(false);
+  const [walletFlash, setWalletFlash] = useState(false);
 
   const nv = gw.networks?.find((n) => n.chainId === chainId);
   if (!nv) {
@@ -95,11 +96,11 @@ export function NetworkView({
     setTlsBusy(false);
   }
 
-  async function copy(url: string) {
+  async function copy(url: string, flash: (v: boolean) => void) {
     if (!url) return;
     if (await copyToClipboard(url)) {
-      setCopyFlash(true);
-      window.setTimeout(() => setCopyFlash(false), 1200);
+      flash(true);
+      window.setTimeout(() => flash(false), 1200);
     }
   }
 
@@ -139,19 +140,50 @@ export function NetworkView({
               className={`p-ic ${copyFlash ? "green" : "accent"}`}
               title="Copy the gateway URL"
               aria-label="Copy the gateway URL"
-              onClick={() => void copy(nv.url ?? "")}
+              onClick={() => void copy(nv.url ?? "", setCopyFlash)}
             >
               <Icon name="copy" />
             </button>
           </span>
         </div>
         <div className="p-gwurl">{nv.url || "—"}</div>
+        {nv.url ? (
+          <div className="p-ps" style={{ color: "var(--dim3)", padding: "0 var(--gut) 4px" }}>
+            Share this, or use it from another machine. A wallet must trust this gateway's certificate first.
+          </div>
+        ) : null}
         {tlsErr ? (
           <div className="p-ps" role="alert" style={{ color: "var(--red)", padding: "0 var(--gut) 10px" }}>
             {tlsErr}
           </div>
         ) : null}
       </div>
+
+      {nv.localUrl ? (
+        <div className="p-band">
+          <div className="p-lblrow">
+            <span className="p-seclbl">
+              Wallet on this machine
+              <span style={{ color: "var(--dim3)", letterSpacing: 0 }}> · no certificate to trust</span>
+            </span>
+            <span className="p-acts">
+              <button
+                type="button"
+                className={`p-ic ${walletFlash ? "green" : "accent"}`}
+                title="Copy the localhost wallet URL"
+                aria-label="Copy the localhost wallet URL"
+                onClick={() => void copy(nv.localUrl ?? "", setWalletFlash)}
+              >
+                <Icon name="copy" />
+              </button>
+            </span>
+          </div>
+          <div className="p-gwurl">{nv.localUrl}</div>
+          <div className="p-ps" style={{ color: "var(--dim3)", padding: "0 var(--gut) 4px" }}>
+            Paste into a wallet on this Mac. It answers over plain http on loopback, so there is nothing to install.
+          </div>
+        </div>
+      ) : null}
 
       <div className="p-band">
         <div className="p-lblrow">

@@ -229,7 +229,7 @@ func caddyReady() *fakeExecutor {
 		})
 }
 
-func TestGatewayRun_FrontedGatewayPublishesOnlyCaddy(t *testing.T) {
+func TestGatewayRun_FrontedGatewayPublishesLoopbackWalletAndCaddy(t *testing.T) {
 	shrinkGatewayWait(t)
 	e := caddyReady()
 	steps := mustPlanGateway(t, frontedGateway(), BackendDocker)
@@ -259,26 +259,26 @@ func TestGatewayRun_FrontedGatewayPublishesOnlyCaddy(t *testing.T) {
 	if erpcRun == "" || caddyRun == "" {
 		t.Fatalf("want both containers created: %#v", e.callLog())
 	}
-	// Caddy is the only RPC front door. A published eRPC port would be a
-	// second, plaintext, unauthenticated way in that the operator did not ask
-	// for — so the invariant is that no mapping reaches eRPC's RPC port, NOT
-	// that eRPC publishes nothing at all.
-	//
-	// The one mapping it does get is the metrics port, pinned to loopback. That
-	// is a deliberate narrowing of the older "publishes nothing" rule rather
-	// than an erosion of it: without it, the recommended configuration (HTTPS
-	// on) would be the single configuration whose traffic share could never be
-	// read. Both halves are asserted, because a regression that widened this to
-	// 0.0.0.0 or pointed it at 4000 would otherwise still pass.
-	if strings.Contains(erpcRun, ":"+strconv.Itoa(ops.ERPCContainerPort)+"'") {
-		t.Errorf("a fronted eRPC must publish no RPC port: %s", erpcRun)
+	// Caddy is the only NETWORK-FACING RPC door. A fronted eRPC does publish its
+	// RPC port now, but ONLY on loopback (127.0.0.1) — the wallet door for a
+	// wallet on this same machine, which needs no certificate trust. A wide
+	// (0.0.0.0) mapping to the RPC port would be the second unauthenticated way
+	// in that the operator did not ask for, so THAT is the invariant, not
+	// "publishes nothing". Both halves are asserted: the loopback door is
+	// present, and nothing on eRPC is bound past loopback.
+	wantWallet := "'-p' '127.0.0.1:4100:" + strconv.Itoa(ops.ERPCContainerPort) + "'"
+	if !strings.Contains(erpcRun, wantWallet) {
+		t.Errorf("a fronted eRPC must publish its RPC port on loopback for wallets (%s): %s", wantWallet, erpcRun)
 	}
+	if strings.Contains(erpcRun, "0.0.0.0") {
+		t.Errorf("a fronted eRPC must bind nothing past loopback: %s", erpcRun)
+	}
+	// The metrics port is likewise pinned to loopback. Without it the recommended
+	// configuration (HTTPS on) would be the single configuration whose traffic
+	// share could never be read.
 	wantMetrics := "'-p' '127.0.0.1:4001:" + strconv.Itoa(ops.ERPCContainerMetricsPort) + "'"
 	if !strings.Contains(erpcRun, wantMetrics) {
 		t.Errorf("a fronted eRPC must still publish its counters on loopback (%s): %s", wantMetrics, erpcRun)
-	}
-	if strings.Contains(erpcRun, "'-p' '0.0.0.0:4001") {
-		t.Errorf("the metrics port must never be widened past loopback: %s", erpcRun)
 	}
 	if !strings.Contains(caddyRun, "'-p' '0.0.0.0:8443:443'") {
 		t.Errorf("want the TLS front published on the configured port: %s", caddyRun)

@@ -721,6 +721,28 @@ type ERPCRunSpec struct {
 	//     configuration — HTTPS on — would be the one configuration that could
 	//     never show where its traffic is going.
 	MetricsPort int
+
+	// LoopbackRPCPort is the HOST port eRPC's RPC endpoint (ERPCContainerPort)
+	// is published on. Like MetricsPort it is ALWAYS pinned to 127.0.0.1 and is
+	// published even when NoPublish is set, and for a closely related reason.
+	//
+	// A fronted gateway sets NoPublish so its only network-facing door is
+	// Caddy's HTTPS port. But a wallet on the SAME machine then has to trust the
+	// internal-CA certificate before it can connect, and trusting that CA needs
+	// sudo or a GUI prompt — a step that fails outright when the app runs
+	// detached (measured: SecTrustSettingsSetTrustSettings refuses with "no user
+	// interaction was possible"). A plaintext RPC port on 127.0.0.1 removes the
+	// step entirely: the port is unreachable from any other machine — loopback
+	// is not a network door — wallets accept http://127.0.0.1 as a secure
+	// context, and the operator gets a paste-into-your-wallet URL with nothing
+	// to install.
+	//
+	// 0 publishes nothing, which is what an UNFRONTED gateway passes: its RPC
+	// port is already on the host through the ordinary mapping above, so a
+	// second loopback mapping to the same container port would only collide.
+	// The caller therefore sets this ONLY for a fronted gateway — exactly where
+	// the ordinary mapping is suppressed.
+	LoopbackRPCPort int
 }
 
 // ERPCRunArgs renders the argv for `docker run` — WITHOUT the leading
@@ -782,6 +804,11 @@ func ERPCRunArgs(spec ERPCRunSpec) []string {
 	// Loopback literally, not `bind`. See ERPCRunSpec.MetricsPort.
 	if spec.MetricsPort > 0 {
 		args = append(args, "-p", publishSpec("127.0.0.1", spec.MetricsPort, ERPCContainerMetricsPort))
+	}
+	// The plaintext wallet door for the same machine, loopback literally, and
+	// published even for a fronted gateway. See ERPCRunSpec.LoopbackRPCPort.
+	if spec.LoopbackRPCPort > 0 {
+		args = append(args, "-p", publishSpec("127.0.0.1", spec.LoopbackRPCPort, ERPCContainerPort))
 	}
 	args = append(args,
 		"-v", spec.HostConfigPath+":"+erpcContainerConfigPath+":ro",

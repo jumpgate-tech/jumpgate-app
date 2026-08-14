@@ -110,7 +110,16 @@ type networkView struct {
 	Name    string `json:"name"`
 	// URL is the full address callers dial for this chain, path and all. It
 	// is only set while the gateway is actually running.
-	URL  string `json:"url,omitempty"`
+	URL string `json:"url,omitempty"`
+
+	// LocalURL is the plaintext loopback address for a wallet on THIS machine:
+	// http://127.0.0.1:<port><path>. It is set only for a fronted gateway that
+	// is running. A wallet accepts a loopback http endpoint as a secure context
+	// with NO certificate to trust — the one thing the HTTPS URL cannot offer
+	// without first installing the internal CA. An unfronted gateway needs no
+	// such companion: its URL is already a plaintext address.
+	LocalURL string `json:"localUrl,omitempty"`
+
 	Path string `json:"path"`
 
 	Upstreams []upstreamView `json:"upstreams"`
@@ -214,6 +223,12 @@ type gatewayView struct {
 	// publishes no plaintext port at all, so the http URL is not merely less
 	// good there, it is not listening.
 	BaseURL string `json:"baseUrl"`
+
+	// LocalBaseURL is BaseURL's plaintext-loopback companion for a fronted
+	// gateway: http://127.0.0.1:<port>, the wallet door for a wallet on this
+	// machine. Empty for an unfronted gateway (its BaseURL is already plaintext)
+	// or a stopped one. See networkView.LocalURL.
+	LocalBaseURL string `json:"localBaseUrl,omitempty"`
 
 	// TLS is the HTTPS front, always present so the UI can render the "off"
 	// state from the same shape as the "on" one.
@@ -525,7 +540,7 @@ func (s *Server) gatewayViewFor(r *http.Request, cfg config.Config, gw config.Ga
 	host, hostOK := findTarget(cfg, gw.Placement.TargetID)
 	if !hostOK {
 		v.Error = fmt.Sprintf("this gateway is placed on machine %q, which is no longer registered — re-place it or remove it", gw.Placement.TargetID)
-		v.Networks = networkViews(cfg, gw, resolved, "")
+		v.Networks = networkViews(cfg, gw, resolved, "", "")
 		v.Blocked = "The machine this gateway runs on is gone, so nothing can be read or started."
 		return v
 	}
@@ -533,7 +548,7 @@ func (s *Server) gatewayViewFor(r *http.Request, cfg config.Config, gw config.Ga
 	ex, err := s.getExecutor(host)
 	if err != nil {
 		v.Error = err.Error()
-		v.Networks = networkViews(cfg, gw, resolved, "")
+		v.Networks = networkViews(cfg, gw, resolved, "", "")
 		v.Blocked = "The machine this gateway runs on could not be reached."
 		return v
 	}
@@ -577,11 +592,23 @@ func (s *Server) gatewayViewFor(r *http.Request, cfg config.Config, gw config.Ga
 	}
 	v.BaseURL = base
 
+	// The plaintext loopback wallet door — see networkView.LocalURL. It exists
+	// only for a fronted gateway (an unfronted one already publishes plaintext
+	// on the host, so BaseURL is that door), and it follows eRPC's own state,
+	// not Caddy's: the loopback port is on the eRPC container, so it serves the
+	// moment eRPC is up even if the TLS front is down. resolved.HTTP() is the
+	// same port setup.loopbackRPCPort publishes on 127.0.0.1.
+	localBase := ""
+	if resolved.Fronted() && st.State == ops.StateRunning {
+		localBase = fmt.Sprintf("http://127.0.0.1:%d", resolved.HTTP())
+	}
+	v.LocalBaseURL = localBase
+
 	perChain := ""
 	if reachable {
 		perChain = base
 	}
-	v.Networks = networkViews(cfg, gw, resolved, perChain)
+	v.Networks = networkViews(cfg, gw, resolved, perChain, localBase)
 
 	v.Actions, v.Blocked = gatewayActions(v, docker)
 	return v
@@ -1020,7 +1047,7 @@ func redactEach(ss []string, keys map[string]string) []string {
 // redactedGatewayConfig gives: this is the same URL, on the same screen, on
 // the same poll. Nothing is written back through gw or resolved — the redacted
 // string only ever lands in the view being built.
-func networkViews(cfg config.Config, gw config.Gateway, resolved catalog.GatewayConfig, base string) []networkView {
+func networkViews(cfg config.Config, gw config.Gateway, resolved catalog.GatewayConfig, base, localBase string) []networkView {
 	keys := providerKeys(cfg)
 	out := make([]networkView, 0, len(gw.Config.Networks))
 	for _, n := range gw.Config.Networks {
@@ -1032,6 +1059,12 @@ func networkViews(cfg config.Config, gw config.Gateway, resolved catalog.Gateway
 		}
 		if base != "" {
 			nv.URL = base + nv.Path
+		}
+		// The plaintext loopback companion, on the same path. localBase is set
+		// only for a fronted, running gateway (see gatewayViewFor), so this is a
+		// wallet door exactly where the HTTPS URL would otherwise be the only one.
+		if localBase != "" {
+			nv.LocalURL = localBase + nv.Path
 		}
 		for _, u := range n.Upstreams {
 			endpoint, label, err := resolveUpstream(cfg, gw, u)

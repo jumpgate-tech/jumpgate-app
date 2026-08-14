@@ -718,6 +718,11 @@ export interface NetworkView {
   chainId: number;
   name: string;
   url?: string;
+  // localUrl is the plaintext loopback address for a wallet on THIS machine
+  // (http://127.0.0.1:<port><path>). Set only for a fronted, running gateway.
+  // A wallet accepts loopback http with NO certificate to trust — the one thing
+  // the HTTPS url cannot offer without installing the internal CA first.
+  localUrl?: string;
   path: string;
   upstreams: UpstreamView[] | null;
   // knownSetSize is how many upstreams "Add valve's set…" would put on this
@@ -813,6 +818,11 @@ export interface GatewayView {
   // can sit on two different boxes.
   docker: DockerView;
   baseUrl: string;
+  // localBaseUrl is baseUrl's plaintext-loopback companion for a fronted
+  // gateway (http://127.0.0.1:<port>) — the wallet door for this machine.
+  // Empty for an unfronted gateway (baseUrl is already plaintext) or a stopped
+  // one.
+  localBaseUrl?: string;
   tls: TlsView;
   networks: NetworkView[] | null;
   actions: string[] | null;

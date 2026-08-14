@@ -274,8 +274,24 @@ function ChainConnect({ gw, network }: { gw: GatewayView; network: NetworkView }
   }
   return (
     <div className="chain-connect">
-      <code className="endpoint-url">{network.url}</code>
-      <CopyButton value={network.url} label="Copy URL" className="btn btn-tiny" />
+      <div className="chain-connect-row">
+        <code className="endpoint-url">{network.url}</code>
+        <CopyButton value={network.url} label="Copy URL" className="btn btn-tiny" />
+      </div>
+      <p className="muted small chain-connect-note">
+        Share this, or use it from another machine — a wallet must trust this gateway’s certificate first.
+      </p>
+      {network.localUrl ? (
+        <>
+          <div className="chain-connect-row chain-connect-wallet">
+            <code className="endpoint-url">{network.localUrl}</code>
+            <CopyButton value={network.localUrl} label="Copy wallet URL" className="btn btn-tiny" />
+          </div>
+          <p className="muted small chain-connect-note">
+            Wallet on this machine — plain http on loopback, nothing to install.
+          </p>
+        </>
+      ) : null}
     </div>
   );
 }

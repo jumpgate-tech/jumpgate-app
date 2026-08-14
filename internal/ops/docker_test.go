@@ -1006,6 +1006,42 @@ func TestERPCRunArgs_JoinsTheNetworkAndCanPublishNothing(t *testing.T) {
 	}
 }
 
+// A fronted gateway publishes NO network-facing RPC port, but a loopback
+// plaintext one is the wallet door for the same machine — it needs no cert
+// trust, and 127.0.0.1 is reachable only from this host. See LoopbackRPCPort.
+func TestERPCRunArgs_FrontedStillPublishesLoopbackRPC(t *testing.T) {
+	args := ERPCRunArgs(ERPCRunSpec{
+		ContainerName:   "valve-node-app-erpc",
+		HostConfigPath:  "/home/o/.valve-node-app/erpc.yaml",
+		Network:         NetworkName,
+		NoPublish:       true,
+		LoopbackRPCPort: 4000,
+	})
+	joined := strings.Join(args, " ")
+	// The plaintext door is present, and pinned to loopback whatever else says.
+	if !strings.Contains(joined, "-p 127.0.0.1:4000:4000") {
+		t.Errorf("want the loopback wallet port: %v", args)
+	}
+	// And it is the ONLY publish: no wide/foreign mapping sneaks in with it.
+	if strings.Count(joined, "-p ") != 1 {
+		t.Errorf("a fronted gateway publishes ONLY the loopback wallet port: %v", args)
+	}
+}
+
+// The loopback wallet port is ALWAYS pinned to 127.0.0.1, even when the
+// operator widened the gateway's own bind — a wallet door is not a front door.
+func TestERPCRunArgs_LoopbackRPCIgnoresBindAddr(t *testing.T) {
+	args := ERPCRunArgs(ERPCRunSpec{
+		BindAddr:        "0.0.0.0",
+		Network:         NetworkName,
+		NoPublish:       true,
+		LoopbackRPCPort: 8645,
+	})
+	if !strings.Contains(strings.Join(args, " "), "-p 127.0.0.1:8645:4000") {
+		t.Errorf("the loopback wallet port must stay on 127.0.0.1: %v", args)
+	}
+}
+
 // --platform is emitted on EVERY run and build, never conditionally. See
 // resolveRunPlatform for the measured failure an omitted flag produced.
 func TestRunAndBuildArgs_AlwaysCarryAPlatform(t *testing.T) {

@@ -469,6 +469,15 @@ func (p *gatewayPlan) checkPortFree(ctx context.Context, e executor.Executor, st
 		if err := p.probePort(ctx, e, st, p.gw.TLS.HTTPS(), "gateway's HTTPS front", false); err != nil {
 			return err
 		}
+		// The loopback plaintext wallet port rides alongside the HTTPS front for
+		// a fronted gateway. It reclaims like the metrics port: a foreign
+		// listener is noted, not fatal — docker fails loudly on a real
+		// collision. See loopbackRPCPort.
+		if lp := p.loopbackRPCPort(); lp > 0 {
+			if err := p.probePort(ctx, e, st, lp, "gateway's localhost wallet port", true); err != nil {
+				return err
+			}
+		}
 	} else {
 		if err := p.probePort(ctx, e, st, p.gw.HTTP(), "gateway", true); err != nil {
 			return err
@@ -582,6 +591,23 @@ func (p *gatewayPlan) metricsHostPort() int {
 		return 0
 	}
 	return p.gw.MetricsHTTP()
+}
+
+// loopbackRPCPort is the host port eRPC's RPC endpoint is published on for a
+// wallet on THIS machine — a plaintext door on 127.0.0.1 that needs no
+// certificate trust — or 0 when there is no separate one to publish.
+//
+// It is the gateway's own HTTP port (p.gw.HTTP()), and it is published ONLY
+// when the gateway is fronted. An unfronted gateway already publishes that same
+// port on the host through the ordinary mapping, so a second loopback mapping to
+// the same container port would just collide; a fronted gateway suppresses the
+// ordinary mapping (NoPublish), which is exactly where the wallet door is
+// otherwise missing. See ops.ERPCRunSpec.LoopbackRPCPort.
+func (p *gatewayPlan) loopbackRPCPort() int {
+	if !p.fronted() {
+		return 0
+	}
+	return p.gw.HTTP()
 }
 
 // ---------------------------------------------------------------------
@@ -891,6 +917,10 @@ func (p *gatewayPlan) runDocker(ctx context.Context, e executor.Executor, st *St
 		// ops.ERPCRunSpec.MetricsPort. Zero when the operator turned the
 		// counters off, which publishes nothing.
 		MetricsPort: p.metricsHostPort(),
+		// The plaintext wallet door on 127.0.0.1, for a fronted gateway only —
+		// an unfronted one already publishes its RPC port on the host. See
+		// loopbackRPCPort and ops.ERPCRunSpec.LoopbackRPCPort.
+		LoopbackRPCPort: p.loopbackRPCPort(),
 	})
 	res, err := ops.DockerRun(ctx, e, args...)
 	if err != nil {

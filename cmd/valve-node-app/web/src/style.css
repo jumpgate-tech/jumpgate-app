@@ -1563,16 +1563,37 @@ table.surface tbody tr:last-child td {
    the identity line (.rpc-ident-trust) instead of being repeated per chain. */
 .chain-connect {
   display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0.35rem 0 0.1rem;
+}
+
+/* One address and its Copy, side by side. The wrapper above stacks the gateway
+   URL, its note, and the loopback wallet URL beneath it. */
+.chain-connect-row {
+  display: flex;
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
-  margin: 0.35rem 0 0.1rem;
+}
+
+/* The wallet URL is the friction-free door — plain http on loopback, no cert to
+   trust — so it gets a quiet accent rule to set it apart from the shareable
+   HTTPS one above it. */
+.chain-connect-wallet {
+  border-left: 2px solid var(--accent);
+  padding-left: 0.5rem;
+  margin-top: 0.25rem;
 }
 
 /* The one Copy on this page that is NOT ghost: pasting this URL into a wallet
    is the action the whole screen leads to. */
 .chain-connect .endpoint-url {
   font-size: 0.85rem;
+}
+
+.chain-connect-note {
+  margin: 0;
 }
 
 .chain-connect-none {
