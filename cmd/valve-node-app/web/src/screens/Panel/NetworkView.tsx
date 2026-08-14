@@ -75,11 +75,13 @@ export function NetworkView({
 
   const tlsResult = tls ?? gw.tls.verification ?? null;
   const tlsOk = tlsResult?.ok === true;
-  const lockTitle = tlsBusy
-    ? "Verifying…"
-    : tlsOk
-      ? `Verified ${tlsResult ? new Date(tlsResult.at).toLocaleString() : ""}`
-      : "Verify HTTPS now";
+  const lockTitle = !running
+    ? "Start the gateway to verify HTTPS"
+    : tlsBusy
+      ? "Verifying…"
+      : tlsOk
+        ? `Verified ${tlsResult ? new Date(tlsResult.at).toLocaleString() : ""}`
+        : "Verify HTTPS now";
 
   async function verify() {
     if (tlsBusy) return;
@@ -88,7 +90,7 @@ export function NetworkView({
     try {
       setTls(await onVerifyTls());
     } catch (e) {
-      setTlsErr(e instanceof Error ? e.message : String(e));
+      setTlsErr(`Couldn't verify HTTPS — ${e instanceof Error ? e.message : String(e)}`);
     }
     setTlsBusy(false);
   }
@@ -127,7 +129,7 @@ export function NetworkView({
               className={`p-ic ${tlsOk ? "green" : "dim"}`}
               title={lockTitle}
               aria-label={lockTitle}
-              disabled={tlsBusy}
+              disabled={tlsBusy || !running}
               onClick={() => void verify()}
             >
               <Icon name="lock" />
@@ -204,7 +206,7 @@ export function NetworkView({
             <span style={{ color: "var(--dim3)", letterSpacing: 0 }}> · combined across endpoints</span>
           </span>
         </div>
-        <CapsBand statuses={capStatuses} busy={capsBusy} err={capsErr} hasData={!!caps} />
+        <CapsBand statuses={capStatuses} busy={capsBusy} err={capsErr} hasData={!!caps} running={running} />
       </div>
 
       <div className="p-band">

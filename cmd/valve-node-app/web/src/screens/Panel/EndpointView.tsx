@@ -146,7 +146,7 @@ export function EndpointView({
         <div className="p-lblrow">
           <span className="p-seclbl">Capabilities</span>
         </div>
-        <CapsBand statuses={capStatuses} busy={capsBusy} err={capsErr} hasData={!!caps} />
+        <CapsBand statuses={capStatuses} busy={capsBusy} err={capsErr} hasData={!!caps} running={running} />
       </div>
 
       <div className="p-band">
