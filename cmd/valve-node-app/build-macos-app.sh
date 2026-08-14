@@ -38,7 +38,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # --- compile the tray binary straight into the bundle -----------------------
 echo "--> go build -tags tray (CGo)"
 CGO_ENABLED=1 go build -tags tray \
-	-ldflags "-s -w" \
+	-ldflags "-s -w -X github.com/valve-tech/valve-node-app/internal/buildinfo.version=$VERSION" \
 	-o "$APP/Contents/MacOS/$EXE_NAME" \
 	"$REPO_ROOT/cmd/valve-node-app"
 

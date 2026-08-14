@@ -238,6 +238,17 @@ type Config struct {
 	AIKey      string `json:"aiKey"`
 	RefRPCBase string `json:"refRpcBase"` // default: defaultRefRPCBase
 
+	// UpdateCheckDisabled turns off the automatic check for a newer release.
+	// The zero value (false) keeps the check on, so a fresh install checks by
+	// default; an operator who does not want the app reaching GitHub can turn
+	// it off in Settings.
+	UpdateCheckDisabled bool `json:"updateCheckDisabled,omitempty"`
+
+	// UpdateSkipVersion is a release the operator chose to skip. The update
+	// notice stays hidden until a release NEWER than this one appears — so
+	// "skip" silences one version without silencing the check.
+	UpdateSkipVersion string `json:"updateSkipVersion,omitempty"`
+
 	// TrustedOverlays are CIDR ranges of the operator's private overlay
 	// networks (WireGuard, Tailscale, Headscale, Netbird, ZeroTier, …). The
 	// security checklist grades a service bound to an address in one of these

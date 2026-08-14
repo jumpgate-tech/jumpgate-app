@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/valve-tech/valve-node-app/internal/buildinfo"
 	"github.com/valve-tech/valve-node-app/internal/config"
 	"github.com/valve-tech/valve-node-app/internal/server"
 )
@@ -35,7 +36,13 @@ func main() {
 	bind := flag.String("bind", "127.0.0.1:8799", bindFlagUsage)
 	noOpen := flag.Bool("no-open", false, "do not open a browser window automatically")
 	tray := flag.Bool("tray", false, "open the UI in a native desktop window (tiny-app mode) instead of a browser tab; requires a build made with -tags tray")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(buildinfo.Version())
+		return
+	}
 
 	if warning := bindWarningLine(*bind); warning != "" {
 		fmt.Fprintln(os.Stderr, warning)
@@ -67,6 +74,11 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Warm the update check in the background so the first UI poll is instant.
+	// It respects the disabled setting and reports failures through the API,
+	// so nothing here needs its result.
+	go s.PrimeUpdateCheck(ctx)
 
 	// Bring up any overlays the operator marked "start with the app". Runs off
 	// the serving path in its own goroutine: an autostart overlay on an

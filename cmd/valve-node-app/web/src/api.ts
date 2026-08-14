@@ -1287,6 +1287,10 @@ export interface Settings {
   // array; callers still coalesce, because an older binary behind a newer
   // bundle would send nothing at all.
   providerKeysSet: string[];
+  // updateCheckEnabled reports whether the app checks GitHub for a newer
+  // release. An older binary behind a newer bundle omits it; the UI treats a
+  // missing value as "on", matching the server default.
+  updateCheckEnabled?: boolean;
 }
 
 export function getSettings(): Promise<Settings> {
@@ -1306,6 +1310,9 @@ export interface PutSettingsRequest {
   // key. A name must match ^[A-Za-z0-9_]+$; the server rejects the WHOLE
   // request on one bad name, so the error has to reach the operator.
   providerKeys?: Record<string, string>;
+  // updateCheckEnabled toggles the automatic release check. Omit to leave it
+  // unchanged, same rule as every other field here.
+  updateCheckEnabled?: boolean;
 }
 
 export function putSettings(body: PutSettingsRequest): Promise<Settings> {
@@ -1313,6 +1320,43 @@ export function putSettings(body: PutSettingsRequest): Promise<Settings> {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
+  });
+}
+
+// ---------------------------------------------------------------------
+// update check
+// ---------------------------------------------------------------------
+
+export interface Update {
+  // current is the running version, e.g. "v0.4.0" or "dev" for a local build.
+  current: string;
+  // latest is the newest published release, or "" when the check is disabled
+  // or has not answered yet.
+  latest: string;
+  // updateAvailable is true only when latest is newer than current AND the
+  // operator has not skipped it. A "dev" build never reports one.
+  updateAvailable: boolean;
+  // releaseUrl points at the release page to open. Empty when there is nothing
+  // newer to show.
+  releaseUrl: string;
+  // checkEnabled is false when the operator turned the check off in Settings.
+  checkEnabled: boolean;
+  // checkError names why the last check failed (offline, rate limited), so the
+  // UI can say "could not check" instead of "up to date". Empty on success.
+  checkError?: string;
+}
+
+export function getUpdate(): Promise<Update> {
+  return request<Update>("/api/update");
+}
+
+// skipUpdate records a version the operator does not want to be nagged about.
+// The notice returns when a release newer than this one appears.
+export function skipUpdate(version: string): Promise<Update> {
+  return request<Update>("/api/update/skip", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ version }),
   });
 }
 

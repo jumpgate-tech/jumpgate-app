@@ -38,6 +38,9 @@ export function Settings() {
   // null = untouched this session; fall back to the loaded/saved value.
   const [providerChoice, setProviderChoice] = useState<api.AIProvider | null>(null);
   const [refRpcBase, setRefRpcBase] = useState<string | null>(null);
+  // null = untouched this session; fall back to the loaded value. A missing
+  // updateCheckEnabled (older binary) reads as "on", matching the server.
+  const [updateCheckEnabled, setUpdateCheckEnabled] = useState<boolean | null>(null);
 
   const [aiKeyValue, setAiKeyValue] = useState("");
   const [keyTouched, setKeyTouched] = useState(false);
@@ -68,6 +71,9 @@ export function Settings() {
       aiProvider: providerChoice ?? current.aiProvider,
       refRpcBase: (refRpcBase ?? current.refRpcBase).trim(),
     };
+    // Only send the update toggle when it was touched this session, so a save
+    // for an unrelated field leaves the stored value alone.
+    if (updateCheckEnabled !== null) body.updateCheckEnabled = updateCheckEnabled;
     // Only send aiKey if the user actually touched the field this session —
     // omitting it preserves whatever key is already stored server-side.
     if (keyTouched) body.aiKey = aiKeyValue;
@@ -95,6 +101,7 @@ export function Settings() {
       setNewKeyName("");
       setNewKeyValue("");
       setRefRpcBase(null);
+      setUpdateCheckEnabled(null);
       setSaved(true);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
@@ -207,6 +214,26 @@ export function Settings() {
                 </label>
                 <p className="muted small">Use the exact name the rejection quotes. Letters, digits and underscores only.</p>
               </div>
+            </section>
+
+            <section className="pk-section">
+              <h2>Updates</h2>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={updateCheckEnabled ?? current.updateCheckEnabled ?? true}
+                  onChange={(e) => {
+                    setUpdateCheckEnabled(e.target.checked);
+                    setSaved(false);
+                  }}
+                />
+                Check for updates automatically
+              </label>
+              <p className="muted small">
+                When on, the app asks GitHub once every few hours whether a newer release exists and shows a
+                notice if so. It never installs anything on its own. Turn it off to stop the app reaching
+                GitHub.
+              </p>
             </section>
 
             <details className="advanced">

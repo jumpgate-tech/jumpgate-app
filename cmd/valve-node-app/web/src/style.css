@@ -788,6 +788,26 @@ details.advanced summary {
   font-size: 0.9rem;
 }
 
+/* The update notice above every screen: an accent-tinted banner with the
+   message on the left and the actions on the right, wrapping on a narrow
+   window. It reuses .banner for the box and adds only the layout + accent. */
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  background: rgba(37, 208, 125, 0.1);
+  border: 1px solid var(--accent);
+  color: var(--fg);
+}
+
+.update-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
 .banner-warn {
   background: rgba(224, 194, 111, 0.1);
   border: 1px solid var(--warn);

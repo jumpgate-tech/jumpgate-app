@@ -51,6 +51,11 @@ vi.mock("./screens/Analytics/Analytics", async () => {
     },
   };
 });
+// The update banner needs a QueryClient this routing test does not provide.
+// It is irrelevant to routing, so stub it out like every screen above.
+vi.mock("./components/UpdateBanner", () => ({
+  UpdateBanner: () => null,
+}));
 
 describe("activeNav", () => {
   it("maps machine→targets and home/panel→rpc, else identity", () => {
