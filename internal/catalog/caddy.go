@@ -69,7 +69,7 @@ const DefaultCaddyImage = "caddy:2-alpine"
 const DefaultTLSDomain = "localhost-valaxy.com"
 
 // DefaultTLSHostname is the name a gateway serves by default: the gateway's
-// own id, a short per-install tag, and DefaultTLSDomain.
+// own id, a collision-resistant per-install tag, and DefaultTLSDomain.
 //
 // The per-install tag is what stops two machines serving different
 // certificates for the SAME name — which is only ever noticed as a browser
@@ -84,8 +84,14 @@ func DefaultTLSHostname(gatewayID, seed string) string {
 	if id == "" {
 		id = "gateway"
 	}
+	// 8 bytes (64 bits) of the hash. The old 3-byte (24-bit) tag collided by
+	// the birthday bound at only a few thousand installs sharing a gateway id —
+	// harmless on the loopback wildcard (each name resolves to its own machine),
+	// but a real hazard the moment a gateway answers on public DNS. 64 bits is
+	// collision-free at any scale this will ever see, for a name still short
+	// enough to hand out.
 	sum := sha256.Sum256([]byte(seed))
-	return fmt.Sprintf("%s-%s.%s", id, hex.EncodeToString(sum[:3]), DefaultTLSDomain)
+	return fmt.Sprintf("%s-%s.%s", id, hex.EncodeToString(sum[:8]), DefaultTLSDomain)
 }
 
 // sanitizeDNSLabel reduces a gateway id to what a DNS label may contain. A
