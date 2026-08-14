@@ -473,6 +473,11 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
+
+	// The update check: is a newer release out, and skip one if the operator
+	// wants. See update.go.
+	mux.HandleFunc("GET /api/update", s.handleGetUpdate)
+	mux.HandleFunc("POST /api/update/skip", s.handleSkipUpdate)
 }
 
 // ---------------------------------------------------------------------
@@ -1459,6 +1464,12 @@ type settingsResponse struct {
 	// ProviderKeysSet names the placeholders that have a key, never the keys.
 	// Same rule as AIKeySet.
 	ProviderKeysSet []string `json:"providerKeysSet"`
+
+	// UpdateCheckEnabled reports whether the app checks GitHub for a newer
+	// release. It is the inverse of config.UpdateCheckDisabled — the UI shows a
+	// positive "check automatically" toggle, so the API speaks in the same
+	// direction.
+	UpdateCheckEnabled bool `json:"updateCheckEnabled"`
 }
 
 // placeholderNamePattern is the name shape chainlist's ${...} slot accepts. It
@@ -1474,7 +1485,8 @@ func settingsResponseFrom(c config.Config) settingsResponse {
 		RefRPCBase: c.RefRPCBase,
 		// Never nil: a nil slice serialises as JSON null, and the UI should be
 		// able to iterate the field without a guard.
-		ProviderKeysSet: []string{},
+		ProviderKeysSet:    []string{},
+		UpdateCheckEnabled: !c.UpdateCheckDisabled,
 	}
 	for name, v := range c.ProviderKeys {
 		if strings.TrimSpace(v) != "" {
@@ -1504,6 +1516,11 @@ type settingsRequest struct {
 	AIProvider *string `json:"aiProvider"`
 	AIKey      *string `json:"aiKey"`
 	RefRPCBase *string `json:"refRpcBase"`
+
+	// UpdateCheckEnabled toggles the automatic release check. A pointer so an
+	// omitted field leaves the setting untouched, matching the other fields
+	// here. The server stores the inverse (config.UpdateCheckDisabled).
+	UpdateCheckEnabled *bool `json:"updateCheckEnabled"`
 
 	// ProviderKeys is a PATCH by placeholder name, not a replacement: a name
 	// with a value sets it, a name with an empty value forgets it, and a name
@@ -1543,6 +1560,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.RefRPCBase != nil {
 			c.RefRPCBase = *req.RefRPCBase
+		}
+		if req.UpdateCheckEnabled != nil {
+			c.UpdateCheckDisabled = !*req.UpdateCheckEnabled
 		}
 		for name, v := range req.ProviderKeys {
 			name = strings.TrimSpace(name)

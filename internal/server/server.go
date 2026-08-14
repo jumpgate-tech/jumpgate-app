@@ -16,11 +16,13 @@ import (
 	"time"
 
 	"github.com/valve-tech/valve-node-app/internal/ai"
+	"github.com/valve-tech/valve-node-app/internal/buildinfo"
 	"github.com/valve-tech/valve-node-app/internal/catalog"
 	"github.com/valve-tech/valve-node-app/internal/chainlist"
 	"github.com/valve-tech/valve-node-app/internal/config"
 	"github.com/valve-tech/valve-node-app/internal/executor"
 	"github.com/valve-tech/valve-node-app/internal/setup"
+	"github.com/valve-tech/valve-node-app/internal/updatecheck"
 )
 
 // cookieName is the name of the cookie that carries the session token once
@@ -62,6 +64,11 @@ type Config struct {
 	// WebSocket and WAITS FOR A BLOCK. That is exactly what makes it worth
 	// having and exactly what makes it untestable in place.
 	VerifyTLS func(ctx context.Context, e executor.Executor, gatewayID string, g catalog.GatewayConfig, dialHost string) (setup.TLSVerification, error)
+
+	// Updater reads the latest published release for the update check.
+	// Injectable for tests (a fake that never touches the network); nil
+	// selects a real updatecheck.Client against buildinfo.ReleaseRepo().
+	Updater updateSource
 }
 
 // Server is the valve-node-app local HTTP server.
@@ -106,6 +113,21 @@ type Server struct {
 	newAIProvider func(id, apiKey, baseURL string) (ai.Provider, error)
 	newChainlist  func() *chainlist.Discoverer
 	verifyTLS     func(ctx context.Context, e executor.Executor, gatewayID string, g catalog.GatewayConfig, dialHost string) (setup.TLSVerification, error)
+
+	// Update-check state, guarded by updMu. updCache is the last release read
+	// from GitHub, updAt when it was read, updErr the last check's error text,
+	// and updHasCache whether a check has run at all. See latestRelease for the
+	// cache window (updateCheckInterval).
+	updater     updateSource
+	updMu       sync.Mutex
+	updCache    updatecheck.Release
+	updAt       time.Time
+	updErr      string
+	updHasCache bool
+
+	// now is the server's clock, defaulting to time.Now. A test sets it to
+	// drive the update-check cache window without waiting real hours.
+	now func() time.Time
 }
 
 // New constructs a Server from the given Config.
@@ -127,6 +149,10 @@ func New(cfg Config) *Server {
 	if s.verifyTLS == nil {
 		s.verifyTLS = setup.VerifyGatewayTLS
 	}
+	s.updater = cfg.Updater
+	if s.updater == nil {
+		s.updater = updatecheck.New(buildinfo.ReleaseRepo())
+	}
 	return s
 }
 
@@ -147,6 +173,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"ok":true}` + "\n"))
+	})
+
+	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, struct {
+			Version string `json:"version"`
+		}{Version: buildinfo.Version()})
 	})
 
 	s.registerAPIRoutes(mux)

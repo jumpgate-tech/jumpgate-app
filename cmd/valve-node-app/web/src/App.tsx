@@ -8,6 +8,7 @@ import { PrivateAccess } from "./screens/PrivateAccess/PrivateAccess";
 import { Targets } from "./screens/Targets/Targets";
 import { Analytics } from "./screens/Analytics/Analytics";
 import { Machine } from "./screens/Machine/Machine";
+import { UpdateBanner } from "./components/UpdateBanner";
 
 const NAV = [
   { to: "#/rpc", nav: "rpc", label: "RPC" },
@@ -54,6 +55,7 @@ export function App() {
         </header>
       )}
       <main id="content" className="content">
+        <UpdateBanner />
         <Routes>
           <Route path="/" element={<Panel />} />
           <Route path="/panel" element={<Panel />} />

@@ -11,6 +11,12 @@ builds:
     binary: jumpgate
     env:
       - CGO_ENABLED=0
+    # Inject the release version so the running binary knows what it is and the
+    # update check can compare against the latest release. {{.Version}} is the
+    # git tag goreleaser is building.
+    ldflags:
+      - -s -w
+      - -X github.com/valve-tech/valve-node-app/internal/buildinfo.version={{.Version}}
     goos:
       - darwin
       - linux
