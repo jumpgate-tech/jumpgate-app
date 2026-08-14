@@ -11,7 +11,7 @@ import { copyToClipboard } from "../../ui";
 import { Icon } from "./icons";
 import { HealthDot } from "./HealthDot";
 import { CapsBand, CapabilityDots } from "./CapabilityMeter";
-import { unionCapabilities, singleCapabilities } from "./capsUtil";
+import { unionCapabilities, singleCapabilities, hasProbeFor } from "./capsUtil";
 
 export function NetworkView({
   gw,
@@ -206,7 +206,14 @@ export function NetworkView({
             <span style={{ color: "var(--dim3)", letterSpacing: 0 }}> · combined across endpoints</span>
           </span>
         </div>
-        <CapsBand statuses={capStatuses} busy={capsBusy} err={capsErr} hasData={!!caps} running={running} />
+        <CapsBand
+          statuses={capStatuses}
+          busy={capsBusy}
+          err={capsErr}
+          hasData={!!caps}
+          running={running}
+          probed={hasProbeFor(caps, chainId)}
+        />
       </div>
 
       <div className="p-band">
@@ -216,11 +223,12 @@ export function NetworkView({
             <button
               type="button"
               className="p-ic dim"
-              title="Re-check capabilities and reload"
+              title={capsBusy ? "Re-checking…" : "Re-check capabilities and reload"}
               aria-label="Re-check capabilities and reload"
+              disabled={capsBusy}
               onClick={onRecheck}
             >
-              <Icon name="refresh" />
+              <Icon name="refresh" className={capsBusy ? "p-spinning" : undefined} />
             </button>
           </span>
         </div>

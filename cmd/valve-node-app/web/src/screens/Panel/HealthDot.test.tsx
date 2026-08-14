@@ -42,6 +42,6 @@ describe("HealthDot", () => {
     expect(screen.getByRole("img", { name: "Stopped" })).toBeInTheDocument();
     cleanup();
     render(<HealthDot running={true} serviceable={false} />);
-    expect(screen.getByRole("img", { name: "Unserviceable" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Not serving" })).toBeInTheDocument();
   });
 });

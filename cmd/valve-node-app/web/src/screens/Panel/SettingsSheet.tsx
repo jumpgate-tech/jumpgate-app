@@ -32,7 +32,7 @@ export function SettingsSheet({
   }
 
   return (
-    <Modal onClose={onClose}>
+    <Modal onClose={onClose} label="Settings">
       <h2>Settings</h2>
       <div className="set-group">
         <div className="set-label">Appearance</div>

@@ -65,17 +65,23 @@ export function CapsBand({
   err,
   hasData,
   running,
+  probed,
 }: {
   statuses: Record<string, string>;
   busy: boolean;
   err: string | null;
   hasData: boolean;
   running: boolean;
+  // probed is false when the cached probe does not cover this target yet (a
+  // freshly-added endpoint). Without it, "not probed" is indistinguishable from
+  // "probed and supports nothing" — both would show every cell unavailable.
+  probed: boolean;
 }) {
   // A stopped gateway can't answer a capability probe — say so instead of
   // running it and showing a raw connection error.
   if (!running) return <div className="p-caprow" style={{ color: "var(--dim2)" }}>Start the gateway to check capabilities.</div>;
   if (busy && !hasData) return <div className="p-caprow" style={{ color: "var(--dim2)" }}>probing…</div>;
   if (err && !hasData) return <div className="p-caprow p-caperr">Couldn't check capabilities — {err}</div>;
+  if (!probed) return <div className="p-caprow" style={{ color: "var(--dim2)" }}>Not checked yet — press refresh to probe.</div>;
   return <CapabilityMeter statuses={statuses} />;
 }

@@ -52,24 +52,34 @@ describe("CapabilityDots", () => {
 
 describe("CapsBand", () => {
   it("tells the operator to start the gateway when it is stopped", () => {
-    render(<CapsBand statuses={{}} busy={false} err={"socket refused"} hasData={false} running={false} />);
+    render(<CapsBand statuses={{}} busy={false} err={"socket refused"} hasData={false} running={false} probed={false} />);
     expect(screen.getByText(/Start the gateway/)).toBeInTheDocument();
     // The raw probe error is NOT shown for a stopped gateway.
     expect(screen.queryByText(/Couldn't check capabilities/)).not.toBeInTheDocument();
   });
 
   it("shows 'probing…' only on the first fetch (busy, no data yet)", () => {
-    render(<CapsBand statuses={{}} busy={true} err={null} hasData={false} running={true} />);
+    render(<CapsBand statuses={{}} busy={true} err={null} hasData={false} running={true} probed={false} />);
     expect(screen.getByText("probing…")).toBeInTheDocument();
   });
 
   it("shows the probe error when it failed with no data", () => {
-    render(<CapsBand statuses={{}} busy={false} err={"socket refused"} hasData={false} running={true} />);
+    render(<CapsBand statuses={{}} busy={false} err={"socket refused"} hasData={false} running={true} probed={false} />);
     expect(screen.getByText(/Couldn't check capabilities/)).toHaveTextContent("socket refused");
   });
 
+  it("says 'not checked yet' when the probe exists but doesn't cover this target", () => {
+    // hasData (a probe ran) but probed=false (this upstream wasn't in it) — a
+    // freshly-added endpoint. It must NOT read as every capability unavailable.
+    render(<CapsBand statuses={{}} busy={false} err={null} hasData={true} running={true} probed={false} />);
+    expect(screen.getByText(/Not checked yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/: unavailable/)).not.toBeInTheDocument();
+  });
+
   it("shows the meter (previous verdict) once there is data, even while refetching", () => {
-    render(<CapsBand statuses={{ http: "supported" }} busy={true} err={null} hasData={true} running={true} />);
+    render(
+      <CapsBand statuses={{ http: "supported" }} busy={true} err={null} hasData={true} running={true} probed={true} />,
+    );
     expect(screen.queryByText("probing…")).not.toBeInTheDocument();
     expect(screen.getByText("HTTP").closest(".p-capitem")).toHaveClass("lit");
   });

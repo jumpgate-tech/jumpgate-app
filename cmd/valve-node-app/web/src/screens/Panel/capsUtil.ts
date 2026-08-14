@@ -36,6 +36,21 @@ export function unionCapabilities(
   return out;
 }
 
+// hasProbeFor reports whether the cached probe actually covers this target —
+// this one upstream when upstreamId is given, or any upstream on the chain
+// otherwise. It distinguishes "probed and supports nothing" (a real verdict)
+// from "not probed yet" (a freshly-added endpoint the last probe never saw),
+// which otherwise both render as an alarming all-unavailable meter.
+export function hasProbeFor(
+  caps: GatewayCapabilities | null | undefined,
+  chainId: number,
+  upstreamId?: string,
+): boolean {
+  return (caps?.endpoints ?? []).some(
+    (e) => e.chainId === chainId && (upstreamId === undefined || e.upstream === upstreamId),
+  );
+}
+
 // singleCapabilities is unionCapabilities narrowed to exactly one upstream — no
 // folding, because there is only one endpoint's own verdict to show.
 export function singleCapabilities(

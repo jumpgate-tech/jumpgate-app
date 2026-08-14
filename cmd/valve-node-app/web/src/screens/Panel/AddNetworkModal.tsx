@@ -203,7 +203,7 @@ export function AddNetworkDialog({
     staleTime: 6 * 60 * 60 * 1000, // matches the server-side cache TTL
   });
   return (
-    <Modal onClose={onCancel} bare>
+    <Modal onClose={onCancel} bare label="Add a network">
       <AddNetworkPicker
         catalogue={data?.chains ?? []}
         loading={isLoading}
