@@ -223,6 +223,7 @@
   height: 46px;
   border-radius: 50%;
   flex: 0 0 auto;
+  position: relative;
   display: grid;
   place-items: center;
   background: radial-gradient(circle at 50% 32%, #2ee68c, #16a862);
@@ -251,8 +252,29 @@
 .p-pbtn.blocked .p-i {
   stroke: #402400;
 }
-.p-power.busy .p-pbtn .p-i {
-  animation: p-spin 1s linear infinite;
+/* Light mode: the "off" button's dark-grey gradient reads as broken on a light
+   page, so give it a light-grey face. theme.ts always stamps data-theme, so
+   this single branch covers explicit-light and system-light alike. */
+:root[data-theme="light"] .p-pbtn.off {
+  background: radial-gradient(circle at 50% 32%, #dfe4ea, #b7c0cc);
+  box-shadow: 0 5px 14px -4px rgba(20, 30, 50, 0.2);
+}
+:root[data-theme="light"] .p-pbtn.off .p-i {
+  stroke: #5b6472;
+}
+/* Busy: a ring sweeps AROUND the button; the glyph stays put and centred.
+   Spinning the glyph itself read as an off-centre wobble. Applied in the list
+   power band (.p-power.busy) and on the empty-state button (.p-pbtn.busy),
+   which has no enclosing .p-power. */
+.p-power.busy .p-pbtn::after,
+.p-pbtn.busy::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(128, 128, 128, 0.25);
+  border-top-color: var(--accent);
+  animation: p-spin 0.8s linear infinite;
 }
 @keyframes p-spin {
   to {
@@ -761,11 +783,6 @@
   width: 32px;
   height: 32px;
 }
-/* Busy on the empty-state button is applied directly to .p-pbtn (there is no
-   enclosing .p-power here), unlike the list view's power band. */
-.p-pbtn.busy .p-i {
-  animation: p-spin 1s linear infinite;
-}
 .p-emptytitle {
   margin-top: 18px;
   font-weight: 600;
@@ -783,6 +800,16 @@
   color: var(--red);
   font-size: 12.5px;
   max-width: 300px;
+}
+/* Provision status/error on the detail screens (network/endpoint), where there
+   is no power band — so a config change's progress and failures are never
+   silent. */
+.p-provision {
+  padding: 8px var(--gut);
+  font-size: 12.5px;
+}
+.p-provision-err {
+  color: var(--red);
 }
 .p-setup-log {
   margin-top: 14px;
@@ -817,8 +844,8 @@
   .p-dot.occasional {
     opacity: 0.65;
   }
-  .p-power.busy .p-pbtn .p-i,
-  .p-pbtn.busy .p-i {
+  .p-power.busy .p-pbtn::after,
+  .p-pbtn.busy::after {
     animation: none;
   }
 }
