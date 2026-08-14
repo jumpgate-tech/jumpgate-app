@@ -88,12 +88,15 @@ describe("App routing", () => {
     expect(screen.getByText("Settings")).toBeInTheDocument();
   });
 
-  it("drops the topbar nav in tray mode, still rendering the panel", () => {
+  it("drops the topbar but shows the bottom tab bar in tray mode, panel as Home", () => {
     (window as { __VALVE_TRAY__?: boolean }).__VALVE_TRAY__ = true;
     try {
       renderAt("");
-      expect(screen.queryByText("RPC")).not.toBeInTheDocument();
-      expect(screen.queryByText("Machines")).not.toBeInTheDocument();
+      // The browser topbar is gone; the tray tab bar is the nav now.
+      expect(screen.queryByText("Private access")).not.toBeInTheDocument(); // topbar label
+      expect(screen.getByText("Home")).toBeInTheDocument(); // tray tab
+      expect(screen.getByText("Machines")).toBeInTheDocument();
+      expect(screen.getByText("Home")).toHaveClass("active"); // panel = Home
       expect(screen.getByText("panel-screen")).toBeInTheDocument();
     } finally {
       delete (window as { __VALVE_TRAY__?: boolean }).__VALVE_TRAY__;
