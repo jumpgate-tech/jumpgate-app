@@ -72,7 +72,7 @@ Each needs the one before it, except slice 0 (independent). `E` grows alongside
 
 | # | Slice | Adds (thin) | Delegate vs build | Weight | Status |
 |---|-------|-------------|-------------------|--------|--------|
-| 0 | Trust retry button | Graceful degrade + "Try again" on the Private (`tls internal`) tier | — | XS | in progress |
+| 0 | Trust retry button | Graceful degrade + "Try again" on the Private (`tls internal`) tier | — | XS | done (a9ad970) |
 | A | Public branded endpoint | "Public" cert source: operator domain + auto Let's Encrypt cert on the gateway's existing path (no keys yet) | Caddy (stock image) | S | spec written |
 | B | Keyed access (the relay) | Go proxy: key → validate → strip → forward; embedded key store; issue/revoke; method allow/deny | Build; eRPC stays keyless | L (the heart) | — |
 | C | Per-key metering | Per-request log + a couple of GROUP BY usage views; per-key usage in the UI; CSV/JSON export | Build (thin) | M | — |
