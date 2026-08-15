@@ -291,6 +291,28 @@ describe("Rpc — TLS verify + trust", () => {
     expect(cmd.className).toContain("strip-cmd");
     expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
   });
+
+  it("offers a calm Try again on a failed trust that re-runs the trust action", async () => {
+    vi.mocked(api.getGateways).mockResolvedValue(response());
+    // First attempt fails (detached-launch osascript, no GUI prompt); the retry
+    // succeeds because the operator trusted the root by hand in the meantime.
+    vi.mocked(api.trustGatewayCert)
+      .mockResolvedValueOnce({
+        ok: false,
+        message: "macOS needs a GUI login session to prompt for authorization.",
+        ranCommand: "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain '/root.crt'",
+      })
+      .mockResolvedValueOnce({ ok: true, message: "Already trusted." });
+    render(<Rpc />, { wrapper });
+    fireEvent.click(await screen.findByRole("button", { name: "Trust on this machine" }));
+    await waitFor(() => expect(api.trustGatewayCert).toHaveBeenCalledTimes(1));
+    // The failure reads as fixable, with an explicit retry beside the command.
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    fireEvent.click(retry);
+    await waitFor(() => expect(api.trustGatewayCert).toHaveBeenCalledTimes(2));
+    expect(api.trustGatewayCert).toHaveBeenLastCalledWith("default");
+    expect(await screen.findByText("Trusted — reload your wallet or browser.")).toBeInTheDocument();
+  });
 });
 
 describe("Rpc — config edit", () => {

@@ -102,6 +102,41 @@ func TrustStoreCommand(goos, certPath, gatewayID string) (TrustStoreInstall, err
 	}
 }
 
+// TrustVerifyCommand returns the command that checks whether certPath is ALREADY
+// trusted as a root on goos, or "" when this OS has no cheap probe for it.
+//
+// WHY this exists — the detached-launch false-failure trap: on darwin the
+// automatic install runs through osascript, which can raise its authorization
+// dialog ONLY inside a GUI (Aqua) login session. A server launched detached
+// (over SSH, a background service, nohup) has none, so the install fails with
+// "no user interaction was possible". The operator then runs the handed-back
+// sudo command by hand, and from that point the certificate IS trusted. A naive
+// retry re-runs osascript, fails the same GUI prompt again, and reports failure
+// though trust already succeeded — a false negative. Running this probe FIRST
+// lets the retry tell the truth: if the root already verifies, report success
+// and never touch the install.
+//
+// darwin: `security verify-cert -c <certPath>` exits 0 for a trusted root and
+// exits 1 (CSSMERR_TP_NOT_TRUSTED) for an untrusted self-signed one, so its exit
+// code answers the question directly and without side effects. linux and windows
+// have no equally cheap, side-effect-free check, so they return "" and the
+// caller keeps its existing install-and-report path (no short-circuit).
+//
+// SECURITY: certPath is validated by the same validateCertPath the install uses,
+// and single-quoted the same way, because it is interpolated into a shell
+// command; a path that fails the check is refused, not escaped-and-hoped.
+func TrustVerifyCommand(goos, certPath string) (string, error) {
+	if err := validateCertPath(certPath); err != nil {
+		return "", err
+	}
+	switch goos {
+	case "darwin":
+		return "security verify-cert -c " + shQuote(certPath), nil
+	default:
+		return "", nil
+	}
+}
+
 // validateCertPath refuses a path that could break out of the quoting the
 // trust-store commands rely on. It is deliberately strict: the path is one this
 // app derived (rootCAPath), so a metacharacter in it is far likelier a bug than

@@ -37,7 +37,22 @@ function dotKind(gw: GatewayView): "ok" | "bad" | "neutral" {
 // command to run by hand) renders the same way wherever trust surfaces. The
 // command lives in its own <code> block rather than an inline nowrap span so
 // a long sudo command wraps instead of truncating.
-function TrustResultLine({ r }: { r: TrustCertResult }) {
+//
+// A failure carries a "Try again" button because the common darwin case is
+// fixable in place: a detached launch's automatic install has no GUI session to
+// prompt in, the operator runs the sudo command by hand, and a retry then
+// succeeds — the backend verifies the root is trusted and short-circuits rather
+// than re-running the install. So the failure reads as a step to redo, not a
+// dead end. The retry disables while one is in flight (trustBusy).
+function TrustResultLine({
+  r,
+  trustBusy,
+  onTrust,
+}: {
+  r: TrustCertResult;
+  trustBusy: boolean;
+  onTrust: () => void;
+}) {
   if (r.ok) {
     return (
       <div className="strip-line strip-note">
@@ -54,6 +69,14 @@ function TrustResultLine({ r }: { r: TrustCertResult }) {
           <CopyButton value={r.ranCommand} label="Copy command" />
         </>
       ) : null}
+      <button
+        className="btn btn-ghost btn-tiny"
+        disabled={trustBusy}
+        title="Run the trust install again. If you just ran the command by hand, this confirms the certificate is trusted."
+        onClick={onTrust}
+      >
+        {trustBusy ? "Trying…" : "Try again"}
+      </button>
     </div>
   );
 }
@@ -126,7 +149,7 @@ export function GatewayIdentity({
             label="Copy cert path"
             title={`Copy the path to Caddy's root certificate. Install it on ${gw.placement.targetId} and in the trust store of any device that will call this URL, and the warning goes away.`}
           />
-          {trustResult ? <TrustResultLine r={trustResult} /> : null}
+          {trustResult ? <TrustResultLine r={trustResult} trustBusy={trustBusy} onTrust={onTrust} /> : null}
         </div>
       ) : null}
     </div>

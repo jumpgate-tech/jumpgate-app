@@ -80,6 +80,59 @@ func TestTrustStoreCommand_PerOS(t *testing.T) {
 	}
 }
 
+// The truthful-retry probe. darwin returns the command that reports whether the
+// root is ALREADY trusted; linux and windows have no cheap probe and return "",
+// which tells the caller to skip the short-circuit rather than run something
+// that lies.
+func TestTrustVerifyCommand_PerOS(t *testing.T) {
+	const path = "/home/ops/.valve-node-app/caddy-root.crt"
+
+	darwin, err := TrustVerifyCommand("darwin", path)
+	if err != nil {
+		t.Fatalf("darwin: %v", err)
+	}
+	// `security verify-cert -c <path>` exits 0 for a trusted root and 1 for one
+	// that is not, so its exit code answers "already trusted?" directly. The path
+	// is single-quoted for sh, safe because validateCertPath forbids a single
+	// quote.
+	for _, want := range []string{
+		"security verify-cert -c ",
+		"'" + path + "'",
+	} {
+		if !strings.Contains(darwin, want) {
+			t.Errorf("darwin verify command missing %q:\n%s", want, darwin)
+		}
+	}
+
+	// linux and windows have no equally cheap, side-effect-free probe, so they opt
+	// out with "" — the caller then keeps its existing install-and-report path.
+	for _, goos := range []string{"linux", "windows"} {
+		cmd, err := TrustVerifyCommand(goos, path)
+		if err != nil {
+			t.Fatalf("%s: %v", goos, err)
+		}
+		if cmd != "" {
+			t.Errorf("%s has no cheap trust probe and must return \"\", got %q", goos, cmd)
+		}
+	}
+}
+
+// The verify command interpolates the path into a shell command exactly as the
+// install does, so it REFUSES a path with a shell metacharacter rather than
+// escaping-and-hoping.
+func TestTrustVerifyCommand_RejectsUnsafePaths(t *testing.T) {
+	for _, bad := range []string{
+		"relative/caddy-root.crt",  // not absolute
+		"/x/root.crt'; rm -rf / #", // single quote → breaks sh
+		"/x/root$(id).crt",         // command substitution
+		"/x/root`id`.crt",          // backtick substitution
+	} {
+		if _, err := TrustVerifyCommand("darwin", bad); err == nil {
+			t.Errorf("unsafe path %q was accepted", bad)
+		}
+	}
+}
+
 // An OS we do not automate must be an error the caller can turn into "install
 // it by hand", not a half-formed command that runs the wrong thing.
 func TestTrustStoreCommand_UnknownOSErrors(t *testing.T) {

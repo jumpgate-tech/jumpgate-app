@@ -617,6 +617,10 @@ func TestGatewayTrustCert_InstallsTheGatewaysOwnInternalRoot(t *testing.T) {
 			// Root, so the linux branch runs its command rather than returning
 			// the sudo fallback — keeping the run-path assertion OS-independent.
 			ex.script("id -u", executor.Result{Stdout: "0\n"})
+			// This test is the fresh-install path: the root is NOT trusted yet, so
+			// the darwin verify probe fails (exit 1) and the install runs. On a
+			// darwin test host a default exit 0 would otherwise short-circuit it.
+			ex.script("verify-cert", executor.Result{ExitCode: 1})
 		}
 		return ex, nil
 	})
@@ -639,6 +643,49 @@ func TestGatewayTrustCert_InstallsTheGatewaysOwnInternalRoot(t *testing.T) {
 	// And it ran on the machine the gateway is placed on.
 	if ex == nil || !ex.ran("caddy-root.crt") {
 		t.Error("no trust command reached the gateway's machine")
+	}
+}
+
+// The truthful retry. On darwin a detached launch (over SSH, a background
+// service, nohup) has no GUI session, so the osascript install fails "no user
+// interaction was possible". The operator then trusts the root by hand and it
+// IS trusted — but a naive retry re-runs osascript, fails the same GUI prompt
+// again, and falsely reports failure. So trust-cert probes FIRST: when the root
+// already verifies, it reports success WITHOUT running the install.
+func TestGatewayTrustCert_AlreadyTrustedShortCircuitsWithoutInstalling(t *testing.T) {
+	root := issueLeaf(t, "root", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	var ex *trustExecutor
+	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) {
+		if ex == nil {
+			ex = &trustExecutor{scriptedExecutor: fleetExecutor("true|0|img|sha256:abc\n"), cert: root}
+			// Force the darwin path regardless of the test host's own OS: an SSH
+			// target is asked with uname, and this one answers Darwin.
+			ex.script("uname", executor.Result{Stdout: "Darwin\n"})
+			// The root already verifies (exit 0): the operator trusted it by hand
+			// after a detached-launch osascript failure.
+			ex.script("verify-cert", executor.Result{ExitCode: 0})
+		}
+		return ex, nil
+	})
+	addSSHTarget(t, a, "box")
+	addGateway(t, a, "default", "box", internalTLSGateway(4100))
+
+	res := a.do(t, "POST", "/api/gateways/default/trust-cert", nil)
+	body := decode[trustCertResult](t, res)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("got %d, want 200 (%s)", res.StatusCode, body.Message)
+	}
+	if !body.OK {
+		t.Fatalf("an already-trusted root must report success, got failure: %s", body.Message)
+	}
+	// The whole point: the retry did NOT re-run the osascript install, which would
+	// fail the same GUI prompt again and falsely report failure.
+	if ex.ran("add-trusted-cert") || ex.ran("osascript") {
+		t.Error("the install ran though the root was already trusted — a retry would falsely report failure")
+	}
+	// And it proved the claim by verifying, not by asserting trust blind.
+	if !ex.ran("verify-cert") {
+		t.Error("success was reported without actually verifying the root is trusted")
 	}
 }
 

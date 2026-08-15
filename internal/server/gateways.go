@@ -1720,6 +1720,27 @@ func (s *Server) handleGatewayTrustCert(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Truthful retry: before running the install, ask whether the root is ALREADY
+	// trusted. darwin's install runs through osascript, which can raise its
+	// authorization dialog only inside a GUI login session; a detached launch (over
+	// SSH, a background service, nohup) has none, so it fails and the operator
+	// trusts the root by hand. From that point the certificate IS trusted, but a
+	// naive retry would re-run osascript, fail the same prompt again, and report
+	// failure — a false negative. When TrustVerifyCommand offers a probe for this
+	// OS and it exits 0, the root is in place: report success and do NOT install.
+	// linux and windows have no cheap probe (empty command) and fall through to
+	// the install path unchanged.
+	if verify, verr := setup.TrustVerifyCommand(goos, path); verr == nil && verify != "" {
+		if vres, rerr := ex.Run(r.Context(), verify, nil); rerr == nil && vres.ExitCode == 0 {
+			writeJSON(w, http.StatusOK, trustCertResult{
+				OK: true,
+				Message: fmt.Sprintf(
+					"This gateway's root certificate is already trusted on machine %q. Reload your wallet or browser.", host.ID),
+			})
+			return
+		}
+	}
+
 	// linux (and windows) need root and do not elevate on their own. If the
 	// executor is not root, do not prompt for a password we cannot supply — hand
 	// back the exact command to run with elevation instead.
