@@ -1050,6 +1050,12 @@ const (
 	// like ERPCContainerPort: the container's port namespace is private, and
 	// the operator's choice of port lives on the host side of the -p mapping.
 	CaddyHTTPSPort = 443
+
+	// CaddyHTTPPort is :80, published ONLY for the Public (acme) tier: the
+	// HTTP-01 ACME challenge is answered there, and Let's Encrypt reaches it
+	// from the internet on the standard port. Fixed on both sides — HTTP-01
+	// has no port choice — so it is not exposed as an operator setting.
+	CaddyHTTPPort = 80
 )
 
 // CaddyContainerNameFor is the TLS front's container name for ONE gateway,
@@ -1095,6 +1101,10 @@ type CaddyRunSpec struct {
 	// source is "files". Empty otherwise.
 	CertFile string
 	KeyFile  string
+	// CertSource is the gateway's cert source (catalog.Cert*). It gates the :80
+	// publish: only the Public (acme) tier binds :80, for the HTTP-01
+	// challenge, so a Private or Local gateway does not grab that port.
+	CertSource string
 }
 
 // CaddyRunArgs renders the argv for `docker run` — WITHOUT the leading
@@ -1136,6 +1146,13 @@ func CaddyRunArgs(spec CaddyRunSpec) []string {
 	}
 	args = append(args,
 		"-p", publishSpec(bind, hostPort, CaddyHTTPSPort),
+	)
+	// The Public (acme) tier also publishes :80 for the HTTP-01 challenge.
+	// Gated on the cert source so Private/Local fronts do not grab :80.
+	if spec.CertSource == catalog.CertACME {
+		args = append(args, "-p", publishSpec(bind, CaddyHTTPPort, CaddyHTTPPort))
+	}
+	args = append(args,
 		"-v", spec.HostConfigPath+":"+caddyContainerConfigPath+":ro",
 		// The data volume is unconditional. See catalog.CaddyDataVolume: a
 		// regenerated internal CA breaks HTTPS for every device that trusted

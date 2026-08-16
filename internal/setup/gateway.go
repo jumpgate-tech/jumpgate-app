@@ -469,6 +469,16 @@ func (p *gatewayPlan) checkPortFree(ctx context.Context, e executor.Executor, st
 		if err := p.probePort(ctx, e, st, p.gw.TLS.HTTPS(), "gateway's HTTPS front", false); err != nil {
 			return err
 		}
+		// The Public (acme) tier also needs :80: the HTTP-01 ACME challenge is
+		// answered there, and ACME fails SILENTLY when :80 is busy. So probe it
+		// like the HTTPS front — reclaim=false, refuse a foreign listener — and
+		// give the operator a clear message instead of a mysterious non-issued
+		// certificate.
+		if p.gw.TLS.CertSourceOrDefault() == catalog.CertACME {
+			if err := p.probePort(ctx, e, st, ops.CaddyHTTPPort, "gateway's ACME HTTP-01 port (:80)", false); err != nil {
+				return err
+			}
+		}
 		// The loopback plaintext wallet port rides alongside the HTTPS front for
 		// a fronted gateway. It reclaims like the metrics port: a foreign
 		// listener is noted, not fatal — docker fails loudly on a real
@@ -969,6 +979,7 @@ func (p *gatewayPlan) runCaddy(ctx context.Context, e executor.Executor, st *Sta
 		Network:        ops.NetworkName,
 		CertFile:       front.Caddy.CertFile,
 		KeyFile:        front.Caddy.KeyFile,
+		CertSource:     front.Caddy.CertSourceOrDefault(),
 	})
 	res, err := ops.DockerRun(ctx, e, args...)
 	if err != nil {
@@ -1168,26 +1179,44 @@ func (p *gatewayPlan) probeCommand(ctx context.Context, e executor.Executor, cha
 	}
 	tls := p.gw.TLS
 	url := front.Caddy.URL() + p.gw.PathFor(chainID)
-	resolve := fmt.Sprintf("--resolve %s", shQuote(fmt.Sprintf("%s:%d:%s", tls.Hostname, tls.HTTPS(), probeHost(tls.Bind()))))
 
-	ca := front.Caddy.CertFile
-	if front.Caddy.CertSourceOrDefault() == catalog.CertInternal {
-		root, err := p.rootCAPath(ctx, e)
-		if err != nil {
-			return "", "", err
+	// resolve and ca default EMPTY, which is exactly the Public (acme) tier: a
+	// real Let's Encrypt certificate verifies against the system trust store
+	// (no --cacert), and the name genuinely resolves on the public internet, so
+	// the loopback --resolve pin is meaningless and is dropped. The
+	// internal/files tiers fill both in below.
+	resolve := ""
+	ca := ""
+	if front.Caddy.CertSourceOrDefault() != catalog.CertACME {
+		resolve = fmt.Sprintf("--resolve %s", shQuote(fmt.Sprintf("%s:%d:%s", tls.Hostname, tls.HTTPS(), probeHost(tls.Bind()))))
+		ca = front.Caddy.CertFile
+		if front.Caddy.CertSourceOrDefault() == catalog.CertInternal {
+			root, err := p.rootCAPath(ctx, e)
+			if err != nil {
+				return "", "", err
+			}
+			ca = root
 		}
-		ca = root
 	}
 
 	attempt := func(extra string) string {
-		return curlBase + body + " " + resolve + " " + extra + " " + shQuote(url)
+		parts := []string{curlBase + body}
+		if resolve != "" {
+			parts = append(parts, resolve)
+		}
+		if extra != "" {
+			parts = append(parts, extra)
+		}
+		return strings.Join(append(parts, shQuote(url)), " ")
 	}
-	cmd := attempt("--cacert " + shQuote(ca))
-	if ca != "" {
-		// Fall through to the system trust store when the CA file is absent or
-		// is a leaf rather than an authority.
-		cmd += " || " + attempt("")
+	// No CA file to name — verify against the system trust store only. This is
+	// the acme case (a real public cert), reached with an empty ca.
+	if ca == "" {
+		return url, attempt(""), nil
 	}
+	// Try the specific CA first, then fall through to the system trust store
+	// when the CA file is a leaf rather than an authority (the files case).
+	cmd := attempt("--cacert "+shQuote(ca)) + " || " + attempt("")
 	return url, cmd, nil
 }
 

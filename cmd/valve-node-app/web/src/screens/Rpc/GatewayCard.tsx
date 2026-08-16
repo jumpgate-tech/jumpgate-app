@@ -248,6 +248,7 @@ export function GatewayCard({
       CertSource: values.tls.certSource,
       CertFile: values.tls.certFile,
       KeyFile: values.tls.keyFile,
+      ACMEEmail: values.tls.acmeEmail,
       HTTPSPort: values.tls.httpsPort ?? 443,
       BindAddr: gw.config.TLS?.BindAddr ?? "",
       ImageRef: gw.config.TLS?.ImageRef ?? "",

@@ -667,10 +667,14 @@ export interface GatewayTLS {
   Enabled: boolean;
   Hostname: string;
   // CertSource: "internal" uses Caddy's own CA (no domain, no network, one
-  // trust-store install); "files" uses a certificate already on disk.
+  // trust-store install); "files" uses a certificate already on disk; "acme"
+  // gets a real Let's Encrypt certificate for the operator's own public domain.
   CertSource: string;
   CertFile: string;
   KeyFile: string;
+  // ACMEEmail is the optional Let's Encrypt contact address for the "acme"
+  // source. Empty means anonymous auto-HTTPS.
+  ACMEEmail?: string;
   HTTPSPort: number;
   // BindAddr defaults to 0.0.0.0, unlike every other bind here: a TLS front on
   // loopback serves only the machine that never needed TLS.

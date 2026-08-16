@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"strings"
 	"text/template"
 )
@@ -36,12 +37,13 @@ const (
 	// nothing to install and nothing for us to run.
 	CertFiles = "files"
 
-	// CertACME obtains a publicly-trusted certificate directly. Deliberately
-	// NOT implemented yet: for a name that resolves to loopback the only
-	// usable challenge is DNS-01, which needs credentials for the zone, and
-	// handing zone-write credentials to every install is worse than the
-	// trust-store click it would save. Left as a named constant so the
-	// decision is visible rather than forgotten.
+	// CertACME obtains a publicly-trusted certificate directly. The operator
+	// sets their OWN real domain and points a DNS record at a publicly
+	// reachable box; stock Caddy then gets a Let's Encrypt certificate over
+	// HTTP-01 / TLS-ALPN. This is the Public tier — a real certificate trusted
+	// everywhere, with nothing for the visitor to install. It needs :80 for the
+	// HTTP-01 challenge, which is why the global auto_https block is omitted for
+	// this source (see caddyfileTemplate).
 	CertACME = "acme"
 )
 
@@ -149,6 +151,11 @@ type CaddyConfig struct {
 	CertFile string
 	KeyFile  string
 
+	// ACMEEmail is the optional contact address for the Public (CertACME)
+	// tier. When set, Caddy registers it with Let's Encrypt so the operator
+	// gets expiry notices; when empty, Caddy runs anonymous auto-HTTPS.
+	ACMEEmail string
+
 	// UpstreamHost and UpstreamPort address the gateway being fronted. On a
 	// shared docker network this is the eRPC container's NAME, which is the
 	// point of the private network: the gateway then needs no published port
@@ -183,6 +190,10 @@ type GatewayTLS struct {
 	// CertFile and KeyFile are paths ON THE TARGET, used only with CertFiles.
 	CertFile string
 	KeyFile  string
+
+	// ACMEEmail is the optional Let's Encrypt contact address for the Public
+	// (CertACME) tier. Empty means anonymous auto-HTTPS.
+	ACMEEmail string
 
 	// HTTPSPort is the host port the front publishes (0 → 443).
 	HTTPSPort int
@@ -256,6 +267,7 @@ func (t *GatewayTLS) Caddy(upstreamHost string, upstreamPort int) CaddyConfig {
 	c.CertSource = t.CertSourceOrDefault()
 	c.CertFile = strings.TrimSpace(t.CertFile)
 	c.KeyFile = strings.TrimSpace(t.KeyFile)
+	c.ACMEEmail = strings.TrimSpace(t.ACMEEmail)
 	c.HTTPSPort = t.HTTPSPort
 	c.ImageRef = t.ImageRef
 	return c
@@ -284,25 +296,31 @@ func (t *GatewayTLS) ValidateSettings() error {
 // caddyfileTemplate renders the Caddyfile.
 //
 // auto_https disable_redirects: Caddy would otherwise also bind :80 to redirect
-// http→https. A gateway is called by programs, not typed into an address bar,
-// and binding a second privileged port purely for a redirect is a needless
-// collision with whatever else wants :80 on the operator's machine.
+// http→https. For the internal and files tiers a gateway is called by programs,
+// not typed into an address bar, and binding a second privileged port purely
+// for a redirect is a needless collision with whatever else wants :80 on the
+// operator's machine.
+//
+// The Public (acme) tier is the exception: it MUST keep :80, because the
+// HTTP-01 ACME challenge is answered there. So the global block is conditional
+// (Global) and is omitted for acme.
 //
 // The proxy is deliberately plain reverse_proxy with no header rewriting: eRPC
 // addresses chains by URL path (/<project>/evm/<chainId>), so the path must
 // reach it untouched, and WebSocket upgrades pass through natively.
-const caddyfileTemplate = `{
+const caddyfileTemplate = `{{if .Global}}{
 	auto_https disable_redirects
 }
-{{.Hostname}} {
-{{.TLSDirective}}
-	reverse_proxy {{.Upstream}}
+{{end}}{{.Hostname}} {
+{{if .TLSDirective}}{{.TLSDirective}}
+{{end}}	reverse_proxy {{.Upstream}}
 }
 `
 
 var caddyfileTmpl = template.Must(template.New("caddyfile").Parse(caddyfileTemplate))
 
 type caddyVars struct {
+	Global       bool
 	Hostname     string
 	TLSDirective string
 	Upstream     string
@@ -365,11 +383,42 @@ func (c CaddyConfig) Validate() error {
 			return fmt.Errorf("catalog: caddy: cert source %q needs both certFile and keyFile", CertFiles)
 		}
 	case CertACME:
-		return fmt.Errorf("catalog: caddy: cert source %q is not implemented", CertACME)
+		// The Public tier needs a name a public CA can actually issue for. The
+		// hostname was already checked non-empty and not-a-URL above.
+		host := strings.ToLower(strings.TrimSpace(c.Hostname))
+		if !strings.Contains(host, ".") {
+			return fmt.Errorf("catalog: caddy: cert source %q needs a public domain name, but %q is a single label", CertACME, c.Hostname)
+		}
+		if host == DefaultTLSDomain || strings.HasSuffix(host, "."+DefaultTLSDomain) {
+			return fmt.Errorf("catalog: caddy: cert source %q cannot issue for %q — that name resolves to loopback; use a public domain that points at this box", CertACME, c.Hostname)
+		}
+		if net.ParseIP(host) != nil {
+			return fmt.Errorf("catalog: caddy: cert source %q needs a domain name, not the bare IP address %q", CertACME, c.Hostname)
+		}
+		if c.ACMEEmail != "" && !looksLikeEmail(c.ACMEEmail) {
+			return fmt.Errorf("catalog: caddy: acme email %q does not look like an email address", c.ACMEEmail)
+		}
 	default:
 		return fmt.Errorf("catalog: caddy: unknown cert source %q", c.CertSource)
 	}
 	return nil
+}
+
+// looksLikeEmail is a deliberately loose check: one @ with a non-empty local
+// part, a domain that has a dot, and no whitespace. It rejects the obvious
+// typos an operator makes in the settings form; Let's Encrypt does the real
+// validation.
+func looksLikeEmail(s string) bool {
+	s = strings.TrimSpace(s)
+	if strings.ContainsAny(s, " \t\r\n") {
+		return false
+	}
+	at := strings.IndexByte(s, '@')
+	if at <= 0 || at != strings.LastIndexByte(s, '@') {
+		return false
+	}
+	domain := s[at+1:]
+	return domain != "" && strings.Contains(domain, ".") && !strings.HasPrefix(domain, ".") && !strings.HasSuffix(domain, ".")
 }
 
 // RenderCaddyfile renders c. Pure string rendering; the caller writes it.
@@ -378,16 +427,28 @@ func RenderCaddyfile(c CaddyConfig) (string, error) {
 		return "", err
 	}
 
+	source := c.CertSourceOrDefault()
+
 	var tlsDirective string
-	switch c.CertSourceOrDefault() {
+	switch source {
 	case CertInternal:
 		tlsDirective = "\ttls internal"
 	case CertFiles:
 		tlsDirective = fmt.Sprintf("\ttls %s %s", c.CertFile, c.KeyFile)
+	case CertACME:
+		// With an email, hand it to Caddy so Let's Encrypt can send expiry
+		// notices; without one, emit no tls directive and let Caddy run
+		// anonymous auto-HTTPS for the public site address.
+		if e := strings.TrimSpace(c.ACMEEmail); e != "" {
+			tlsDirective = fmt.Sprintf("\ttls %s", e)
+		}
 	}
 
 	var buf bytes.Buffer
 	if err := caddyfileTmpl.Execute(&buf, caddyVars{
+		// The global auto_https block binds Caddy off :80. The Public (acme)
+		// tier needs :80 for the HTTP-01 challenge, so omit the block there.
+		Global:       source != CertACME,
 		Hostname:     c.Hostname,
 		TLSDirective: tlsDirective,
 		Upstream:     fmt.Sprintf("%s:%d", c.UpstreamHost, c.UpstreamPort),

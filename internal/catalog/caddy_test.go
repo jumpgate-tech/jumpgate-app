@@ -61,6 +61,105 @@ func TestRenderCaddyfile_Files(t *testing.T) {
 	}
 }
 
+// The Public tier: the operator's own real domain and a Let's Encrypt cert
+// that stock Caddy obtains itself over HTTP-01 / TLS-ALPN. Two shapes matter:
+// the site address is the real domain, and the global auto_https block is GONE
+// (that block is what stops Caddy binding :80, which HTTP-01 needs).
+func TestRenderCaddyfile_ACME(t *testing.T) {
+	got, err := RenderCaddyfile(CaddyConfig{
+		Hostname:     "rpc.your-company.com",
+		CertSource:   CertACME,
+		UpstreamHost: "valve-node-app-erpc",
+		UpstreamPort: 4000,
+	})
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	for _, want := range []string{
+		"rpc.your-company.com {",
+		"reverse_proxy valve-node-app-erpc:4000",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	// The global block MUST be omitted for a public front: it is what keeps
+	// Caddy off :80, and HTTP-01 needs :80.
+	if strings.Contains(got, "auto_https disable_redirects") {
+		t.Errorf("a public front must bind :80 for HTTP-01; the global block must be omitted:\n%s", got)
+	}
+	// No email given: Caddy runs auto-HTTPS, so no tls directive at all.
+	if strings.Contains(got, "tls ") {
+		t.Errorf("no email was set, so there must be no tls directive:\n%s", got)
+	}
+	// The path must reach eRPC untouched.
+	if strings.Contains(got, "rewrite") || strings.Contains(got, "strip_prefix") {
+		t.Errorf("the path must reach eRPC untouched:\n%s", got)
+	}
+}
+
+// With an email the operator gets Let's Encrypt expiry notices; render `tls
+// <email>`. Only then — an empty email must not produce a bare `tls`.
+func TestRenderCaddyfile_ACMEWithEmail(t *testing.T) {
+	got, err := RenderCaddyfile(CaddyConfig{
+		Hostname:     "rpc.your-company.com",
+		CertSource:   CertACME,
+		ACMEEmail:    "ops@your-company.com",
+		UpstreamHost: "erpc",
+		UpstreamPort: 4000,
+	})
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	if !strings.Contains(got, "tls ops@your-company.com") {
+		t.Errorf("want the operator's email in the tls directive:\n%s", got)
+	}
+	if strings.Contains(got, "auto_https disable_redirects") {
+		t.Errorf("a public front must not carry the global block:\n%s", got)
+	}
+}
+
+// The Public tier accepts a real public domain and rejects the three shapes
+// that could never get a public certificate: a loopback name under our own
+// wildcard, a bare IP, and a single-label host.
+func TestCaddyConfig_ValidateACME(t *testing.T) {
+	base := CaddyConfig{CertSource: CertACME, UpstreamHost: "erpc", UpstreamPort: 4000}
+
+	if err := (func() error { c := base; c.Hostname = "rpc.your-company.com"; return c.Validate() })(); err != nil {
+		t.Errorf("a public FQDN must be accepted: %v", err)
+	}
+	// An email that looks like one is fine; one that does not is rejected.
+	if err := (func() error { c := base; c.Hostname = "rpc.x.com"; c.ACMEEmail = "ops@x.com"; return c.Validate() })(); err != nil {
+		t.Errorf("a valid email must be accepted: %v", err)
+	}
+
+	bad := []struct {
+		name string
+		host string
+		mail string
+		want string
+	}{
+		{"loopback wildcard", "gw-abc.localhost-valaxy.com", "", "loopback"},
+		{"bare ipv4", "203.0.113.10", "", "IP"},
+		{"single label", "localhost", "", "single label"},
+		{"bad email", "rpc.x.com", "not-an-email", "email"},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base
+			c.Hostname = tc.host
+			c.ACMEEmail = tc.mail
+			err := c.Validate()
+			if err == nil {
+				t.Fatalf("want a rejection for %q", tc.host)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestCaddyConfig_URL(t *testing.T) {
 	base := CaddyConfig{Hostname: "h.example", UpstreamHost: "erpc", UpstreamPort: 4000}
 	if got := base.URL(); got != "https://h.example" {
@@ -97,11 +196,11 @@ func TestRenderCaddyfile_Rejects(t *testing.T) {
 			want: "needs both certFile and keyFile",
 		},
 		{
-			// Named but unimplemented on purpose: DNS-01 is the only usable
-			// challenge for a loopback name, and that needs zone credentials.
-			name: "acme is not implemented",
-			mut:  func(c *CaddyConfig) { c.CertSource = CertACME },
-			want: "not implemented",
+			// ACME is implemented now, but the default hostname resolves to
+			// loopback, which no public CA can validate — so acme on it fails.
+			name: "acme on a loopback name",
+			mut:  func(c *CaddyConfig) { c.CertSource = CertACME; c.Hostname = "gw.localhost-valaxy.com" },
+			want: "loopback",
 		},
 		{"unknown source", func(c *CaddyConfig) { c.CertSource = "magic" }, "unknown cert source"},
 	}

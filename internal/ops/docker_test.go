@@ -1087,6 +1087,27 @@ func TestCaddyRunArgs(t *testing.T) {
 	}
 }
 
+// The Public (acme) tier needs :80 published as well as :443 — HTTP-01 answers
+// the ACME challenge on :80. A non-acme front must NOT grab :80, so a Private
+// or Local gateway does not collide with whatever else wants that port.
+func TestCaddyRunArgs_ACMEPublishesTheHTTPChallengePort(t *testing.T) {
+	acme := strings.Join(CaddyRunArgs(CaddyRunSpec{
+		HostPort:   8443,
+		CertSource: catalog.CertACME,
+	}), " ")
+	for _, want := range []string{"-p 0.0.0.0:8443:443", "-p 0.0.0.0:80:80"} {
+		if !strings.Contains(acme, want) {
+			t.Errorf("acme front missing %q: %s", want, acme)
+		}
+	}
+
+	// A non-acme front publishes only :443.
+	internal := strings.Join(CaddyRunArgs(CaddyRunSpec{HostPort: 8443}), " ")
+	if strings.Contains(internal, ":80:80") {
+		t.Errorf("a non-acme front must not grab :80: %s", internal)
+	}
+}
+
 func TestCaddyRunArgs_MountsCertFilesAtTheSamePathBothSides(t *testing.T) {
 	args := CaddyRunArgs(CaddyRunSpec{
 		CertFile: "/var/lib/valve-node-app/tls/cert.pem",

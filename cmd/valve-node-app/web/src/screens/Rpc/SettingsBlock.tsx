@@ -1,6 +1,7 @@
 // The gateway's settings, edited in place: port, bind, the request-counter
-// switch, and the HTTPS front (two sources, no ACME — see the legacy tlsFields
-// comment). Controlled inputs replace the old querySelector-on-save read; the
+// switch, and the HTTPS front (three cert sources: Caddy's own CA, a file on
+// disk, and a public Let's Encrypt certificate for the operator's own domain).
+// Controlled inputs replace the old querySelector-on-save read; the
 // values are handed up on Save and the parent builds the config. The live
 // "Verify HTTPS now" check sits here because that is where the question is
 // asked.
@@ -18,6 +19,7 @@ export interface SettingsValues {
     certSource: string;
     certFile: string;
     keyFile: string;
+    acmeEmail: string;
     httpsPort: number | null;
   };
 }
@@ -133,7 +135,10 @@ export function SettingsBlock({
   const [certSource, setCertSource] = useState(t?.CertSource || "internal");
   const [certFile, setCertFile] = useState(t?.CertFile ?? "");
   const [keyFile, setKeyFile] = useState(t?.KeyFile ?? "");
+  const [acmeEmail, setAcmeEmail] = useState(t?.ACMEEmail ?? "");
   const [httpsPort, setHttpsPort] = useState(String(t?.HTTPSPort || 443));
+
+  const isAcme = certSource === "acme";
 
   function save() {
     const p = Number.parseInt(port.trim(), 10);
@@ -148,6 +153,7 @@ export function SettingsBlock({
         certSource,
         certFile: certFile.trim(),
         keyFile: keyFile.trim(),
+        acmeEmail: acmeEmail.trim(),
         httpsPort: Number.isFinite(hp) ? hp : null,
       },
     });
@@ -188,17 +194,25 @@ export function SettingsBlock({
         so a gateway on a LAN or Tailscale address is unusable from a browser dApp without this.
       </p>
       <label>
-        Hostname <span className="muted">— must resolve to this machine</span>
+        {isAcme ? (
+          <>
+            Public domain <span className="muted">— your own name, pointed at this box</span>
+          </>
+        ) : (
+          <>
+            Hostname <span className="muted">— must resolve to this machine</span>
+          </>
+        )}
         <input
           type="text"
           value={hostname}
-          placeholder={suggested || "gateway.example.com"}
+          placeholder={isAcme ? "rpc.your-company.com" : suggested || "gateway.example.com"}
           autoComplete="off"
           spellCheck={false}
           onChange={(e) => setHostname(e.target.value)}
         />
       </label>
-      {suggested ? (
+      {!isAcme && suggested ? (
         <p className="muted small">
           The default is <code>{suggested}</code>. That whole domain's wildcard resolves to <code>127.0.0.1</code> from
           any network, so the name works on this machine with nothing to install and no hosts file to edit — and it is
@@ -214,35 +228,63 @@ export function SettingsBlock({
         <select value={certSource} onChange={(e) => setCertSource(e.target.value)}>
           <option value="internal">Caddy's own authority — works offline, one trust-store install</option>
           <option value="files">A certificate file on this machine</option>
+          <option value="acme">A public domain — a real certificate, trusted everywhere</option>
         </select>
       </label>
-      <label>
-        Certificate file <span className="muted">— path on that machine, used only for “a certificate file”</span>
-        <input
-          type="text"
-          value={certFile}
-          placeholder="/var/lib/valve-node-app/tls/cert.pem"
-          autoComplete="off"
-          spellCheck={false}
-          onChange={(e) => setCertFile(e.target.value)}
-        />
-      </label>
-      <label>
-        Private key file
-        <input
-          type="text"
-          value={keyFile}
-          placeholder="/var/lib/valve-node-app/tls/key.pem"
-          autoComplete="off"
-          spellCheck={false}
-          onChange={(e) => setKeyFile(e.target.value)}
-        />
-      </label>
-      <p className="muted small">
-        If that certificate is missing, unreadable, expired or does not cover the hostname, HTTPS stays on and falls
-        back to Caddy's own authority — with the reason shown above. A dead endpoint is worse than a one-time browser
-        warning, and certificate lifetimes are shrinking every year.
-      </p>
+      {isAcme ? (
+        <>
+          <label>
+            Contact email <span className="muted">— optional, for Let's Encrypt expiry notices</span>
+            <input
+              type="text"
+              value={acmeEmail}
+              placeholder="ops@your-company.com"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => setAcmeEmail(e.target.value)}
+            />
+          </label>
+          <p className="muted small">
+            Caddy gets a real certificate from Let's Encrypt for the public domain above. Three things must be true, and
+            this app cannot check them for you: this box is reachable from the internet on port 80 and port 443, and a
+            DNS record for the domain points at this box. Port 80 answers the certificate challenge.
+          </p>
+          <div className="banner banner-warn">
+            This endpoint is OPEN. Anyone who learns the URL can use it for free. Keys and metering arrive in a later
+            step — do not put this in front of paying customers yet.
+          </div>
+        </>
+      ) : (
+        <>
+          <label>
+            Certificate file <span className="muted">— path on that machine, used only for “a certificate file”</span>
+            <input
+              type="text"
+              value={certFile}
+              placeholder="/var/lib/valve-node-app/tls/cert.pem"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => setCertFile(e.target.value)}
+            />
+          </label>
+          <label>
+            Private key file
+            <input
+              type="text"
+              value={keyFile}
+              placeholder="/var/lib/valve-node-app/tls/key.pem"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => setKeyFile(e.target.value)}
+            />
+          </label>
+          <p className="muted small">
+            If that certificate is missing, unreadable, expired or does not cover the hostname, HTTPS stays on and falls
+            back to Caddy's own authority — with the reason shown above. A dead endpoint is worse than a one-time browser
+            warning, and certificate lifetimes are shrinking every year.
+          </p>
+        </>
+      )}
       <VerifyPanel enabled={tlsOn} verifying={verifying} verifyResult={verifyResult} verifyErr={verifyErr} onVerify={onVerify} />
       <div className="card-actions">
         <button className="btn" onClick={save}>

@@ -17,7 +17,7 @@ export const SETUP_CHAINS = [
 // internalTLSConfig is the gateway config the one-click setup flow creates and
 // updates: an eRPC on 4000 fronted by Caddy's internal CA (HTTPSPort 0 → 443).
 // Hostname is left empty on purpose — the server fills a name whose wildcard
-// already resolves to loopback.
+// already resolves to loopback. publicTLSConfig is the Public-tier sibling.
 export function internalTLSConfig(networks: api.GatewayNetwork[]): api.GatewayConfig {
   return {
     ProjectID: "main",
@@ -30,6 +30,34 @@ export function internalTLSConfig(networks: api.GatewayNetwork[]): api.GatewayCo
       CertSource: "internal",
       CertFile: "",
       KeyFile: "",
+      HTTPSPort: 0,
+      BindAddr: "",
+      ImageRef: "",
+    },
+  };
+}
+
+// publicTLSConfig is the Public-tier variant: the same eRPC-on-4000 gateway,
+// fronted by a real Let's Encrypt certificate for the operator's OWN domain.
+// The operator must set that domain (hostname) and point a DNS record at this
+// box; the email is optional and only feeds Let's Encrypt expiry notices.
+export function publicTLSConfig(
+  networks: api.GatewayNetwork[],
+  hostname: string,
+  email = "",
+): api.GatewayConfig {
+  return {
+    ProjectID: "main",
+    BindAddr: "127.0.0.1",
+    Port: 4000,
+    Networks: networks,
+    TLS: {
+      Enabled: true,
+      Hostname: hostname,
+      CertSource: "acme",
+      CertFile: "",
+      KeyFile: "",
+      ACMEEmail: email,
       HTTPSPort: 0,
       BindAddr: "",
       ImageRef: "",

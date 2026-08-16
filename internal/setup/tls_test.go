@@ -220,6 +220,15 @@ func frontedGateway() catalog.GatewayConfig {
 	return g
 }
 
+// acmeFrontedGateway is the Public tier: a real domain and a Let's Encrypt
+// certificate obtained by stock Caddy. tlsHost is a public FQDN, so it passes
+// the acme hostname rules.
+func acmeFrontedGateway() catalog.GatewayConfig {
+	g := testGateway()
+	g.TLS = &catalog.GatewayTLS{Enabled: true, Hostname: tlsHost, HTTPSPort: 8443, CertSource: catalog.CertACME}
+	return g
+}
+
 // caddyReady is dockerReady plus the two things a TLS front adds: an internal
 // CA root readable out of the container, and an https probe that answers.
 func caddyReady() *fakeExecutor {
@@ -365,6 +374,27 @@ func TestGatewayCheck_FrontedProbeUsesHTTPSAndVerifies(t *testing.T) {
 	// works fails setup only for real reasons and not for un-pointed DNS.
 	if !strings.Contains(cmd, "--resolve '"+tlsHost+":8443:127.0.0.1'") {
 		t.Errorf("want DNS pinned to the target's own loopback: %s", cmd)
+	}
+
+	// The Public (acme) tier verifies against the SYSTEM trust store: the cert
+	// is a real Let's Encrypt one, so there is no internal CA to name, and the
+	// public name genuinely resolves, so the loopback --resolve pin is dropped.
+	acme := &gatewayPlan{id: testGatewayID, gw: acmeFrontedGateway(), backend: BackendDocker}
+	url, cmd, err = acme.probeCommand(context.Background(), e, 369)
+	if err != nil {
+		t.Fatalf("probeCommand: %v", err)
+	}
+	if !strings.HasPrefix(url, "https://"+tlsHost+":8443/") {
+		t.Errorf("acme url = %q, want the https front door", url)
+	}
+	if strings.Contains(cmd, "--cacert") {
+		t.Errorf("a public cert verifies against system trust, not an internal CA: %s", cmd)
+	}
+	if strings.Contains(cmd, "--resolve") {
+		t.Errorf("a public name resolves for real; drop the loopback pin: %s", cmd)
+	}
+	if strings.Contains(cmd, " -k") || strings.Contains(cmd, "--insecure") {
+		t.Errorf("the probe must still verify the chain: %s", cmd)
 	}
 
 	// An unfronted gateway is unchanged: plain http on the published port.

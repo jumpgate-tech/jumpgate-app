@@ -320,6 +320,37 @@ func TestGatewayPreflight_ForeignListenerOnHTTPSFrontStillRefuses(t *testing.T) 
 	}
 }
 
+// The Public (acme) tier adds a :80 probe: HTTP-01 answers the ACME challenge
+// on :80, and a busy :80 makes issuance fail SILENTLY. So a foreign listener on
+// :80 must fail preflight, like the HTTPS front (reclaim=false). The probe is
+// scripted by the port in the grep pattern so only the :80 check sees it.
+func TestGatewayPreflight_ACMERefusesBusyPortEighty(t *testing.T) {
+	e := caddyReady().script("[:.]80(", executor.Result{
+		Stdout: "tcp   LISTEN 0  4096   0.0.0.0:80   0.0.0.0:*\n",
+	})
+	step := stepByID(t, mustPlanGateway(t, acmeFrontedGateway(), BackendDocker), "preflight")
+
+	err := step.Verify(context.Background(), e, &State{})
+	if err == nil {
+		t.Fatal("a busy :80 must fail acme preflight — HTTP-01 needs it and fails silently otherwise")
+	}
+	if !strings.Contains(err.Error(), "80") {
+		t.Fatalf("want the :80 port named in the error, got %v", err)
+	}
+}
+
+// A non-acme front never binds :80, so a busy :80 must NOT fail its preflight.
+func TestGatewayPreflight_NonACMEIgnoresBusyPortEighty(t *testing.T) {
+	e := caddyReady().script("[:.]80(", executor.Result{
+		Stdout: "tcp   LISTEN 0  4096   0.0.0.0:80   0.0.0.0:*\n",
+	})
+	step := stepByID(t, mustPlanGateway(t, frontedGateway(), BackendDocker), "preflight")
+
+	if err := step.Verify(context.Background(), e, &State{}); err != nil {
+		t.Fatalf("an internal-CA front does not use :80, so a busy :80 must not fail preflight: %v", err)
+	}
+}
+
 // The port probe must survive a target that has none of ss/netstat/lsof: a
 // false "busy" terminally blocks a preflight that has no Run to fix it,
 // while docker itself fails loudly on a real collision.
