@@ -73,8 +73,8 @@ Each needs the one before it, except slice 0 (independent). `E` grows alongside
 | # | Slice | Adds (thin) | Delegate vs build | Weight | Status |
 |---|-------|-------------|-------------------|--------|--------|
 | 0 | Trust retry button | Graceful degrade + "Try again" on the Private (`tls internal`) tier | — | XS | done (a9ad970) |
-| A | Public branded endpoint | "Public" cert source: operator domain + auto Let's Encrypt cert on the gateway's existing path (no keys yet) | Caddy (stock image) | S | spec written |
-| B | Keyed access (the relay) | Go proxy: key → validate → strip → forward; embedded key store; issue/revoke; method allow/deny | Build; eRPC stays keyless | L (the heart) | — |
+| A | Public branded endpoint | "Public" cert source: operator domain + auto Let's Encrypt cert on the gateway's existing path (no keys yet) | Caddy (stock image) | S | done (698aca6) |
+| B | Keyed access (the relay) | Go proxy: key → validate → strip → forward; embedded key store; issue/revoke; method allow/deny | Build; eRPC stays keyless | L (the heart) | spec written (f0b0c31), awaiting review |
 | C | Per-key metering | Per-request log + a couple of GROUP BY usage views; per-key usage in the UI; CSV/JSON export | Build (thin) | M | — |
 | D | Credits + on-chain top-up | Integer credit ledger; on-chain payment watcher; per-request deduct; disable-at-zero | Build (thin — NOT x402/permit2) | M | — |
 | E | Customer dashboard | Wallet-signature login; a subset of valve's web (create key, see usage, top up) | Build a subset | M | — |
