@@ -34,6 +34,16 @@ type BuildOptions struct {
 	// PollInterval is the latency floor a synthesised subscription pays. Zero
 	// takes the package default of one second.
 	PollInterval time.Duration
+	// BeaconEndpoints is the per-chain beacon pool. A chain absent here has no
+	// consensus layer and answers a definite 501.
+	BeaconEndpoints map[int][]*url.URL
+	// Chains is what this gateway serves, for the health rollup.
+	Chains []int
+	// Credits meters spend. Nil leaves metering OFF, which is how a gateway
+	// behaves before an operator switches billing on.
+	Credits CreditStore
+	// CreditBlock is how many credits to lease at a time. Zero takes the default.
+	CreditBlock int64
 }
 
 // Build turns startup configuration into a data-plane handler. It returns a nil
@@ -81,14 +91,43 @@ func Build(opt BuildOptions) (http.Handler, error) {
 	// thing this design must never do.
 	caller := NewERPCCaller(erpc, projectID)
 
-	return NewHandler(Config{
+	cfg := Config{
 		Auth:      cache,
 		ProjectID: projectID,
 		ERPC:      erpc,
 		Beacon:    opt.Beacon,
 		Caller:    caller,
 		Streams:   NewPollerStreams(caller, opt.PollInterval),
-	})
+	}
+
+	// The beacon pool round-robins a chain's consensus upstreams and drops the
+	// ones that report themselves down. Its Next satisfies the Beacon hook, so
+	// an explicit hook still wins when a caller supplies one.
+	var pool *BeaconPool
+	if len(opt.BeaconEndpoints) > 0 {
+		pool = NewBeaconPool(opt.BeaconEndpoints)
+		if cfg.Beacon == nil {
+			cfg.Beacon = pool.Next
+		}
+	}
+	cfg.Health = NewHealthProbe(caller, pool, opt.Chains)
+
+	// Metering stays off unless a ledger is supplied. Serving unmetered is the
+	// status quo; switching billing on must be deliberate.
+	if opt.Credits != nil {
+		cfg.Credits = NewCreditLease(opt.Credits, CreditOptions{BlockSize: opt.CreditBlock})
+	}
+
+	return NewHandler(cfg)
+}
+
+// BuildBeaconPool exposes the pool a caller must Run so it keeps re-probing. A
+// pool that never re-probed would shrink to nothing over a long uptime.
+func BuildBeaconPool(endpoints map[int][]*url.URL) *BeaconPool {
+	if len(endpoints) == 0 {
+		return nil
+	}
+	return NewBeaconPool(endpoints)
 }
 
 // BuildAdmin builds the operator's key-management client. It returns nil when

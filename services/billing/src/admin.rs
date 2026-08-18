@@ -65,7 +65,7 @@ use subtle::ConstantTimeEq;
 use crate::error::Error;
 use crate::keys::{AuthOutcome, KeyConfig, KeyManager, KeyPatch, KeyRecord, Rate};
 use crate::pricing::PriceBook;
-use crate::store::AuditRow;
+use crate::store::{AuditRow, Store};
 use crate::Result;
 
 /// The default number of audit rows a read returns when the caller sets no limit.
@@ -79,12 +79,19 @@ const MAX_AUDIT_LIMIT: i64 = 1000;
 pub struct AppState {
     keys: Arc<Mutex<KeyManager>>,
     prices: Arc<Mutex<PriceBook>>,
+    /// The credit ledger's connection. Unlike `keys` and `prices`, this holds
+    /// the raw [`Store`] with no in-memory cache layer in front of it. The
+    /// design (keyed-access design doc, section 8) is explicit that a credit
+    /// balance must never be cached — a stale balance is money — so there is
+    /// no `Accounts` wrapper here mirroring `KeyManager` or `PriceBook`, only
+    /// the database itself, read and written fresh on every call.
+    accounts: Arc<Mutex<Store>>,
     /// The admin bearer token, for every `/admin/*` route. It never appears
     /// in a response or a log.
     token: Arc<String>,
-    /// The relay bearer token, for `/internal/authenticate` only. Kept apart
-    /// from `token` so the two credentials can never be confused: each
-    /// route group's middleware reads only the field it owns.
+    /// The relay bearer token, for `/internal/*` routes only. Kept apart from
+    /// `token` so the two credentials can never be confused: each route
+    /// group's middleware reads only the field it owns.
     relay_token: Arc<String>,
 }
 
@@ -97,6 +104,7 @@ impl AppState {
     pub fn new(
         keys: KeyManager,
         prices: PriceBook,
+        accounts: Store,
         token: String,
         relay_token: String,
     ) -> Result<AppState> {
@@ -109,6 +117,7 @@ impl AppState {
         Ok(AppState {
             keys: Arc::new(Mutex::new(keys)),
             prices: Arc::new(Mutex::new(prices)),
+            accounts: Arc::new(Mutex::new(accounts)),
             token: Arc::new(token),
             relay_token: Arc::new(relay_token),
         })
@@ -142,6 +151,9 @@ pub fn build_router(state: AppState) -> Router {
 
     let internal = Router::new()
         .route("/internal/authenticate", post(authenticate_key))
+        .route("/internal/reserve", post(reserve_credits))
+        .route("/internal/settle", post(settle_credits))
+        .route("/internal/price", get(price_for_relay))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_relay_bearer,
@@ -456,6 +468,86 @@ async fn authenticate_key(
     Ok((StatusCode::OK, Json(AuthenticateView::build(record, constraints))).into_response())
 }
 
+/// Reserve up to `credits` credits for an account (design doc section 8: the
+/// relay leases credits rather than caching a balance). Grants what is
+/// available when the account holds less than asked — a partial grant, never
+/// a failure — so the response always carries a `granted` count, 0 included.
+/// An unknown account is a 404; a non-positive `credits` is a 400, checked
+/// before the store is touched.
+async fn reserve_credits(
+    State(state): State<AppState>,
+    Json(req): Json<ReserveRequest>,
+) -> std::result::Result<Json<ReserveView>, ApiError> {
+    if req.credits <= 0 {
+        return Err(ApiError::from(Error::InvalidCredits(req.credits)));
+    }
+    let granted = {
+        let accounts = state.accounts.lock().expect("accounts lock");
+        accounts.reserve(&req.account, req.credits)?
+    };
+    match granted {
+        Some(granted) => Ok(Json(ReserveView { granted })),
+        None => Err(ApiError::from(Error::AccountNotFound(req.account))),
+    }
+}
+
+/// Settle a previous reservation: the relay reports how much of `reserved` it
+/// actually spent, and this returns the rest to `credits_remaining`. Rejects
+/// `spent > reserved` and a negative amount with a 400 before the store is
+/// touched — the relay cannot spend more than it held. An unknown account is
+/// a 404, the same as `reserve_credits`.
+async fn settle_credits(
+    State(state): State<AppState>,
+    Json(req): Json<SettleRequest>,
+) -> std::result::Result<Json<SettleView>, ApiError> {
+    if req.spent < 0 || req.reserved < 0 || req.spent > req.reserved {
+        return Err(ApiError::from(Error::InvalidSettle {
+            spent: req.spent,
+            reserved: req.reserved,
+        }));
+    }
+    let settled = {
+        let accounts = state.accounts.lock().expect("accounts lock");
+        accounts.settle(&req.account, req.spent, req.reserved)?
+    };
+    match settled {
+        Some((credits_remaining, credits_reserved)) => Ok(Json(SettleView {
+            credits_remaining,
+            credits_reserved,
+        })),
+        None => Err(ApiError::from(Error::AccountNotFound(req.account))),
+    }
+}
+
+/// The price of one method on one chain, for the relay to charge the right
+/// amount per request.
+///
+/// This is a separate route rather than a field folded into
+/// `/internal/authenticate`, because the two answers change on different
+/// clocks. A key's authenticate record is worth caching for a short TTL
+/// (section 8): it rarely changes mid-session. A price applies per request,
+/// per method, per chain — a single key calls many methods across a session —
+/// so baking one price into the once-per-TTL authenticate response would
+/// answer the wrong question. `price_of_normalized` is a `RwLock` read with
+/// no database I/O, so a dedicated lookup here costs nothing extra.
+async fn price_for_relay(
+    State(state): State<AppState>,
+    Query(q): Query<PriceQuery>,
+) -> Json<PriceForRelayView> {
+    let (canonical, credits) = {
+        let pb = state.prices.lock().expect("prices lock");
+        pb.price_of_normalized(&q.method, q.chain)
+    };
+    let known = canonical.is_some();
+    let method = canonical.unwrap_or(q.method);
+    Json(PriceForRelayView {
+        method,
+        chain_id: q.chain,
+        credits,
+        known,
+    })
+}
+
 /// Per-key usage needs the metering hot path, which is not built. Return 501 and
 /// a JSON note. Do not fabricate usage numbers.
 async fn key_usage(Path(_id): Path<String>) -> impl IntoResponse {
@@ -740,6 +832,57 @@ impl AuthenticateView {
     }
 }
 
+/// The body of `POST /internal/reserve`.
+#[derive(Debug, Deserialize)]
+struct ReserveRequest {
+    account: String,
+    credits: i64,
+}
+
+/// The reply to `POST /internal/reserve`. `granted` may be 0 — that is a
+/// normal "out of credits" answer, not an error.
+#[derive(Debug, Serialize)]
+struct ReserveView {
+    granted: i64,
+}
+
+/// The body of `POST /internal/settle`.
+#[derive(Debug, Deserialize)]
+struct SettleRequest {
+    account: String,
+    spent: i64,
+    reserved: i64,
+}
+
+/// The reply to `POST /internal/settle`: the account's balance after the
+/// settle, so the relay can confirm the arithmetic without a second read.
+#[derive(Debug, Serialize)]
+struct SettleView {
+    credits_remaining: i64,
+    credits_reserved: i64,
+}
+
+/// The query for `GET /internal/price`. `chain` defaults to 0 (any chain),
+/// matching `method_pricing`'s own convention.
+#[derive(Debug, Deserialize)]
+struct PriceQuery {
+    method: String,
+    #[serde(default)]
+    chain: i64,
+}
+
+/// The reply to `GET /internal/price`. `known` is false when `method` matched
+/// no priced row and `credits` is therefore the "*" default, not a specific
+/// price for that method — the relay can use this to tell "priced at the
+/// default" from "priced because we recognise this method".
+#[derive(Debug, Serialize)]
+struct PriceForRelayView {
+    method: String,
+    chain_id: i64,
+    credits: i64,
+    known: bool,
+}
+
 /// The query for a per-chain price. `?chain=N`, default 0 (any chain).
 #[derive(Debug, Deserialize)]
 struct ChainQuery {
@@ -811,10 +954,12 @@ impl From<Error> for ApiError {
     /// the public id or the price rule, never a secret.
     fn from(e: Error) -> ApiError {
         let status = match &e {
-            Error::KeyNotFound(_) => StatusCode::NOT_FOUND,
-            Error::InvalidPrice(_) | Error::RangeInverted { .. } | Error::RangeTooWide { .. } => {
-                StatusCode::BAD_REQUEST
-            }
+            Error::KeyNotFound(_) | Error::AccountNotFound(_) => StatusCode::NOT_FOUND,
+            Error::InvalidPrice(_)
+            | Error::RangeInverted { .. }
+            | Error::RangeTooWide { .. }
+            | Error::InvalidCredits(_)
+            | Error::InvalidSettle { .. } => StatusCode::BAD_REQUEST,
             // A missing pepper is a startup fault surfaced at request time.
             Error::MissingPepper
             | Error::MissingAdminToken

@@ -23,6 +23,12 @@ pub enum Error {
     MissingAdminToken,
     #[error("the relay bearer token is missing or empty; set JUMPGATE_RELAY_TOKEN")]
     MissingRelayToken,
+    #[error("account not found: {0}")]
+    AccountNotFound(String),
+    #[error("invalid credits: must be positive, got {0}")]
+    InvalidCredits(i64),
+    #[error("invalid settle: spent {spent} must be between 0 and reserved {reserved}")]
+    InvalidSettle { spent: i64, reserved: i64 },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

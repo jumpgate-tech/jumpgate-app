@@ -362,6 +362,149 @@ impl Store {
         }
         Ok(out)
     }
+
+    // --- accounts: reserve and settle a credit lease -----------------------
+    //
+    // The design (keyed-access design doc, section 8) forbids caching a credit
+    // balance: a stale balance is money. So the relay leases a block of
+    // credits instead — it reserves up to N up front, spends them at wire
+    // speed with no further store round trip, then settles back what it did
+    // not use. `reserve` and `settle` are that lease's two verbs. Both run as
+    // one SQL statement each, so two concurrent reserves against the same
+    // account can never both grant credits that were already granted to the
+    // other; there is no read-then-write gap for a race to land in.
+
+    /// Insert or update an account's balance row. The reserve and settle
+    /// routes only ever adjust an existing row; they never create one, so
+    /// this is how a row starts to exist. Used by tests today; a deposit step
+    /// will call it too once that lands.
+    pub fn upsert_account(
+        &self,
+        address: &str,
+        credits_remaining: i64,
+        credits_reserved: i64,
+        escrow_ceiling: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO account \
+                 (address, credits_remaining, credits_reserved, escrow_ceiling, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(address) DO UPDATE SET \
+                 credits_remaining = excluded.credits_remaining, \
+                 credits_reserved = excluded.credits_reserved, \
+                 escrow_ceiling = excluded.escrow_ceiling, \
+                 updated_at = excluded.updated_at",
+            params![address, credits_remaining, credits_reserved, escrow_ceiling, unix_now()],
+        )?;
+        Ok(())
+    }
+
+    /// Read one account's balance row, for tests and for a caller that wants
+    /// the raw numbers rather than a lease outcome.
+    pub fn get_account(&self, address: &str) -> Result<Option<(i64, i64, i64)>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT credits_remaining, credits_reserved, escrow_ceiling \
+                 FROM account WHERE address = ?1",
+                params![address],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Reserve up to `credits` credits for `address`, moving them from
+    /// `credits_remaining` into `credits_reserved`. Returns the amount
+    /// actually granted — 0 or more, never more than `credits` — or `None`
+    /// when the account does not exist. A 0 grant is a normal answer: it
+    /// means the account is out of credits, not an error.
+    ///
+    /// The grant is capped two ways at once: by what `credits_remaining`
+    /// actually holds, and by the escrow ceiling's headroom
+    /// (`escrow_ceiling - credits_reserved`) when `escrow_ceiling` is set.
+    /// `escrow_ceiling = 0` means "no ceiling", matching the same
+    /// zero-means-any-chain convention `method_pricing` already uses, so a
+    /// freshly seeded account (ceiling 0 by schema default) is not
+    /// accidentally reservation-locked at zero.
+    ///
+    /// The `before` CTE is `MATERIALIZED` on purpose, not a style choice.
+    /// SQLite evaluates a `RETURNING` expression against the row's
+    /// post-update state, so a plain (non-materialized) CTE referencing this
+    /// same table would be re-run there and see the balance this very
+    /// statement already debited — recomputing "granted" from the wrong,
+    /// already-spent number. Materializing snapshots `before` once, at the
+    /// pre-update state, so the `SET` clause and the `RETURNING` clause agree
+    /// on the same granted amount. This was verified against a live SQLite
+    /// database before landing, not just reasoned about.
+    pub fn reserve(&self, address: &str, credits: i64) -> Result<Option<i64>> {
+        let granted = self
+            .conn
+            .query_row(
+                "WITH before AS MATERIALIZED ( \
+                     SELECT credits_remaining AS remaining, credits_reserved AS reserved, \
+                            escrow_ceiling AS ceiling \
+                     FROM account WHERE address = ?2 \
+                 ) \
+                 UPDATE account \
+                 SET credits_remaining = credits_remaining - ( \
+                         SELECT MIN(?1, remaining, \
+                             CASE WHEN ceiling = 0 THEN ?1 ELSE MAX(ceiling - reserved, 0) END) \
+                         FROM before), \
+                     credits_reserved = credits_reserved + ( \
+                         SELECT MIN(?1, remaining, \
+                             CASE WHEN ceiling = 0 THEN ?1 ELSE MAX(ceiling - reserved, 0) END) \
+                         FROM before), \
+                     updated_at = ?3 \
+                 WHERE address = ?2 \
+                 RETURNING ( \
+                     SELECT MIN(?1, remaining, \
+                         CASE WHEN ceiling = 0 THEN ?1 ELSE MAX(ceiling - reserved, 0) END) \
+                     FROM before)",
+                params![credits, address, unix_now()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        Ok(granted)
+    }
+
+    /// Settle a previous reservation: remove `reserved` from
+    /// `credits_reserved`, and return the unspent remainder
+    /// (`reserved - spent`) to `credits_remaining`. The caller (the admin API
+    /// handler) has already rejected `spent > reserved` and any negative
+    /// amount before this runs; this is the write, not the validation.
+    ///
+    /// `credits_reserved` is clamped at 0 with `MAX(...)`. A relay that
+    /// settles more than the account currently shows reserved — a double
+    /// settle, or a bug upstream — must not drive the reservation negative.
+    /// The unspent credit still returns to `credits_remaining` regardless, so
+    /// a mismatched settle loses no credit; it only stops double-draining
+    /// `credits_reserved`.
+    ///
+    /// Returns the new `(credits_remaining, credits_reserved)`, or `None`
+    /// when the account does not exist.
+    pub fn settle(&self, address: &str, spent: i64, reserved: i64) -> Result<Option<(i64, i64)>> {
+        let row = self
+            .conn
+            .query_row(
+                "UPDATE account \
+                 SET credits_reserved = MAX(credits_reserved - ?1, 0), \
+                     credits_remaining = credits_remaining + (?1 - ?2), \
+                     updated_at = ?4 \
+                 WHERE address = ?3 \
+                 RETURNING credits_remaining, credits_reserved",
+                params![reserved, spent, address, unix_now()],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        Ok(row)
+    }
 }
 
 /// Map one SQL row to a `StoredKey`.
@@ -519,5 +662,186 @@ mod tests {
 
         // A limit above the row count returns every row, not an error.
         assert_eq!(store.read_audit(1000).unwrap().len(), 3);
+    }
+
+    // --- accounts: reserve and settle --------------------------------------
+
+    fn temp_account_db_path(tag: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "jumpgate-account-{}-{}-{}.db",
+            tag,
+            std::process::id(),
+            unix_now()
+        ));
+        path
+    }
+
+    fn remove_db(path: &std::path::Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[test]
+    fn reserve_grants_in_full_when_enough_is_available() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_account("0xabc", 100, 0, 0).unwrap();
+
+        let granted = store.reserve("0xabc", 30).unwrap();
+        assert_eq!(granted, Some(30));
+        assert_eq!(store.get_account("0xabc").unwrap(), Some((70, 30, 0)));
+    }
+
+    #[test]
+    fn reserve_grants_a_partial_amount_when_short() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_account("0xshort", 10, 0, 0).unwrap();
+
+        // Requests 30, only 10 is there: a partial grant, not a failure.
+        let granted = store.reserve("0xshort", 30).unwrap();
+        assert_eq!(granted, Some(10));
+        assert_eq!(store.get_account("0xshort").unwrap(), Some((0, 10, 0)));
+    }
+
+    #[test]
+    fn reserve_grants_zero_when_the_account_is_empty() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_account("0xempty", 0, 0, 0).unwrap();
+
+        // A 0 grant is a normal answer ("out of credits"), not an error.
+        let granted = store.reserve("0xempty", 30).unwrap();
+        assert_eq!(granted, Some(0));
+        assert_eq!(store.get_account("0xempty").unwrap(), Some((0, 0, 0)));
+    }
+
+    #[test]
+    fn reserve_returns_none_for_an_unknown_account() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.reserve("0xnosuch", 10).unwrap(), None);
+    }
+
+    #[test]
+    fn reserve_respects_a_nonzero_escrow_ceiling() {
+        let store = Store::open_in_memory().unwrap();
+        // Plenty remaining, but 40 already reserved against a ceiling of 50:
+        // only 10 more headroom exists no matter how much is requested.
+        store.upsert_account("0xceil", 1000, 40, 50).unwrap();
+
+        let granted = store.reserve("0xceil", 30).unwrap();
+        assert_eq!(granted, Some(10));
+        assert_eq!(store.get_account("0xceil").unwrap(), Some((990, 50, 50)));
+    }
+
+    #[test]
+    fn reserve_zero_ceiling_means_unbounded() {
+        let store = Store::open_in_memory().unwrap();
+        // The schema default for escrow_ceiling is 0. That must mean "no
+        // ceiling", not "reserve nothing", the same way method_pricing's
+        // chain_id = 0 means "any chain".
+        store.upsert_account("0xnoceil", 500, 0, 0).unwrap();
+        let granted = store.reserve("0xnoceil", 500).unwrap();
+        assert_eq!(granted, Some(500));
+    }
+
+    #[test]
+    fn settle_returns_the_unspent_remainder() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_account("0xsettle", 100, 0, 0).unwrap();
+        store.reserve("0xsettle", 40).unwrap();
+
+        // Spent 15 of the 40 reserved; 25 comes back to credits_remaining.
+        let result = store.settle("0xsettle", 15, 40).unwrap();
+        assert_eq!(result, Some((85, 0)));
+        assert_eq!(store.get_account("0xsettle").unwrap(), Some((85, 0, 0)));
+    }
+
+    #[test]
+    fn settle_clamps_credits_reserved_at_zero() {
+        let store = Store::open_in_memory().unwrap();
+        // Only 10 is actually reserved, but the caller reports settling 40 —
+        // a double settle or an upstream bug. credits_reserved must not go
+        // negative; the unspent credit still returns to credits_remaining.
+        store.upsert_account("0xover", 50, 10, 0).unwrap();
+
+        let result = store.settle("0xover", 0, 40).unwrap();
+        assert_eq!(result, Some((90, 0)), "reserved clamps at 0, not -30");
+    }
+
+    #[test]
+    fn settle_returns_none_for_an_unknown_account() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.settle("0xnosuch", 0, 10).unwrap(), None);
+    }
+
+    #[test]
+    fn reserve_then_settle_round_trip_is_invariant_when_nothing_is_spent() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_account("0xroundtrip", 200, 0, 0).unwrap();
+        let before_total = 200;
+
+        let granted = store.reserve("0xroundtrip", 75).unwrap().unwrap();
+        let (remaining_mid, reserved_mid, _) = store.get_account("0xroundtrip").unwrap().unwrap();
+        assert_eq!(remaining_mid + reserved_mid, before_total);
+
+        // Settling with spent = 0 must return the whole reservation, leaving
+        // the account exactly where it started.
+        store.settle("0xroundtrip", 0, granted).unwrap();
+        let (remaining_after, reserved_after, _) =
+            store.get_account("0xroundtrip").unwrap().unwrap();
+        assert_eq!(remaining_after + reserved_after, before_total);
+        assert_eq!((remaining_after, reserved_after), (200, 0));
+    }
+
+    #[test]
+    fn reserve_then_settle_conserves_total_minus_what_was_spent() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_account("0xspend", 200, 0, 0).unwrap();
+
+        let granted = store.reserve("0xspend", 75).unwrap().unwrap();
+        store.settle("0xspend", 20, granted).unwrap();
+
+        // The total (remaining + reserved) must fall by exactly what was
+        // spent — no more (a leak) and no less (a double credit).
+        let (remaining, reserved, _) = store.get_account("0xspend").unwrap().unwrap();
+        assert_eq!(remaining + reserved, 200 - 20);
+        assert_eq!((remaining, reserved), (180, 0));
+    }
+
+    #[test]
+    fn concurrent_reserves_never_grant_more_than_the_account_had() {
+        // This is the load-bearing correctness test: over-granting is the bug
+        // that lets a customer spend money that does not exist. Each thread
+        // opens its OWN connection to the same on-disk file, so this
+        // exercises SQLite's real locking, not an in-process mutex that would
+        // serialize the calls trivially and prove nothing.
+        let path = temp_account_db_path("concurrent");
+        {
+            let seed = Store::open(&path).unwrap();
+            seed.upsert_account("0xconcurrent", 55, 0, 0).unwrap();
+        }
+
+        let threads: Vec<_> = (0..20)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let store = Store::open(&path).unwrap();
+                    store.reserve("0xconcurrent", 10).unwrap().unwrap()
+                })
+            })
+            .collect();
+
+        let total_granted: i64 = threads.into_iter().map(|h| h.join().unwrap()).sum();
+
+        assert_eq!(
+            total_granted, 55,
+            "20 requests of 10 against a balance of 55 must grant exactly 55 in total"
+        );
+
+        let verify = Store::open(&path).unwrap();
+        let (remaining, reserved, _) = verify.get_account("0xconcurrent").unwrap().unwrap();
+        assert_eq!(remaining, 0, "every available credit was reserved");
+        assert_eq!(reserved, 55, "the reservation total matches what was granted");
+        remove_db(&path);
     }
 }

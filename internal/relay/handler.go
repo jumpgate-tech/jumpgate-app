@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -38,6 +39,16 @@ type Config struct {
 	Caller RPCCaller
 	// Streams opens a synthesised subscription. Nil disables WebSocket support.
 	Streams Streams
+	// Credits meters spend. Nil turns metering OFF and serves everything, which
+	// is how a gateway behaves before an operator switches billing on. Turning
+	// it on must be a deliberate act rather than a side effect of some other
+	// setting, so there is no default.
+	Credits *CreditLease
+	// Price is the cost in credits of one call. Nil charges one credit per call.
+	Price func(method string, chainID int) int64
+	// Health backs the rollup. Nil still answers, so a gateway that never wired
+	// one keeps a working endpoint rather than a crashing one.
+	Health *HealthProbe
 }
 
 // Handler serves the public data plane.
@@ -103,7 +114,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch route.Category {
 	case CategoryHealth:
-		h.serveHealth(w, route)
+		h.serveHealth(w, r, route)
 	case CategoryBeacon:
 		h.serveBeacon(w, r, route, rec)
 	default:
@@ -146,9 +157,67 @@ func (h *Handler) serveRPC(w http.ResponseWriter, r *http.Request, route Route, 
 		return
 	}
 
+	// Charge BEFORE forwarding, so a customer who cannot pay costs the operator
+	// no upstream call at all.
+	if err := h.charge(r.Context(), rec, route.ChainID, methods); err != nil {
+		writeChargeError(w, err)
+		return
+	}
+
 	target := *h.cfg.ERPC
 	target.Path = route.UpstreamPath(h.cfg.ProjectID)
 	h.forward(w, r, &target, body)
+}
+
+// charge meters one request against the key's funding account.
+//
+// A batch costs the sum of its calls. Charging a ten-call batch as one request
+// would be a discount nobody designed, and it would make slice C's per-request
+// usage rows disagree with the ledger.
+func (h *Handler) charge(ctx context.Context, rec KeyRecord, chainID int, methods []string) error {
+	if h.cfg.Credits == nil {
+		return nil
+	}
+	// credit_exempt is the ONLY way a key gets free service. Keeping it the only
+	// way is what makes the unbound-key case below safe to refuse.
+	if rec.CreditExempt {
+		return nil
+	}
+	// A key bound to no funding account cannot be charged. With metering on it
+	// is refused rather than served free: otherwise every unbound key would be
+	// a hole straight through billing, and credit_exempt would mean nothing.
+	if rec.AccountAddress == "" {
+		return ErrInsufficientCredits
+	}
+
+	var cost int64
+	for _, method := range methods {
+		cost += h.priceOf(method, chainID)
+	}
+	return h.cfg.Credits.Spend(ctx, rec.AccountAddress, cost)
+}
+
+// priceOf resolves one call's cost. Without a price book every call costs one
+// credit, which keeps the arithmetic honest rather than free.
+func (h *Handler) priceOf(method string, chainID int) int64 {
+	if h.cfg.Price == nil {
+		return 1
+	}
+	if price := h.cfg.Price(method, chainID); price > 0 {
+		return price
+	}
+	return 1
+}
+
+// writeChargeError separates "cannot pay" from "cannot tell". Reporting a ledger
+// outage as a payment problem would send a funded customer to buy credits they
+// already own.
+func writeChargeError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrInsufficientCredits) {
+		writeError(w, http.StatusPaymentRequired, "account is out of credits")
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "the credit ledger did not answer")
 }
 
 // serveBeacon proxies to the beacon client. Beacon is a different protocol on a
@@ -247,19 +316,36 @@ func (h *Handler) serveWebSocket(w http.ResponseWriter, r *http.Request, route R
 	}).Run(r.Context())
 }
 
-// serveHealth answers the rollup. The matrix it reports over is filled in by
-// the gateway wiring; the relay only proves here that health authenticates and
-// that its shape follows the pinned depth.
-func (h *Handler) serveHealth(w http.ResponseWriter, route Route) {
+// serveHealth answers the rollup over the category x arch x chain matrix. Each
+// path level pins one more dimension, and the answer carries real state — a
+// rollup that always said "ok" would be worse than none, because a monitor would
+// trust it.
+func (h *Handler) serveHealth(w http.ResponseWriter, r *http.Request, route Route) {
 	out := map[string]any{"status": "ok"}
-	if route.Arch != "" {
+	if h.cfg.Health == nil {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+
+	switch route.Depth {
+	case HealthCell:
 		out["arch"] = route.Arch
-	}
-	if route.Sel != "" {
-		out["selector"] = route.Sel
-	}
-	if route.Depth == HealthCell {
 		out["chain_id"] = route.ChainID
+		for k, v := range h.cfg.Health.Cell(r.Context(), route.ChainID) {
+			out[k] = v
+		}
+	case HealthSelector:
+		// Level three accepts an arch OR a category. A category selector reports
+		// only the chains that actually have it, so /health/<key>/beacon does not
+		// list chains with no consensus layer.
+		if route.Arch != "" {
+			out["arch"] = route.Arch
+		} else {
+			out["category"] = route.Sel
+		}
+		out["chains"] = h.cfg.Health.Rollup(r.Context(), route.Sel)
+	case HealthAll:
+		out["chains"] = h.cfg.Health.Rollup(r.Context(), "")
 	}
 	writeJSON(w, http.StatusOK, out)
 }
