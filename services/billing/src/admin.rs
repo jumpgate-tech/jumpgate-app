@@ -713,6 +713,7 @@ struct CreatedKey {
 #[derive(Debug, Deserialize)]
 struct PatchKeyRequest {
     label: Option<String>,
+    account_address: Option<String>,
     credit_exempt: Option<bool>,
     allow_trace: Option<bool>,
     rate: Option<RateDto>,
@@ -723,6 +724,7 @@ impl PatchKeyRequest {
     fn into_patch(self) -> KeyPatch {
         KeyPatch {
             label: self.label,
+            account_address: self.account_address,
             credit_exempt: self.credit_exempt,
             allow_trace: self.allow_trace,
             rate: self.rate.map(Rate::from),
@@ -1018,7 +1020,9 @@ mod tests {
         let path = temp_db_path(tag);
         let km = KeyManager::new(Store::open(&path).unwrap(), PEPPER).unwrap();
         let pb = PriceBook::new(Store::open(&path).unwrap()).unwrap();
-        let state = AppState::new(km, pb, TOKEN.to_string(), RELAY_TOKEN.to_string()).unwrap();
+        let accounts = Store::open(&path).unwrap();
+        let state =
+            AppState::new(km, pb, accounts, TOKEN.to_string(), RELAY_TOKEN.to_string()).unwrap();
         (build_router(state), path)
     }
 
@@ -1028,8 +1032,27 @@ mod tests {
         let path = temp_db_path(tag);
         let km = KeyManager::new(Store::open(&path).unwrap(), PEPPER).unwrap();
         let pb = PriceBook::new(Store::open(&path).unwrap()).unwrap();
-        let state = AppState::new(km, pb, TOKEN.to_string(), RELAY_TOKEN.to_string()).unwrap();
+        let accounts = Store::open(&path).unwrap();
+        let state =
+            AppState::new(km, pb, accounts, TOKEN.to_string(), RELAY_TOKEN.to_string()).unwrap();
         (state, path)
+    }
+
+    /// Open a third connection to the test app's database, to seed an account
+    /// row directly. `/internal/reserve` and `/internal/settle` only ever
+    /// adjust an existing row (see `Store::upsert_account`), so a test that
+    /// exercises them first needs this.
+    fn seed_account(
+        path: &std::path::Path,
+        address: &str,
+        remaining: i64,
+        reserved: i64,
+        ceiling: i64,
+    ) {
+        let store = Store::open(path).unwrap();
+        store
+            .upsert_account(address, remaining, reserved, ceiling)
+            .unwrap();
     }
 
     /// Send a request and return the status and the parsed JSON body (or null for
@@ -1180,6 +1203,47 @@ mod tests {
         let new_key = body["key"].as_str().unwrap();
         assert!(new_key.starts_with("jg_"));
         assert_ne!(new_key, old_key, "rotate must issue a different key");
+        remove_db(&path);
+    }
+
+    // Binding a key to a funding account is what makes metering possible at
+    // all. Until it is set the relay has no account to charge and refuses the
+    // key, because credit_exempt must stay the ONLY way to get free service.
+    #[tokio::test]
+    async fn patch_binds_a_key_to_a_funding_account() {
+        let (app, path) = test_app("bindaccount");
+        let (id, raw) = create_key(&app, "unbound").await;
+
+        let (status, body) = send(
+            &app,
+            json_req(
+                "PATCH",
+                &format!("/admin/keys/{id}"),
+                TOKEN,
+                json!({ "account_address": "0xcustomer" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["account_address"], "0xcustomer");
+
+        // The relay reads the binding on the hot path, so it must survive the
+        // in-memory record and not only the row.
+        let (status, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/authenticate",
+                RELAY_TOKEN,
+                json!({ "key": raw }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["account_address"], "0xcustomer",
+            "authenticate must report the binding the relay charges against"
+        );
         remove_db(&path);
     }
 
@@ -1654,6 +1718,355 @@ mod tests {
             .unwrap();
         let (status, _) = send(&app, req).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+        remove_db(&path);
+    }
+
+    // --- credit lease: /internal/reserve and /internal/settle -----------------
+
+    #[tokio::test]
+    async fn reserve_grants_in_full_when_enough_is_available() {
+        let (app, path) = test_app("reserveok");
+        seed_account(&path, "0xabc", 100, 0, 0);
+
+        let (status, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/reserve",
+                RELAY_TOKEN,
+                json!({ "account": "0xabc", "credits": 30 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["granted"], 30);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn reserve_grants_a_partial_amount_when_short() {
+        let (app, path) = test_app("reservepartial");
+        seed_account(&path, "0xshort", 10, 0, 0);
+
+        let (status, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/reserve",
+                RELAY_TOKEN,
+                json!({ "account": "0xshort", "credits": 30 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["granted"], 10,
+            "a short account grants what it has, not an error"
+        );
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn reserve_grants_zero_is_not_an_error() {
+        let (app, path) = test_app("reservezero");
+        seed_account(&path, "0xempty", 0, 0, 0);
+
+        let (status, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/reserve",
+                RELAY_TOKEN,
+                json!({ "account": "0xempty", "credits": 5 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "a 0 grant is a 200, not an error");
+        assert_eq!(body["granted"], 0);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn reserve_respects_the_escrow_ceiling() {
+        let (app, path) = test_app("reserveceiling");
+        // 1000 remaining, but 40 already reserved against a ceiling of 50.
+        seed_account(&path, "0xceil", 1000, 40, 50);
+
+        let (status, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/reserve",
+                RELAY_TOKEN,
+                json!({ "account": "0xceil", "credits": 30 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["granted"], 10, "only the ceiling's headroom grants");
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn reserve_unknown_account_is_a_404() {
+        let (app, path) = test_app("reserve404");
+        let (status, _) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/reserve",
+                RELAY_TOKEN,
+                json!({ "account": "0xnosuch", "credits": 10 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn reserve_non_positive_credits_is_a_400() {
+        let (app, path) = test_app("reservebadcredits");
+        seed_account(&path, "0xabc", 100, 0, 0);
+
+        for bad in [0, -5] {
+            let (status, _) = send(
+                &app,
+                json_req(
+                    "POST",
+                    "/internal/reserve",
+                    RELAY_TOKEN,
+                    json!({ "account": "0xabc", "credits": bad }),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "credits={bad} must be a 400");
+        }
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn settle_returns_the_unspent_remainder() {
+        let (app, path) = test_app("settleok");
+        seed_account(&path, "0xsettle", 100, 40, 0);
+
+        let (status, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/settle",
+                RELAY_TOKEN,
+                json!({ "account": "0xsettle", "spent": 15, "reserved": 40 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["credits_remaining"], 125, "100 + (40 - 15) unspent");
+        assert_eq!(body["credits_reserved"], 0);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn settle_spent_more_than_reserved_is_a_400() {
+        let (app, path) = test_app("settleoverspend");
+        seed_account(&path, "0xoverspend", 100, 40, 0);
+
+        let (status, _) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/settle",
+                RELAY_TOKEN,
+                json!({ "account": "0xoverspend", "spent": 41, "reserved": 40 }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "the relay cannot spend more than it held"
+        );
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn settle_unknown_account_is_a_404() {
+        let (app, path) = test_app("settle404");
+        let (status, _) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/settle",
+                RELAY_TOKEN,
+                json!({ "account": "0xnosuch", "spent": 0, "reserved": 10 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn reserve_then_settle_then_reserve_keeps_the_arithmetic_exact() {
+        let (app, path) = test_app("roundtrip");
+        seed_account(&path, "0xroundtrip", 200, 0, 0);
+        let total_before = 200;
+
+        // First reserve.
+        let (_, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/reserve",
+                RELAY_TOKEN,
+                json!({ "account": "0xroundtrip", "credits": 75 }),
+            ),
+        )
+        .await;
+        let first_grant = body["granted"].as_i64().unwrap();
+        assert_eq!(first_grant, 75);
+
+        // Settle it, spending nothing: the whole reservation returns.
+        let (_, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/settle",
+                RELAY_TOKEN,
+                json!({ "account": "0xroundtrip", "spent": 0, "reserved": first_grant }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            body["credits_remaining"].as_i64().unwrap()
+                + body["credits_reserved"].as_i64().unwrap(),
+            total_before,
+            "remaining + reserved is invariant across a reserve/settle cycle"
+        );
+        assert_eq!(body["credits_remaining"], 200);
+        assert_eq!(body["credits_reserved"], 0);
+
+        // Reserve again: the account is exactly back where it started, so
+        // the same request grants the same amount.
+        let (_, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/reserve",
+                RELAY_TOKEN,
+                json!({ "account": "0xroundtrip", "credits": 75 }),
+            ),
+        )
+        .await;
+        assert_eq!(body["granted"], 75);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn admin_token_does_not_open_reserve_settle_or_price() {
+        let (app, path) = test_app("crossadminlease");
+        seed_account(&path, "0xabc", 100, 0, 0);
+
+        let (status, _) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/reserve",
+                TOKEN,
+                json!({ "account": "0xabc", "credits": 10 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "admin token on reserve");
+
+        let (status, _) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/settle",
+                TOKEN,
+                json!({ "account": "0xabc", "spent": 0, "reserved": 0 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "admin token on settle");
+
+        let (status, _) = send(&app, get("/internal/price?method=eth_call", Some(TOKEN))).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "admin token on price");
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn relay_token_still_does_not_open_admin_routes() {
+        let (app, path) = test_app("crossrelaylease");
+        let (status, _) = send(&app, get("/admin/pricing", Some(RELAY_TOKEN))).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn price_for_relay_reports_a_known_method() {
+        let (app, path) = test_app("pricerelay");
+        let (status, body) = send(
+            &app,
+            get("/internal/price?method=eth_call&chain=1", Some(RELAY_TOKEN)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["method"], "eth_call");
+        assert_eq!(body["chain_id"], 1);
+        assert_eq!(body["credits"], 20);
+        assert_eq!(body["known"], true);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn price_for_relay_reports_an_unknown_method_as_the_default() {
+        let (app, path) = test_app("pricerelayunknown");
+        let (status, body) = send(
+            &app,
+            get("/internal/price?method=totally_unknown", Some(RELAY_TOKEN)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["known"], false);
+        assert_eq!(body["credits"], 20, "the default price, not a guess");
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn concurrent_reserves_over_http_never_exceed_the_balance() {
+        // The store-level test (`store::tests::concurrent_reserves_never_grant_more_than_the_account_had`)
+        // is the load-bearing one: it drives two real, separate SQLite
+        // connections. This test exercises the same guarantee through the
+        // actual HTTP route wiring, so a future refactor of the handler
+        // cannot quietly reintroduce a read-then-write gap.
+        let (app, path) = test_app("concurrenthttp");
+        seed_account(&path, "0xhttp", 55, 0, 0);
+
+        let mut tasks = Vec::new();
+        for _ in 0..20 {
+            let app = app.clone();
+            tasks.push(tokio::spawn(async move {
+                let (_, body) = send(
+                    &app,
+                    json_req(
+                        "POST",
+                        "/internal/reserve",
+                        RELAY_TOKEN,
+                        json!({ "account": "0xhttp", "credits": 10 }),
+                    ),
+                )
+                .await;
+                body["granted"].as_i64().unwrap()
+            }));
+        }
+
+        let mut total = 0;
+        for t in tasks {
+            total += t.await.unwrap();
+        }
+        assert_eq!(total, 55, "20 requests of 10 against 55 must total exactly 55");
         remove_db(&path);
     }
 

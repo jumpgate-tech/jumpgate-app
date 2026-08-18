@@ -10,7 +10,7 @@ import (
 // serve every customer's traffic for free and report nothing.
 
 func TestBuildDisabledWhenNoBind(t *testing.T) {
-	h, err := Build(BuildOptions{})
+	h, _, err := Build(BuildOptions{})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -20,7 +20,7 @@ func TestBuildDisabledWhenNoBind(t *testing.T) {
 }
 
 func TestBuildSucceedsWhenFullyConfigured(t *testing.T) {
-	h, err := Build(BuildOptions{
+	h, _, err := Build(BuildOptions{
 		RelayBind:     "127.0.0.1:8790",
 		BillingSocket: "/run/jumpgate/billing.sock",
 		RelayToken:    "relay-token",
@@ -60,7 +60,7 @@ func TestBuildRefusesAHalfConfiguredRelay(t *testing.T) {
 		opt := full
 		tt.mutate(&opt)
 
-		h, err := Build(opt)
+		h, _, err := Build(opt)
 		if err == nil {
 			t.Errorf("%s: err = nil, want a refusal", tt.name)
 			continue
@@ -77,7 +77,7 @@ func TestBuildRefusesAHalfConfiguredRelay(t *testing.T) {
 // An unusable eRPC URL is a startup failure, not a run-time surprise on the
 // first customer request.
 func TestBuildRejectsAMalformedERPCURL(t *testing.T) {
-	_, err := Build(BuildOptions{
+	_, _, err := Build(BuildOptions{
 		RelayBind:     "127.0.0.1:8790",
 		BillingSocket: "/run/jumpgate/billing.sock",
 		RelayToken:    "relay-token",
@@ -92,7 +92,7 @@ func TestBuildRejectsAMalformedERPCURL(t *testing.T) {
 // The project id defaults rather than failing. eRPC's own default is "main",
 // and an operator who never set one should not be blocked by it.
 func TestBuildDefaultsTheProjectID(t *testing.T) {
-	h, err := Build(BuildOptions{
+	h, _, err := Build(BuildOptions{
 		RelayBind:     "127.0.0.1:8790",
 		BillingSocket: "/run/jumpgate/billing.sock",
 		RelayToken:    "relay-token",

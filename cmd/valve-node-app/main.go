@@ -45,6 +45,10 @@ func main() {
 	billingSocket := flag.String("billing-socket", "", "unix socket of the billing key store")
 	erpcURL := flag.String("erpc-url", "http://127.0.0.1:4000", "base URL of the keyless eRPC the relay forwards to")
 	projectID := flag.String("erpc-project", "", "eRPC project segment (empty means main)")
+	// Metering is off by default. Serving unmetered is the status quo, so
+	// charging customers is a deliberate act rather than a side effect of
+	// pointing the relay at a key store.
+	metering := flag.Bool("meter", false, "charge credits for metered RPC (off means serve without billing)")
 	noOpen := flag.Bool("no-open", false, "do not open a browser window automatically")
 	tray := flag.Bool("tray", false, "open the UI in a native desktop window (tiny-app mode) instead of a browser tab; requires a build made with -tags tray")
 	showVersion := flag.Bool("version", false, "print the version and exit")
@@ -75,12 +79,13 @@ func main() {
 
 	// The relay's credential never arrives as a flag. A flag lands in the
 	// process listing, where any local user reads it.
-	relayHandler, err := relay.Build(relay.BuildOptions{
-		RelayBind:     *relayBind,
-		BillingSocket: *billingSocket,
-		RelayToken:    os.Getenv("JUMPGATE_RELAY_TOKEN"),
-		ERPCURL:       *erpcURL,
-		ProjectID:     *projectID,
+	relayHandler, relayRuntime, err := relay.Build(relay.BuildOptions{
+		RelayBind:      *relayBind,
+		BillingSocket:  *billingSocket,
+		RelayToken:     os.Getenv("JUMPGATE_RELAY_TOKEN"),
+		ERPCURL:        *erpcURL,
+		ProjectID:      *projectID,
+		EnableMetering: *metering,
 	})
 	if err != nil {
 		// A half-configured relay is fatal rather than quietly off. Serving
@@ -149,6 +154,11 @@ func main() {
 				log.Printf("valve-node-app: relay data plane: %v", err)
 			}
 		}()
+		// The background loops are not optional. Without them leased credits are
+		// never settled back and the beacon pool never re-probes, so a customer's
+		// balance would sit stranded and a recovered node would stay out of
+		// rotation for the life of the process.
+		go relayRuntime.Run(ctx)
 		fmt.Printf("metered RPC data plane on %s\n", *relayBind)
 	}
 

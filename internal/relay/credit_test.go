@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // The relay must not cache a balance. A stale balance is money: at high QPS a
@@ -267,5 +268,54 @@ func TestLeaseCoversACostBiggerThanOneBlock(t *testing.T) {
 
 	if err := lease.Spend(context.Background(), acct, 250); err != nil {
 		t.Fatalf("a 250-credit call must be servable: %v", err)
+	}
+}
+
+// Without a settle loop, leased credits stay reserved forever. A customer who
+// stops calling would watch their balance sit in a reservation until the process
+// restarted, which reads to them as money that vanished.
+func TestLeaseRunSettlesPeriodically(t *testing.T) {
+	store := newLedger(acct, 1000)
+	lease := newLease(store, 100)
+
+	for i := 0; i < 10; i++ {
+		if err := lease.Spend(context.Background(), acct, 1); err != nil {
+			t.Fatalf("spend: %v", err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go lease.Run(ctx, 20*time.Millisecond)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if store.settles.Load() > 0 && store.total(acct) == 990 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no settle happened: total = %d, settles = %d", store.total(acct), store.settles.Load())
+}
+
+// Shutdown settles too. Losing the last block on every restart would strand
+// credits a little at a time, forever.
+func TestLeaseRunSettlesOnShutdown(t *testing.T) {
+	store := newLedger(acct, 1000)
+	lease := newLease(store, 100)
+
+	if err := lease.Spend(context.Background(), acct, 5); err != nil {
+		t.Fatalf("spend: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { lease.Run(ctx, time.Hour); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if got := store.total(acct); got != 995 {
+		t.Errorf("ledger total = %d, want 995 — shutdown did not settle", got)
 	}
 }

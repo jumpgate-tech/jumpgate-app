@@ -31,6 +31,7 @@ type billingStub struct {
 	gotQuery string
 	status   int
 	body     string
+	hits     int
 }
 
 func newBillingStub(t *testing.T) *billingStub {
@@ -56,6 +57,7 @@ func newBillingStub(t *testing.T) *billingStub {
 		st.gotAuth = r.Header.Get("Authorization")
 		b, _ := io.ReadAll(r.Body)
 		st.gotBody = string(b)
+		st.hits++
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(st.status)
 		io.WriteString(w, st.body)

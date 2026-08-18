@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 var (
@@ -177,4 +178,38 @@ func (l *CreditLease) settle(ctx context.Context, account string) error {
 	p.reserved = 0
 	p.spent = 0
 	return nil
+}
+
+// defaultSettleInterval is how often leased credits are reported back. It is
+// short enough that a customer who stops calling sees their balance return
+// quickly, and long enough that the ledger is not written on every request.
+const defaultSettleInterval = 30 * time.Second
+
+// Run settles on an interval until ctx is cancelled, then settles once more.
+//
+// Without this, leased credits stay reserved forever: a customer who stopped
+// calling would watch their balance sit in a reservation until the process
+// restarted, which reads to them as money that vanished. The shutdown settle
+// matters for the same reason — losing the last block on every restart would
+// strand credits a little at a time, forever.
+func (l *CreditLease) Run(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = defaultSettleInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// The parent context is already cancelled, so the final settle gets
+			// its own budget rather than failing immediately.
+			final, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			_ = l.SettleAll(final)
+			cancel()
+			return
+		case <-ticker.C:
+			_ = l.SettleAll(ctx)
+		}
+	}
 }

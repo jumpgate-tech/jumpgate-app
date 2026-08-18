@@ -296,11 +296,14 @@ fn cmd_serve(args: impl Iterator<Item = String>) -> billing::Result<()> {
     let token = admin_token()?;
     let relay = relay_token()?;
 
-    // The key manager and the price book each need their own connection to the
-    // same file. WAL mode lets the two connections share the database.
+    // The key manager, the price book, and the account ledger each need their
+    // own connection to the same file. WAL mode lets the three connections
+    // share the database. The account ledger gets no manager wrapping it —
+    // see `AppState::accounts` for why a credit balance is never cached.
     let km = KeyManager::new(Store::open(&flags.db)?, &pepper)?;
     let pb = PriceBook::new(Store::open(&flags.db)?)?;
-    let state = AppState::new(km, pb, token, relay)?;
+    let accounts = Store::open(&flags.db)?;
+    let state = AppState::new(km, pb, accounts, token, relay)?;
 
     let runtime = tokio::runtime::Runtime::new()?;
 

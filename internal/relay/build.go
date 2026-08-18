@@ -1,10 +1,12 @@
 package relay
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -39,11 +41,36 @@ type BuildOptions struct {
 	BeaconEndpoints map[int][]*url.URL
 	// Chains is what this gateway serves, for the health rollup.
 	Chains []int
-	// Credits meters spend. Nil leaves metering OFF, which is how a gateway
-	// behaves before an operator switches billing on.
+	// EnableMetering switches billing on. It is OFF by default: serving
+	// unmetered is the status quo, and charging customers must be a deliberate
+	// act rather than a side effect of configuring a key store.
+	EnableMetering bool
+	// Credits overrides the ledger. Nil with EnableMetering uses the same
+	// billing service the keys come from.
 	Credits CreditStore
 	// CreditBlock is how many credits to lease at a time. Zero takes the default.
 	CreditBlock int64
+}
+
+// Runtime is the background work a built relay needs. A caller MUST run it, or
+// leased credits are never settled and the beacon pool never re-probes.
+type Runtime struct {
+	Credits *CreditLease
+	Beacon  *BeaconPool
+}
+
+// Run drives every background loop until ctx is cancelled.
+func (r Runtime) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	if r.Credits != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.Credits.Run(ctx, 0) }()
+	}
+	if r.Beacon != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.Beacon.Run(ctx, 0) }()
+	}
+	wg.Wait()
 }
 
 // Build turns startup configuration into a data-plane handler. It returns a nil
@@ -53,26 +80,26 @@ type BuildOptions struct {
 // that disabled itself halfway would serve every customer's traffic for free,
 // and nothing in the request path would report it — the operator would find out
 // from a bill that never arrived.
-func Build(opt BuildOptions) (http.Handler, error) {
+func Build(opt BuildOptions) (http.Handler, Runtime, error) {
 	if opt.RelayBind == "" {
-		return nil, nil
+		return nil, Runtime{}, nil
 	}
 	if opt.BillingSocket == "" {
-		return nil, errors.New("relay: a relay bind is set with no billing socket")
+		return nil, Runtime{}, errors.New("relay: a relay bind is set with no billing socket")
 	}
 	if opt.RelayToken == "" {
-		return nil, errors.New("relay: a relay bind is set with no relay token (JUMPGATE_RELAY_TOKEN)")
+		return nil, Runtime{}, errors.New("relay: a relay bind is set with no relay token (JUMPGATE_RELAY_TOKEN)")
 	}
 	if opt.ERPCURL == "" {
-		return nil, errors.New("relay: a relay bind is set with no erpc url")
+		return nil, Runtime{}, errors.New("relay: a relay bind is set with no erpc url")
 	}
 
 	erpc, err := url.Parse(opt.ERPCURL)
 	if err != nil {
-		return nil, fmt.Errorf("relay: erpc url %q: %w", opt.ERPCURL, err)
+		return nil, Runtime{}, fmt.Errorf("relay: erpc url %q: %w", opt.ERPCURL, err)
 	}
 	if erpc.Scheme == "" || erpc.Host == "" {
-		return nil, fmt.Errorf("relay: erpc url %q needs a scheme and a host", opt.ERPCURL)
+		return nil, Runtime{}, fmt.Errorf("relay: erpc url %q needs a scheme and a host", opt.ERPCURL)
 	}
 
 	projectID := opt.ProjectID
@@ -114,11 +141,27 @@ func Build(opt BuildOptions) (http.Handler, error) {
 
 	// Metering stays off unless a ledger is supplied. Serving unmetered is the
 	// status quo; switching billing on must be deliberate.
-	if opt.Credits != nil {
-		cfg.Credits = NewCreditLease(opt.Credits, CreditOptions{BlockSize: opt.CreditBlock})
+	ledger := opt.Credits
+	if ledger == nil && opt.EnableMetering {
+		// The ledger lives in the same service as the keys, so the same client
+		// and the same least-privilege credential serve both.
+		ledger = store
+	}
+	if ledger != nil {
+		cfg.Credits = NewCreditLease(ledger, CreditOptions{BlockSize: opt.CreditBlock})
+		// The store owns pricing, and it is not one credit per call: the seeded
+		// book charges 20 for a default method and 75 for eth_getLogs. A relay
+		// that assumed 1 would undercharge twentyfold with nothing to report it.
+		cfg.Price = func(method string, chainID int) int64 {
+			return store.PriceOf(context.Background(), method, chainID)
+		}
 	}
 
-	return NewHandler(cfg)
+	handler, err := NewHandler(cfg)
+	if err != nil {
+		return nil, Runtime{}, err
+	}
+	return handler, Runtime{Credits: cfg.Credits, Beacon: pool}, nil
 }
 
 // BuildBeaconPool exposes the pool a caller must Run so it keeps re-probing. A

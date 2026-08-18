@@ -68,6 +68,11 @@ pub struct KeyConfig {
 #[derive(Debug, Clone, Default)]
 pub struct KeyPatch {
     pub label: Option<String>,
+    /// The funding account this key spends from. Until it is set, the relay has
+    /// no account to charge and refuses the key: `credit_exempt` is the only
+    /// intended way to get free service, so an unbound key must not be a second
+    /// one. Binding is therefore a required step, not an optional nicety.
+    pub account_address: Option<String>,
     pub credit_exempt: Option<bool>,
     pub allow_trace: Option<bool>,
     pub rate: Option<Rate>,
@@ -243,6 +248,9 @@ impl KeyManager {
             .load_key(id)?
             .ok_or_else(|| Error::KeyNotFound(id.to_string()))?;
 
+        if let Some(account) = patch.account_address {
+            stored.account_address = Some(account);
+        }
         if let Some(label) = patch.label {
             stored.label = label;
         }
