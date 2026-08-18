@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -131,27 +132,67 @@ func NewPollerStreams(caller RPCCaller, interval time.Duration) *PollerStreams {
 	return &PollerStreams{caller: caller, interval: interval, loops: make(map[int]*chainLoop)}
 }
 
+// subscriber is one client's interest in a chain.
+type subscriber struct {
+	kind   string
+	filter json.RawMessage
+	notify func(json.RawMessage)
+}
+
 // chainLoop is one chain's poll loop and its subscribers.
+//
+// ONE loop serves every kind. newHeads and logs are both derived from the same
+// head advance, and syncing rides the same tick, so three kinds on a chain cost
+// one eth_blockNumber per interval rather than three.
 type chainLoop struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
 	mu     sync.Mutex
 	nextID int
-	subs   map[int]func(json.RawMessage)
+	subs   map[int]subscriber
 }
 
-func (l *chainLoop) fanout(payload json.RawMessage) {
+// fanoutKind delivers a payload to every subscriber of one kind.
+func (l *chainLoop) fanoutKind(kind string, payload json.RawMessage) {
 	l.mu.Lock()
 	targets := make([]func(json.RawMessage), 0, len(l.subs))
-	for _, notify := range l.subs {
-		targets = append(targets, notify)
+	for _, sub := range l.subs {
+		if sub.kind == kind {
+			targets = append(targets, sub.notify)
+		}
 	}
 	l.mu.Unlock()
 
 	for _, notify := range targets {
 		notify(payload)
 	}
+}
+
+// logsSubscribers snapshots the log watchers and their filters.
+func (l *chainLoop) logsSubscribers() []subscriber {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]subscriber, 0, len(l.subs))
+	for _, sub := range l.subs {
+		if sub.kind == "logs" {
+			out = append(out, sub)
+		}
+	}
+	return out
+}
+
+// hasKind reports whether anyone is watching a kind, so the loop can skip an
+// upstream call nobody would read.
+func (l *chainLoop) hasKind(kind string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, sub := range l.subs {
+		if sub.kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *chainLoop) count() int {
@@ -186,17 +227,10 @@ func (s *PollerStreams) Stop() {
 // Subscribe attaches one subscriber, starting the chain's loop if it is the
 // first. The returned handle detaches it, and the loop stops when the last one
 // leaves — a chain nobody watches must not keep calling a paid upstream.
-func (s *PollerStreams) Subscribe(ctx context.Context, chainID int, kind string, _ json.RawMessage, notify func(json.RawMessage)) (StreamHandle, error) {
+func (s *PollerStreams) Subscribe(ctx context.Context, chainID int, kind string, filter json.RawMessage, notify func(json.RawMessage)) (StreamHandle, error) {
 	if !SupportedSubscription(kind) {
 		return nil, fmt.Errorf("%w: %s is not supported over this endpoint", ErrSubscriptionUnsupported, kind)
 	}
-	// v1 synthesises newHeads. logs and syncing are accepted by the grammar and
-	// are the next two to land; refusing them here would be a worse answer than
-	// the session's, so they route through the same head loop for now.
-	if kind != "newHeads" {
-		return nil, fmt.Errorf("%w: %s is not supported over this endpoint yet", ErrSubscriptionUnsupported, kind)
-	}
-
 	s.mu.Lock()
 	loop, ok := s.loops[chainID]
 	if !ok {
@@ -208,7 +242,7 @@ func (s *PollerStreams) Subscribe(ctx context.Context, chainID int, kind string,
 	loop.mu.Lock()
 	loop.nextID++
 	id := loop.nextID
-	loop.subs[id] = notify
+	loop.subs[id] = subscriber{kind: kind, filter: filter, notify: notify}
 	loop.mu.Unlock()
 
 	return &streamHandle{streams: s, chainID: chainID, id: id}, nil
@@ -220,20 +254,37 @@ func (s *PollerStreams) startLoop(chainID int) *chainLoop {
 	loop := &chainLoop{
 		cancel: cancel,
 		done:   make(chan struct{}),
-		subs:   make(map[int]func(json.RawMessage)),
+		subs:   make(map[int]subscriber),
 	}
 
 	go func() {
 		defer close(loop.done)
-		poller := NewHeadPoller(NewRPCBlockFetcher(s.caller, chainID))
+		fetcher := NewRPCBlockFetcher(s.caller, chainID)
+		poller := NewHeadPoller(fetcher)
 		ticker := time.NewTicker(s.interval)
 		defer ticker.Stop()
+
+		// lastSyncing is the previously reported state. syncing reports a
+		// CHANGE, not a heartbeat: a node that is steadily synced must not spam
+		// a subscriber once per poll.
+		var lastSyncing json.RawMessage
+		var syncingSeen bool
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+			}
+
+			if loop.hasKind("syncing") {
+				if state, err := s.readSyncing(ctx, chainID); err == nil {
+					if !syncingSeen || !bytes.Equal(state, lastSyncing) {
+						syncingSeen = true
+						lastSyncing = state
+						loop.fanoutKind("syncing", state)
+					}
+				}
 			}
 
 			heads, err := poller.Poll(ctx)
@@ -250,14 +301,100 @@ func (s *PollerStreams) startLoop(chainID int) *chainLoop {
 					"parentHash": head.ParentHash,
 					"reorged":    head.Reorged,
 				})
-				if err != nil {
-					continue
+				if err == nil {
+					loop.fanoutKind("newHeads", payload)
 				}
-				loop.fanout(payload)
+				// logs are derived from the SAME head advance, so a chain with
+				// both kinds still polls its head once.
+				s.deliverLogs(ctx, chainID, loop, head)
 			}
 		}
 	}()
 	return loop
+}
+
+// readSyncing asks the node whether it is still catching up.
+func (s *PollerStreams) readSyncing(ctx context.Context, chainID int) (json.RawMessage, error) {
+	raw, err := s.caller.Call(ctx, chainID, []byte(`{"jsonrpc":"2.0","id":1,"method":"eth_syncing","params":[]}`))
+	if err != nil {
+		return nil, err
+	}
+	var env rpcEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, err
+	}
+	if env.Error != nil {
+		return nil, fmt.Errorf("relay: eth_syncing: %s", env.Error.Message)
+	}
+	return env.Result, nil
+}
+
+// deliverLogs fetches one block's logs per distinct filter and fans each set out
+// to the subscriber that asked for it.
+//
+// A reorged head is skipped rather than replayed: re-emitting logs for a block
+// the chain abandoned would double-count them for every subscriber, and a
+// consumer that honours the reorged flag on newHeads already knows to unwind.
+func (s *PollerStreams) deliverLogs(ctx context.Context, chainID int, loop *chainLoop, head BlockRef) {
+	subs := loop.logsSubscribers()
+	if len(subs) == 0 {
+		return
+	}
+	for _, sub := range subs {
+		entries, err := s.readLogs(ctx, chainID, head.Number, sub.filter)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			sub.notify(entry)
+		}
+	}
+}
+
+// readLogs runs eth_getLogs for one block, carrying the caller's filter through
+// unchanged so the node does the matching rather than the relay.
+func (s *PollerStreams) readLogs(ctx context.Context, chainID int, block uint64, filter json.RawMessage) ([]json.RawMessage, error) {
+	criteria := map[string]any{
+		"fromBlock": fmt.Sprintf("0x%x", block),
+		"toBlock":   fmt.Sprintf("0x%x", block),
+	}
+	// The subscribe params arrive as the array after the kind. Its first entry,
+	// when present, is the log filter.
+	var args []map[string]any
+	if len(filter) > 0 && json.Unmarshal(filter, &args) == nil && len(args) > 0 {
+		for k, v := range args[0] {
+			// fromBlock and toBlock are the relay's to set: a subscription
+			// streams new blocks, so a caller-supplied range would either
+			// re-read history every tick or silently return nothing.
+			if k == "fromBlock" || k == "toBlock" {
+				continue
+			}
+			criteria[k] = v
+		}
+	}
+
+	params, err := json.Marshal([]any{criteria})
+	if err != nil {
+		return nil, err
+	}
+	body := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"eth_getLogs","params":%s}`, params)
+
+	raw, err := s.caller.Call(ctx, chainID, []byte(body))
+	if err != nil {
+		return nil, err
+	}
+	var env rpcEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, err
+	}
+	if env.Error != nil {
+		return nil, fmt.Errorf("relay: eth_getLogs: %s", env.Error.Message)
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(env.Result, &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 // detach removes one subscriber and stops the loop when it was the last.

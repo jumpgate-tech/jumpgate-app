@@ -20,10 +20,11 @@ import (
 
 // scriptedCaller answers JSON-RPC calls from a script and counts them.
 type scriptedCaller struct {
-	mu     sync.Mutex
-	calls  atomic.Int64
-	head   uint64
-	blocks map[uint64]string
+	mu      sync.Mutex
+	calls   atomic.Int64
+	head    uint64
+	blocks  map[uint64]string
+	syncing bool
 }
 
 func newScriptedCaller() *scriptedCaller {
@@ -53,6 +54,14 @@ func (s *scriptedCaller) Call(_ context.Context, _ int, body []byte) ([]byte, er
 	switch req.Method {
 	case "eth_blockNumber":
 		return []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"result":"0x%x"}`, s.head)), nil
+	case "eth_syncing":
+		if s.syncing {
+			return []byte(`{"jsonrpc":"2.0","id":1,"result":{"currentBlock":"0x1","highestBlock":"0x9"}}`), nil
+		}
+		return []byte(`{"jsonrpc":"2.0","id":1,"result":false}`), nil
+	case "eth_getLogs":
+		return []byte(`{"jsonrpc":"2.0","id":1,"result":[` +
+			`{"address":"0xdead","topics":["0xt1"],"blockNumber":"0x1","data":"0x"}]}`), nil
 	case "eth_getBlockByNumber":
 		var tag string
 		json.Unmarshal(req.Params[0], &tag)
@@ -324,5 +333,100 @@ func TestERPCCallerReportsAnUnreachableUpstream(t *testing.T) {
 	c := NewERPCCaller(dead, "main")
 	if _, err := c.Call(context.Background(), 369, []byte(`{}`)); err == nil {
 		t.Fatal("err = nil, want a dial failure")
+	}
+}
+
+// A logs subscriber is fed from the SAME head loop as newHeads. Each new block
+// becomes one eth_getLogs call, so the subscriber count still does not multiply
+// upstream load.
+func TestStreamsDeliverLogs(t *testing.T) {
+	caller := newScriptedCaller()
+	caller.advance()
+	streams := NewPollerStreams(caller, 20*time.Millisecond)
+	t.Cleanup(streams.Stop)
+
+	got := make(chan json.RawMessage, 4)
+	h, err := streams.Subscribe(context.Background(), 369, "logs", json.RawMessage(`[{"address":"0xdead"}]`), func(m json.RawMessage) {
+		select {
+		case got <- m:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatalf("subscribe logs: %v", err)
+	}
+	defer h.Close()
+
+	keepAdvancing(t, caller)
+	select {
+	case m := <-got:
+		var entry map[string]any
+		if err := json.Unmarshal(m, &entry); err != nil {
+			t.Fatalf("decode %q: %v", m, err)
+		}
+		if entry["address"] == nil {
+			t.Errorf("log = %v, want a log entry with an address", entry)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no log notification arrived")
+	}
+}
+
+// syncing reports a CHANGE, not a heartbeat. A node that is steadily synced must
+// not spam a subscriber once per poll.
+func TestStreamsDeliverSyncingOnChangeOnly(t *testing.T) {
+	caller := newScriptedCaller()
+	caller.advance()
+	streams := NewPollerStreams(caller, 20*time.Millisecond)
+	t.Cleanup(streams.Stop)
+
+	var count atomic.Int64
+	h, err := streams.Subscribe(context.Background(), 369, "syncing", nil, func(json.RawMessage) {
+		count.Add(1)
+	})
+	if err != nil {
+		t.Fatalf("subscribe syncing: %v", err)
+	}
+	defer h.Close()
+
+	keepAdvancing(t, caller)
+	time.Sleep(200 * time.Millisecond)
+	if got := count.Load(); got > 2 {
+		t.Errorf("syncing fired %d times with no state change, want at most 2", got)
+	}
+
+	caller.mu.Lock()
+	caller.syncing = true
+	caller.mu.Unlock()
+	waitFor(t, func() bool { return count.Load() >= 1 })
+}
+
+// All three kinds on one chain still cost ONE poll loop. This is the claim that
+// makes terminating WebSocket cheaper than proxying it, and adding kinds must
+// not quietly break it.
+func TestStreamsShareOneLoopAcrossKinds(t *testing.T) {
+	caller := newScriptedCaller()
+	caller.advance()
+	streams := NewPollerStreams(caller, 50*time.Millisecond)
+	t.Cleanup(streams.Stop)
+
+	h1, err := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) {})
+	if err != nil {
+		t.Fatalf("newHeads: %v", err)
+	}
+	h2, err := streams.Subscribe(context.Background(), 369, "logs", nil, func(json.RawMessage) {})
+	if err != nil {
+		t.Fatalf("logs: %v", err)
+	}
+	h3, err := streams.Subscribe(context.Background(), 369, "syncing", nil, func(json.RawMessage) {})
+	if err != nil {
+		t.Fatalf("syncing: %v", err)
+	}
+	defer h1.Close()
+	defer h2.Close()
+	defer h3.Close()
+
+	if got := streams.LoopCount(); got != 1 {
+		t.Errorf("poll loops = %d, want 1 for three kinds on one chain", got)
 	}
 }

@@ -105,3 +105,38 @@ func TestBuildDefaultsTheProjectID(t *testing.T) {
 		t.Fatal("handler is nil")
 	}
 }
+
+func TestBuildAdminDisabledWithoutASocket(t *testing.T) {
+	c, err := BuildAdmin("", "admin-token")
+	if err != nil {
+		t.Fatalf("BuildAdmin: %v", err)
+	}
+	if c != nil {
+		t.Error("client is non-nil with no billing socket")
+	}
+}
+
+// A socket with no admin token is a misconfiguration, not a quiet disable. An
+// operator who configured a store expects to manage keys with it.
+func TestBuildAdminRefusesASocketWithoutAToken(t *testing.T) {
+	c, err := BuildAdmin("/run/jumpgate/billing.sock", "")
+	if err == nil {
+		t.Fatal("err = nil, want a refusal")
+	}
+	if c != nil {
+		t.Error("client is non-nil despite the error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "token") {
+		t.Errorf("err = %q, want it to name the missing token", err)
+	}
+}
+
+func TestBuildAdminSucceeds(t *testing.T) {
+	c, err := BuildAdmin("/run/jumpgate/billing.sock", "admin-token")
+	if err != nil {
+		t.Fatalf("BuildAdmin: %v", err)
+	}
+	if c == nil {
+		t.Fatal("client is nil with a complete configuration")
+	}
+}

@@ -90,3 +90,21 @@ func Build(opt BuildOptions) (http.Handler, error) {
 		Streams:   NewPollerStreams(caller, opt.PollInterval),
 	})
 }
+
+// BuildAdmin builds the operator's key-management client. It returns nil when
+// no billing socket is configured, so a gateway that sells no keys simply has
+// no key store.
+//
+// The caller must assign the result to a KeyAdmin interface ONLY when it is
+// non-nil. A nil *AdminClient stored in a non-nil interface would pass every
+// `== nil` check and then panic on the first call — the classic Go typed-nil
+// trap, and here it would turn a clean 501 into a crash on an operator's click.
+func BuildAdmin(socketPath, adminToken string) (*AdminClient, error) {
+	if socketPath == "" {
+		return nil, nil
+	}
+	if adminToken == "" {
+		return nil, errors.New("relay: a billing socket is set with no admin token (JUMPGATE_ADMIN_TOKEN)")
+	}
+	return NewAdminClient(socketPath, adminToken), nil
+}

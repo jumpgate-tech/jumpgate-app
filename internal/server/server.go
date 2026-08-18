@@ -47,6 +47,10 @@ type Config struct {
 	// control of the operator's servers. A customer must never be one route
 	// away from that.
 	Relay http.Handler
+	// Keys manages customer API keys against the billing store. Nil when the
+	// operator sells no keys, which makes the key routes answer 501 rather than
+	// dereference a nil client.
+	Keys KeyAdmin
 	// RelayBind is the host:port the data plane listens on. Bind it to the
 	// interface Caddy reaches, never to 0.0.0.0: Caddy is the public door and
 	// the TLS terminator, and a plaintext keyed URL would expose the key on the
@@ -207,6 +211,7 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	s.registerAPIRoutes(mux)
+	s.registerKeyRoutes(mux)
 
 	uiHandler := http.FileServerFS(s.cfg.UI)
 	mux.Handle("/", uiHandler)

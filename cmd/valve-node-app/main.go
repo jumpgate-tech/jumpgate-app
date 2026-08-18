@@ -89,12 +89,27 @@ func main() {
 		log.Fatalf("valve-node-app: relay: %v", err)
 	}
 
+	// Key management is the operator's surface and uses the ADMIN credential,
+	// which mints and revokes keys. The relay's credential cannot do either.
+	adminClient, err := relay.BuildAdmin(*billingSocket, os.Getenv("JUMPGATE_ADMIN_TOKEN"))
+	if err != nil {
+		log.Fatalf("valve-node-app: key store: %v", err)
+	}
+	// Assign only when non-nil. A nil *AdminClient inside a non-nil interface
+	// would pass every nil check and then panic on the first click, instead of
+	// answering the clean 501 a gateway with no key store should give.
+	var keyAdmin server.KeyAdmin
+	if adminClient != nil {
+		keyAdmin = adminClient
+	}
+
 	token := server.NewSessionToken()
 	s := server.New(server.Config{
 		Bind:      *bind,
 		Token:     token,
 		UI:        uiFS,
 		Relay:     relayHandler,
+		Keys:      keyAdmin,
 		RelayBind: *relayBind,
 	})
 
