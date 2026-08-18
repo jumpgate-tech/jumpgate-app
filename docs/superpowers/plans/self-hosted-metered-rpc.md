@@ -18,11 +18,22 @@ out. Credits are topped up **on-chain only**.
 "Thin" describes HOW we build each feature, not WHICH features we keep. Nothing
 valve does is dropped. The rule is **delegate, do not rebuild**:
 
-- Upstream selection, failover, caching, WebSocket multiplexing → **eRPC**. We
-  already generate its config.
+- Upstream selection, failover, caching → **eRPC**. We already generate its
+  config.
 - Domain routing, TLS, the public front → **Caddy**. We already generate its
   Caddyfile.
+- The key store, pricing, and the credit ledger → **`services/billing`**, the
+  Rust crate already in this tree. The relay calls it; it does not rebuild it.
 - What we build is the thin glue between them, plus a small control plane.
+
+**One written exception.** WebSocket multiplexing was assigned to eRPC. Slice B
+takes it back: the relay terminates the customer's WebSocket and speaks plain
+HTTP to every upstream. This widens the upstream pool to every HTTP-only node,
+collapses N subscribers into one poll loop, removes the gzip-on-upgrade bug class
+from the relay-to-eRPC hop, and makes per-notification metering fall out for free.
+It costs a poll-interval latency floor, relay-side reorg handling, and
+`newPendingTransactions`, which has no honest HTTP equivalent. The trade is
+recorded in the slice B spec, not smuggled in.
 
 ## The reference model (valve's real architecture)
 
@@ -48,15 +59,16 @@ drops the x402 machinery (see slice D).
 ```
 customer (wallet / app)
    │  https://rpc.operator.com/rpc/<key>/evm/<chainId>
+   │  https://rpc.operator.com/beacon/<key>/evm/<chainId>/eth/v1/...
+   │  https://rpc.operator.com/health/<key>/evm/<chainId>
    ▼
-Caddy   (operator domain · auto Let's Encrypt cert · strips /rpc)
+Caddy   (operator domain · auto Let's Encrypt cert · rewrites nothing)
    ▼
-jumpgate relay  (Go — NEW)
-   │  key → keyConfig (embedded store) → validate → check credits → log usage → STRIP key
-   ▼
-eRPC    (keyless · UNCHANGED · /main/evm/<chainId>)
-   ▼
-upstreams
+jumpgate relay  (Go — NEW)          ◄──unix socket──►  services/billing (Rust)
+   │  validate → constraints → reserve credits → STRIP key      key store · pricing
+   │  ws terminated here; HTTP to every upstream                credit ledger · audit
+   ├──► eRPC          (keyless · UNCHANGED · /main/evm/<chainId>) ──► upstreams
+   └──► beacon client (:5052 · REST + SSE · prefix stripped)
                                     ▲
 on-chain payment watcher → credits ledger ┘   (disable key at 0)
 customer dashboard (wallet-signature login) → create key · see usage · top up
@@ -74,7 +86,7 @@ Each needs the one before it, except slice 0 (independent). `E` grows alongside
 |---|-------|-------------|-------------------|--------|--------|
 | 0 | Trust retry button | Graceful degrade + "Try again" on the Private (`tls internal`) tier | — | XS | done (a9ad970) |
 | A | Public branded endpoint | "Public" cert source: operator domain + auto Let's Encrypt cert on the gateway's existing path (no keys yet) | Caddy (stock image) | S | done (698aca6) |
-| B | Keyed access (the relay) | Go proxy: key → validate → strip → forward; embedded key store; issue/revoke; method allow/deny | Build; eRPC stays keyless | L (the heart) | spec written (f0b0c31), awaiting review |
+| B | Keyed access (the relay) | Go proxy: key → validate → strip → forward; ws terminated relay-side; `/rpc`, `/beacon`, `/health`; issue/revoke | Delegate the store to `services/billing`; eRPC stays keyless | L (the heart) | spec revised 2026-08-17, awaiting review |
 | C | Per-key metering | Per-request log + a couple of GROUP BY usage views; per-key usage in the UI; CSV/JSON export | Build (thin) | M | — |
 | D | Credits + on-chain top-up | Integer credit ledger; on-chain payment watcher; per-request deduct; disable-at-zero | Build (thin — NOT x402/permit2) | M | — |
 | E | Customer dashboard | Wallet-signature login; a subset of valve's web (create key, see usage, top up) | Build a subset | M | — |
@@ -97,12 +109,23 @@ Forks settled in its spec: the three tiers reuse the existing cert-source field
 once the name is genuinely public.
 
 ### Slice B — Keyed access (the relay)
-A Go proxy in front of eRPC. It maps `/rpc/<key>/<arch>/<chainId>`: validate the
-key, apply method allow/deny, strip the key, forward to eRPC's
-`/<project>/<arch>/<chainId>`. The key is a PATH segment (eRPC will not read a
-key from the path — the relay is the required translation layer). Forks: the
-embedded store (SQLite, since jumpgate has no DB today), and keeping the public
-data plane separate from jumpgate's private loopback control plane.
+A Go proxy in front of eRPC. It maps `/<category>/<key>/<arch>/<chainId>`:
+validate the key, apply the key's constraints, strip the key, forward. The key is
+a PATH segment (eRPC will not read a key from the path — the relay is the
+required translation layer). Three categories ship: `/rpc` to eRPC, `/beacon`
+straight to the beacon client, and `/health` as a rollup over the
+category × arch × chain matrix. `arch` rides under every category, so a future
+chain family costs a value and not a route.
+
+Forks settled in its spec: the store is the shipped Rust `services/billing`,
+reached over a **unix socket** with a least-privilege relay credential (a TCP
+loopback port can be squatted, which would leak both the credential and every raw
+customer key); the public data plane stays a separate listener from jumpgate's
+private loopback control plane; the relay terminates WebSocket and polls
+upstreams over HTTP; key records cache with a five second TTL while credits use a
+reservation lease, because a stale balance is money rather than a wart; and the
+key format does NOT change — wallets only send static keys in paths, so
+`jg_<base58>` stays, with `key_constraint` as the real security boundary.
 
 ### Slice C — Per-key metering
 Log each request to the store (chain, method, key, latency, status). A few

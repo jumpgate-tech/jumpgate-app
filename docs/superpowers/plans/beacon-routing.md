@@ -7,20 +7,30 @@ consumer reaches each with a path prefix.
 Chosen pattern: Valve's, because its architecture slot already handles
 non-EVM chains.
 
+> **SUPERSEDED 2026-08-17.** This section made `beacon` a value in the `:arch`
+> slot. It is not one. `rpc` and `beacon` are **categories** — kinds of API —
+> and `:arch` (evm, svm, btc) is a separate dimension that rides under *every*
+> category. The grammar below is the current one; the table that follows is kept
+> for the backend mapping, which is still correct. See
+> [slice B](../specs/2026-08-15-relay-keyed-access-design.md) section 1.
+
 ```
-https://<host>/rpc/:key/:arch/:chain_id[/...]
+https://<host>/<category>/:key/:arch/:chain_id[/...]
 ```
 
-`:arch` is the selector for "which internal server":
-
-| arch     | protocol             | backend                    | example                                              |
-|----------|----------------------|----------------------------|------------------------------------------------------|
-| `evm`    | JSON-RPC (POST + WS) | eRPC (existing)            | `…/rpc/:key/evm/369`                                 |
-| `beacon` | REST + SSE           | beacon client HTTP (:5052) | `…/rpc/:key/beacon/369/eth/v1/beacon/genesis`        |
-| (future) | —                    | —                          | `svm`, `btc`, … slot into the same grammar           |
+| category | arch     | protocol             | backend                    | example                                          |
+|----------|----------|----------------------|----------------------------|--------------------------------------------------|
+| `rpc`    | `evm`    | JSON-RPC (POST + WS) | eRPC (existing)            | `…/rpc/:key/evm/369`                             |
+| `beacon` | `evm`    | REST + SSE           | beacon client HTTP (:5052) | `…/beacon/:key/evm/369/eth/v1/beacon/genesis`    |
+| `health` | any      | JSON rollup          | the relay itself           | `…/health/:key/evm/369`                          |
+| `rpc`    | `svm`/`btc` | —                 | —                          | reserved; the slot costs a value, not a route    |
 
 eRPC already serves `<project>/evm/<chainId>` (project `rpc`, default `main`).
 So `evm` needs no change — beacon is a new branch beside it.
+
+`beacon` keeps its own `:arch` slot even though only `evm` populates it today. A
+future chain family with a consensus-layer REST API then costs a value rather
+than a new top-level route.
 
 ## Why beacon is a separate backend
 
@@ -30,29 +40,37 @@ different protocol — a REST tree under `/eth/...` plus an SSE stream at
 proxy to the beacon client's HTTP port.
 
 Both live behind ONE front — the Caddy container that already terminates TLS
-in front of eRPC (the "Serve HTTPS" option). The front routes by arch:
+in front of eRPC (the "Serve HTTPS" option). Caddy sends every category to the
+relay and rewrites nothing; the **relay** routes by category:
 
 ```
-/rpc/:key/beacon/:chain_id/*   →  beacon upstream pool for :chain_id   (more specific, matched first)
-/rpc/:key/*                    →  eRPC                                  (evm and everything else)
+/beacon/:key/:arch/:chain_id/*  →  beacon upstream pool for :chain_id
+/rpc/:key/:arch/:chain_id       →  eRPC
+/health[/:key[/...]]            →  the relay itself
 ```
+
+Sibling prefixes are disjoint, so there is no match-ordering hazard. The earlier
+nested shape needed `/rpc/:key/beacon/*` to be matched **before** the
+`/rpc/:key/*` catch-all, and a later edit that reordered the mux would have sent
+beacon traffic to eRPC silently. Disjoint roots make that unrepresentable.
 
 ## Path handling — the rules that bite
 
-1. **Strip the prefix for beacon.** The front rewrites
-   `/rpc/:key/beacon/:chain_id/eth/v1/...` → `/eth/v1/...` before proxying, so
-   the beacon client sees its own native tree. eRPC's `/evm` branch is passed
-   through unchanged (eRPC owns that path).
+1. **Strip the prefix for beacon.** The relay rewrites
+   `/beacon/:key/:arch/:chain_id/eth/v1/...` → `/eth/v1/...` before proxying, so
+   the beacon client sees its own native tree. eRPC's `/rpc` branch keeps the
+   path eRPC owns, minus the key.
 2. **Stream, do not buffer.** Beacon `/eth/v1/events` is Server-Sent Events and
    exec `…/evm/:chain_id` upgrades to WebSocket on the same path. The front must
    disable response buffering on both, or subscriptions stall.
-3. **Key check on both arches.** eRPC validates `:key` for evm. Beacon does not
-   go through eRPC, so the front must validate the SAME key before it proxies
-   beacon — otherwise beacon is an open door beside a locked one. This is the
-   join point with the billing/key service (jg_ keys, HMAC lookup) — that
-   service lives in the jumpgate-app tree (services/billing), not this repo.
-   DECISION NEEDED (B1): key check in Caddy (forward-auth to the billing admin
-   API) vs a small Go auth shim.
+3. **Key check on both categories.** Beacon does not go through eRPC, so
+   something must validate the SAME key before it proxies beacon — otherwise
+   beacon is an open door beside a locked one. This is the join point with the
+   billing/key service (jg_ keys, HMAC lookup) in `services/billing`.
+   **B1 is CLOSED (2026-08-17): a small Go auth shim.** That shim is the slice B
+   relay. Caddy stays a plain reverse proxy and validates nothing; the relay
+   validates every category, strips the key, and forwards. See
+   [slice B](../specs/2026-08-15-relay-keyed-access-design.md).
 4. **No beacon → clean 404/501.** A chain with no consensus layer (an L2, or a
    PulseChain variant that exposes none) must answer `/beacon/:chain_id` with a
    definite 404/501, never a dead 502. The catalog already knows this:
