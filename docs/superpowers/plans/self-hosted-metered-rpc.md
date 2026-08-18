@@ -86,7 +86,7 @@ Each needs the one before it, except slice 0 (independent). `E` grows alongside
 |---|-------|-------------|-------------------|--------|--------|
 | 0 | Trust retry button | Graceful degrade + "Try again" on the Private (`tls internal`) tier | — | XS | done (a9ad970) |
 | A | Public branded endpoint | "Public" cert source: operator domain + auto Let's Encrypt cert on the gateway's existing path (no keys yet) | Caddy (stock image) | S | done (698aca6) |
-| B | Keyed access (the relay) | Go proxy: key → validate → strip → forward; ws terminated relay-side; `/rpc`, `/beacon`, `/health`; issue/revoke | Delegate the store to `services/billing`; eRPC stays keyless | L (the heart) | spec revised 2026-08-17, awaiting review |
+| B | Keyed access (the relay) | Go proxy: key → validate → strip → forward; ws terminated relay-side; `/rpc`, `/beacon`, `/health`; issue/revoke | Delegate the store to `services/billing`; eRPC stays keyless | L (the heart) | **core built** (d422e5c, 3a5d1b4, 823ce0d, 70a128d, cbfda79) — see the carry-over below |
 | C | Per-key metering | Per-request log + a couple of GROUP BY usage views; per-key usage in the UI; CSV/JSON export | Build (thin) | M | — |
 | D | Credits + on-chain top-up | Integer credit ledger; on-chain payment watcher; per-request deduct; disable-at-zero | Build (thin — NOT x402/permit2) | M | — |
 | E | Customer dashboard | Wallet-signature login; a subset of valve's web (create key, see usage, top up) | Build a subset | M | — |
@@ -143,6 +143,29 @@ carry the key. NOT valve's x402/permit2/treasury subsystem.
 Wallet-signature login (one EIP-712 verify + a session token, as valve does). A
 small React surface: create a key, see usage, top up. A subset of valve's web,
 not the whole thing. No org/team model.
+
+### Slice B carry-over — what is NOT built
+
+The relay serves keyed traffic end to end, but four items from its spec are not
+done. They are listed here rather than in a commit message, because the next
+person to open this file needs them.
+
+1. **The credit reservation.** The spec has slice B making the reserve call and
+   decrementing locally, with slice D adding the settle loop. Neither exists yet.
+   `account.credits_reserved` and `escrow_ceiling` are still untouched columns,
+   so nothing meters spend today — a valid key is unlimited.
+2. **The beacon upstream pool.** `Config.Beacon` is a resolver hook with no
+   catalog behind it. A gateway therefore answers `501` for every beacon call
+   until the pool, its round-robin, and its `/eth/v1/node/health` rotation land.
+3. **Health returns a shape, not data.** `/health/<key>/<arch>/<chainId>` answers
+   the right envelope with no real sync state, head height, or upstream count.
+4. **Acceptance has not run on a real box.** Everything was verified against real
+   processes and real sockets on the development Mac. It has NOT run on
+   `the test VPS` with a real Let's Encrypt certificate and live upstreams,
+   which is what the spec asks for.
+
+Item 1 is the one that matters commercially: the product meters nothing until it
+is done.
 
 ## Build order and gates
 
