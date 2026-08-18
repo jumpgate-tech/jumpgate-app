@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -257,4 +258,139 @@ func TestDefaultTLSHostname(t *testing.T) {
 	if got := DefaultTLSHostname("...", "seed"); !strings.HasPrefix(got, "gateway-") {
 		t.Errorf("want a fallback label, got %q", got)
 	}
+}
+
+// Security fix: the rendered Caddyfile must redact a customer key on sight,
+// so the day someone adds a debug log directive they cannot write a raw key
+// to disk. See docs/superpowers/specs/2026-08-15-relay-keyed-access-design.md
+// section 10.
+func TestRenderCaddyfile_RedactsKeyInLog(t *testing.T) {
+	got, err := RenderCaddyfile(CaddyConfig{
+		Hostname:     "default-1a2b3c.localhost-valaxy.com",
+		UpstreamHost: "valve-node-app-erpc",
+		UpstreamPort: 4000,
+	})
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	for _, want := range []string{
+		"format filter",
+		"wrap console",
+		"request>uri regexp",
+		`"jg_REDACTED"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q from the log redaction block:\n%s", want, got)
+		}
+	}
+}
+
+// The anti-drift guard for CHANGE 2: this compiles the exact pattern the
+// template renders and checks it against a sample key. A future typo in the
+// character class then fails the build instead of silently logging keys.
+func TestKeyRedactionPattern_MatchesASampleKey(t *testing.T) {
+	re, err := regexp.Compile(keyRedactionPattern)
+	if err != nil {
+		t.Fatalf("keyRedactionPattern does not compile: %v", err)
+	}
+	// A key is "jg_" plus base58: this sample deliberately avoids 0, O, I
+	// and l, none of which are valid base58 characters.
+	sample := "jg_1a2B3c4D5e6F7g8H9j"
+	if !re.MatchString(sample) {
+		t.Errorf("pattern %q must match a sample key %q", keyRedactionPattern, sample)
+	}
+}
+
+// A non-metered gateway keeps pointing straight at eRPC, exactly as today.
+func TestRenderCaddyfile_NotMetered(t *testing.T) {
+	got, err := RenderCaddyfile(CaddyConfig{
+		Hostname:     "default-1a2b3c.localhost-valaxy.com",
+		UpstreamHost: "valve-node-app-erpc",
+		UpstreamPort: 4000,
+	})
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	if !strings.Contains(got, "reverse_proxy valve-node-app-erpc:4000") {
+		t.Errorf("a non-metered gateway must proxy straight to eRPC:\n%s", got)
+	}
+}
+
+// A metered gateway's single reverse_proxy targets the relay, not eRPC. One
+// line is enough: the relay itself serves /rpc, /beacon and /health, so a
+// matcher per category would be redundant.
+func TestRenderCaddyfile_Metered(t *testing.T) {
+	got, err := RenderCaddyfile(CaddyConfig{
+		Hostname:     "default-1a2b3c.localhost-valaxy.com",
+		UpstreamHost: "valve-node-app-erpc",
+		UpstreamPort: 4000,
+		Metered:      true,
+		RelayHost:    "valve-node-app-relay",
+		RelayPort:    8090,
+	})
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	if !strings.Contains(got, "reverse_proxy valve-node-app-relay:8090") {
+		t.Errorf("a metered gateway must proxy to the relay:\n%s", got)
+	}
+	if strings.Contains(got, "valve-node-app-erpc:4000") {
+		t.Errorf("a metered gateway must not also proxy to eRPC directly:\n%s", got)
+	}
+	// Exactly one reverse_proxy line: the relay owns all three categories, so
+	// a matcher per category would be redundant.
+	if n := strings.Count(got, "reverse_proxy"); n != 1 {
+		t.Errorf("want exactly one reverse_proxy directive, got %d:\n%s", n, got)
+	}
+}
+
+// Caddy must rewrite nothing for a metered gateway: the relay owns every
+// path strip, so there must be no uri strip_prefix and no handle_path.
+func TestRenderCaddyfile_MeteredHasNoRewritingDirective(t *testing.T) {
+	got, err := RenderCaddyfile(CaddyConfig{
+		Hostname:     "default-1a2b3c.localhost-valaxy.com",
+		UpstreamHost: "valve-node-app-erpc",
+		UpstreamPort: 4000,
+		Metered:      true,
+		RelayHost:    "valve-node-app-relay",
+		RelayPort:    8090,
+	})
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	for _, unwanted := range []string{"rewrite", "strip_prefix", "handle_path"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("a metered gateway must not rewrite the path, found %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+// A metered gateway needs a relay upstream. An empty one must be a
+// validation error, the same as an empty eRPC upstream is today.
+func TestRenderCaddyfile_MeteredRejectsEmptyRelay(t *testing.T) {
+	base := CaddyConfig{Hostname: "h.example", UpstreamHost: "erpc", UpstreamPort: 4000, Metered: true}
+
+	t.Run("no relay host", func(t *testing.T) {
+		c := base
+		c.RelayPort = 8090
+		_, err := RenderCaddyfile(c)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "relay host") {
+			t.Errorf("error = %q, want it to mention the relay host", err)
+		}
+	})
+
+	t.Run("bad relay port", func(t *testing.T) {
+		c := base
+		c.RelayHost = "relay"
+		_, err := RenderCaddyfile(c)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "relay port") {
+			t.Errorf("error = %q, want it to mention the relay port", err)
+		}
+	})
 }

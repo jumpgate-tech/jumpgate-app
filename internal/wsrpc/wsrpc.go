@@ -30,6 +30,7 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -115,9 +116,27 @@ type Conn struct {
 	br   *bufio.Reader
 	max  int64
 
+	// isServer marks a Conn Accept built, on the server side of the
+	// handshake. It picks the mask direction for every frame this Conn
+	// reads and writes: RFC 6455 requires a server to send unmasked frames
+	// and demand masked ones back, and a client the exact opposite.
+	isServer bool
+
 	// stop ends the context watchdog Dial installs. nil when the caller
 	// dialled and therefore owns the connection's lifetime themselves.
 	stop chan struct{}
+}
+
+// newServerConn builds a Conn for the SERVER side of a handshake Accept just
+// completed, over a connection and buffered reader Accept already has —
+// typically from http.Hijacker.
+//
+// It reuses the same frame reader and writer the client path uses, so
+// continuation frames, control frames and the message cap behave identically
+// on both ends of this one package. A second, hand-rolled server frame
+// implementation is exactly the drift this package exists to end.
+func newServerConn(conn net.Conn, br *bufio.Reader, max int64) *Conn {
+	return &Conn{conn: conn, br: br, max: max, isServer: true}
 }
 
 // Dial opens a connection to rawURL (ws:// or wss://) and completes the
@@ -282,12 +301,40 @@ func handshake(conn net.Conn, host, path string, max int64) (*Conn, error) {
 	return &Conn{conn: conn, br: br, max: max}, nil
 }
 
-// WriteText sends payload as one masked text frame.
-func (c *Conn) WriteText(payload []byte) error { return writeText(c.conn, payload) }
+// WriteText sends payload as one text frame — masked if this Conn is a
+// client, unmasked if Accept built it as a server. RFC 6455 §5.1 requires
+// exactly one of those for each side and forbids the other.
+func (c *Conn) WriteText(payload []byte) error {
+	return writeFrame(c.conn, opcodeText, payload, !c.isServer)
+}
 
 // ReadMessage returns the next complete data message, reassembling
-// continuation frames and skipping control frames.
-func (c *Conn) ReadMessage() ([]byte, error) { return readMessage(c.br, c.max) }
+// continuation frames and skipping control frames — except that on the
+// server side, a ping gets a pong back first, as RFC 6455 §5.5.2 requires.
+func (c *Conn) ReadMessage() ([]byte, error) {
+	var onPing func([]byte) error
+	if c.isServer {
+		onPing = c.WritePong
+	}
+	return readMessage(c.br, c.max, c.isServer, onPing)
+}
+
+// WritePong answers a ping with a pong carrying the same payload, per RFC
+// 6455 §5.5.3. Exported so a caller driving its own read loop — rather than
+// ReadMessage's automatic reply — can still answer one.
+func (c *Conn) WritePong(payload []byte) error {
+	return writeFrame(c.conn, opcodePong, payload, !c.isServer)
+}
+
+// WriteClose sends a close frame carrying a status code and a reason, per RFC
+// 6455 §5.5.1 and §7.4. A relay uses this to end a customer's connection on
+// purpose, instead of just dropping the TCP socket under it.
+func (c *Conn) WriteClose(code uint16, reason string) error {
+	payload := make([]byte, 2+len(reason))
+	binary.BigEndian.PutUint16(payload, code)
+	copy(payload[2:], reason)
+	return writeFrame(c.conn, opcodeClose, payload, !c.isServer)
+}
 
 // SetDeadline bounds the next reads and writes. A caller reading an open-ended
 // stream — waiting for a subscription notification that may never come — uses

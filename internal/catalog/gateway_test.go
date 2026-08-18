@@ -475,3 +475,18 @@ func TestRenderGatewayConfig_RejectsMetricsPortCollision(t *testing.T) {
 		t.Errorf("with metrics off there is no second listener, so 4001 is free: %v", err)
 	}
 }
+
+// Anti-drift guard. PathFor must always equal PathForArch("evm", ...): a
+// second, drifting definition of the path shape would send the relay to a
+// path eRPC does not serve.
+func TestPathFor_MatchesPathForArchEVM(t *testing.T) {
+	g := GatewayConfig{ProjectID: "fleet"}
+	got := g.PathFor(369)
+	want := g.PathForArch("evm", 369)
+	if got != want {
+		t.Errorf("PathFor(369) = %q, PathForArch(\"evm\", 369) = %q; they must match", got, want)
+	}
+	if got != "/fleet/evm/369" {
+		t.Errorf("PathFor(369) = %q, want /fleet/evm/369", got)
+	}
+}

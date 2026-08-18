@@ -322,10 +322,21 @@ func (g GatewayConfig) MetricsBind() string {
 	return g.MetricsBindAddr
 }
 
-// PathFor is the request path for a chain — the URL callers actually use.
-// The same path serves WebSocket with a ws:// or wss:// scheme.
+// PathForArch is the request path for one chain under one eRPC
+// architecture — the URL callers actually use. The same path serves
+// WebSocket with a ws:// or wss:// scheme.
+func (g GatewayConfig) PathForArch(arch string, chainID int) string {
+	return fmt.Sprintf("/%s/%s/%d", g.ProjectIDOrDefault(), arch, chainID)
+}
+
+// PathFor is PathForArch for "evm", the only architecture this app runs
+// today. Keeping it as a call to PathForArch, not a second copy of the
+// format string, is deliberate: the relay
+// (docs/superpowers/specs/2026-08-15-relay-keyed-access-design.md, section 5)
+// forwards to this same path, and a second, drifting copy would send it to
+// a path eRPC does not serve.
 func (g GatewayConfig) PathFor(chainID int) string {
-	return fmt.Sprintf("/%s/evm/%d", g.ProjectIDOrDefault(), chainID)
+	return g.PathForArch("evm", chainID)
 }
 
 // RenderGatewayConfig renders g to erpc.yaml. Pure string rendering; the

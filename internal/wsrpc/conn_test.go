@@ -77,7 +77,7 @@ func TestRoundTrip_AsksAndHearsTheAnswer(t *testing.T) {
 	addr := serveRaw(t, func(conn net.Conn, req *http.Request) {
 		accept101(conn, req)
 		// Read the client's question, then answer it.
-		if _, err := readMessage(bufio.NewReader(conn), DefaultMaxMessageBytes); err != nil {
+		if _, err := readMessage(bufio.NewReader(conn), DefaultMaxMessageBytes, true, nil); err != nil {
 			return
 		}
 		_ = writeUnmasked(conn, []byte(`{"result":"0x171"}`))
@@ -100,7 +100,7 @@ func TestRoundTrip_SendsThePathAndHostFromTheURL(t *testing.T) {
 	addr := serveRaw(t, func(conn net.Conn, req *http.Request) {
 		seen <- req
 		accept101(conn, req)
-		_, _ = readMessage(bufio.NewReader(conn), DefaultMaxMessageBytes)
+		_, _ = readMessage(bufio.NewReader(conn), DefaultMaxMessageBytes, true, nil)
 		_ = writeUnmasked(conn, []byte(`{}`))
 	})
 
@@ -125,7 +125,7 @@ func TestHandshake_HostHeaderOverrideWins(t *testing.T) {
 	addr := serveRaw(t, func(conn net.Conn, req *http.Request) {
 		seen <- req
 		accept101(conn, req)
-		_, _ = readMessage(bufio.NewReader(conn), DefaultMaxMessageBytes)
+		_, _ = readMessage(bufio.NewReader(conn), DefaultMaxMessageBytes, true, nil)
 		_ = writeUnmasked(conn, []byte(`{}`))
 	})
 
@@ -233,7 +233,7 @@ func TestRoundTrip_UpgradeThenSilenceIsNotARefusal(t *testing.T) {
 func TestRoundTrip_CloseInsteadOfAnAnswerIsNoAnswer(t *testing.T) {
 	addr := serveRaw(t, func(conn net.Conn, req *http.Request) {
 		accept101(conn, req)
-		_, _ = readMessage(bufio.NewReader(conn), DefaultMaxMessageBytes)
+		_, _ = readMessage(bufio.NewReader(conn), DefaultMaxMessageBytes, true, nil)
 		_, _ = conn.Write([]byte{0x88, 0x00}) // FIN | close, empty payload
 	})
 
@@ -321,7 +321,7 @@ func tlsStub(t *testing.T, answer string) (string, *x509.CertPool) {
 		brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " +
 			base64.StdEncoding.EncodeToString(sum[:]) + "\r\n\r\n")
 		brw.Flush()
-		if _, err := readMessage(brw.Reader, DefaultMaxMessageBytes); err != nil {
+		if _, err := readMessage(brw.Reader, DefaultMaxMessageBytes, true, nil); err != nil {
 			return
 		}
 		_ = writeUnmasked(brw.Writer, []byte(answer))

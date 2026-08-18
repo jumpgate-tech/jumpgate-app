@@ -168,6 +168,22 @@ type CaddyConfig struct {
 
 	// ImageRef overrides the Caddy image ("" → caddy:2-alpine).
 	ImageRef string
+
+	// Metered marks a gateway billed by key. When true, Caddy's single
+	// reverse_proxy targets the relay (RelayHost/RelayPort) instead of
+	// eRPC — the relay is the one process that answers /rpc, /beacon and
+	// /health, so one proxy line covers all three and a matcher per
+	// category would be redundant. A non-metered gateway keeps pointing
+	// straight at UpstreamHost/UpstreamPort, exactly as today.
+	//
+	// Either way Caddy rewrites nothing: the relay owns every path strip,
+	// the same as eRPC already does for the unmetered path.
+	Metered bool
+
+	// RelayHost and RelayPort address the relay, and are read only when
+	// Metered is true.
+	RelayHost string
+	RelayPort int
 }
 
 // GatewayTLS is the OPERATOR-FACING half of a gateway's TLS front: what is
@@ -293,6 +309,19 @@ func (t *GatewayTLS) ValidateSettings() error {
 	return nil
 }
 
+// keyRedactionPattern matches a raw customer key so the access log can hide
+// it. A key is "jg_" plus base58 of 16 bytes, and the character class is the
+// base58 alphabet — it excludes 0, O, I and l on purpose, because those are
+// never valid key characters.
+//
+// This is rendered into every Caddyfile unconditionally (see
+// caddyfileTemplate), not left for a runbook. No `log` directive is rendered
+// today, so nothing leaks today — but the first person who adds one to debug
+// metering would otherwise write every customer key to disk, because the key
+// rides in the URL path. See
+// docs/superpowers/specs/2026-08-15-relay-keyed-access-design.md section 10.
+const keyRedactionPattern = `jg_[1-9A-HJ-NP-Za-km-z]+`
+
 // caddyfileTemplate renders the Caddyfile.
 //
 // auto_https disable_redirects: Caddy would otherwise also bind :80 to redirect
@@ -307,23 +336,34 @@ func (t *GatewayTLS) ValidateSettings() error {
 //
 // The proxy is deliberately plain reverse_proxy with no header rewriting: eRPC
 // addresses chains by URL path (/<project>/evm/<chainId>), so the path must
-// reach it untouched, and WebSocket upgrades pass through natively.
+// reach it untouched, and WebSocket upgrades pass through natively. For a
+// metered gateway the same rule holds for the relay it proxies to instead —
+// the relay owns every path strip, so Caddy still rewrites nothing.
 const caddyfileTemplate = `{{if .Global}}{
 	auto_https disable_redirects
 }
 {{end}}{{.Hostname}} {
 {{if .TLSDirective}}{{.TLSDirective}}
-{{end}}	reverse_proxy {{.Upstream}}
+{{end}}	log {
+		format filter {
+			wrap console
+			fields {
+				request>uri regexp "{{.RedactionPattern}}" "jg_REDACTED"
+			}
+		}
+	}
+	reverse_proxy {{.Upstream}}
 }
 `
 
 var caddyfileTmpl = template.Must(template.New("caddyfile").Parse(caddyfileTemplate))
 
 type caddyVars struct {
-	Global       bool
-	Hostname     string
-	TLSDirective string
-	Upstream     string
+	Global           bool
+	Hostname         string
+	TLSDirective     string
+	RedactionPattern string
+	Upstream         string
 }
 
 // CertSourceOrDefault resolves the cert source ("" → internal).
@@ -375,6 +415,17 @@ func (c CaddyConfig) Validate() error {
 	}
 	if c.UpstreamPort <= 0 {
 		return fmt.Errorf("catalog: caddy: upstream port %d is invalid", c.UpstreamPort)
+	}
+	// A metered gateway proxies to the relay, not to UpstreamHost/Port, so
+	// it needs its own address checked — an empty one here would render a
+	// Caddyfile that points reverse_proxy at ":0".
+	if c.Metered {
+		if strings.TrimSpace(c.RelayHost) == "" {
+			return fmt.Errorf("catalog: caddy: metered gateway needs a relay host")
+		}
+		if c.RelayPort <= 0 {
+			return fmt.Errorf("catalog: caddy: relay port %d is invalid", c.RelayPort)
+		}
 	}
 	switch c.CertSourceOrDefault() {
 	case CertInternal:
@@ -444,14 +495,24 @@ func RenderCaddyfile(c CaddyConfig) (string, error) {
 		}
 	}
 
+	// A metered gateway proxies to the relay; a plain one proxies straight to
+	// eRPC. Either way it is ONE reverse_proxy line — the relay itself
+	// answers /rpc, /beacon and /health, so a matcher per category would be
+	// redundant, and neither target gets a path rewrite.
+	upstreamHost, upstreamPort := c.UpstreamHost, c.UpstreamPort
+	if c.Metered {
+		upstreamHost, upstreamPort = c.RelayHost, c.RelayPort
+	}
+
 	var buf bytes.Buffer
 	if err := caddyfileTmpl.Execute(&buf, caddyVars{
 		// The global auto_https block binds Caddy off :80. The Public (acme)
 		// tier needs :80 for the HTTP-01 challenge, so omit the block there.
-		Global:       source != CertACME,
-		Hostname:     c.Hostname,
-		TLSDirective: tlsDirective,
-		Upstream:     fmt.Sprintf("%s:%d", c.UpstreamHost, c.UpstreamPort),
+		Global:           source != CertACME,
+		Hostname:         c.Hostname,
+		TLSDirective:     tlsDirective,
+		RedactionPattern: keyRedactionPattern,
+		Upstream:         fmt.Sprintf("%s:%d", upstreamHost, upstreamPort),
 	}); err != nil {
 		return "", err
 	}

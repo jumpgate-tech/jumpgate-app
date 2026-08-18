@@ -91,7 +91,7 @@ func wsStream(frames ...wsFrame) *bufio.Reader {
 // precisely because it used to be three constants; the tests exercise the
 // default, and TestReadMessage_HonoursACallerSuppliedCap covers the knob.
 func readAtDefaultCap(br *bufio.Reader) ([]byte, error) {
-	return readMessage(br, DefaultMaxMessageBytes)
+	return readMessage(br, DefaultMaxMessageBytes, false, nil)
 }
 
 const (
@@ -294,10 +294,10 @@ func TestReadMessage_HonoursACallerSuppliedCap(t *testing.T) {
 	payload := bytes.Repeat([]byte("x"), 2048)
 	frame := wsFrame{fin: true, opcode: opText, payload: payload}
 
-	if _, err := readMessage(wsStream(frame), 1024); err == nil {
+	if _, err := readMessage(wsStream(frame), 1024, false, nil); err == nil {
 		t.Fatal("a 2048-byte frame was accepted under a 1024-byte cap")
 	}
-	got, err := readMessage(wsStream(frame), 4096)
+	got, err := readMessage(wsStream(frame), 4096, false, nil)
 	if err != nil {
 		t.Fatalf("a 2048-byte frame was refused under a 4096-byte cap: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestReadMessage_CapsTheAssembledMessageNotJustOneFrame(t *testing.T) {
 		wsFrame{fin: false, opcode: opText, payload: chunk},
 		wsFrame{fin: false, opcode: opCont, payload: chunk},
 		wsFrame{fin: true, opcode: opCont, payload: chunk},
-	), 1024)
+	), 1024, false, nil)
 	if err == nil {
 		t.Fatal("three 400-byte fragments (1200 bytes assembled) were accepted under a 1024-byte cap")
 	}
