@@ -21,6 +21,8 @@ pub enum Error {
     AddrNotLoopback(std::net::SocketAddr),
     #[error("the admin bearer token is missing or empty; set JUMPGATE_ADMIN_TOKEN")]
     MissingAdminToken,
+    #[error("the relay bearer token is missing or empty; set JUMPGATE_RELAY_TOKEN")]
+    MissingRelayToken,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

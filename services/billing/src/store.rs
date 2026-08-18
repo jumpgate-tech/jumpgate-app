@@ -217,6 +217,25 @@ impl Store {
         Ok(keys)
     }
 
+    /// Load one key row by its keyed hash. The key manager's hot map already
+    /// answers "is this key active", so this exists only for the failure path
+    /// of an authenticate check, to tell "no such key" from "this key is
+    /// revoked" (see `keys::KeyManager::authenticate_status`).
+    pub fn find_key_by_hash(&self, key_hash: &[u8]) -> Result<Option<StoredKey>> {
+        let key = self
+            .conn
+            .query_row(
+                "SELECT id, key_hash, label, account_address, credit_exempt, allow_trace, \
+                        rate_unlimited, per_second_limit, per_day_limit, created_at, \
+                        disabled_at, expires_at \
+                 FROM project_key WHERE key_hash = ?1",
+                params![key_hash],
+                row_to_key,
+            )
+            .optional()?;
+        Ok(key)
+    }
+
     /// Load one key row by public id.
     pub fn load_key(&self, id: &str) -> Result<Option<StoredKey>> {
         let key = self
@@ -433,6 +452,38 @@ mod tests {
             bad.is_err(),
             "the CHECK constraint must reject a zero price"
         );
+    }
+
+    #[test]
+    fn find_key_by_hash_locates_the_row() {
+        let store = Store::open_in_memory().unwrap();
+        let key = StoredKey {
+            id: "k_findme".into(),
+            key_hash: vec![7u8; 32],
+            label: "findable".into(),
+            account_address: None,
+            credit_exempt: false,
+            allow_trace: false,
+            rate_unlimited: true,
+            per_second_limit: None,
+            per_day_limit: None,
+            created_at: unix_now(),
+            disabled_at: None,
+            expires_at: None,
+        };
+        store.insert_key(&key).unwrap();
+
+        let found = store
+            .find_key_by_hash(&[7u8; 32])
+            .unwrap()
+            .expect("the row must be found by its hash");
+        assert_eq!(found.id, "k_findme");
+    }
+
+    #[test]
+    fn find_key_by_hash_returns_none_for_an_unknown_hash() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.find_key_by_hash(&[9u8; 32]).unwrap().is_none());
     }
 
     #[test]

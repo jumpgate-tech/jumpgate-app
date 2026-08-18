@@ -119,6 +119,24 @@ impl KeyRecord {
     }
 }
 
+/// The outcome of an authenticate check that did not resolve to a live key.
+/// Plain `authenticate` folds "no such key", "revoked", and "expired" into one
+/// `None`, on purpose — a caller must not learn which case it hit. The
+/// `/internal/authenticate` route needs one more bit than that: 401 for an
+/// unknown or wrong key, 403 for a revoked one. `authenticate_status` is that
+/// narrow extra answer, built on top of `authenticate`, not a replacement for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthOutcome {
+    /// The key is valid, active, and not expired. Carries its record.
+    Active(KeyRecord),
+    /// The key exists in the store but is revoked.
+    Disabled,
+    /// No stored key matches, or it exists but is expired. Both look the
+    /// same to a caller: the key does not work now, and no more detail is
+    /// safe to hand back.
+    Unknown,
+}
+
 /// The key manager. It owns the store and the in-memory key map.
 pub struct KeyManager {
     store: Store,
@@ -290,6 +308,29 @@ impl KeyManager {
         } else {
             None
         }
+    }
+
+    /// Resolve a raw key and, on failure, say why. `authenticate` cannot tell
+    /// "wrong key" from "revoked key" by itself, because `revoke` evicts a key
+    /// from the hot map at once (see below) — so a miss here falls back to one
+    /// store read, keyed by the same hash, to check `disabled_at`. That extra
+    /// read runs only on the failure path; a live key never pays for it.
+    pub fn authenticate_status(&self, raw_key: &str) -> Result<AuthOutcome> {
+        if let Some(record) = self.authenticate(raw_key) {
+            return Ok(AuthOutcome::Active(record));
+        }
+        let hash = self.hash(raw_key);
+        match self.store.find_key_by_hash(&hash)? {
+            Some(stored) if stored.disabled_at.is_some() => Ok(AuthOutcome::Disabled),
+            _ => Ok(AuthOutcome::Unknown),
+        }
+    }
+
+    /// The (kind, value) constraints for a key, in the schema's vocabulary.
+    /// The admin surface reads this through the manager, so the store stays
+    /// encapsulated (matches `read_audit`).
+    pub fn constraints(&self, id: &str) -> Result<Vec<(String, String)>> {
+        self.store.list_key_constraints(id)
     }
 
     /// Revoke a key. Sets `disabled_at`, writes an audit row, and evicts the key
@@ -565,6 +606,56 @@ mod tests {
             Err(Error::MissingPepper) => {}
             _ => panic!("an empty pepper must be rejected"),
         }
+    }
+
+    #[test]
+    fn authenticate_status_returns_active_for_a_live_key() {
+        let km = manager();
+        let (id, raw) = km.create(KeyConfig::default()).unwrap();
+        match km.authenticate_status(&raw).unwrap() {
+            AuthOutcome::Active(record) => assert_eq!(record.id, id),
+            other => panic!("expected Active, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn authenticate_status_returns_unknown_for_a_garbage_key() {
+        let km = manager();
+        km.create(KeyConfig::default()).unwrap();
+        assert_eq!(
+            km.authenticate_status("jg_not_a_real_key").unwrap(),
+            AuthOutcome::Unknown
+        );
+        assert_eq!(km.authenticate_status("").unwrap(), AuthOutcome::Unknown);
+    }
+
+    #[test]
+    fn authenticate_status_returns_disabled_for_a_revoked_key() {
+        // A revoked key is evicted from the hot map, so telling it apart from
+        // an unknown key needs the store fallback in `authenticate_status`.
+        let km = manager();
+        let (id, raw) = km.create(KeyConfig::default()).unwrap();
+        km.revoke(&id).unwrap();
+        assert_eq!(
+            km.authenticate_status(&raw).unwrap(),
+            AuthOutcome::Disabled
+        );
+    }
+
+    #[test]
+    fn constraints_reads_back_through_the_public_method() {
+        let km = manager();
+        let cfg = KeyConfig {
+            label: "constrained".into(),
+            origins: vec!["https://app.example".into()],
+            ..Default::default()
+        };
+        let (id, _) = km.create(cfg).unwrap();
+        let got = km.constraints(&id).unwrap();
+        assert_eq!(
+            got,
+            vec![("origin".to_string(), "https://app.example".to_string())]
+        );
     }
 
     #[test]

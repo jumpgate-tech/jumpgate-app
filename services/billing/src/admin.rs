@@ -1,17 +1,34 @@
-//! The operator admin HTTP API: keys, pricing, and the audit log.
+//! The operator admin HTTP API: keys, pricing, and the audit log. Also the
+//! relay's one route: `/internal/authenticate`.
 //!
-//! This is step 4 of the billing build (docs/design/billing-admin.md section 5).
+//! This is step 4 of the billing build (docs/design/billing-admin.md section 5),
+//! extended per the keyed-access design
+//! (docs/superpowers/specs/2026-08-15-relay-keyed-access-design.md section 7).
 //! The store owns the SQL, the key manager owns the crypto, and the price book
 //! owns the pricing map. This module is the thin HTTP shell over the three.
 //!
-//! Security shape (findings S9, S10, S11):
-//!   - The API binds loopback only. [`serve`] refuses a non-loopback address.
-//!   - Every `/admin/*` route needs the bearer token from `JUMPGATE_ADMIN_TOKEN`.
-//!     The compare runs in constant time. A missing or wrong token returns 401
-//!     with a small JSON error and no detail. The server refuses to start with an
-//!     empty token, so the gate cannot open by default.
+//! Security shape (findings S9, S10, S11, and the keyed-access design):
+//!   - [`serve`] binds loopback TCP and refuses a non-loopback address. This
+//!     is the fallback transport for a platform with no reliable unix socket
+//!     (Windows).
+//!   - [`serve_unix`] binds a unix socket instead. This is the transport a
+//!     same-box relay uses. A TCP port on loopback is squattable by any local
+//!     process before this service starts; a unix socket inside a
+//!     service-owned, `0700` directory is not. See `serve_unix` for the full
+//!     posture, including the peer credential check.
+//!   - Two bearer tokens, not one. `JUMPGATE_ADMIN_TOKEN` gates every
+//!     `/admin/*` route: create, rotate, revoke, pricing, audit. A second,
+//!     separate `JUMPGATE_RELAY_TOKEN` gates only `/internal/authenticate`.
+//!     The admin token does NOT work on `/internal/*`, and the relay token
+//!     does NOT work on `/admin/*` — each route group's middleware checks
+//!     only its own token. A relay credential leak then buys an attacker the
+//!     ability to test whether a key is valid, not the ability to mint or
+//!     revoke one. Both compares run in constant time. A missing or empty
+//!     token, for either credential, is a startup fault: the server refuses
+//!     to start, so neither gate can open by default.
 //!   - `GET /healthz` is the one open route. It touches no secret.
-//!   - The raw key and the token never appear in a response body or an error.
+//!   - The raw key, the key hash, and both tokens never appear in a response
+//!     body or an error.
 //!
 //! TODO: mutual TLS is the design's target for the admin plane (billing-admin.md
 //! section 2, finding S9). This step ships loopback plus a bearer token, the
@@ -32,6 +49,7 @@
 //! instead; do not copy this mutex arrangement onto that path.
 
 use std::net::SocketAddr;
+use std::path::Path as FsPath;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path, Query, Request, State};
@@ -45,7 +63,7 @@ use serde_json::json;
 use subtle::ConstantTimeEq;
 
 use crate::error::Error;
-use crate::keys::{KeyConfig, KeyManager, KeyPatch, KeyRecord, Rate};
+use crate::keys::{AuthOutcome, KeyConfig, KeyManager, KeyPatch, KeyRecord, Rate};
 use crate::pricing::PriceBook;
 use crate::store::AuditRow;
 use crate::Result;
@@ -61,29 +79,50 @@ const MAX_AUDIT_LIMIT: i64 = 1000;
 pub struct AppState {
     keys: Arc<Mutex<KeyManager>>,
     prices: Arc<Mutex<PriceBook>>,
-    /// The admin bearer token. It never appears in a response or a log.
+    /// The admin bearer token, for every `/admin/*` route. It never appears
+    /// in a response or a log.
     token: Arc<String>,
+    /// The relay bearer token, for `/internal/authenticate` only. Kept apart
+    /// from `token` so the two credentials can never be confused: each
+    /// route group's middleware reads only the field it owns.
+    relay_token: Arc<String>,
 }
 
 impl AppState {
-    /// Build the state. It refuses an empty token, so the gate cannot open by
-    /// default (finding S9). The caller reads the token from
-    /// `JUMPGATE_ADMIN_TOKEN` and must fail closed when it is unset.
-    pub fn new(keys: KeyManager, prices: PriceBook, token: String) -> Result<AppState> {
+    /// Build the state. It refuses an empty token for either credential, so
+    /// neither gate can open by default (finding S9, and the same posture for
+    /// the relay credential). The caller reads `token` from
+    /// `JUMPGATE_ADMIN_TOKEN` and `relay_token` from `JUMPGATE_RELAY_TOKEN`,
+    /// and must fail closed when either is unset.
+    pub fn new(
+        keys: KeyManager,
+        prices: PriceBook,
+        token: String,
+        relay_token: String,
+    ) -> Result<AppState> {
         if token.is_empty() {
             return Err(Error::MissingAdminToken);
+        }
+        if relay_token.is_empty() {
+            return Err(Error::MissingRelayToken);
         }
         Ok(AppState {
             keys: Arc::new(Mutex::new(keys)),
             prices: Arc::new(Mutex::new(prices)),
             token: Arc::new(token),
+            relay_token: Arc::new(relay_token),
         })
     }
 }
 
-/// Build the router: the open `GET /healthz` plus the guarded `/admin/*` routes.
-/// The bearer middleware is a route layer on the admin routes only, so healthz
-/// stays open.
+/// Build the router: the open `GET /healthz`, the admin-token-gated
+/// `/admin/*` routes, and the relay-token-gated `/internal/*` routes.
+///
+/// Each guarded group carries its own `route_layer`, bound to its own
+/// middleware function reading its own token field. That is what makes the
+/// separation a fact of the wiring: the admin middleware never even looks at
+/// `relay_token`, and the relay middleware never looks at `token`, so a future
+/// edit cannot accidentally let one credential open both doors.
 pub fn build_router(state: AppState) -> Router {
     let admin = Router::new()
         .route("/admin/keys", post(create_key).get(list_keys))
@@ -101,15 +140,27 @@ pub fn build_router(state: AppState) -> Router {
             require_bearer,
         ));
 
+    let internal = Router::new()
+        .route("/internal/authenticate", post(authenticate_key))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_relay_bearer,
+        ));
+
     Router::new()
         .route("/healthz", get(healthz))
         .merge(admin)
+        .merge(internal)
         .with_state(state)
 }
 
 /// Bind the loopback address and serve the admin API. It refuses a non-loopback
 /// address before it binds (finding S9/S3 posture). The bind and serve I/O errors
 /// map to [`Error::Io`].
+///
+/// This is the fallback transport (design doc section 7): `AF_UNIX` exists on
+/// Windows but is patchy in both toolchains, so a Windows build keeps using
+/// TCP. Every other target should prefer [`serve_unix`].
 pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
     if !addr.ip().is_loopback() {
         return Err(Error::AddrNotLoopback(addr));
@@ -121,27 +172,173 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
     Ok(())
 }
 
+/// Bind a unix socket and serve the admin API over it. This is the relay's
+/// transport (design doc section 7): a unix socket in a service-owned
+/// directory, not a TCP port on loopback. Binding an unused high port on
+/// loopback needs no privilege on Linux or macOS, so a TCP port is squattable
+/// by any local process that starts before this service does; a unix socket
+/// inside a `0700` directory is not, because only the owning user can even
+/// see the directory's contents.
+///
+/// Three things happen before the bind, all load-bearing:
+///
+/// 1. The parent directory is created at `0700` if missing. This is the real
+///    protection — on Linux and macOS, directory permissions gate whether
+///    another user's process can reach the socket at all, so both the
+///    directory mode and the socket file mode are set, not just one.
+/// 2. Any file already at `path` is unlinked first. A crashed process leaves
+///    its socket file behind; binding to an existing path then fails with
+///    `EADDRINUSE` unless the stale file is removed first. A dangling unix
+///    socket file carries no data, so removing it is safe.
+/// 3. The socket file itself is set to `0600` once it exists, so a
+///    same-directory, different-user read (were the directory mode ever
+///    loosened by mistake) still hits a permission error.
+///
+/// Every accepted connection also passes a peer credential check — see
+/// [`PeerCheckedUnixListener`] for what it does and does not stop.
+#[cfg(unix)]
+pub async fn serve_unix(path: &FsPath, state: AppState) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let listener = bind_unix(path)?;
+    println!("jumpgate admin API listening on unix:{}", path.display());
+
+    // The socket file we just created is owned by our own effective uid, so
+    // its metadata is a dependency-free way to read that uid back — no need
+    // for `libc::getuid()` or a new crate just for this.
+    let expected_uid = std::fs::metadata(path)?.uid();
+
+    let checked = PeerCheckedUnixListener {
+        inner: listener,
+        expected_uid,
+    };
+    axum::serve(checked, build_router(state)).await?;
+    Ok(())
+}
+
+/// The synchronous half of [`serve_unix`]: prepare the directory, clear a
+/// stale socket file, bind, and lock the socket file down. Split out so a
+/// test can drive it without running the accept loop.
+#[cfg(unix)]
+fn bind_unix(path: &FsPath) -> Result<tokio::net::UnixListener> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+    }
+
+    // Ignore the error: the common case is "no such file", which is exactly
+    // the state we want before a bind. A real removal failure (e.g. a
+    // permission problem) still surfaces at the `bind` call below.
+    let _ = std::fs::remove_file(path);
+
+    let listener = tokio::net::UnixListener::bind(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(listener)
+}
+
+/// A unix listener that only hands `axum::serve` a connection from the
+/// expected uid. `axum::serve`'s `Listener::accept` must always return a
+/// connection — it has no way to reject one — so this loops past a bad peer
+/// instead of returning it.
+///
+/// **What this stops:** a process running as a different local user from
+/// reaching the socket, as a backstop in case the directory or file mode is
+/// ever loosened by mistake (design doc section 7).
+///
+/// **What this does NOT stop:** an impostor process running under the SAME
+/// uid as the billing service. `peer_cred()` reports the kernel's view of the
+/// connecting process's real uid, which a same-uid impostor legitimately has.
+/// Stopping that needs process isolation — a separate service account, or a
+/// container boundary — which is outside what any socket-level check can do.
+#[cfg(unix)]
+struct PeerCheckedUnixListener {
+    inner: tokio::net::UnixListener,
+    expected_uid: u32,
+}
+
+#[cfg(unix)]
+impl axum::serve::Listener for PeerCheckedUnixListener {
+    type Io = tokio::net::UnixStream;
+    type Addr = tokio::net::unix::SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            let (stream, addr) = match self.inner.accept().await {
+                Ok(pair) => pair,
+                Err(e) => {
+                    eprintln!("unix accept error: {e}");
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    continue;
+                }
+            };
+            match stream.peer_cred() {
+                Ok(cred) if peer_uid_ok(cred.uid(), self.expected_uid) => return (stream, addr),
+                Ok(cred) => eprintln!(
+                    "rejected a unix peer with uid {}, expected {}",
+                    cred.uid(),
+                    self.expected_uid
+                ),
+                Err(e) => eprintln!("could not read the unix peer credential: {e}"),
+            }
+            // Drop `stream` here and loop for the next connection. Closing it
+            // with no response is the correct refusal: the peer gets a
+            // connection reset, not a hint about why.
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.inner.local_addr()
+    }
+}
+
+/// The peer credential decision, pulled out as a plain comparison so it is
+/// testable with ordinary numbers and needs no real socket.
+#[cfg(unix)]
+fn peer_uid_ok(peer_uid: u32, expected_uid: u32) -> bool {
+    peer_uid == expected_uid
+}
+
 // --- auth ---------------------------------------------------------------------
 
-/// The bearer gate on every `/admin/*` route. It reads the `Authorization`
-/// header, expects `Bearer <token>`, and compares the token in constant time. A
-/// missing or wrong token returns 401 with a small JSON error and no detail.
-async fn require_bearer(State(state): State<AppState>, req: Request, next: Next) -> Response {
+/// True when the request carries `Bearer <expected>`. The compare runs in
+/// constant time: `ct_eq` on slices returns false at once for a length
+/// mismatch and takes the same time for any equal-length guess, so neither
+/// token leaks through a timing side channel.
+fn bearer_matches(req: &Request, expected: &str) -> bool {
     let presented = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
 
-    let ok = match presented {
-        // `ct_eq` on slices returns false at once for a length mismatch and runs
-        // in constant time for an equal length, so it does not leak the token by
-        // timing.
-        Some(token) => token.as_bytes().ct_eq(state.token.as_bytes()).into(),
+    match presented {
+        Some(token) => token.as_bytes().ct_eq(expected.as_bytes()).into(),
         None => false,
-    };
+    }
+}
 
-    if ok {
+/// The bearer gate on every `/admin/*` route. A missing or wrong token
+/// returns 401 with a small JSON error and no detail. This checks `token`
+/// only — the relay token never opens this door.
+async fn require_bearer(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    if bearer_matches(&req, &state.token) {
+        next.run(req).await
+    } else {
+        unauthorized()
+    }
+}
+
+/// The bearer gate on `/internal/*`. This checks `relay_token` only — the
+/// admin token never opens this door, which is the whole point of splitting
+/// the credential (design doc section 7: least privilege).
+async fn require_relay_bearer(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    if bearer_matches(&req, &state.relay_token) {
         next.run(req).await
     } else {
         unauthorized()
@@ -155,6 +352,12 @@ fn unauthorized() -> Response {
         Json(json!({ "error": "unauthorized" })),
     )
         .into_response()
+}
+
+/// The 403 response for a disabled (revoked) key. It carries a small JSON
+/// error and leaks no detail beyond the status the caller already knows.
+fn forbidden() -> Response {
+    (StatusCode::FORBIDDEN, Json(json!({ "error": "disabled" }))).into_response()
 }
 
 // --- handlers -----------------------------------------------------------------
@@ -224,6 +427,33 @@ async fn revoke_key(
         km.revoke(&id)?;
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The relay's one operation: resolve a raw key and read its record. This is
+/// the least-privilege route (design doc section 7) — it can only look a key
+/// up, never create, rotate, revoke, price, or read audit.
+///
+/// It never returns the key hash or the raw key, because [`KeyRecord`] never
+/// carries them past the manager in the first place (see `keys.rs`); there is
+/// no field to accidentally serialize.
+async fn authenticate_key(
+    State(state): State<AppState>,
+    Json(req): Json<AuthenticateRequest>,
+) -> std::result::Result<Response, ApiError> {
+    let outcome = {
+        let km = state.keys.lock().expect("keys lock");
+        km.authenticate_status(&req.key)?
+    };
+    let record = match outcome {
+        AuthOutcome::Active(record) => record,
+        AuthOutcome::Disabled => return Ok(forbidden()),
+        AuthOutcome::Unknown => return Ok(unauthorized()),
+    };
+    let constraints = {
+        let km = state.keys.lock().expect("keys lock");
+        km.constraints(&record.id)?
+    };
+    Ok((StatusCode::OK, Json(AuthenticateView::build(record, constraints))).into_response())
 }
 
 /// Per-key usage needs the metering hot path, which is not built. Return 501 and
@@ -439,6 +669,77 @@ impl From<&KeyRecord> for KeyView {
     }
 }
 
+/// The body of `POST /internal/authenticate`.
+#[derive(Debug, Deserialize)]
+struct AuthenticateRequest {
+    key: String,
+}
+
+/// A key's constraints, grouped by kind and named to match
+/// `CreateKeyRequest`'s fields. The relay then reads the same shape it would
+/// have sent to create the key, instead of an untyped (kind, value) list.
+#[derive(Debug, Default, Serialize)]
+struct ConstraintsView {
+    origins: Vec<String>,
+    method_allow: Vec<String>,
+    method_block: Vec<String>,
+    networks: Vec<String>,
+    ip_allow: Vec<String>,
+    ip_deny: Vec<String>,
+}
+
+impl ConstraintsView {
+    /// Group the store's flat (kind, value) rows into their named buckets. An
+    /// unrecognised kind is dropped rather than failing the whole read — the
+    /// schema's vocabulary is closed, so this should never hit in practice.
+    fn from_pairs(pairs: Vec<(String, String)>) -> ConstraintsView {
+        let mut view = ConstraintsView::default();
+        for (kind, value) in pairs {
+            match kind.as_str() {
+                "origin" => view.origins.push(value),
+                "method_allow" => view.method_allow.push(value),
+                "method_block" => view.method_block.push(value),
+                "network" => view.networks.push(value),
+                "ip_allow" => view.ip_allow.push(value),
+                "ip_deny" => view.ip_deny.push(value),
+                _ => {}
+            }
+        }
+        view
+    }
+}
+
+/// The reply to `POST /internal/authenticate`. It holds no secret: no key
+/// hash, no raw key. `enabled` is always `true` here — `authenticate_key`
+/// only ever builds this view for [`AuthOutcome::Active`] — but the field
+/// stays explicit because the relay's contract names it.
+#[derive(Debug, Serialize)]
+struct AuthenticateView {
+    id: String,
+    label: String,
+    enabled: bool,
+    account_address: Option<String>,
+    credit_exempt: bool,
+    allow_trace: bool,
+    rate: RateDto,
+    constraints: ConstraintsView,
+}
+
+impl AuthenticateView {
+    fn build(record: KeyRecord, constraint_pairs: Vec<(String, String)>) -> AuthenticateView {
+        AuthenticateView {
+            id: record.id,
+            label: record.label,
+            enabled: record.disabled_at.is_none(),
+            account_address: record.account_address,
+            credit_exempt: record.credit_exempt,
+            allow_trace: record.allow_trace,
+            rate: RateDto::from(&record.rate),
+            constraints: ConstraintsView::from_pairs(constraint_pairs),
+        }
+    }
+}
+
 /// The query for a per-chain price. `?chain=N`, default 0 (any chain).
 #[derive(Debug, Deserialize)]
 struct ChainQuery {
@@ -517,6 +818,7 @@ impl From<Error> for ApiError {
             // A missing pepper is a startup fault surfaced at request time.
             Error::MissingPepper
             | Error::MissingAdminToken
+            | Error::MissingRelayToken
             | Error::AddrNotLoopback(_)
             | Error::Sqlite(_)
             | Error::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -543,6 +845,7 @@ mod tests {
     use crate::store::{unix_now, Store};
 
     const TOKEN: &str = "test-admin-token";
+    const RELAY_TOKEN: &str = "test-relay-token";
     const PEPPER: &[u8] = b"test-pepper";
 
     /// A temp-file database path, so both the key manager and the price book can
@@ -570,8 +873,18 @@ mod tests {
         let path = temp_db_path(tag);
         let km = KeyManager::new(Store::open(&path).unwrap(), PEPPER).unwrap();
         let pb = PriceBook::new(Store::open(&path).unwrap()).unwrap();
-        let state = AppState::new(km, pb, TOKEN.to_string()).unwrap();
+        let state = AppState::new(km, pb, TOKEN.to_string(), RELAY_TOKEN.to_string()).unwrap();
         (build_router(state), path)
+    }
+
+    /// Build the `AppState` directly (not the router), for the `serve_unix`
+    /// tests, which need to drive the transport rather than call `.oneshot()`.
+    fn test_state(tag: &str) -> (AppState, std::path::PathBuf) {
+        let path = temp_db_path(tag);
+        let km = KeyManager::new(Store::open(&path).unwrap(), PEPPER).unwrap();
+        let pb = PriceBook::new(Store::open(&path).unwrap()).unwrap();
+        let state = AppState::new(km, pb, TOKEN.to_string(), RELAY_TOKEN.to_string()).unwrap();
+        (state, path)
     }
 
     /// Send a request and return the status and the parsed JSON body (or null for
@@ -1003,5 +1316,319 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
         assert_eq!(body["note"], "metering not yet wired");
         remove_db(&path);
+    }
+
+    // --- least-privilege split: /internal/authenticate ------------------------
+
+    #[tokio::test]
+    async fn internal_authenticate_returns_the_record_for_a_valid_key() {
+        let (app, path) = test_app("authok");
+        let (id, raw) = create_key(&app, "relay-target").await;
+
+        let (status, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/authenticate",
+                RELAY_TOKEN,
+                json!({ "key": raw }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["id"], id);
+        assert_eq!(body["label"], "relay-target");
+        assert_eq!(body["enabled"], true);
+        assert_eq!(body["credit_exempt"], false);
+        assert_eq!(body["allow_trace"], false);
+        assert_eq!(body["rate"], "unlimited");
+        assert!(body["account_address"].is_null());
+        assert!(body["constraints"].is_object(), "constraints must be present");
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn internal_authenticate_never_leaks_the_hash_or_the_raw_key() {
+        let (app, path) = test_app("authnoleak");
+        let (_, raw) = create_key(&app, "no-leak").await;
+
+        let (status, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/authenticate",
+                RELAY_TOKEN,
+                json!({ "key": raw }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let text = body.to_string();
+        assert!(
+            !text.contains(&raw),
+            "the response must not echo the raw key back"
+        );
+        assert!(
+            body.get("key_hash").is_none(),
+            "the response must not carry a key_hash field"
+        );
+        assert!(
+            body.get("key").is_none(),
+            "the response must not carry a raw key field"
+        );
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn internal_authenticate_rejects_an_unknown_key() {
+        let (app, path) = test_app("authunknown");
+        let (status, _) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/authenticate",
+                RELAY_TOKEN,
+                json!({ "key": "jg_not_a_real_key" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn internal_authenticate_rejects_a_disabled_key() {
+        let (app, path) = test_app("authdisabled");
+        let (id, raw) = create_key(&app, "to-disable").await;
+
+        let del = HttpRequest::builder()
+            .method("DELETE")
+            .uri(format!("/admin/keys/{id}"))
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap();
+        send(&app, del).await;
+
+        let (status, _) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/authenticate",
+                RELAY_TOKEN,
+                json!({ "key": raw }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn internal_authenticate_reads_back_the_constraints() {
+        let (app, path) = test_app("authconstraints");
+        let (_, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/admin/keys",
+                TOKEN,
+                json!({
+                    "label": "constrained",
+                    "method_allow": ["eth_call"],
+                    "ip_deny": ["10.0.0.2"],
+                }),
+            ),
+        )
+        .await;
+        let raw = body["key"].as_str().unwrap().to_string();
+
+        let (status, body) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/authenticate",
+                RELAY_TOKEN,
+                json!({ "key": raw }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["constraints"]["method_allow"], json!(["eth_call"]));
+        assert_eq!(body["constraints"]["ip_deny"], json!(["10.0.0.2"]));
+        assert_eq!(body["constraints"]["origins"], json!([]));
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn admin_token_does_not_open_internal_authenticate() {
+        let (app, path) = test_app("crossadmin");
+        let (_, raw) = create_key(&app, "cross-check").await;
+
+        // The admin token is valid — just not for this route.
+        let (status, _) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/authenticate",
+                TOKEN,
+                json!({ "key": raw }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "the admin token must not authorize /internal/*"
+        );
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn relay_token_does_not_open_admin_routes() {
+        let (app, path) = test_app("crossrelay");
+
+        let (status, _) = send(&app, get("/admin/keys", Some(RELAY_TOKEN))).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "the relay token must not authorize /admin/*"
+        );
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn internal_authenticate_needs_a_token_at_all() {
+        let (app, path) = test_app("authnotoken");
+        let (_, raw) = create_key(&app, "needs-token").await;
+
+        let req = HttpRequest::builder()
+            .method("POST")
+            .uri("/internal/authenticate")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&json!({ "key": raw })).unwrap()))
+            .unwrap();
+        let (status, _) = send(&app, req).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        remove_db(&path);
+    }
+
+    // --- the unix transport -----------------------------------------------
+
+    #[test]
+    fn peer_uid_ok_matches_only_the_expected_uid() {
+        assert!(peer_uid_ok(1000, 1000));
+        assert!(!peer_uid_ok(1000, 1001));
+        assert!(!peer_uid_ok(0, 1000));
+    }
+
+    /// A temp directory path for a unix-socket test. Nested one level under a
+    /// throwaway parent, so the test also exercises `serve_unix` creating that
+    /// parent directory at `0700`.
+    ///
+    /// This uses `/tmp` directly, not `std::env::temp_dir()`. A unix socket
+    /// path is capped at roughly 100 bytes by the kernel's `sockaddr_un`
+    /// (the exact cap varies, macOS is 104), and `std::env::temp_dir()` on
+    /// macOS already returns a long per-process path that leaves too little
+    /// room for a name plus `/billing.sock`.
+    fn temp_socket_path(tag: &str) -> std::path::PathBuf {
+        let mut dir = std::path::PathBuf::from("/tmp");
+        dir.push(format!(
+            "jg-{tag}-{}-{}",
+            std::process::id(),
+            unix_now() % 100_000
+        ));
+        dir.push("b.sock");
+        dir
+    }
+
+    /// Retry-connect to a unix socket path, bounded, so a test never hangs if
+    /// `serve_unix` fails to bind. Connecting, not just checking the path
+    /// exists, is the right readiness signal: the stale-socket test leaves a
+    /// plain file at the path before `serve_unix` even starts, and a plain
+    /// file "exists" too — only a real, bound socket accepts a connection.
+    async fn wait_for_socket(path: &std::path::Path) -> tokio::net::UnixStream {
+        for _ in 0..200 {
+            match tokio::net::UnixStream::connect(path).await {
+                Ok(stream) => return stream,
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            }
+        }
+        panic!("could not connect to {}", path.display());
+    }
+
+    /// Send one raw HTTP/1.1 request over a connected unix stream and return
+    /// the response text. No hyper client needed: the request is tiny and
+    /// fixed, so a hand-written request line is clearer than pulling in a
+    /// client stack for one call.
+    async fn raw_http_get(stream: &mut tokio::net::UnixStream, path: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let req = format!(
+            "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(req.as_bytes()).await.unwrap();
+        let mut out = Vec::new();
+        stream.read_to_end(&mut out).await.unwrap();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    #[tokio::test]
+    async fn serve_unix_binds_owner_only_and_serves_a_request() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (state, dbpath) = test_state("unixserve");
+        let sock_path = temp_socket_path("unixserve");
+        let dir = sock_path.parent().unwrap().to_path_buf();
+
+        let sock_path_for_task = sock_path.clone();
+        let handle = tokio::spawn(async move {
+            let _ = serve_unix(&sock_path_for_task, state).await;
+        });
+
+        let mut stream = wait_for_socket(&sock_path).await;
+
+        let dir_mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700, "the socket's parent directory must be 0700");
+        let sock_mode = std::fs::metadata(&sock_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(sock_mode, 0o600, "the socket file must be 0600");
+
+        let response = raw_http_get(&mut stream, "/healthz").await;
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "expected a 200 from /healthz over the unix socket, got: {response}"
+        );
+        assert!(response.contains("\"status\":\"ok\""));
+
+        handle.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+        remove_db(&dbpath);
+    }
+
+    #[tokio::test]
+    async fn serve_unix_removes_a_stale_socket_file_before_binding() {
+        let (state, dbpath) = test_state("unixstale");
+        let sock_path = temp_socket_path("unixstale");
+        let dir = sock_path.parent().unwrap().to_path_buf();
+
+        // Simulate a crashed process: the directory and a plain file already
+        // sit at the socket path. `UnixListener::bind` refuses to bind over an
+        // existing path, so this only works if `serve_unix` unlinks it first.
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&sock_path, b"stale").unwrap();
+
+        let sock_path_for_task = sock_path.clone();
+        let handle = tokio::spawn(async move {
+            let _ = serve_unix(&sock_path_for_task, state).await;
+        });
+
+        let mut stream = wait_for_socket(&sock_path).await;
+        let response = raw_http_get(&mut stream, "/healthz").await;
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "the service must bind and serve even with a stale file at the path, got: {response}"
+        );
+
+        handle.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+        remove_db(&dbpath);
     }
 }

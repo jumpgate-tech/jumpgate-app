@@ -17,6 +17,7 @@ use billing::store::Store;
 const DEFAULT_DB: &str = "jumpgate-billing.db";
 const PEPPER_ENV: &str = "JUMPGATE_KEY_PEPPER";
 const ADMIN_TOKEN_ENV: &str = "JUMPGATE_ADMIN_TOKEN";
+const RELAY_TOKEN_ENV: &str = "JUMPGATE_RELAY_TOKEN";
 const DEFAULT_ADMIN_ADDR: &str = "127.0.0.1:8787";
 
 fn main() {
@@ -260,12 +261,63 @@ fn admin_token() -> billing::Result<String> {
     }
 }
 
-/// Serve the admin API on a loopback address. This is the one async command, so
-/// `main` stays synchronous: it builds a tokio runtime and blocks on the server.
-/// It reads the pepper (for the key manager) and the admin token (fail closed).
+/// Read the relay bearer token from the environment. Fail hard when it is
+/// unset or empty, the same posture as [`admin_token`] and the pepper: a
+/// missing credential must never widen into "no credential needed".
+fn relay_token() -> billing::Result<String> {
+    match std::env::var(RELAY_TOKEN_ENV) {
+        Ok(v) if !v.is_empty() => Ok(v),
+        _ => {
+            eprintln!("error: set {RELAY_TOKEN_ENV} to a non-empty value");
+            exit(1);
+        }
+    }
+}
+
+/// Serve the admin API. This is the one async command, so `main` stays
+/// synchronous: it builds a tokio runtime and blocks on the server. It reads
+/// the pepper (for the key manager) and both bearer tokens (fail closed).
+///
+/// `--addr` (TCP, loopback only) and `--socket` (a unix socket) pick the
+/// transport. They are mutually exclusive — passing both leaves no single
+/// answer for which one the operator meant, so it is a usage error, not a
+/// silent pick of one. `--socket` is the transport the relay uses (design doc
+/// section 7); `--addr` stays for a platform with no reliable `AF_UNIX`.
 fn cmd_serve(args: impl Iterator<Item = String>) -> billing::Result<()> {
     let rest: Vec<String> = args.collect();
     let flags = Flags::parse(&rest);
+
+    if flags.addr.is_some() && flags.socket.is_some() {
+        eprintln!("error: --addr and --socket are mutually exclusive");
+        exit(2);
+    }
+
+    let pepper = pepper()?;
+    let token = admin_token()?;
+    let relay = relay_token()?;
+
+    // The key manager and the price book each need their own connection to the
+    // same file. WAL mode lets the two connections share the database.
+    let km = KeyManager::new(Store::open(&flags.db)?, &pepper)?;
+    let pb = PriceBook::new(Store::open(&flags.db)?)?;
+    let state = AppState::new(km, pb, token, relay)?;
+
+    let runtime = tokio::runtime::Runtime::new()?;
+
+    if let Some(socket_str) = &flags.socket {
+        #[cfg(unix)]
+        {
+            let path = PathBuf::from(socket_str);
+            return runtime.block_on(admin::serve_unix(&path, state));
+        }
+        #[cfg(not(unix))]
+        {
+            eprintln!(
+                "error: --socket needs a unix target; this build has no AF_UNIX, use --addr"
+            );
+            exit(2);
+        }
+    }
 
     let addr_str = flags.addr.as_deref().unwrap_or(DEFAULT_ADMIN_ADDR);
     let addr: SocketAddr = match addr_str.parse() {
@@ -275,17 +327,6 @@ fn cmd_serve(args: impl Iterator<Item = String>) -> billing::Result<()> {
             exit(2);
         }
     };
-
-    let pepper = pepper()?;
-    let token = admin_token()?;
-
-    // The key manager and the price book each need their own connection to the
-    // same file. WAL mode lets the two connections share the database.
-    let km = KeyManager::new(Store::open(&flags.db)?, &pepper)?;
-    let pb = PriceBook::new(Store::open(&flags.db)?)?;
-    let state = AppState::new(km, pb, token)?;
-
-    let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(admin::serve(addr, state))
 }
 
@@ -305,6 +346,7 @@ struct Flags {
     per_day: Option<i64>,
     expires_at: Option<i64>,
     addr: Option<String>,
+    socket: Option<String>,
 }
 
 impl Flags {
@@ -330,6 +372,7 @@ impl Flags {
                 }
                 "--chain" => f.chain = Some(parse_int(&next_value(&mut it, "--chain"))),
                 "--addr" => f.addr = Some(next_value(&mut it, "--addr")),
+                "--socket" => f.socket = Some(next_value(&mut it, "--socket")),
                 other if other.starts_with("--") => {
                     eprintln!("error: unknown flag {other}");
                     exit(2);
@@ -382,7 +425,11 @@ fn usage() {
     eprintln!("  billing price list  [--db path]");
     eprintln!("  billing price get <method> [--chain N] [--db path]");
     eprintln!("  billing price set <method> <credits> [--chain N] [--db path]");
-    eprintln!("  billing serve [--db path] [--addr 127.0.0.1:8787]");
+    eprintln!("  billing serve [--db path] [--addr 127.0.0.1:8787] [--socket path]");
+    eprintln!("                (--addr and --socket are mutually exclusive)");
     eprintln!("  ({PEPPER_ENV} must be set for every keys command and for serve)");
-    eprintln!("  ({ADMIN_TOKEN_ENV} must be set for serve; the admin API binds loopback only)");
+    eprintln!("  ({ADMIN_TOKEN_ENV} must be set for serve; it gates every /admin/* route)");
+    eprintln!(
+        "  ({RELAY_TOKEN_ENV} must be set for serve; it gates /internal/authenticate only)"
+    );
 }
