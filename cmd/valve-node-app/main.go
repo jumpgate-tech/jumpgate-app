@@ -21,6 +21,7 @@ import (
 
 	"github.com/valve-tech/valve-node-app/internal/buildinfo"
 	"github.com/valve-tech/valve-node-app/internal/config"
+	"github.com/valve-tech/valve-node-app/internal/relay"
 	"github.com/valve-tech/valve-node-app/internal/server"
 )
 
@@ -34,6 +35,16 @@ const bindFlagUsage = "address to bind the local server to. " +
 
 func main() {
 	bind := flag.String("bind", "127.0.0.1:8799", bindFlagUsage)
+	// The data plane is off unless an operator asks for it. It is a separate
+	// listener from --bind on purpose: --bind carries the session token that
+	// controls the operator's servers, and this one carries customer traffic
+	// authenticated by key. Bind it to the interface Caddy reaches, never to
+	// 0.0.0.0 — Caddy is the public door and the TLS terminator, and a
+	// plaintext keyed URL would expose the key on the wire.
+	relayBind := flag.String("relay-bind", "", "address to serve the metered RPC data plane on (empty disables it)")
+	billingSocket := flag.String("billing-socket", "", "unix socket of the billing key store")
+	erpcURL := flag.String("erpc-url", "http://127.0.0.1:4000", "base URL of the keyless eRPC the relay forwards to")
+	projectID := flag.String("erpc-project", "", "eRPC project segment (empty means main)")
 	noOpen := flag.Bool("no-open", false, "do not open a browser window automatically")
 	tray := flag.Bool("tray", false, "open the UI in a native desktop window (tiny-app mode) instead of a browser tab; requires a build made with -tags tray")
 	showVersion := flag.Bool("version", false, "print the version and exit")
@@ -62,11 +73,29 @@ func main() {
 		log.Fatalf("valve-node-app: embedded UI: %v", err)
 	}
 
+	// The relay's credential never arrives as a flag. A flag lands in the
+	// process listing, where any local user reads it.
+	relayHandler, err := relay.Build(relay.BuildOptions{
+		RelayBind:     *relayBind,
+		BillingSocket: *billingSocket,
+		RelayToken:    os.Getenv("JUMPGATE_RELAY_TOKEN"),
+		ERPCURL:       *erpcURL,
+		ProjectID:     *projectID,
+	})
+	if err != nil {
+		// A half-configured relay is fatal rather than quietly off. Serving
+		// unmetered traffic is worse than serving none: the operator sells
+		// access and would be giving it away with nothing to report it.
+		log.Fatalf("valve-node-app: relay: %v", err)
+	}
+
 	token := server.NewSessionToken()
 	s := server.New(server.Config{
-		Bind:  *bind,
-		Token: token,
-		UI:    uiFS,
+		Bind:      *bind,
+		Token:     token,
+		UI:        uiFS,
+		Relay:     relayHandler,
+		RelayBind: *relayBind,
 	})
 
 	url := fmt.Sprintf("http://%s/?token=%s", *bind, token)
@@ -94,6 +123,19 @@ func main() {
 			}
 		}
 	}()
+
+	// The data plane runs beside the control plane on its own listener. A
+	// failure here is the relay's failure and must not be mistaken for the UI
+	// failing to come up, so it is logged rather than folded into the main
+	// server's error.
+	if relayHandler != nil {
+		go func() {
+			if err := s.ListenAndServeRelay(ctx); err != nil {
+				log.Printf("valve-node-app: relay data plane: %v", err)
+			}
+		}()
+		fmt.Printf("metered RPC data plane on %s\n", *relayBind)
+	}
 
 	// Launched by double-clicking the macOS .app bundle, the OS passes no
 	// flags — so a bundled build enters tray mode on its own. An explicit

@@ -10,6 +10,8 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+
+	"github.com/valve-tech/valve-node-app/internal/wsrpc"
 )
 
 // maxBodyBytes caps a request body the relay must read to apply method policy.
@@ -31,6 +33,11 @@ type Config struct {
 	// has no consensus layer, which the relay answers as a definite 501 rather
 	// than a dead 502.
 	Beacon func(chainID int) (*url.URL, bool)
+	// Caller performs one JSON-RPC call over HTTP on behalf of a terminated
+	// WebSocket session. Nil disables WebSocket support.
+	Caller RPCCaller
+	// Streams opens a synthesised subscription. Nil disables WebSocket support.
+	Streams Streams
 }
 
 // Handler serves the public data plane.
@@ -111,6 +118,16 @@ func (h *Handler) serveRPC(w http.ResponseWriter, r *http.Request, route Route, 
 		return
 	}
 
+	// A WebSocket is TERMINATED here, never proxied. Proxying the upgrade would
+	// put subscription management back on eRPC and bring the gzip-on-upgrade
+	// hazard back with it, because there would be an upgrade on that hop again.
+	// Terminating also makes upstream WebSocket support irrelevant: everything
+	// past this point is plain HTTP.
+	if isWebSocketUpgrade(r) {
+		h.serveWebSocket(w, r, route, rec)
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "could not read the request body")
@@ -186,6 +203,48 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, target *url.UR
 		r.ContentLength = int64(len(body))
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// isWebSocketUpgrade reports whether the caller asked to upgrade. Connection is
+// a comma-separated list of tokens, so it is scanned rather than compared.
+func isWebSocketUpgrade(r *http.Request) bool {
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return false
+	}
+	for _, token := range strings.Split(r.Header.Get("Connection"), ",") {
+		if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+			return true
+		}
+	}
+	return false
+}
+
+// serveWebSocket takes over the connection and runs one session on it.
+//
+// Authentication and policy already ran, so no unauthenticated caller ever gets
+// a connection. Everything after the handshake is checked again per frame,
+// because the handshake itself carries no method.
+func (h *Handler) serveWebSocket(w http.ResponseWriter, r *http.Request, route Route, rec KeyRecord) {
+	if h.cfg.Caller == nil || h.cfg.Streams == nil {
+		writeError(w, http.StatusNotImplemented, "this gateway serves no WebSocket")
+		return
+	}
+
+	conn, err := wsrpc.Accept(w, r, nil)
+	if err != nil {
+		// Accept has already answered with a status when it refused, and it
+		// does not hijack on that path.
+		return
+	}
+	defer conn.Close()
+
+	NewWSSession(WSConfig{
+		Conn:    conn,
+		Record:  rec,
+		ChainID: route.ChainID,
+		Caller:  h.cfg.Caller,
+		Streams: h.cfg.Streams,
+	}).Run(r.Context())
 }
 
 // serveHealth answers the rollup. The matrix it reports over is filled in by

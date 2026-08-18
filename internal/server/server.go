@@ -37,6 +37,21 @@ type Config struct {
 	Token string
 	// UI is the filesystem the static web UI is served from.
 	UI fs.FS
+
+	// Relay is the public data-plane handler — customer RPC traffic, keyed per
+	// request. It is nil when the operator sells no keys.
+	//
+	// It is held here as a plain handler and served on its OWN listener by
+	// ListenAndServeRelay. It never joins the mux Handler() builds, because
+	// that mux is wrapped in authMiddleware and its token authorizes full
+	// control of the operator's servers. A customer must never be one route
+	// away from that.
+	Relay http.Handler
+	// RelayBind is the host:port the data plane listens on. Bind it to the
+	// interface Caddy reaches, never to 0.0.0.0: Caddy is the public door and
+	// the TLS terminator, and a plaintext keyed URL would expose the key on the
+	// wire.
+	RelayBind string
 	// NewExecutor builds the executor.Executor for a config.Target — local
 	// or SSH depending on Target.Mode. Injectable for tests (a fake); nil
 	// selects defaultNewExecutor, which dials the real thing.
