@@ -1174,6 +1174,42 @@ export function provisionGateway(gid: string): Promise<{ status: string; targetI
   );
 }
 
+// ---------------------------------------------------------------------
+// customer API keys (metered RPC)
+// ---------------------------------------------------------------------
+
+// KeyView is one key as the operator sees it. It carries NO secret: the store
+// keeps only a hash, and the raw key exists solely in the reply to createKey.
+export interface KeyView {
+  id: string;
+  label: string;
+  disabled: boolean;
+  allow_trace: boolean;
+  credit_exempt: boolean;
+  created_at: number;
+}
+
+export function listKeys(gid: string): Promise<KeyView[]> {
+  return request<KeyView[]>(`/api/gateways/${encodeURIComponent(gid)}/keys`);
+}
+
+// createKey returns the raw key ONCE. Nothing can recover it afterwards, so the
+// caller must show it to the operator immediately.
+export function createKey(gid: string, label: string): Promise<{ id: string; key: string }> {
+  return request<{ id: string; key: string }>(`/api/gateways/${encodeURIComponent(gid)}/keys`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ label }),
+  });
+}
+
+export function revokeKey(gid: string, keyId: string): Promise<{ status: string }> {
+  return request<{ status: string }>(
+    `/api/gateways/${encodeURIComponent(gid)}/keys/${encodeURIComponent(keyId)}/revoke`,
+    { method: "POST" },
+  );
+}
+
 // wipeGateway resolves with the report even on an error status, for the same
 // reason wipeContainer does.
 export async function wipeGateway(gid: string): Promise<WipeResult> {

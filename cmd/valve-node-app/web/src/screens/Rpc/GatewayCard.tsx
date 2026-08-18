@@ -34,6 +34,7 @@ import { ConfirmDialog } from "../Panel/Dialogs";
 import { GatewayIdentity } from "./GatewayIdentity";
 import { AttentionStrip } from "./AttentionStrip";
 import { NetworksPanel } from "./Chains";
+import { KeysSection } from "./KeysSection";
 import { ManageSection } from "./ManageSection";
 import type { SettingsValues } from "./SettingsBlock";
 import {
@@ -113,6 +114,7 @@ export function GatewayCard({
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [keysOpen, setKeysOpen] = useState(false);
   const [openDetails, setOpenDetails] = useState<Set<number>>(new Set());
   const [pendingChains, setPendingChains] = useState<number[]>([]);
   const [orphanErr, setOrphanErr] = useState<Record<string, string | null>>({});
@@ -488,6 +490,11 @@ export function GatewayCard({
         onAddChain={() => setDialog({ kind: "add-chain" })}
         onAddDevnet={() => void addDevnetChain(1337)}
         onReprobe={() => void onReprobe()}
+      />
+      <KeysSection
+        gid={gid}
+        open={keysOpen}
+        onToggle={() => setKeysOpen((o) => !o)}
       />
       <ManageSection
         gw={gw}

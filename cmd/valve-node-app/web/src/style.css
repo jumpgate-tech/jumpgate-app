@@ -2563,3 +2563,26 @@ textarea:focus {
 .endpoint-fix input {
   margin-top: 0.25rem;
 }
+
+/* The freshly minted API key. It is shown once — the store keeps only a hash —
+   so it gets room, wraps rather than truncates (a clipped key is an unusable
+   key), and sits in a warning banner so the "copy it now" reads as urgent. */
+.keys-minted {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.keys-minted .cap {
+  flex-basis: 100%;
+}
+
+.keys-secret {
+  flex: 1 1 16rem;
+  min-width: 0;
+  word-break: break-all;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg-inset, rgba(0, 0, 0, 0.18));
+  box-shadow: 0 0 0 1px var(--border);
+}
