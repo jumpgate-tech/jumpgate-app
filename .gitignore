@@ -32,3 +32,4 @@ coverage/
 # wrangler cache (created when wrangler runs from repo root)
 .wrangler/
 services/billing/target-linux/
+progress.txt

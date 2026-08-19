@@ -27,7 +27,7 @@ are listed here rather than buried.
 | 3 | No health surface | `/health` is a third category, and a rollup over the matrix |
 | 4 | WebSocket passes through to eRPC | The relay terminates ws and speaks HTTP to upstreams |
 | 5 | gzip is a hazard to avoid | gzip is a test axis on every acceptance case |
-| 6 | End-to-end is untestable here | Acceptance runs on a real box (`the test VPS`) |
+| 6 | End-to-end is untestable here | Acceptance runs on a real box |
 
 The key format does NOT change. It stays `jg_<base58 of 16 CSPRNG bytes>`, opaque
 and unversioned. See "Key format" for why.
@@ -387,8 +387,8 @@ exact shape of the original eRPC bug, and the relay adds a second proxy that can
 re-add the header.
 
 **End-to-end, on a real box.** The first draft called this untestable. It is not —
-`the test VPS` (512MB, 1 vCPU) and `the test VPS` both exist. Reach them on
-port 2222; outbound port 22 is blocked from this network.
+a small test VPS is available. Its address, its ssh alias and its port live
+in the operator's own environment notes, not in this repository.
 
 Acceptance on a real box:
 

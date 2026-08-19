@@ -8,7 +8,7 @@
 //
 //	JUMPGATE_LIVEBOX_HOST=203.0.113.7 \
 //	JUMPGATE_LIVEBOX_USER=root \
-//	JUMPGATE_LIVEBOX_KEY=~/.ssh/redacted-key-name \
+//	JUMPGATE_LIVEBOX_KEY=<path to the box's ssh key> \
 //	JUMPGATE_LIVEBOX_PORT=2222 \
 //	go test -tags livebox -run TestLiveBox -v ./internal/vpn/
 //

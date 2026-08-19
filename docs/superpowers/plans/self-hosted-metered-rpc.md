@@ -179,7 +179,7 @@ Closing item 1 turned up two things that had never worked and could not have:
 
 ### What the acceptance actually proved
 
-Run against `the test VPS` (464 MB, 1 vCPU) and against real local components:
+Run against a 512 MB / 1 vCPU test VPS and against real local components:
 
 - Real Ethereum mainnet and real PulseChain answered through the relay on the
   box, with the key stripped from the forwarded request.
