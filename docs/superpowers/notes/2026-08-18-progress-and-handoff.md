@@ -105,8 +105,15 @@ git diff --exit-code cmd/valve-node-app/web/dist     # dist MUST be committed
   `the depth` occurs 4 times in `internal/relay/route.go`, but only ever about
   path-segment depth, which looks unrelated. `the curve` occurs nowhere.
   Crucially, none of them appear inside a user-visible string literal — every
-  occurrence is a comment, a test name, or prose. So the surface meant is very
-  likely the landing repo's copy. Nothing was changed.
+  occurrence is a comment, a test name, or prose.
+
+  The landing repo (`jumpgate-tech/landing`) was then checked too: none of the
+  three appear there either, in any casing, and its section headings are already
+  bare single words — `Route`, `Tunnel`, `Yours`, `Connect`, `Host` — with no
+  "the" left to drop. So the instruction cannot be applied literally to either
+  repo as it stands. Either it was already carried out on the landing copy, or
+  it refers to a surface outside both repos. Nothing was changed; the owner
+  should say which surface was meant.
 
 - Should `billing init` be changed to accept `--db`, matching `serve`? Small fix
   with a real chance of biting somebody again.
