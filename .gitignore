@@ -33,3 +33,15 @@ coverage/
 .wrangler/
 services/billing/target-linux/
 progress.txt
+
+# Databases and stray store files. A billing store was committed once: `billing
+# init --db foo` treats "--db" as the POSITIONAL path, so it created a database
+# literally named "--db" at the repo root, and `git add -A` then tracked it three
+# times. The file held only the seeded price rows and no key material, but a
+# store belongs nowhere near the tree.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+/--db
