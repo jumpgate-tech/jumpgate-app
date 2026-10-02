@@ -171,8 +171,13 @@ func (c *BillingClient) Reserve(ctx context.Context, account string, credits int
 //
 // A rejection is surfaced rather than swallowed: a silently dropped settle
 // strands a customer's own credits inside a reservation.
-func (c *BillingClient) Settle(ctx context.Context, account string, spent, reserved int64) error {
-	body, err := json.Marshal(map[string]any{"account": account, "spent": spent, "reserved": reserved})
+func (c *BillingClient) Settle(ctx context.Context, account string, spent, reserved int64, settleID string) error {
+	body, err := json.Marshal(map[string]any{
+		"account":   account,
+		"spent":     spent,
+		"reserved":  reserved,
+		"settle_id": settleID,
+	})
 	if err != nil {
 		return fmt.Errorf("relay: encode settle: %w", err)
 	}

@@ -68,3 +68,18 @@ CREATE TABLE IF NOT EXISTS audit_log (
   target  TEXT,
   detail  TEXT
 );
+
+-- Applied settles, keyed by the relay's settle id. A relay whose reply was lost
+-- retries with the same id, and the ledger answers with the original result
+-- instead of refunding the reservation twice. Rows older than a week are pruned:
+-- no relay retries a settle for that long.
+CREATE TABLE IF NOT EXISTS settle_log (
+  settle_id         TEXT    PRIMARY KEY,
+  address           TEXT    NOT NULL,
+  spent             INTEGER NOT NULL,
+  reserved          INTEGER NOT NULL,
+  credits_remaining INTEGER NOT NULL,
+  credits_reserved  INTEGER NOT NULL,
+  applied_at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_settle_log_applied ON settle_log(applied_at);

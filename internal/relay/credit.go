@@ -2,6 +2,8 @@ package relay
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -30,8 +32,9 @@ type CreditStore interface {
 	// answer meaning "out of credits" — neither is an error.
 	Reserve(ctx context.Context, account string, credits int64) (int64, error)
 	// Settle reports how much of a reservation was actually consumed and
-	// returns the remainder to the balance.
-	Settle(ctx context.Context, account string, spent, reserved int64) error
+	// returns the remainder to the balance. settleID makes it safe to retry:
+	// the store applies one id at most once.
+	Settle(ctx context.Context, account string, spent, reserved int64, settleID string) error
 }
 
 // CreditOptions configures a CreditLease.
@@ -56,6 +59,15 @@ type creditPool struct {
 	reserved int64
 	// spent is what has been consumed since the last settle.
 	spent int64
+	// pending is a settle the store has not confirmed. It is retried exactly
+	// as it was first sent, under the same id, until the store accepts it.
+	pending *pendingSettle
+}
+
+// pendingSettle is one settle report, frozen when it was first attempted.
+type pendingSettle struct {
+	id              string
+	spent, reserved int64
 }
 
 // CreditLease spends leased credits locally and settles the remainder back.
@@ -126,6 +138,12 @@ func (l *CreditLease) Spend(ctx context.Context, account string, credits int64) 
 	if err != nil {
 		return fmt.Errorf("relay: reserve credits: %w", err)
 	}
+	// A grant outside [0, ask] is a ledger fault, not a balance. Taking a
+	// negative one would drive the pool negative; taking an oversized one would
+	// spend credits the ledger never reserved.
+	if granted < 0 || granted > ask {
+		return fmt.Errorf("relay: reserve credits: ledger granted %d of %d asked", granted, ask)
+	}
 	p.available += granted
 	p.reserved += granted
 
@@ -158,26 +176,33 @@ func (l *CreditLease) SettleAll(ctx context.Context) error {
 	return firstErr
 }
 
-// settle flushes one account. The pool is cleared only after the store accepts
-// the report, so a failed settle keeps the credits leased rather than losing
-// track of them.
+// settle flushes one account.
+//
+// A settle is frozen into a pending snapshot before it is sent, and the pool
+// starts afresh. If the store's reply is lost, the next attempt re-sends that
+// same snapshot under the same id, so a settle the store already applied is
+// recognised rather than applied twice. Only once it is confirmed is whatever
+// accumulated since then snapshotted and sent.
 func (l *CreditLease) settle(ctx context.Context, account string) error {
 	p := l.poolFor(account)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.reserved == 0 {
-		return nil
+	for {
+		if p.pending == nil {
+			if p.reserved == 0 {
+				return nil
+			}
+			p.pending = &pendingSettle{id: newSettleID(), spent: p.spent, reserved: p.reserved}
+			// The unspent remainder goes back with this settle, so it is no
+			// longer the relay's to spend.
+			p.available, p.reserved, p.spent = 0, 0, 0
+		}
+		if err := l.store.Settle(ctx, account, p.pending.spent, p.pending.reserved, p.pending.id); err != nil {
+			return fmt.Errorf("relay: settle credits: %w", err)
+		}
+		p.pending = nil
 	}
-
-	spent, reserved := p.spent, p.reserved
-	if err := l.store.Settle(ctx, account, spent, reserved); err != nil {
-		return fmt.Errorf("relay: settle credits: %w", err)
-	}
-	p.available = 0
-	p.reserved = 0
-	p.spent = 0
-	return nil
 }
 
 // defaultSettleInterval is how often leased credits are reported back. It is
@@ -212,4 +237,10 @@ func (l *CreditLease) Run(ctx context.Context, interval time.Duration) {
 			_ = l.SettleAll(ctx)
 		}
 	}
+}
+
+func newSettleID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

@@ -27,6 +27,13 @@ type ledgerStore struct {
 	reserves  atomic.Int64
 	settles   atomic.Int64
 	failWith  error
+	// applied dedupes by settle id, as the ledger's settle_log does.
+	applied map[string][2]int64
+	// loseReplies makes the next N settles apply and then report failure, the
+	// way a reply lost to a timeout looks from the relay.
+	loseReplies int
+	// grantOverride replaces what Reserve hands back, to model a bad ledger.
+	grantOverride *int64
 }
 
 func newLedger(account string, credits int64) *ledgerStore {
@@ -55,15 +62,35 @@ func (s *ledgerStore) Reserve(_ context.Context, account string, credits int64) 
 	}
 	s.remaining[account] = have - granted
 	s.reserved[account] += granted
+	if s.grantOverride != nil {
+		return *s.grantOverride, nil
+	}
 	return granted, nil
 }
 
-func (s *ledgerStore) Settle(_ context.Context, account string, spent, reserved int64) error {
+func (s *ledgerStore) Settle(_ context.Context, account string, spent, reserved int64, settleID string) error {
 	s.settles.Add(1)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.applied == nil {
+		s.applied = map[string][2]int64{}
+	}
+	if prev, ok := s.applied[settleID]; ok {
+		if prev != [2]int64{spent, reserved} {
+			return errors.New("settle id reused for different numbers")
+		}
+		return nil
+	}
+	if reserved > s.reserved[account] {
+		return errors.New("settle exceeds the reservation")
+	}
+	s.applied[settleID] = [2]int64{spent, reserved}
 	s.reserved[account] -= reserved
 	s.remaining[account] += reserved - spent
+	if s.loseReplies > 0 {
+		s.loseReplies--
+		return errors.New("reply lost")
+	}
 	return nil
 }
 
@@ -317,5 +344,56 @@ func TestLeaseRunSettlesOnShutdown(t *testing.T) {
 
 	if got := store.total(acct); got != 995 {
 		t.Errorf("ledger total = %d, want 995 — shutdown did not settle", got)
+	}
+}
+
+// A settle whose reply was lost is retried with the same id AND the same numbers,
+// even though the customer kept spending in between. Re-sending fresh numbers
+// under the old id would either be refused or, without the id, refund twice.
+func TestLeaseRetriesALostSettleWithTheSameSnapshot(t *testing.T) {
+	store := newLedger(acct, 100)
+	lease := newLease(store, 10)
+	ctx := context.Background()
+
+	if err := lease.Spend(ctx, acct, 4); err != nil {
+		t.Fatal(err)
+	}
+	store.loseReplies = 1
+	if err := lease.SettleAll(ctx); err == nil {
+		t.Fatal("a lost reply must surface as an error")
+	}
+
+	// The customer keeps going after the failed settle.
+	if err := lease.Spend(ctx, acct, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.SettleAll(ctx); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	if got, want := store.total(acct), int64(100-4-3); got != want {
+		t.Fatalf("ledger total = %d, want %d: a retried settle must apply exactly once", got, want)
+	}
+	if r := store.reserved[acct]; r != 0 {
+		t.Errorf("ledger still holds %d reserved after every settle landed", r)
+	}
+}
+
+// The relay trusts the store's grant to be between zero and what it asked for.
+// A negative grant would drive the pool negative; an oversized one would let the
+// relay spend credits the ledger never reserved.
+func TestLeaseRejectsAGrantOutsideTheAsk(t *testing.T) {
+	for _, bad := range []int64{-5, 11} {
+		store := newLedger(acct, 100)
+		store.grantOverride = &bad
+		lease := newLease(store, 10)
+
+		if err := lease.Spend(context.Background(), acct, 1); err == nil || errors.Is(err, ErrInsufficientCredits) {
+			t.Errorf("grant %d: err = %v, want a ledger error (not out-of-credits)", bad, err)
+		}
+		p := lease.poolFor(acct)
+		if p.available < 0 || p.reserved < 0 {
+			t.Errorf("grant %d left the pool negative: available=%d reserved=%d", bad, p.available, p.reserved)
+		}
 	}
 }
