@@ -193,15 +193,14 @@ func Classify(unit, line string, now time.Time) (Hit, bool) {
 }
 
 // classify matches line against the signature table (first match wins); if
-// none match, an error-ish line (matching an (?i)erro|warn|crit|fatal level
-// word — "erro" rather than "error" so lighthouse-pulse's abbreviated ERRO
-// tag is caught too) still produces an unclassified Hit (Signature ""),
-// severity taken from the level word. A benign line with neither yields
+// none match, an error-ish line (one carrying a warn, error or critical
+// level token or level= field; see levelSeverity) still produces an
+// unclassified Hit (Signature ""), severity taken from that level. A benign line with neither yields
 // ok=false — no Hit at all.
 func classify(unit, line string, now time.Time) (Hit, bool) {
 	for _, sig := range signatures {
 		if sig.pattern.MatchString(line) {
-			if sig.requireErrLevel && !errLevelPattern.MatchString(line) {
+			if sig.requireErrLevel && !hasErrLevel(line) {
 				continue
 			}
 			return Hit{
