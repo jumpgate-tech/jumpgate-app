@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -131,6 +134,8 @@ type PollerStreams struct {
 	// it attaches to it. It is nil outside tests, which use it to park
 	// Subscribe in the window where the loop can be cancelled under it.
 	beforeAttach func()
+	// gaps counts skipped height ranges across every chain.
+	gaps atomic.Uint64
 
 	mu    sync.Mutex
 	loops map[int]*chainLoop
@@ -321,6 +326,10 @@ func (l *chainLoop) hasKind(kind string) bool {
 	return false
 }
 
+// Gaps reports how many times a poll loop skipped heights to resume after
+// falling too far behind. Tests and metrics read it.
+func (s *PollerStreams) Gaps() uint64 { return s.gaps.Load() }
+
 // LoopCount reports how many chains are being polled. Tests and metrics read it.
 func (s *PollerStreams) LoopCount() int {
 	s.mu.Lock()
@@ -440,9 +449,22 @@ func (s *PollerStreams) startLoop(chainID int) *chainLoop {
 			}
 
 			heads, err := poller.Poll(ctx)
-			if err != nil {
-				// A poll failure is transient by assumption. The poller does not
-				// advance its cursor on failure, so the next tick delivers
+			var gap *HeadGapError
+			switch {
+			case err == nil:
+			case errors.As(err, &gap):
+				// The poller jumped past heights it could not catch up on and
+				// is delivering from the head. Nothing reaches a subscriber
+				// for the skipped range, so the operator hears about it here.
+				s.gaps.Add(1)
+				log.Printf("relay: chain %d: %v", chainID, err)
+			case errors.Is(err, ErrReorgTooDeep):
+				// The poller re-anchored on the upstream's branch and is
+				// delivering its head marked reorged.
+				log.Printf("relay: chain %d: %v; re-anchored at the head", chainID, err)
+			default:
+				// Any other failure is transient by assumption. The poller does
+				// not advance its cursor on it, so the next tick delivers
 				// whatever this one missed.
 				continue
 			}

@@ -290,3 +290,61 @@ func TestHeadPollerBoundsTheReorgWalk(t *testing.T) {
 		t.Fatalf("err = %v, want ErrReorgTooDeep", err)
 	}
 }
+
+// An outage longer than one poll may catch up must not stall the poller for
+// good. Before, the cursor never moved past the gap, so every later poll failed
+// the same way and every newHeads and logs subscriber on the chain went silent
+// for the life of the process. The poller now jumps to the head, reports the
+// heights it skipped, and carries on.
+func TestHeadPollerResumesAfterAGapTooLongToCatchUp(t *testing.T) {
+	chain := newFakeChain()
+	chain.extend(3, "a")
+	p := NewHeadPoller(chain)
+	collect(t, p)
+
+	chain.extend(maxCatchUpBlocks+100, "a")
+	head := uint64(3 + maxCatchUpBlocks + 100)
+
+	heads, err := p.Poll(context.Background())
+	var gap *HeadGapError
+	if !errors.As(err, &gap) {
+		t.Fatalf("err = %v, want a HeadGapError reporting the skipped heights", err)
+	}
+	if gap.From != 4 || gap.To != head-1 {
+		t.Errorf("gap = %d..%d, want 4..%d", gap.From, gap.To, head-1)
+	}
+	if len(heads) != 1 || heads[0].Number != head {
+		t.Fatalf("heads = %v, want the current head %d delivered with the gap", heads, head)
+	}
+
+	chain.extend(1, "a")
+	got := collect(t, p)
+	if len(got) != 1 || got[0].Number != head+1 {
+		t.Fatalf("got %v, want head %d — the poller did not resume after the gap", got, head+1)
+	}
+}
+
+// A reorg deeper than the walk limit must not stall the poller either. The
+// branch it remembers is gone for good, so walking back again on every poll
+// fails again on every poll. It re-anchors on the upstream's chain instead.
+func TestHeadPollerResumesAfterAReorgTooDeepToWalk(t *testing.T) {
+	chain := newFakeChain()
+	chain.extend(300, "a")
+	p := NewHeadPoller(chain)
+	collect(t, p)
+
+	chain.reorg(1, 250, "b")
+	heads, err := p.Poll(context.Background())
+	if !errors.Is(err, ErrReorgTooDeep) {
+		t.Fatalf("err = %v, want ErrReorgTooDeep", err)
+	}
+	if len(heads) != 1 || heads[0].Number != 251 || !heads[0].Reorged {
+		t.Fatalf("heads = %v, want the new branch's head 251 marked reorged", heads)
+	}
+
+	chain.extend(1, "b")
+	got := collect(t, p)
+	if len(got) != 1 || got[0].Number != 252 {
+		t.Fatalf("got %v, want head 252 — the poller did not resume after the reorg", got)
+	}
+}

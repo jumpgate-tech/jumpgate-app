@@ -38,6 +38,17 @@ func (s *scriptedCaller) advance() {
 	s.blocks[s.head] = fmt.Sprintf("0xaa%d", s.head)
 }
 
+// jump produces n blocks at once, the way a chain looks to a relay that could
+// not reach it for a while.
+func (s *scriptedCaller) jump(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := 0; i < n; i++ {
+		s.head++
+		s.blocks[s.head] = fmt.Sprintf("0xaa%d", s.head)
+	}
+}
+
 func (s *scriptedCaller) Call(_ context.Context, _ int, body []byte) ([]byte, error) {
 	s.calls.Add(1)
 	var req struct {
@@ -428,5 +439,50 @@ func TestStreamsShareOneLoopAcrossKinds(t *testing.T) {
 
 	if got := streams.LoopCount(); got != 1 {
 		t.Errorf("poll loops = %d, want 1 for three kinds on one chain", got)
+	}
+}
+
+// A relay that lost its upstream for longer than one poll may catch up must
+// pick the stream back up when the upstream returns. Before, the loop swallowed
+// the poller's "too far behind" error on every tick from then on, and every
+// newHeads and logs subscriber on the chain went silent for good.
+func TestStreamsResumeAfterAnOutageLongerThanOnePollCanCatchUp(t *testing.T) {
+	caller := newScriptedCaller()
+	caller.advance()
+	streams := NewPollerStreams(caller, 10*time.Millisecond)
+	t.Cleanup(streams.Stop)
+
+	var highest atomic.Uint64
+	h, err := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(m json.RawMessage) {
+		var head struct {
+			Number string `json:"number"`
+		}
+		if json.Unmarshal(m, &head) == nil {
+			if n, err := parseHexUint(head.Number); err == nil && n > highest.Load() {
+				highest.Store(n)
+			}
+		}
+	}, nil)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer h.Close()
+
+	// Wait until the loop is primed and delivering, then jump past what one
+	// poll may catch up, all at once.
+	caller.advance()
+	waitFor(t, func() bool {
+		caller.advance()
+		return highest.Load() > 0
+	})
+	caller.jump(maxCatchUpBlocks + 50)
+	caller.mu.Lock()
+	past := caller.head
+	caller.mu.Unlock()
+
+	keepAdvancing(t, caller)
+	waitFor(t, func() bool { return highest.Load() > past })
+	if got := streams.Gaps(); got == 0 {
+		t.Error("Gaps() = 0, want the skipped heights reported")
 	}
 }
