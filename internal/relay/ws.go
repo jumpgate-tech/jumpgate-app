@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/valve-tech/valve-node-app/internal/wsrpc"
 )
@@ -33,6 +34,21 @@ const (
 // no longer be served, not because anything broke.
 const closePolicyViolation uint16 = 1008
 
+// closeTryAgainLater is 1013: the session ended because the client fell too far
+// behind its own stream. Nothing is wrong with the key, and reconnecting is the
+// right response.
+const closeTryAgainLater uint16 = 1013
+
+// Session timing defaults. A client gets three pings to answer before the idle
+// timeout reaps it, so one lost pong on a bad network is not a disconnect. The
+// write timeout is long enough for a congested but live client and short enough
+// that a client which stopped reading is gone within seconds.
+const (
+	defaultWSWriteTimeout = 10 * time.Second
+	defaultWSIdleTimeout  = 90 * time.Second
+	defaultWSPingInterval = 30 * time.Second
+)
+
 // supportedSubscriptions are the kinds a poller can feed over plain HTTP.
 //
 // newPendingTransactions is deliberately absent. It has no honest HTTP polling
@@ -54,8 +70,14 @@ type StreamHandle interface{ Close() error }
 // Streams starts a synthesised subscription. One implementation serves every
 // subscriber on a chain from a single poll loop, which is why terminating here
 // costs one upstream connection instead of N.
+//
+// notify may block: an implementation must not let one subscriber's delivery
+// hold up another's. lost, when not nil, is called at most once if the stream
+// gives up on a subscriber that fell too far behind. After that, notify is
+// never called again, so a caller that ignored lost would hold a subscription
+// that had silently stopped.
 type Streams interface {
-	Subscribe(ctx context.Context, chainID int, kind string, params json.RawMessage, notify func(json.RawMessage)) (StreamHandle, error)
+	Subscribe(ctx context.Context, chainID int, kind string, params json.RawMessage, notify func(json.RawMessage), lost func()) (StreamHandle, error)
 }
 
 // RPCCaller performs one JSON-RPC call over HTTP.
@@ -76,6 +98,14 @@ type WSConfig struct {
 	// Reauth re-checks the key. A non-nil error ends the session. Nil never
 	// re-checks.
 	Reauth func(ctx context.Context) error
+
+	// WriteTimeout bounds one frame write, IdleTimeout ends a session that
+	// sends no frame at all for that long, and PingInterval is how often the
+	// session pings so a listen-only client has something to answer. Zero
+	// means the default for each.
+	WriteTimeout time.Duration
+	IdleTimeout  time.Duration
+	PingInterval time.Duration
 }
 
 // WSSession serves one customer WebSocket.
@@ -102,14 +132,32 @@ type WSSession struct {
 
 // NewWSSession builds a session.
 func NewWSSession(cfg WSConfig) *WSSession {
+	if cfg.WriteTimeout <= 0 {
+		cfg.WriteTimeout = defaultWSWriteTimeout
+	}
+	if cfg.IdleTimeout <= 0 {
+		cfg.IdleTimeout = defaultWSIdleTimeout
+	}
+	if cfg.PingInterval <= 0 {
+		cfg.PingInterval = defaultWSPingInterval
+	}
 	return &WSSession{cfg: cfg, subs: make(map[string]StreamHandle)}
 }
 
 // Run reads frames until the client goes away.
+//
+// "Goes away" includes going quiet. A client that vanishes without a close
+// frame would otherwise hold its read, and every stream it opened, forever. The
+// idle timeout reaps it, and the pings give a live client that only listens
+// something to answer.
 func (s *WSSession) Run(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer s.closeAll()
+
+	s.cfg.Conn.SetWriteTimeout(s.cfg.WriteTimeout)
+	s.cfg.Conn.SetIdleTimeout(s.cfg.IdleTimeout)
+	go s.ping(ctx)
 
 	for {
 		msg, err := s.cfg.Conn.ReadMessage()
@@ -201,6 +249,11 @@ func (s *WSSession) handleSubscribe(ctx context.Context, id json.RawMessage, par
 
 	handle, err := s.cfg.Streams.Subscribe(ctx, s.cfg.ChainID, kind, rest, func(payload json.RawMessage) {
 		s.deliver(ctx, subID, payload)
+	}, func() {
+		// The stream gave up on this client for falling behind. Ending the
+		// session is the honest answer: a subscription that silently stopped
+		// would leave the client waiting for events that will never come.
+		s.end(closeTryAgainLater, "subscription fell too far behind")
 	})
 	if err != nil {
 		if errors.Is(err, ErrSubscriptionUnsupported) {
@@ -392,10 +445,39 @@ func (s *WSSession) writeNotification(subID string, payload json.RawMessage) {
 	s.write(msg)
 }
 
+// write sends one frame. A write that fails, including one that hit the write
+// timeout because the client stopped reading, closes the connection: Run's read
+// then fails and releases every stream, instead of the session living on with
+// writes that can never land.
 func (s *WSSession) write(payload []byte) {
 	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	_ = s.cfg.Conn.WriteText(payload)
+	err := s.cfg.Conn.WriteText(payload)
+	s.writeMu.Unlock()
+	if err != nil {
+		_ = s.cfg.Conn.Close()
+	}
+}
+
+// ping keeps a listen-only client inside the idle timeout until Run returns. A
+// ping that cannot be written means the client is gone, so it ends the session
+// the same way a failed write does.
+func (s *WSSession) ping(ctx context.Context) {
+	ticker := time.NewTicker(s.cfg.PingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		s.writeMu.Lock()
+		err := s.cfg.Conn.WritePing(nil)
+		s.writeMu.Unlock()
+		if err != nil {
+			_ = s.cfg.Conn.Close()
+			return
+		}
+	}
 }
 
 // rawOrNull keeps a caller's id shape intact. JSON-RPC allows a string, a

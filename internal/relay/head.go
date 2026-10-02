@@ -17,6 +17,19 @@ var ErrReorgTooDeep = errors.New("relay: reorg deeper than the walk limit")
 // than replay hundreds of blocks into every subscriber.
 const maxReorgDepth = 128
 
+// HeadGapError reports heights the poller skipped because it fell further
+// behind than one poll may catch up, typically after an upstream outage. From
+// and To are inclusive. Nothing in that range was delivered, so a logs
+// subscriber missed whatever it held, and the error exists so that loss is
+// reported rather than silent.
+type HeadGapError struct {
+	From, To uint64
+}
+
+func (e *HeadGapError) Error() string {
+	return fmt.Sprintf("relay: skipped blocks %d..%d, more than one poll may catch up", e.From, e.To)
+}
+
 // maxCatchUpBlocks bounds one poll's output. A relay that was paused, or a
 // chain that jumped, must not turn a single poll into an unbounded fetch loop.
 const maxCatchUpBlocks = 512
@@ -75,6 +88,12 @@ func NewHeadPoller(src BlockFetcher) *HeadPoller {
 //
 // A failed poll does not advance the cursor, so the next successful one
 // delivers whatever the failure missed.
+//
+// Two failures would repeat on every poll, so they re-anchor on the current
+// head instead: falling more than maxCatchUpBlocks behind, which returns a
+// *HeadGapError, and a reorg deeper than the walk limit, which returns
+// ErrReorgTooDeep. Either way Poll returns the head together with the error,
+// and the next poll carries on from there.
 func (p *HeadPoller) Poll(ctx context.Context) ([]BlockRef, error) {
 	headNum, err := p.src.HeadNumber(ctx)
 	if err != nil {
@@ -93,11 +112,30 @@ func (p *HeadPoller) Poll(ctx context.Context) ([]BlockRef, error) {
 	}
 
 	resumeFrom, reorged, err := p.resumePoint(ctx, head)
+	if errors.Is(err, ErrReorgTooDeep) {
+		// The branch the poller remembers is gone past the walk limit, and it
+		// will still be gone next poll. Failing again on every tick would
+		// silence the chain for good, so re-anchor on the upstream's branch,
+		// mark the head reorged so a consumer unwinds, and say why.
+		if aerr := p.reanchor(ctx, head); aerr != nil {
+			return nil, aerr
+		}
+		head.Reorged = true
+		return []BlockRef{head}, err
+	}
 	if err != nil {
 		return nil, err
 	}
 	if head.Number >= resumeFrom && head.Number-resumeFrom >= maxCatchUpBlocks {
-		return nil, fmt.Errorf("relay: %d blocks behind, more than one poll may catch up", head.Number-resumeFrom+1)
+		// Too far behind to catch up in one poll, and replaying it over several
+		// would deliver hour-old heads as news. Jump to the head and report the
+		// heights skipped. Refusing instead would leave the cursor where it is,
+		// and every later poll would refuse the same way.
+		gap := &HeadGapError{From: resumeFrom, To: head.Number - 1}
+		if aerr := p.reanchor(ctx, head); aerr != nil {
+			return nil, aerr
+		}
+		return []BlockRef{head}, gap
 	}
 
 	var out []BlockRef
@@ -134,6 +172,18 @@ func (p *HeadPoller) prime(ctx context.Context, head BlockRef) error {
 		p.window[block.Number] = block.Hash
 	}
 	p.primed = true
+	return nil
+}
+
+// reanchor discards the remembered branch and primes on head. The new window
+// is built aside and swapped in only once complete, so a failed re-anchor
+// leaves the cursor where it was and the next poll tries, and reports, again.
+func (p *HeadPoller) reanchor(ctx context.Context, head BlockRef) error {
+	fresh := NewHeadPoller(p.src)
+	if err := fresh.prime(ctx, head); err != nil {
+		return err
+	}
+	p.window, p.last = fresh.window, fresh.last
 	return nil
 }
 
