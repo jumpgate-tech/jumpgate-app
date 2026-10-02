@@ -1,0 +1,92 @@
+[
+  {
+    "case": "limited_with_every_constraint",
+    "record": {
+      "account_address": "0x00000000000000000000000000000000000000aa",
+      "allow_trace": true,
+      "constraints": {
+        "ip_allow": [
+          "203.0.113.0/24",
+          "198.51.100.7"
+        ],
+        "ip_deny": [
+          "203.0.113.66",
+          "2001:db8::/32"
+        ],
+        "method_allow": [
+          "eth_call",
+          "eth_getBalance"
+        ],
+        "method_block": [
+          "debug_traceCall",
+          "eth_sendRawTransaction"
+        ],
+        "networks": [
+          "369",
+          "943"
+        ],
+        "origins": [
+          "https://app.example.com",
+          "https://staging.example.com"
+        ]
+      },
+      "credit_exempt": false,
+      "enabled": true,
+      "id": "key_limited",
+      "label": "key_limited-label",
+      "rate": {
+        "limited": {
+          "per_day": 100000,
+          "per_second": 50
+        }
+      }
+    }
+  },
+  {
+    "case": "unlimited_without_constraints",
+    "record": {
+      "account_address": null,
+      "allow_trace": false,
+      "constraints": {
+        "ip_allow": [],
+        "ip_deny": [],
+        "method_allow": [],
+        "method_block": [],
+        "networks": [],
+        "origins": []
+      },
+      "credit_exempt": true,
+      "enabled": true,
+      "id": "key_unlimited",
+      "label": "key_unlimited-label",
+      "rate": "unlimited"
+    }
+  },
+  {
+    "case": "per_day_only",
+    "record": {
+      "account_address": "0x00000000000000000000000000000000000000bb",
+      "allow_trace": false,
+      "constraints": {
+        "ip_allow": [],
+        "ip_deny": [],
+        "method_allow": [],
+        "method_block": [],
+        "networks": [
+          "1"
+        ],
+        "origins": []
+      },
+      "credit_exempt": false,
+      "enabled": true,
+      "id": "key_daily",
+      "label": "key_daily-label",
+      "rate": {
+        "limited": {
+          "per_day": 5000,
+          "per_second": 0
+        }
+      }
+    }
+  }
+]

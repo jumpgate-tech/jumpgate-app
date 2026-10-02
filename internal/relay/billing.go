@@ -86,6 +86,113 @@ type authRequest struct {
 	Key string `json:"key"`
 }
 
+// authenticateReply is the record exactly as billing sends it: the Rust
+// AuthenticateView in services/billing/src/admin.rs. It is a wire form only and
+// is turned into a KeyRecord at once, so the rest of the relay never sees it.
+//
+// Its shape is billing's, not ours, because billing is the store and its admin
+// API has other readers. The relay once decoded straight into KeyRecord's flat
+// fields, which billing never sends, and every constraint and rate limit came
+// out empty without a single error. testdata/authenticate_contract.json pins
+// the shape on both sides now; change this struct and that fixture together.
+type authenticateReply struct {
+	ID             string  `json:"id"`
+	Label          string  `json:"label"`
+	Enabled        bool    `json:"enabled"`
+	AccountAddress *string `json:"account_address"`
+	CreditExempt   bool    `json:"credit_exempt"`
+	AllowTrace     bool    `json:"allow_trace"`
+	// Rate is either the string "unlimited" or
+	// {"limited": {"per_second": n, "per_day": n}}, serde's form for an enum.
+	Rate json.RawMessage `json:"rate"`
+	// Constraints is a pointer so that a reply without it is an error rather
+	// than a key with no policy. An absent field is the exact failure this
+	// type exists to stop: it reads as "allow everything".
+	Constraints *authenticateConstraints `json:"constraints"`
+}
+
+// authenticateConstraints is billing's ConstraintsView: the key's (kind, value)
+// rows grouped into one list per kind.
+type authenticateConstraints struct {
+	Origins     []string `json:"origins"`
+	MethodAllow []string `json:"method_allow"`
+	MethodBlock []string `json:"method_block"`
+	Networks    []string `json:"networks"`
+	IPAllow     []string `json:"ip_allow"`
+	IPDeny      []string `json:"ip_deny"`
+}
+
+// limitedRate is the body of a {"limited": {...}} rate. The fields are pointers
+// so a limit billing forgot to send is an error, not a silent zero, which the
+// limiter would read as "this axis is not limited".
+type limitedRate struct {
+	PerSecond *int `json:"per_second"`
+	PerDay    *int `json:"per_day"`
+}
+
+// record converts the wire form into the relay's KeyRecord. Anything it does not
+// understand is an error. The cache turns that into an outage answer, which
+// fails closed: a record the relay cannot read must never be served as a key
+// with no limits.
+func (a authenticateReply) record() (KeyRecord, error) {
+	if a.Constraints == nil {
+		return KeyRecord{}, fmt.Errorf("key %q: reply has no constraints", a.ID)
+	}
+	rec := KeyRecord{
+		ID:           a.ID,
+		Label:        a.Label,
+		Enabled:      a.Enabled,
+		CreditExempt: a.CreditExempt,
+		AllowTrace:   a.AllowTrace,
+		MethodAllow:  a.Constraints.MethodAllow,
+		MethodBlock:  a.Constraints.MethodBlock,
+		Origins:      a.Constraints.Origins,
+		Networks:     a.Constraints.Networks,
+		IPAllow:      a.Constraints.IPAllow,
+		IPDeny:       a.Constraints.IPDeny,
+	}
+	if a.AccountAddress != nil {
+		rec.AccountAddress = *a.AccountAddress
+	}
+	if err := decodeRate(a.Rate, &rec); err != nil {
+		return KeyRecord{}, fmt.Errorf("key %q: %w", a.ID, err)
+	}
+	return rec, nil
+}
+
+// decodeRate reads billing's rate enum into rec's three rate fields.
+func decodeRate(raw json.RawMessage, rec *KeyRecord) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return fmt.Errorf("reply has no rate")
+	}
+	var unit string
+	if err := json.Unmarshal(raw, &unit); err == nil {
+		if unit != "unlimited" {
+			return fmt.Errorf("unknown rate %q", unit)
+		}
+		rec.RateUnlimited = true
+		return nil
+	}
+	var tagged map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &tagged); err != nil {
+		return fmt.Errorf("rate is neither a string nor an object: %s", raw)
+	}
+	body, ok := tagged["limited"]
+	if !ok || len(tagged) != 1 {
+		return fmt.Errorf("unknown rate %s", raw)
+	}
+	var lim limitedRate
+	if err := json.Unmarshal(body, &lim); err != nil {
+		return fmt.Errorf("limited rate: %w", err)
+	}
+	if lim.PerSecond == nil || lim.PerDay == nil {
+		return fmt.Errorf("limited rate is missing a limit: %s", body)
+	}
+	rec.PerSecondLimit = *lim.PerSecond
+	rec.PerDayLimit = *lim.PerDay
+	return nil
+}
+
 // Authenticate resolves a raw key to its record.
 func (c *BillingClient) Authenticate(ctx context.Context, rawKey string) (KeyRecord, error) {
 	body, err := json.Marshal(authRequest{Key: rawKey})
@@ -111,8 +218,12 @@ func (c *BillingClient) Authenticate(ctx context.Context, rawKey string) (KeyRec
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		var rec KeyRecord
-		if err := json.NewDecoder(resp.Body).Decode(&rec); err != nil {
+		var wire authenticateReply
+		if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
+			return KeyRecord{}, fmt.Errorf("relay: decode key record: %w", err)
+		}
+		rec, err := wire.record()
+		if err != nil {
 			return KeyRecord{}, fmt.Errorf("relay: decode key record: %w", err)
 		}
 		return rec, nil

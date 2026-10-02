@@ -25,22 +25,28 @@ var (
 
 // KeyRecord is what the store knows about one key. It never carries the raw key
 // or its hash — the relay holds a secret only for as long as one request needs.
+//
+// It carries no JSON tags on purpose. It is the relay's own view, flattened for
+// policy.go and the rate limiter, and it is not the shape billing sends. Tags
+// here once made it look like the wire form, and decoding into it dropped every
+// constraint and limit without an error. The wire form is authenticateReply in
+// billing.go.
 type KeyRecord struct {
-	ID             string   `json:"id"`
-	Label          string   `json:"label"`
-	Enabled        bool     `json:"enabled"`
-	CreditExempt   bool     `json:"credit_exempt"`
-	AllowTrace     bool     `json:"allow_trace"`
-	MethodAllow    []string `json:"method_allow"`
-	MethodBlock    []string `json:"method_block"`
-	Origins        []string `json:"origins"`
-	Networks       []string `json:"networks"`
-	IPAllow        []string `json:"ip_allow"`
-	IPDeny         []string `json:"ip_deny"`
-	RateUnlimited  bool     `json:"rate_unlimited"`
-	PerSecondLimit int      `json:"per_second_limit"`
-	PerDayLimit    int      `json:"per_day_limit"`
-	AccountAddress string   `json:"account_address"`
+	ID             string
+	Label          string
+	Enabled        bool
+	CreditExempt   bool
+	AllowTrace     bool
+	MethodAllow    []string
+	MethodBlock    []string
+	Origins        []string
+	Networks       []string
+	IPAllow        []string
+	IPDeny         []string
+	RateUnlimited  bool
+	PerSecondLimit int
+	PerDayLimit    int
+	AccountAddress string
 }
 
 // Authenticator resolves a raw key to its record. The billing client implements
