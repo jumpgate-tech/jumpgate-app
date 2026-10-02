@@ -982,3 +982,19 @@ func TestWire_RunStopsServicesBeforeChown(t *testing.T) {
 		t.Fatalf("want stop(%d) < chown(%d) < enable --now(%d); calls: %v", stopIdx, chownIdx, startIdx, e.callLog())
 	}
 }
+
+// A hash or block number that merely contains "401" or "jwt" is not an engine
+// auth failure. Without word boundaries roughly 1.5% of random 64-hex hashes
+// matched, and setup's handshake check blamed the JWT secret for them.
+func TestAuthErrorLinesMatchWholeWordsOnly(t *testing.T) {
+	journal := strings.Join([]string{
+		"ERRO Block import failed  hash=0x9f3a401bc7e2 number=19401",       // 401 inside a hash and a number
+		"level=error msg=\"invalid block\" parent=0xjwtfe00",                // "invalid" in prose, jwt inside a hex-ish token
+		"ERRO Engine API request failed  status=401 error=\"Unauthorized\"", // a real auth failure
+		"level=error msg=\"could not verify JWT\" err=\"signature is invalid\"",
+	}, "\n")
+	got := authErrorLines(journal)
+	if len(got) != 2 || !strings.Contains(got[0], "status=401") || !strings.Contains(got[1], "verify JWT") {
+		t.Fatalf("authErrorLines = %q, want only the two real auth failures", got)
+	}
+}

@@ -774,8 +774,10 @@ func handshakeCheck(ctx context.Context, e executor.Executor, w catalog.WireConf
 // startup INFO line "Finished reading JWT secret from ...jwt.hex"). A line
 // is only flagged when it also carries an error-level indicator.
 var (
-	authErrorPattern = regexp.MustCompile(`(?i)jwt|401|unauthorized`)
-	errLevelPattern  = regexp.MustCompile(`(?i)(level=(warn(ing)?|error|fatal)|\bERRO\b|\bCRIT\b|\bFATAL\b|authentication failed|invalid)`)
+	// Whole words only: without the boundaries "401" matched inside block
+	// hashes and numbers, and the handshake check blamed the JWT secret.
+	authErrorPattern = regexp.MustCompile(`(?i)\bjwt\b|\b401\b|\bunauthorized\b`)
+	errLevelPattern  = regexp.MustCompile(`(?i)(level=(warn(ing)?|error|fatal)|\bERRO\b|\bCRIT\b|\bFATAL\b|authentication failed|\binvalid\b)`)
 )
 
 func authErrorLines(journal string) []string {
