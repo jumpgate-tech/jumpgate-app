@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +53,17 @@ type Config struct {
 	// Health backs the rollup. Nil still answers, so a gateway that never wired
 	// one keeps a working endpoint rather than a crashing one.
 	Health *HealthProbe
+	// Limiter holds each key to its plan's rate limits. Nil builds one on the
+	// real clock: the upstream is keyless, so a relay without a limiter would
+	// let any key send as fast as it liked, and that must not be the quiet
+	// result of a missing field.
+	Limiter *RateLimiter
+	// TrustedProxies lists the peers, as addresses or CIDR blocks, whose
+	// X-Forwarded-For the relay believes. Empty means it believes nobody and
+	// checks the IP policy against the TCP peer. The header is written by
+	// whoever sends the request, so reading it from an untrusted peer would let
+	// any caller name an allowed address and walk through the allow-list.
+	TrustedProxies []string
 }
 
 // Handler serves the public data plane.
@@ -60,7 +73,8 @@ type Config struct {
 // key rather than that token, so the two live on separate listeners and the
 // boundary is a fact of the wiring rather than a rule an edit can forget.
 type Handler struct {
-	cfg Config
+	cfg     Config
+	trusted []*net.IPNet
 }
 
 // NewHandler builds the data-plane handler.
@@ -74,7 +88,14 @@ func NewHandler(cfg Config) (*Handler, error) {
 	if cfg.ProjectID == "" {
 		return nil, errors.New("relay: no project id configured")
 	}
-	return &Handler{cfg: cfg}, nil
+	if cfg.Limiter == nil {
+		cfg.Limiter = NewRateLimiter(RateLimitOptions{})
+	}
+	trusted, err := parseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	return &Handler{cfg: cfg, trusted: trusted}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +130,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "origin not allowed for this key")
 		return
 	}
-	if err := CheckIP(rec, clientIP(r)); err != nil {
+	if err := CheckIP(rec, h.clientIP(r)); err != nil {
 		writeError(w, http.StatusForbidden, "address not allowed for this key")
 		return
 	}
@@ -159,6 +180,12 @@ func (h *Handler) serveRPC(w http.ResponseWriter, r *http.Request, route Route, 
 		return
 	}
 
+	// Throttle before charging, so a call the plan does not allow costs the
+	// customer nothing. A batch counts as its calls, the same as charge bills it.
+	if !h.admit(w, rec, len(methods)) {
+		return
+	}
+
 	// Charge BEFORE forwarding, so a customer who cannot pay costs the operator
 	// no upstream call at all.
 	if err := h.charge(r.Context(), rec, route.ChainID, methods); err != nil {
@@ -197,6 +224,28 @@ func (h *Handler) charge(ctx context.Context, rec KeyRecord, chainID int, method
 		cost += h.priceOf(method, chainID)
 	}
 	return h.cfg.Credits.Spend(ctx, rec.AccountAddress, cost)
+}
+
+// admit applies the key's rate limits to n calls, and answers 429 when they do
+// not fit. Retry-After is whole seconds, rounded up, so a client that honours
+// it never retries early.
+func (h *Handler) admit(w http.ResponseWriter, rec KeyRecord, n int) bool {
+	wait, ok := h.cfg.Limiter.Allow(rec, n)
+	if ok {
+		return true
+	}
+	w.Header().Set("Retry-After", strconv.FormatInt(retryAfterSeconds(wait), 10))
+	writeError(w, http.StatusTooManyRequests, "rate limit exceeded for this key")
+	return false
+}
+
+// retryAfterSeconds rounds a wait up to whole seconds, never below one.
+func retryAfterSeconds(wait time.Duration) int64 {
+	secs := int64((wait + time.Second - 1) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
 }
 
 // priceOf resolves one call's cost. Without a price book every call costs one
@@ -242,6 +291,12 @@ func (h *Handler) serveBeacon(w http.ResponseWriter, r *http.Request, route Rout
 		// A chain with no consensus layer is a definite answer, not a dead
 		// upstream. The catalog knows which chains have one.
 		writeError(w, http.StatusNotImplemented, "this chain has no consensus layer")
+		return
+	}
+
+	// Beacon calls draw on the same limits as JSON-RPC. A plan's rate is a
+	// rate of calls to the operator's nodes, whichever API they arrive on.
+	if !h.admit(w, rec, 1) {
 		return
 	}
 
@@ -328,6 +383,12 @@ func (h *Handler) serveWebSocket(w http.ResponseWriter, r *http.Request, route R
 		Caller:  h.cfg.Caller,
 		Streams: h.cfg.Streams,
 		Reauth:  h.reauthEvery(route.Key, wsReauthInterval),
+		// Every frame draws on the same limits as an HTTP call. Without this a
+		// WebSocket would be the way around every per-second limit.
+		Admit: func() bool {
+			_, ok := h.cfg.Limiter.Allow(rec, 1)
+			return ok
+		},
 	}
 	// The same meter as HTTP. Without it every call after the upgrade, and every
 	// notification, would be served free.
@@ -454,16 +515,85 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-// clientIP reads the caller's address. Caddy sets X-Forwarded-For and is the
-// only thing that reaches the relay, so the left-most entry is the caller.
-func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		first, _, _ := strings.Cut(fwd, ",")
-		return strings.TrimSpace(first)
+// clientIP reads the caller's address for the IP policy.
+//
+// X-Forwarded-For is believed only when the TCP peer is a trusted proxy. A
+// proxy appends the address it saw to whatever the caller sent, so the list is
+// read from the right, skipping hops that are themselves trusted proxies. The
+// first other entry is the address the outermost trusted proxy actually saw.
+// Everything to its left was written by the caller and proves nothing.
+func (h *Handler) clientIP(r *http.Request) string {
+	peer := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		peer = host
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+	if !h.trusts(peer) {
+		return peer
 	}
-	return host
+
+	// Repeated headers are one list, in order, as RFC 7230 section 3.2.2 says.
+	var hops []string
+	for _, value := range r.Header.Values("X-Forwarded-For") {
+		for _, hop := range strings.Split(value, ",") {
+			if hop = strings.TrimSpace(hop); hop != "" {
+				hops = append(hops, hop)
+			}
+		}
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		// An entry that is not an address is returned rather than skipped.
+		// CheckIP refuses an unreadable address whenever a policy exists, which
+		// is the safe answer to a list nobody can vouch for.
+		if !h.trusts(hops[i]) {
+			return hops[i]
+		}
+	}
+	// Every hop is a trusted proxy, so the call began inside the operator's own
+	// network. The left-most hop is as close to its origin as the list goes.
+	if len(hops) > 0 {
+		return hops[0]
+	}
+	return peer
+}
+
+// trusts reports whether addr is a configured trusted proxy.
+func (h *Handler) trusts(addr string) bool {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	for _, network := range h.trusted {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseTrustedProxies reads addresses and CIDR blocks. A malformed entry fails
+// startup rather than being dropped: a typo in a trust list should not quietly
+// change whose header the relay believes.
+func parseTrustedProxies(entries []string) ([]*net.IPNet, error) {
+	out := make([]*net.IPNet, 0, len(entries))
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if strings.Contains(entry, "/") {
+			_, network, err := net.ParseCIDR(entry)
+			if err != nil {
+				return nil, fmt.Errorf("relay: trusted proxy %q: %w", entry, err)
+			}
+			out = append(out, network)
+			continue
+		}
+		ip := net.ParseIP(entry)
+		if ip == nil {
+			return nil, fmt.Errorf("relay: trusted proxy %q is not an address or CIDR block", entry)
+		}
+		bits := 8 * net.IPv6len
+		if v4 := ip.To4(); v4 != nil {
+			ip, bits = v4, 8*net.IPv4len
+		}
+		out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	}
+	return out, nil
 }

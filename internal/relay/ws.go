@@ -28,6 +28,9 @@ const (
 	// codeOutOfCredits and codeLedgerUnavailable mirror HTTP's 402 and 503.
 	codeOutOfCredits      = -32003
 	codeLedgerUnavailable = -32004
+	// codeRateLimited mirrors HTTP's 429. -32005 is the code EIP-1474 reserves
+	// for "limit exceeded", so client libraries already recognise it.
+	codeRateLimited = -32005
 )
 
 // closePolicyViolation is RFC 6455's 1008: the session ended because the key may
@@ -98,6 +101,9 @@ type WSConfig struct {
 	// Reauth re-checks the key. A non-nil error ends the session. Nil never
 	// re-checks.
 	Reauth func(ctx context.Context) error
+	// Admit applies the key's rate limits to one call. False refuses the frame.
+	// Nil admits everything.
+	Admit func() bool
 
 	// WriteTimeout bounds one frame write, IdleTimeout ends a session that
 	// sends no frame at all for that long, and PingInterval is how often the
@@ -193,6 +199,13 @@ func (s *WSSession) handleFrame(ctx context.Context, msg []byte) {
 		// The connection survives a refusal, so one denied call does not drop a
 		// customer's whole session.
 		s.writeError(call.ID, codePolicyDenied, "method not allowed for this key")
+		return
+	}
+
+	// Throttle before charging, as the HTTP path does, so a refused frame costs
+	// nothing. The session survives: a client that slows down carries on.
+	if s.cfg.Admit != nil && !s.cfg.Admit() {
+		s.writeError(call.ID, codeRateLimited, "rate limit exceeded for this key")
 		return
 	}
 
