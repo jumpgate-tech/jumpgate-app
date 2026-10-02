@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,11 @@ type Config struct {
 	// Health backs the rollup. Nil still answers, so a gateway that never wired
 	// one keeps a working endpoint rather than a crashing one.
 	Health *HealthProbe
+	// Limiter holds each key to its plan's rate limits. Nil builds one on the
+	// real clock: the upstream is keyless, so a relay without a limiter would
+	// let any key send as fast as it liked, and that must not be the quiet
+	// result of a missing field.
+	Limiter *RateLimiter
 }
 
 // Handler serves the public data plane.
@@ -73,6 +79,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 	if cfg.ProjectID == "" {
 		return nil, errors.New("relay: no project id configured")
+	}
+	if cfg.Limiter == nil {
+		cfg.Limiter = NewRateLimiter(RateLimitOptions{})
 	}
 	return &Handler{cfg: cfg}, nil
 }
@@ -159,6 +168,12 @@ func (h *Handler) serveRPC(w http.ResponseWriter, r *http.Request, route Route, 
 		return
 	}
 
+	// Throttle before charging, so a call the plan does not allow costs the
+	// customer nothing. A batch counts as its calls, the same as charge bills it.
+	if !h.admit(w, rec, len(methods)) {
+		return
+	}
+
 	// Charge BEFORE forwarding, so a customer who cannot pay costs the operator
 	// no upstream call at all.
 	if err := h.charge(r.Context(), rec, route.ChainID, methods); err != nil {
@@ -197,6 +212,28 @@ func (h *Handler) charge(ctx context.Context, rec KeyRecord, chainID int, method
 		cost += h.priceOf(method, chainID)
 	}
 	return h.cfg.Credits.Spend(ctx, rec.AccountAddress, cost)
+}
+
+// admit applies the key's rate limits to n calls, and answers 429 when they do
+// not fit. Retry-After is whole seconds, rounded up, so a client that honours
+// it never retries early.
+func (h *Handler) admit(w http.ResponseWriter, rec KeyRecord, n int) bool {
+	wait, ok := h.cfg.Limiter.Allow(rec, n)
+	if ok {
+		return true
+	}
+	w.Header().Set("Retry-After", strconv.FormatInt(retryAfterSeconds(wait), 10))
+	writeError(w, http.StatusTooManyRequests, "rate limit exceeded for this key")
+	return false
+}
+
+// retryAfterSeconds rounds a wait up to whole seconds, never below one.
+func retryAfterSeconds(wait time.Duration) int64 {
+	secs := int64((wait + time.Second - 1) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
 }
 
 // priceOf resolves one call's cost. Without a price book every call costs one
@@ -242,6 +279,12 @@ func (h *Handler) serveBeacon(w http.ResponseWriter, r *http.Request, route Rout
 		// A chain with no consensus layer is a definite answer, not a dead
 		// upstream. The catalog knows which chains have one.
 		writeError(w, http.StatusNotImplemented, "this chain has no consensus layer")
+		return
+	}
+
+	// Beacon calls draw on the same limits as JSON-RPC. A plan's rate is a
+	// rate of calls to the operator's nodes, whichever API they arrive on.
+	if !h.admit(w, rec, 1) {
 		return
 	}
 
@@ -328,6 +371,12 @@ func (h *Handler) serveWebSocket(w http.ResponseWriter, r *http.Request, route R
 		Caller:  h.cfg.Caller,
 		Streams: h.cfg.Streams,
 		Reauth:  h.reauthEvery(route.Key, wsReauthInterval),
+		// Every frame draws on the same limits as an HTTP call. Without this a
+		// WebSocket would be the way around every per-second limit.
+		Admit: func() bool {
+			_, ok := h.cfg.Limiter.Allow(rec, 1)
+			return ok
+		},
 	}
 	// The same meter as HTTP. Without it every call after the upgrade, and every
 	// notification, would be served free.
