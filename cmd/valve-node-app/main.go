@@ -121,7 +121,7 @@ func main() {
 	url := fmt.Sprintf("http://%s/?token=%s", *bind, token)
 	fmt.Println(url)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := shutdownContext(context.Background())
 	defer stop()
 
 	// Warm the update check in the background so the first UI poll is instant.
@@ -190,6 +190,30 @@ func main() {
 
 	if err := s.ListenAndServe(ctx); err != nil {
 		log.Fatalf("valve-node-app: server: %v", err)
+	}
+}
+
+// shutdownContext returns a context canceled by the first SIGINT or SIGTERM.
+//
+// signal.NotifyContext keeps catching those signals until its stop function
+// is called, and main used to call it only on the tray path. So once a
+// graceful shutdown was under way, every further Ctrl-C was absorbed by a
+// context that was already canceled, and an operator whose shutdown stalled
+// had no way to kill the process from the terminal. Here the handler is
+// unregistered as soon as the first signal lands, and before the returned
+// context reports done, so a second Ctrl-C gets the default behaviour and
+// ends the process.
+func shutdownContext(parent context.Context) (context.Context, context.CancelFunc) {
+	sigCtx, stopSignals := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(parent)
+	go func() {
+		<-sigCtx.Done()
+		stopSignals()
+		cancel()
+	}()
+	return ctx, func() {
+		stopSignals()
+		cancel()
 	}
 }
 
