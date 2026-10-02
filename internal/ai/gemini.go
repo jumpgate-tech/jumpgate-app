@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 )
 
 // geminiDefaultBase is Gemini's real API host, used when New's baseURL is
@@ -56,14 +55,17 @@ func (p *geminiProvider) Explain(ctx context.Context, req ExplainRequest) (strin
 		return "", fmt.Errorf("gemini: encode request: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s/v1beta/models/gemini-2.0-flash:generateContent?key=%s",
-		p.baseURL, url.QueryEscape(p.apiKey))
+	// The key goes in a header, never the URL: a URL is quoted verbatim in every
+	// *url.Error the transport returns, which would carry the key into logs and
+	// API responses.
+	endpoint := p.baseURL + "/v1beta/models/gemini-2.0-flash:generateContent"
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(b))
 	if err != nil {
 		return "", fmt.Errorf("gemini: build request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", p.apiKey)
 
 	res, err := p.client.Do(httpReq)
 	if err != nil {

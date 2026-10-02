@@ -204,3 +204,48 @@ func TestCapLines_EmptyInput(t *testing.T) {
 		t.Errorf("got %v, want nothing", got)
 	}
 }
+
+// The Gemini key travels in a header, not the URL. A key in the query string
+// rides along into every *url.Error the transport returns, and from there into
+// logs and API responses.
+func TestGemini_KeyIsAHeaderNotAQueryParameter(t *testing.T) {
+	var gotQuery, gotKey string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		gotKey = r.Header.Get("x-goog-api-key")
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	p, err := New("gemini", "sk-secret-gemini", ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Explain(context.Background(), explainReq()); err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+	if strings.Contains(gotQuery, "sk-secret-gemini") {
+		t.Errorf("key in the query string: %q", gotQuery)
+	}
+	if gotKey != "sk-secret-gemini" {
+		t.Errorf("x-goog-api-key = %q, want the key", gotKey)
+	}
+}
+
+func TestGemini_TransportErrorsDoNotCarryTheKey(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := ts.URL
+	ts.Close()
+
+	p, err := New("gemini", "sk-secret-gemini", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.Explain(context.Background(), explainReq())
+	if err == nil {
+		t.Fatal("expected an error from a closed server")
+	}
+	if strings.Contains(err.Error(), "sk-secret-gemini") {
+		t.Errorf("error leaks the key: %v", err)
+	}
+}
