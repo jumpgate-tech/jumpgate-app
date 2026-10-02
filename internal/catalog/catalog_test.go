@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/valve-tech/valve-node-app/internal/executor"
 )
@@ -344,13 +346,26 @@ func TestRustBuildCmd_CargoEnvSourcing_NoSubshell(t *testing.T) {
 			if err := os.WriteFile(cargoEnv, []byte(envScript), 0o644); err != nil {
 				t.Fatal(err)
 			}
+			// The stub is a symlink to the system's echo rather than a freshly
+			// written script. macOS assesses a newly created executable before
+			// it may run, and under many concurrent test processes that check
+			// can stall indefinitely at exec, hanging the whole suite. A
+			// symlink to a binary the OS already trusts has nothing new to
+			// assess. `cargo --version` then prints "--version" and exits 0.
 			cargoStub := filepath.Join(fakebin, "cargo")
-			if err := os.WriteFile(cargoStub, []byte("#!/bin/sh\necho cargo-stub-ok\nexit 0\n"), 0o755); err != nil {
+			echo, err := exec.LookPath("echo")
+			if err != nil {
+				t.Skipf("no echo binary on PATH: %v", err)
+			}
+			if err := os.Symlink(echo, cargoStub); err != nil {
 				t.Fatal(err)
 			}
 
 			exe := executor.NewLocal()
-			ctx := context.Background()
+			// A bound on every command: a stalled exec must fail this test, not
+			// hang the suite until the package timeout.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 
 			// Property 1: the recipe's literal brace-group form keeps the PATH
 			// edit alive past the sourcing statement, so cargo resolves.

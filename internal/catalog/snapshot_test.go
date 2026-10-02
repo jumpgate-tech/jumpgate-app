@@ -1,11 +1,13 @@
 package catalog
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A realistic versions.json matching the shape one.valve.city serves for
@@ -57,20 +59,21 @@ const versions369 = `{
 func runThroughShell(t *testing.T, cmd string) ([]string, string) {
 	t.Helper()
 	dir := t.TempDir()
-	stub := filepath.Join(dir, "reth")
-	// printf %s\n on "$@" — one line per argument, no interpretation.
-	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
-		t.Fatalf("write stub reth: %v", err)
-	}
+	// The stub is a shell function, not an executable written to dir: macOS
+	// assesses a newly created executable before it may run, and under many
+	// concurrent test processes that check can stall exec indefinitely. A
+	// function shadows `reth` exactly as a PATH entry would, since the command
+	// under test calls it by bare name. printf %s\n on "$@" — one line per
+	// argument, no interpretation.
+	stub := `reth() { for a in "$@"; do printf '%s\n' "$a"; done; }; `
 
-	c := exec.Command("sh", "-c", cmd)
-	// The stub dir goes FIRST, but the real PATH stays behind it. Handing the
-	// shell a PATH with nothing but the stub on it would defeat the injection
-	// tests silently: `touch` would not resolve, so an injected command could
-	// never leave a trace even when the quoting was broken and the shell did
-	// genuinely try to run it.
-	c.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, "sh", "-c", stub+cmd)
+	// The real PATH stays as it is. Handing the shell an empty PATH would
+	// defeat the injection tests silently: `touch` would not resolve, so an
+	// injected command could never leave a trace even when the quoting was
+	// broken and the shell did genuinely try to run it.
 	c.Dir = dir
 	out, err := c.Output()
 	if err != nil {
