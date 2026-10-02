@@ -63,6 +63,14 @@ type Snapshot struct {
 	DiskUsedPct    float64   `json:"diskUsedPct"`
 	ExecActive     bool      `json:"execActive"`
 	BeaconActive   bool      `json:"beaconActive"`
+
+	// DiskKnown reports whether DiskUsedPct is a reading. A failed or
+	// unparseable disk probe leaves DiskUsedPct at 0, which on its own is
+	// indistinguishable from an empty disk; consumers should show "unknown"
+	// rather than "0% used" when this is false. It is a separate field,
+	// rather than making DiskUsedPct nullable, so existing readers of
+	// diskUsedPct keep getting a number.
+	DiskKnown bool `json:"diskKnown"`
 }
 
 // Config configures a Monitor.
@@ -211,6 +219,7 @@ func (m *Monitor) poll(ctx context.Context) Snapshot {
 	if res, err := m.cfg.Exec.Run(ctx, diskCmd(m.cfg.Wire.DataDir), nil); err == nil && res.ExitCode == 0 {
 		if pct, ok := parseDiskPct(res.Stdout); ok {
 			snap.DiskUsedPct = pct
+			snap.DiskKnown = true
 		}
 	}
 	// systemctl is-active exits non-zero when a unit isn't active — that's
@@ -284,9 +293,13 @@ func beaconPeerCountCmd(addr string) string {
 // errors/returns nothing, which would otherwise be misread as 0% used.
 // Mirrors the ancestor-walk internal/ops's diskFreeBytes and internal/setup's
 // preflight check use for the free-bytes probe.
+//
+// df's output is not piped through anything (parseDiskPct skips the header
+// itself), so the command's exit status is df's own. Behind `| tail -1` a
+// failed df exited 0 with no output, and the failure was invisible.
 func diskCmd(dir string) string {
 	return fmt.Sprintf(
-		`d=%s; while [ ! -d "$d" ]; do d=$(dirname "$d"); done; df --output=pcent "$d" | tail -1`,
+		`d=%s; while [ ! -d "$d" ]; do d=$(dirname "$d"); done; df --output=pcent "$d"`,
 		shQuote(dir),
 	)
 }
