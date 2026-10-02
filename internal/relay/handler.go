@@ -233,11 +233,23 @@ func (h *Handler) serveBeacon(w http.ResponseWriter, r *http.Request, route Rout
 		writeError(w, http.StatusNotImplemented, "this gateway serves no beacon API")
 		return
 	}
+	if err := checkBeaconRequest(r.Method, route.Rest); err != nil {
+		writeBeaconPolicyError(w, err)
+		return
+	}
 	base, ok := h.cfg.Beacon(route.ChainID)
 	if !ok || base == nil {
 		// A chain with no consensus layer is a definite answer, not a dead
 		// upstream. The catalog knows which chains have one.
 		writeError(w, http.StatusNotImplemented, "this chain has no consensus layer")
+		return
+	}
+
+	// Charge after the chain and policy checks, so a refused call costs the
+	// customer nothing, and before forwarding, so an unpaid one costs the
+	// operator nothing.
+	if err := h.charge(r.Context(), rec, route.ChainID, []string{beaconMethod}); err != nil {
+		writeChargeError(w, err)
 		return
 	}
 
