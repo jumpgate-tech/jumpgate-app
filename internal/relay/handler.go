@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -57,6 +58,12 @@ type Config struct {
 	// let any key send as fast as it liked, and that must not be the quiet
 	// result of a missing field.
 	Limiter *RateLimiter
+	// TrustedProxies lists the peers, as addresses or CIDR blocks, whose
+	// X-Forwarded-For the relay believes. Empty means it believes nobody and
+	// checks the IP policy against the TCP peer. The header is written by
+	// whoever sends the request, so reading it from an untrusted peer would let
+	// any caller name an allowed address and walk through the allow-list.
+	TrustedProxies []string
 }
 
 // Handler serves the public data plane.
@@ -66,7 +73,8 @@ type Config struct {
 // key rather than that token, so the two live on separate listeners and the
 // boundary is a fact of the wiring rather than a rule an edit can forget.
 type Handler struct {
-	cfg Config
+	cfg     Config
+	trusted []*net.IPNet
 }
 
 // NewHandler builds the data-plane handler.
@@ -83,7 +91,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 	if cfg.Limiter == nil {
 		cfg.Limiter = NewRateLimiter(RateLimitOptions{})
 	}
-	return &Handler{cfg: cfg}, nil
+	trusted, err := parseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	return &Handler{cfg: cfg, trusted: trusted}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +130,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "origin not allowed for this key")
 		return
 	}
-	if err := CheckIP(rec, clientIP(r)); err != nil {
+	if err := CheckIP(rec, h.clientIP(r)); err != nil {
 		writeError(w, http.StatusForbidden, "address not allowed for this key")
 		return
 	}
@@ -503,16 +515,85 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-// clientIP reads the caller's address. Caddy sets X-Forwarded-For and is the
-// only thing that reaches the relay, so the left-most entry is the caller.
-func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		first, _, _ := strings.Cut(fwd, ",")
-		return strings.TrimSpace(first)
+// clientIP reads the caller's address for the IP policy.
+//
+// X-Forwarded-For is believed only when the TCP peer is a trusted proxy. A
+// proxy appends the address it saw to whatever the caller sent, so the list is
+// read from the right, skipping hops that are themselves trusted proxies. The
+// first other entry is the address the outermost trusted proxy actually saw.
+// Everything to its left was written by the caller and proves nothing.
+func (h *Handler) clientIP(r *http.Request) string {
+	peer := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		peer = host
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+	if !h.trusts(peer) {
+		return peer
 	}
-	return host
+
+	// Repeated headers are one list, in order, as RFC 7230 section 3.2.2 says.
+	var hops []string
+	for _, value := range r.Header.Values("X-Forwarded-For") {
+		for _, hop := range strings.Split(value, ",") {
+			if hop = strings.TrimSpace(hop); hop != "" {
+				hops = append(hops, hop)
+			}
+		}
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		// An entry that is not an address is returned rather than skipped.
+		// CheckIP refuses an unreadable address whenever a policy exists, which
+		// is the safe answer to a list nobody can vouch for.
+		if !h.trusts(hops[i]) {
+			return hops[i]
+		}
+	}
+	// Every hop is a trusted proxy, so the call began inside the operator's own
+	// network. The left-most hop is as close to its origin as the list goes.
+	if len(hops) > 0 {
+		return hops[0]
+	}
+	return peer
+}
+
+// trusts reports whether addr is a configured trusted proxy.
+func (h *Handler) trusts(addr string) bool {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	for _, network := range h.trusted {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseTrustedProxies reads addresses and CIDR blocks. A malformed entry fails
+// startup rather than being dropped: a typo in a trust list should not quietly
+// change whose header the relay believes.
+func parseTrustedProxies(entries []string) ([]*net.IPNet, error) {
+	out := make([]*net.IPNet, 0, len(entries))
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if strings.Contains(entry, "/") {
+			_, network, err := net.ParseCIDR(entry)
+			if err != nil {
+				return nil, fmt.Errorf("relay: trusted proxy %q: %w", entry, err)
+			}
+			out = append(out, network)
+			continue
+		}
+		ip := net.ParseIP(entry)
+		if ip == nil {
+			return nil, fmt.Errorf("relay: trusted proxy %q is not an address or CIDR block", entry)
+		}
+		bits := 8 * net.IPv6len
+		if v4 := ip.To4(); v4 != nil {
+			ip, bits = v4, 8*net.IPv4len
+		}
+		out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	}
+	return out, nil
 }

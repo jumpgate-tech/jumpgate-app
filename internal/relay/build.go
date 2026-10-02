@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -50,6 +51,10 @@ type BuildOptions struct {
 	Credits CreditStore
 	// CreditBlock is how many credits to lease at a time. Zero takes the default.
 	CreditBlock int64
+	// TrustedProxies lists the peers whose X-Forwarded-For the relay believes.
+	// Nil takes the default from RelayBind (see defaultTrustedProxies). A
+	// non-nil empty list trusts nobody.
+	TrustedProxies []string
 }
 
 // Runtime is the background work a built relay needs. A caller MUST run it, or
@@ -127,6 +132,11 @@ func Build(opt BuildOptions) (http.Handler, Runtime, error) {
 		Streams:   NewPollerStreams(caller, opt.PollInterval),
 	}
 
+	cfg.TrustedProxies = opt.TrustedProxies
+	if cfg.TrustedProxies == nil {
+		cfg.TrustedProxies = defaultTrustedProxies(opt.RelayBind)
+	}
+
 	// The beacon pool round-robins a chain's consensus upstreams and drops the
 	// ones that report themselves down. Its Next satisfies the Beacon hook, so
 	// an explicit hook still wins when a caller supplies one.
@@ -162,6 +172,28 @@ func Build(opt BuildOptions) (http.Handler, Runtime, error) {
 		return nil, Runtime{}, err
 	}
 	return handler, Runtime{Credits: cfg.Credits, Beacon: pool}, nil
+}
+
+// defaultTrustedProxies trusts loopback when the relay is bound to loopback,
+// and nobody otherwise.
+//
+// A loopback-bound relay can only be reached from this host, and the process
+// meant to reach it there is the local Caddy that fronts a metered gateway
+// (catalog.CaddyConfig.Metered). Caddy puts the address it saw in
+// X-Forwarded-For. Without trusting it, every customer would look like
+// 127.0.0.1 and no IP policy could work. Any other local process could forge the
+// header too, but a local process is already inside the operator's trust
+// boundary. Bound to any other interface the relay cannot tell its proxy from a
+// caller, so it trusts nobody until the operator lists the proxy explicitly.
+func defaultTrustedProxies(bind string) []string {
+	host, _, err := net.SplitHostPort(bind)
+	if err != nil {
+		return nil
+	}
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return nil
+	}
+	return []string{"127.0.0.0/8", "::1"}
 }
 
 // BuildBeaconPool exposes the pool a caller must Run so it keeps re-probing. A
