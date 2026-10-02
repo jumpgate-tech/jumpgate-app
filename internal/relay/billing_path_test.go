@@ -28,7 +28,7 @@ func (c *countingCredits) Reserve(_ context.Context, _ string, credits int64) (i
 	return credits, nil
 }
 
-func (c *countingCredits) Settle(context.Context, string, int64, int64) error { return nil }
+func (c *countingCredits) Settle(context.Context, string, int64, int64, string) error { return nil }
 
 func creditedHandler(t *testing.T, rec KeyRecord, store CreditStore, got *capturedRequest) *Handler {
 	t.Helper()

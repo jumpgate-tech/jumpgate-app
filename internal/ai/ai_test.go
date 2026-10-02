@@ -67,7 +67,7 @@ func TestGeminiExplainRequestShape(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		gotKey = r.URL.Query().Get("key")
+		gotKey = r.Header.Get("x-goog-api-key")
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"it's a corrupt db, resync"}],"role":"model"}}]}`))
@@ -91,7 +91,7 @@ func TestGeminiExplainRequestShape(t *testing.T) {
 		t.Errorf("path = %q, want /v1beta/models/gemini-2.0-flash:generateContent", gotPath)
 	}
 	if gotKey != "test-gemini-key" {
-		t.Errorf("?key= = %q, want test-gemini-key", gotKey)
+		t.Errorf("x-goog-api-key = %q, want test-gemini-key", gotKey)
 	}
 
 	contents, _ := gotBody["contents"].([]any)

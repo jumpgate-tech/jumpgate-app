@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::pricing;
 
 /// One `project_key` row, with the hash. The store owns the hash; higher layers
@@ -51,7 +51,12 @@ pub(crate) fn unix_now() -> i64 {
 }
 
 /// Bump this when the schema changes. It is written to `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 1;
+/// 2 added `settle_log`.
+const SCHEMA_VERSION: i64 = 2;
+
+/// How long an applied settle id is remembered. No relay retries a settle for
+/// anywhere near this long.
+const SETTLE_LOG_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
 const SCHEMA: &str = include_str!("schema.sql");
 
 /// A handle to the billing database.
@@ -478,32 +483,96 @@ impl Store {
     /// `credits_reserved`, and return the unspent remainder
     /// (`reserved - spent`) to `credits_remaining`. The caller (the admin API
     /// handler) has already rejected `spent > reserved` and any negative
-    /// amount before this runs; this is the write, not the validation.
+    /// amount before this runs.
     ///
-    /// `credits_reserved` is clamped at 0 with `MAX(...)`. A relay that
-    /// settles more than the account currently shows reserved — a double
-    /// settle, or a bug upstream — must not drive the reservation negative.
-    /// The unspent credit still returns to `credits_remaining` regardless, so
-    /// a mismatched settle loses no credit; it only stops double-draining
-    /// `credits_reserved`.
+    /// A settle may not release more than the account holds in reserve. That
+    /// used to be clamped instead, which still refunded the full `reserved`,
+    /// so a retried settle minted credits. It is now a
+    /// [`Error::SettleExceedsReservation`], and nothing moves. The same bound
+    /// keeps the arithmetic far from overflow.
+    ///
+    /// With a `settle_id`, a settle applies at most once: a repeat of an
+    /// applied id returns the original result, and an id reused for different
+    /// numbers is [`Error::SettleIdReused`]. The check, the write, and the log
+    /// row commit together.
     ///
     /// Returns the new `(credits_remaining, credits_reserved)`, or `None`
     /// when the account does not exist.
-    pub fn settle(&self, address: &str, spent: i64, reserved: i64) -> Result<Option<(i64, i64)>> {
-        let row = self
-            .conn
+    pub fn settle(
+        &self,
+        address: &str,
+        spent: i64,
+        reserved: i64,
+        settle_id: Option<&str>,
+    ) -> Result<Option<(i64, i64)>> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        if let Some(id) = settle_id {
+            let applied = tx
+                .query_row(
+                    "SELECT address, spent, reserved, credits_remaining, credits_reserved \
+                     FROM settle_log WHERE settle_id = ?1",
+                    params![id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, i64>(4)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            if let Some((addr, s, r, remaining, held)) = applied {
+                if addr != address || s != spent || r != reserved {
+                    return Err(Error::SettleIdReused(id.to_owned()));
+                }
+                return Ok(Some((remaining, held)));
+            }
+        }
+
+        let held = tx
             .query_row(
-                "UPDATE account \
-                 SET credits_reserved = MAX(credits_reserved - ?1, 0), \
-                     credits_remaining = credits_remaining + (?1 - ?2), \
-                     updated_at = ?4 \
-                 WHERE address = ?3 \
-                 RETURNING credits_remaining, credits_reserved",
-                params![reserved, spent, address, unix_now()],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                "SELECT credits_reserved FROM account WHERE address = ?1",
+                params![address],
+                |row| row.get::<_, i64>(0),
             )
             .optional()?;
-        Ok(row)
+        let Some(held) = held else {
+            return Ok(None);
+        };
+        if reserved > held {
+            return Err(Error::SettleExceedsReservation { reserved, held });
+        }
+
+        let now = unix_now();
+        let (remaining, held_after) = tx.query_row(
+            "UPDATE account \
+             SET credits_reserved = credits_reserved - ?1, \
+                 credits_remaining = credits_remaining + (?1 - ?2), \
+                 updated_at = ?4 \
+             WHERE address = ?3 \
+             RETURNING credits_remaining, credits_reserved",
+            params![reserved, spent, address, now],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+
+        if let Some(id) = settle_id {
+            tx.execute(
+                "INSERT INTO settle_log \
+                 (settle_id, address, spent, reserved, credits_remaining, credits_reserved, applied_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![id, address, spent, reserved, remaining, held_after, now],
+            )?;
+            tx.execute(
+                "DELETE FROM settle_log WHERE applied_at < ?1",
+                params![now - SETTLE_LOG_RETENTION_SECS],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(Some((remaining, held_after)))
     }
 }
 
@@ -751,27 +820,82 @@ mod tests {
         store.reserve("0xsettle", 40).unwrap();
 
         // Spent 15 of the 40 reserved; 25 comes back to credits_remaining.
-        let result = store.settle("0xsettle", 15, 40).unwrap();
+        let result = store.settle("0xsettle", 15, 40, None).unwrap();
         assert_eq!(result, Some((85, 0)));
         assert_eq!(store.get_account("0xsettle").unwrap(), Some((85, 0, 0)));
     }
 
     #[test]
-    fn settle_clamps_credits_reserved_at_zero() {
+    fn settle_more_than_is_held_is_rejected_and_changes_nothing() {
         let store = Store::open_in_memory().unwrap();
         // Only 10 is actually reserved, but the caller reports settling 40 —
-        // a double settle or an upstream bug. credits_reserved must not go
-        // negative; the unspent credit still returns to credits_remaining.
+        // a double settle or an upstream bug. This used to clamp the
+        // reservation and still refund 40, minting 30 credits.
         store.upsert_account("0xover", 50, 10, 0).unwrap();
 
-        let result = store.settle("0xover", 0, 40).unwrap();
-        assert_eq!(result, Some((90, 0)), "reserved clamps at 0, not -30");
+        let err = store.settle("0xover", 0, 40, None).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::SettleExceedsReservation {
+                    reserved: 40,
+                    held: 10
+                }
+            ),
+            "got {err}"
+        );
+        assert_eq!(
+            store.get_account("0xover").unwrap(),
+            Some((50, 10, 0)),
+            "a rejected settle must not move a single credit"
+        );
+    }
+
+    #[test]
+    fn settle_with_a_huge_reservation_cannot_overflow() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_account("0xhuge", 50, 10, 0).unwrap();
+
+        assert!(store.settle("0xhuge", 0, i64::MAX, None).is_err());
+        assert_eq!(store.get_account("0xhuge").unwrap(), Some((50, 10, 0)));
+    }
+
+    #[test]
+    fn a_retried_settle_applies_once() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_account("0xretry", 100, 0, 0).unwrap();
+        store.reserve("0xretry", 40).unwrap();
+
+        // The relay's first attempt was applied but its reply was lost, so it
+        // sends the same settle again with the same id.
+        let first = store.settle("0xretry", 0, 40, Some("s-1")).unwrap();
+        let again = store.settle("0xretry", 0, 40, Some("s-1")).unwrap();
+        assert_eq!(first, Some((100, 0)));
+        assert_eq!(again, first, "a replay answers with the original result");
+        assert_eq!(
+            store.get_account("0xretry").unwrap(),
+            Some((100, 0, 0)),
+            "the retry must not refund the reservation twice"
+        );
+    }
+
+    #[test]
+    fn a_settle_id_reused_for_different_numbers_is_rejected() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_account("0xreuse", 100, 0, 0).unwrap();
+        store.reserve("0xreuse", 40).unwrap();
+        store.settle("0xreuse", 10, 40, Some("s-1")).unwrap();
+        store.reserve("0xreuse", 20).unwrap();
+
+        let err = store.settle("0xreuse", 0, 20, Some("s-1")).unwrap_err();
+        assert!(matches!(err, Error::SettleIdReused(_)), "got {err}");
+        assert_eq!(store.get_account("0xreuse").unwrap(), Some((70, 20, 0)));
     }
 
     #[test]
     fn settle_returns_none_for_an_unknown_account() {
         let store = Store::open_in_memory().unwrap();
-        assert_eq!(store.settle("0xnosuch", 0, 10).unwrap(), None);
+        assert_eq!(store.settle("0xnosuch", 0, 10, None).unwrap(), None);
     }
 
     #[test]
@@ -786,7 +910,7 @@ mod tests {
 
         // Settling with spent = 0 must return the whole reservation, leaving
         // the account exactly where it started.
-        store.settle("0xroundtrip", 0, granted).unwrap();
+        store.settle("0xroundtrip", 0, granted, None).unwrap();
         let (remaining_after, reserved_after, _) =
             store.get_account("0xroundtrip").unwrap().unwrap();
         assert_eq!(remaining_after + reserved_after, before_total);
@@ -799,7 +923,7 @@ mod tests {
         store.upsert_account("0xspend", 200, 0, 0).unwrap();
 
         let granted = store.reserve("0xspend", 75).unwrap().unwrap();
-        store.settle("0xspend", 20, granted).unwrap();
+        store.settle("0xspend", 20, granted, None).unwrap();
 
         // The total (remaining + reserved) must fall by exactly what was
         // spent — no more (a leak) and no less (a double credit).

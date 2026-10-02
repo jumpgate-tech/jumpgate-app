@@ -24,7 +24,14 @@ const (
 	codeMethodNotFound = -32601
 	codePolicyDenied   = -32001
 	codeUpstream       = -32002
+	// codeOutOfCredits and codeLedgerUnavailable mirror HTTP's 402 and 503.
+	codeOutOfCredits      = -32003
+	codeLedgerUnavailable = -32004
 )
+
+// closePolicyViolation is RFC 6455's 1008: the session ended because the key may
+// no longer be served, not because anything broke.
+const closePolicyViolation uint16 = 1008
 
 // supportedSubscriptions are the kinds a poller can feed over plain HTTP.
 //
@@ -63,6 +70,12 @@ type WSConfig struct {
 	ChainID int
 	Caller  RPCCaller
 	Streams Streams
+	// Charge meters one call, by method, against the key's account. Nil serves
+	// unmetered, matching a gateway with billing off.
+	Charge func(ctx context.Context, method string) error
+	// Reauth re-checks the key. A non-nil error ends the session. Nil never
+	// re-checks.
+	Reauth func(ctx context.Context) error
 }
 
 // WSSession serves one customer WebSocket.
@@ -125,11 +138,24 @@ func (s *WSSession) handleFrame(ctx context.Context, msg []byte) {
 		return
 	}
 
+	if !s.stillAuthorised(ctx) {
+		return
+	}
 	if err := CheckMethods(s.cfg.Record, []string{call.Method}); err != nil {
 		// The connection survives a refusal, so one denied call does not drop a
 		// customer's whole session.
 		s.writeError(call.ID, codePolicyDenied, "method not allowed for this key")
 		return
+	}
+
+	// Charge BEFORE serving, as the HTTP path does. eth_subscribe is the one
+	// exception: it bills per delivered notification (see deliver), so opening
+	// the stream is free.
+	if call.Method != "eth_subscribe" {
+		if err := s.charge(ctx, call.Method); err != nil {
+			s.writeChargeError(call.ID, err)
+			return
+		}
 	}
 
 	switch call.Method {
@@ -174,7 +200,7 @@ func (s *WSSession) handleSubscribe(ctx context.Context, id json.RawMessage, par
 	}
 
 	handle, err := s.cfg.Streams.Subscribe(ctx, s.cfg.ChainID, kind, rest, func(payload json.RawMessage) {
-		s.writeNotification(subID, payload)
+		s.deliver(ctx, subID, payload)
 	})
 	if err != nil {
 		if errors.Is(err, ErrSubscriptionUnsupported) {
@@ -231,6 +257,66 @@ func (s *WSSession) closeAll() {
 	for _, h := range handles {
 		_ = h.Close()
 	}
+}
+
+// deliver charges one notification and then writes it.
+//
+// An empty account ends the session rather than leaving a stream that silently
+// stops: the client reconnects into a 402, which says what is wrong. A ledger
+// that cannot answer drops this one notification instead, because delivering it
+// would be delivering it free, and ending a funded customer's session over an
+// outage would be worse than one missed head.
+func (s *WSSession) deliver(ctx context.Context, subID string, payload json.RawMessage) {
+	if !s.stillAuthorised(ctx) {
+		return
+	}
+	if err := s.charge(ctx, "eth_subscribe"); err != nil {
+		if errors.Is(err, ErrInsufficientCredits) {
+			s.end(closePolicyViolation, "account is out of credits")
+		}
+		return
+	}
+	s.writeNotification(subID, payload)
+}
+
+func (s *WSSession) charge(ctx context.Context, method string) error {
+	if s.cfg.Charge == nil {
+		return nil
+	}
+	return s.cfg.Charge(ctx, method)
+}
+
+// stillAuthorised re-checks the key and ends the session if it was revoked. The
+// handshake alone would let a revoked key keep its socket for as long as the
+// customer cared to hold it open.
+func (s *WSSession) stillAuthorised(ctx context.Context) bool {
+	if s.cfg.Reauth == nil {
+		return true
+	}
+	if err := s.cfg.Reauth(ctx); err != nil {
+		s.end(closePolicyViolation, "key is no longer valid")
+		return false
+	}
+	return true
+}
+
+// end closes the connection. Run's read then fails, and Run releases every
+// stream this session holds.
+func (s *WSSession) end(code uint16, reason string) {
+	s.writeMu.Lock()
+	_ = s.cfg.Conn.WriteClose(code, reason)
+	s.writeMu.Unlock()
+	_ = s.cfg.Conn.Close()
+}
+
+// writeChargeError mirrors the HTTP path's split between "cannot pay" and
+// "cannot tell".
+func (s *WSSession) writeChargeError(id json.RawMessage, err error) {
+	if errors.Is(err, ErrInsufficientCredits) {
+		s.writeError(id, codeOutOfCredits, "account is out of credits")
+		return
+	}
+	s.writeError(id, codeLedgerUnavailable, "the credit ledger did not answer")
 }
 
 // splitSubscribeParams reads the subscription name and leaves the rest for the

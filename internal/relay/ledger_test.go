@@ -69,13 +69,13 @@ func TestBillingClientSettle(t *testing.T) {
 	stub.body = `{"credits_remaining":88,"credits_reserved":0}`
 
 	c := NewBillingClient(stub.socket, "relay-token")
-	if err := c.Settle(context.Background(), "0xcustomer", 12, 30); err != nil {
+	if err := c.Settle(context.Background(), "0xcustomer", 12, 30, "s-1"); err != nil {
 		t.Fatalf("Settle: %v", err)
 	}
 	if stub.gotPath != "/internal/settle" {
 		t.Errorf("path = %q, want /internal/settle", stub.gotPath)
 	}
-	for _, want := range []string{`"account":"0xcustomer"`, `"spent":12`, `"reserved":30`} {
+	for _, want := range []string{`"account":"0xcustomer"`, `"spent":12`, `"reserved":30`, `"settle_id":"s-1"`} {
 		if !strings.Contains(stub.gotBody, want) {
 			t.Errorf("body = %q, want it to contain %s", stub.gotBody, want)
 		}
@@ -90,7 +90,7 @@ func TestBillingClientSettleSurfacesARejection(t *testing.T) {
 	stub.body = `{"error":"invalid settle: spent 40 must be between 0 and reserved 30"}`
 
 	c := NewBillingClient(stub.socket, "relay-token")
-	if err := c.Settle(context.Background(), "0xcustomer", 40, 30); err == nil {
+	if err := c.Settle(context.Background(), "0xcustomer", 40, 30, "s-2"); err == nil {
 		t.Fatal("err = nil, want the rejection surfaced")
 	}
 }

@@ -29,6 +29,10 @@ pub enum Error {
     InvalidCredits(i64),
     #[error("invalid settle: spent {spent} must be between 0 and reserved {reserved}")]
     InvalidSettle { spent: i64, reserved: i64 },
+    #[error("settle of {reserved} exceeds the {held} credits this account holds in reserve")]
+    SettleExceedsReservation { reserved: i64, held: i64 },
+    #[error("settle id {0} was already used for a different settle")]
+    SettleIdReused(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

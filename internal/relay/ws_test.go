@@ -103,6 +103,12 @@ type wsHarness struct {
 
 func newWSHarness(t *testing.T, rec KeyRecord) *wsHarness {
 	t.Helper()
+	return newWSHarnessWith(t, rec, nil)
+}
+
+// newWSHarnessWith lets a test adjust the session config, for example to meter it.
+func newWSHarnessWith(t *testing.T, rec KeyRecord, adjust func(*WSConfig)) *wsHarness {
+	t.Helper()
 	h := &wsHarness{caller: &stubCaller{}, streams: newStubStreams(), done: make(chan struct{})}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -110,13 +116,17 @@ func newWSHarness(t *testing.T, rec KeyRecord) *wsHarness {
 		if err != nil {
 			return
 		}
-		sess := NewWSSession(WSConfig{
+		cfg := WSConfig{
 			Conn:    conn,
 			Record:  rec,
 			ChainID: 369,
 			Caller:  h.caller,
 			Streams: h.streams,
-		})
+		}
+		if adjust != nil {
+			adjust(&cfg)
+		}
+		sess := NewWSSession(cfg)
 		sess.Run(r.Context())
 		close(h.done)
 	}))

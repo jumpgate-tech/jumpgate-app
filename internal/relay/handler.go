@@ -11,6 +11,8 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/valve-tech/valve-node-app/internal/wsrpc"
 )
@@ -231,11 +233,23 @@ func (h *Handler) serveBeacon(w http.ResponseWriter, r *http.Request, route Rout
 		writeError(w, http.StatusNotImplemented, "this gateway serves no beacon API")
 		return
 	}
+	if err := checkBeaconRequest(r.Method, route.Rest); err != nil {
+		writeBeaconPolicyError(w, err)
+		return
+	}
 	base, ok := h.cfg.Beacon(route.ChainID)
 	if !ok || base == nil {
 		// A chain with no consensus layer is a definite answer, not a dead
 		// upstream. The catalog knows which chains have one.
 		writeError(w, http.StatusNotImplemented, "this chain has no consensus layer")
+		return
+	}
+
+	// Charge after the chain and policy checks, so a refused call costs the
+	// customer nothing, and before forwarding, so an unpaid one costs the
+	// operator nothing.
+	if err := h.charge(r.Context(), rec, route.ChainID, []string{beaconMethod}); err != nil {
+		writeChargeError(w, err)
 		return
 	}
 
@@ -307,13 +321,56 @@ func (h *Handler) serveWebSocket(w http.ResponseWriter, r *http.Request, route R
 	}
 	defer conn.Close()
 
-	NewWSSession(WSConfig{
+	cfg := WSConfig{
 		Conn:    conn,
 		Record:  rec,
 		ChainID: route.ChainID,
 		Caller:  h.cfg.Caller,
 		Streams: h.cfg.Streams,
-	}).Run(r.Context())
+		Reauth:  h.reauthEvery(route.Key, wsReauthInterval),
+	}
+	// The same meter as HTTP. Without it every call after the upgrade, and every
+	// notification, would be served free.
+	if h.cfg.Credits != nil {
+		cfg.Charge = func(ctx context.Context, method string) error {
+			return h.charge(ctx, rec, route.ChainID, []string{method})
+		}
+	}
+	NewWSSession(cfg).Run(r.Context())
+}
+
+// wsReauthInterval bounds how long a revoked key keeps a live socket. The key
+// cache already answers repeat lookups from memory, so this costs little.
+const wsReauthInterval = 30 * time.Second
+
+// reauthEvery re-checks a key at most once per interval.
+//
+// Only a definite refusal ends a session. A key store that cannot answer leaves
+// it running, because the handshake already authenticated this key and dropping
+// every funded customer's socket over a store blip would be the worse failure.
+func (h *Handler) reauthEvery(key string, interval time.Duration) func(context.Context) error {
+	var (
+		mu   sync.Mutex
+		last = time.Now()
+	)
+	return func(ctx context.Context) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if time.Since(last) < interval {
+			return nil
+		}
+		rec, err := h.cfg.Auth.Authenticate(ctx, key)
+		switch {
+		case errors.Is(err, ErrUnavailable):
+			return nil
+		case err != nil:
+			return err
+		case !rec.Enabled:
+			return ErrDisabledKey
+		}
+		last = time.Now()
+		return nil
+	}
 }
 
 // serveHealth answers the rollup over the category x arch x chain matrix. Each

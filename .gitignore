@@ -44,4 +44,4 @@ progress.txt
 *.db-shm
 *.sqlite
 *.sqlite3
-/--db
+/--db*

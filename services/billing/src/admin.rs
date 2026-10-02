@@ -508,7 +508,12 @@ async fn settle_credits(
     }
     let settled = {
         let accounts = state.accounts.lock().expect("accounts lock");
-        accounts.settle(&req.account, req.spent, req.reserved)?
+        accounts.settle(
+            &req.account,
+            req.spent,
+            req.reserved,
+            req.settle_id.as_deref(),
+        )?
     };
     match settled {
         Some((credits_remaining, credits_reserved)) => Ok(Json(SettleView {
@@ -854,6 +859,11 @@ struct SettleRequest {
     account: String,
     spent: i64,
     reserved: i64,
+    /// Makes the settle safe to retry: a repeat of an applied id is answered
+    /// with the original result instead of refunding twice. Optional so an
+    /// older relay still settles, without that protection.
+    #[serde(default)]
+    settle_id: Option<String>,
 }
 
 /// The reply to `POST /internal/settle`: the account's balance after the
@@ -962,6 +972,11 @@ impl From<Error> for ApiError {
             | Error::RangeTooWide { .. }
             | Error::InvalidCredits(_)
             | Error::InvalidSettle { .. } => StatusCode::BAD_REQUEST,
+            // The ledger and the relay disagree about what is reserved. That is
+            // a conflict to investigate, never something to paper over.
+            Error::SettleExceedsReservation { .. } | Error::SettleIdReused(_) => {
+                StatusCode::CONFLICT
+            }
             // A missing pepper is a startup fault surfaced at request time.
             Error::MissingPepper
             | Error::MissingAdminToken
@@ -1886,6 +1901,47 @@ mod tests {
             StatusCode::BAD_REQUEST,
             "the relay cannot spend more than it held"
         );
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn settle_beyond_the_reservation_is_a_409_and_mints_nothing() {
+        let (app, path) = test_app("settleconflict");
+        seed_account(&path, "0xconflict", 100, 10, 0);
+
+        let (status, _) = send(
+            &app,
+            json_req(
+                "POST",
+                "/internal/settle",
+                RELAY_TOKEN,
+                json!({ "account": "0xconflict", "spent": 0, "reserved": 40 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn a_retried_settle_id_is_answered_without_refunding_twice() {
+        let (app, path) = test_app("settleretry");
+        seed_account(&path, "0xretry", 100, 40, 0);
+        let settle = || {
+            json_req(
+                "POST",
+                "/internal/settle",
+                RELAY_TOKEN,
+                json!({ "account": "0xretry", "spent": 15, "reserved": 40, "settle_id": "s-1" }),
+            )
+        };
+
+        let (first_status, first) = send(&app, settle()).await;
+        let (again_status, again) = send(&app, settle()).await;
+        assert_eq!(first_status, StatusCode::OK);
+        assert_eq!(again_status, StatusCode::OK, "a retry is not an error");
+        assert_eq!(first["credits_remaining"], 125);
+        assert_eq!(again, first, "the retry gets the original answer");
         remove_db(&path);
     }
 

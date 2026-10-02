@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -249,6 +250,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		if c, err := r.Cookie(cookieName); err == nil && tokensEqual(c.Value, s.cfg.Token) {
+			// SameSite ignores the port, so a page on another local port is
+			// "same-site" and the browser sends it this cookie. A cookie may
+			// therefore authorise a change only when the request also comes
+			// from this origin. The bearer path above needs no such check: a
+			// cross-origin page cannot set Authorization without a CORS
+			// preflight, and this server grants none.
+			if !isSafeMethod(r.Method) && !sameOrigin(r) {
+				http.Error(w, "cross-origin request refused", http.StatusForbidden)
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -269,10 +280,7 @@ func tokensEqual(a, b string) bool {
 
 // ListenAndServe runs the server until ctx is canceled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
-	httpServer := &http.Server{
-		Addr:    s.cfg.Bind,
-		Handler: s.Handler(),
-	}
+	httpServer := newHTTPServer(s.cfg.Bind, s.Handler())
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -294,4 +302,51 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 // here so tests can create a jar without importing cookiejar directly.
 func cookiejarNew() (*cookiejar.Jar, error) {
 	return cookiejar.New(nil)
+}
+
+func isSafeMethod(m string) bool {
+	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
+}
+
+// sameOrigin reports whether a browser request came from this server's own
+// origin. Fetch metadata is preferred when present; otherwise Origin must name
+// this host. A request carrying neither is not from a browser page (browsers
+// always send Origin on a cross-origin POST), so it is allowed.
+func sameOrigin(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "none":
+		// "none" is a user-initiated navigation, not a page.
+	case "":
+		// Older browser or not a browser: fall through to Origin.
+	default:
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		// Includes "null", which sandboxed and file:// pages send.
+		return false
+	}
+	return u.Host == r.Host
+}
+
+// Listener timeouts. Header reads are bounded so a slow-header client cannot
+// pin sockets open. There is deliberately no WriteTimeout: SSE and WebSocket
+// responses are long-lived, and a whole-response deadline would cut them off.
+const (
+	readHeaderTimeout = 10 * time.Second
+	idleTimeout       = 2 * time.Minute
+)
+
+// newHTTPServer builds a listener's http.Server with the shared timeouts.
+func newHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
+	}
 }
