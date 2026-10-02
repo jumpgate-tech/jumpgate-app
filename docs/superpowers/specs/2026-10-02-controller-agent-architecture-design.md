@@ -243,8 +243,20 @@ gradually.
 
 ## Naming
 
-The product is Jumpgate and the new binary is `jumpgate`. The Go module path,
-`cmd/valve-node-app`, the `~/.valve-node-app` config directory and the
-`valve-node-app` service user keep their names in this programme; new on-box
-paths use `jumpgate` (`/run/jumpgate`, `/var/lib/jumpgate`, user `jumpgate`).
-Renaming the old ones is a separate decision.
+The product is Jumpgate and the binary is `jumpgate`. "valve-node-app" is a
+stale name ("node" meant a blockchain node) and is retired as the **first step of
+sub-project 1**, before any new package is written, so new code is born under
+the new import path:
+
+- Go module `github.com/valve-tech/valve-node-app` → `…/jumpgate`;
+  `cmd/valve-node-app` → `cmd/jumpgate` (the web-app entry point becomes
+  `jumpgate serve`; the tray build keeps its tag).
+- Controller config directory `~/.valve-node-app` → `~/.jumpgate`, migrated
+  once on first start (move, leave a pointer file, never copy secrets twice).
+- On-box service user and group `valve-node-app` → `jumpgate-node`, migrated by
+  the agent when a box is paired: stop units, `usermod`/`groupmod` rename,
+  re-render units, `chown` only if ownership is by name rather than uid, start
+  units, verify. Boxes not yet paired keep the old user until then; the catalog
+  accepts both names during the transition.
+- `jumpgate` (the SSH-only tunnel user) and `jumpgate-node` (runs the clients)
+  are deliberately different accounts.

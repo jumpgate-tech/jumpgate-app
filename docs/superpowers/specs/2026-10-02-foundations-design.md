@@ -28,6 +28,14 @@ wallets), the TUI, setup over intents, gateways/VPN/keys over intents,
 validators. Approval-tier intents therefore do not exist yet; policy changes in
 this sub-project happen only through bootstrap (root SSH).
 
+## Step 0: retire the valve-node-app name
+
+Done first, as its own commit, per "Naming" in the parent spec: module path,
+`cmd/jumpgate`, `~/.jumpgate` with one-time migration, and the catalog accepting
+both `valve-node-app` and `jumpgate-node` service users. On-box user migration
+is part of pairing (bootstrap step 6a: stop units, rename user and group,
+re-render units, start, verify). Paths below use the new names.
+
 ## Components
 
 New packages, each usable and testable alone:
@@ -179,7 +187,7 @@ controller) if it is rejected for staleness.
   agent address recorded at pairing **and** that `requestHash` and `seq` match.
   A receipt failing either check is an error, never a result.
 - Controller transport key: an ed25519 SSH key generated once per controller at
-  `~/.valve-node-app/ssh/jumpgate_ed25519` (0600), or an ssh-agent key if the
+  `~/.jumpgate/ssh/jumpgate_ed25519` (0600), or an ssh-agent key if the
   operator configures one.
 
 ### `internal/bootstrap`
@@ -193,7 +201,7 @@ a verify check like `setup.Step`:
    rather than editing the main file.
 2. **Upload agent binary** — pick `jumpgate-linux-<arch>` from
    `uname -m`. If the controller itself is that platform, use
-   `os.Executable()`; otherwise use `~/.valve-node-app/agents/` (populated by
+   `os.Executable()`; otherwise use `~/.jumpgate/agents/` (populated by
    `make agents`, with a `SHA256SUMS` file). Upload to
    `/usr/local/lib/jumpgate/jumpgate.new`, verify the SHA-256 on the box, then
    rename into place.
@@ -224,7 +232,7 @@ step 4, and adds the invoking user to group `jumpgate`.
 
 ### `internal/daemon` and `jumpgate serve`
 
-- Runtime directory: `~/.valve-node-app/run/` (0700).
+- Runtime directory: `~/.jumpgate/run/` (0700).
 - `server.lock`: an exclusive `flock` held for the server's lifetime. A second
   `serve` fails with "already running, pid N".
 - `server.json` (0600): `{pid, socket, httpAddr, token, version, startedAt}`,
@@ -238,11 +246,10 @@ step 4, and adds the invoking user to group `jumpgate`.
   `run/server.log`) and wait up to 10 s for it.
 - `jumpgate stop` sends SIGTERM to the recorded pid after confirming the lock is
   held by it.
-- `cmd/valve-node-app` takes the same lock and writes the same file, so the two
+- The tray/web entry point takes the same lock and writes the same file, so the two
   binaries never run two servers for one user.
 - To let `jumpgate serve` serve the web UI, the `//go:embed all:web/dist`
-  moves from `cmd/valve-node-app/main.go` into a small package at
-  `cmd/valve-node-app/web` that both binaries import.
+  moves into a small package at `cmd/jumpgate/web`.
 
 The intent commands in this sub-project (`status`, `disk`, …) go through the
 server: `POST /api/targets/{id}/intent/{kind}`, which signs with the controller
