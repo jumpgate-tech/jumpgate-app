@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func explainReq() ExplainRequest {
@@ -202,6 +203,64 @@ func TestCapLines_ASingleOversizeLineTerminates(t *testing.T) {
 func TestCapLines_EmptyInput(t *testing.T) {
 	if got := capLines(nil); len(got) != 0 {
 		t.Errorf("got %v, want nothing", got)
+	}
+}
+
+// The regression for capLines dropping everything: when the newest line on
+// its own exceeds the byte budget, popping whole lines from the front empties
+// the batch and the provider is asked to explain nothing, so it invents a
+// diagnosis. The newest line must survive, cut down to fit, with both of its
+// ends kept: the head carries the timestamp, level and message that say what
+// failed, and the tail carries the trailing error= detail that says why.
+func TestCapLines_AnOversizeNewestLineIsTruncatedNotDropped(t *testing.T) {
+	head := "2026-07-23T03:00:00Z ERROR rpc: request failed payload="
+	tail := ` error="401 Unauthorized"`
+	huge := head + strings.Repeat("ab", maxExplainBytes) + tail
+
+	got := capLines([]string{"older line", huge})
+	if len(got) != 1 {
+		t.Fatalf("got %d lines, want exactly the truncated newest one", len(got))
+	}
+	if n := len(got[0]) + 1; n > maxExplainBytes {
+		t.Errorf("truncated line is %d bytes with its newline, want <= %d", n, maxExplainBytes)
+	}
+	if !strings.HasPrefix(got[0], head) {
+		t.Errorf("truncation lost the line's head (level and message): %.80q", got[0])
+	}
+	if !strings.HasSuffix(got[0], tail) {
+		t.Errorf("truncation lost the line's tail (the error detail): %q", got[0][max(0, len(got[0])-80):])
+	}
+	if !strings.Contains(got[0], "truncated") {
+		t.Error("truncated line does not say it was truncated, so the model may read the join as real text")
+	}
+}
+
+// Truncation must not split a multi-byte character, or the prompt carries
+// invalid UTF-8 to the provider.
+func TestCapLines_TruncationKeepsValidUTF8(t *testing.T) {
+	got := capLines([]string{strings.Repeat("é", maxExplainBytes)})
+	if len(got) != 1 {
+		t.Fatalf("got %d lines, want 1", len(got))
+	}
+	if !utf8.ValidString(got[0]) {
+		t.Error("truncated line is not valid UTF-8")
+	}
+	if n := len(got[0]) + 1; n > maxExplainBytes {
+		t.Errorf("truncated line is %d bytes with its newline, want <= %d", n, maxExplainBytes)
+	}
+}
+
+// A non-empty input never yields an empty batch, whatever its shape.
+func TestCapLines_NonEmptyInputNeverYieldsAnEmptyBatch(t *testing.T) {
+	inputs := [][]string{
+		{strings.Repeat("x", maxExplainBytes)},
+		{strings.Repeat("x", maxExplainBytes-1)},
+		{"short", strings.Repeat("y", 3*maxExplainBytes)},
+	}
+	for _, in := range inputs {
+		if got := capLines(in); len(got) == 0 {
+			t.Errorf("capLines(%d lines, newest %d bytes) returned nothing", len(in), len(in[len(in)-1]))
+		}
 	}
 }
 

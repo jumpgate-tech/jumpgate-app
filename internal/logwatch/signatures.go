@@ -13,20 +13,31 @@ type signature struct {
 	explain  string
 	learnURL string
 	// requireErrLevel, when true, means pattern alone is not enough — the
-	// line must ALSO carry an error-level indicator (see errLevelPattern)
+	// line must ALSO carry an error-level indicator (see hasErrLevel)
 	// before it counts as a match. Used by engine-auth: benign lines like
 	// prysm's routine "Finished reading JWT secret from ...jwt.hex" INFO
-	// line match `jwt|401|unauthorized` too, so without this gate they'd
+	// line match the engine-auth pattern too, so without this gate they'd
 	// be misclassified as a critical auth failure. Same lesson as
 	// internal/setup/steps.go's handshake authErrorLines gate, propagated
 	// here since the underlying patterns can each drift independently.
 	requireErrLevel bool
 }
 
-// errLevelPattern mirrors internal/setup/steps.go's errLevelPattern (kept
-// as a separate copy since the two packages classify independent log
-// streams and shouldn't share a cross-package dependency for one regex).
-var errLevelPattern = regexp.MustCompile(`(?i)(level=(warn(ing)?|error|fatal)|\bERRO\b|\bCRIT\b|\bFATAL\b|authentication failed|invalid)`)
+// errLevelPattern gates requireErrLevel signatures. It started as a copy of
+// internal/setup/steps.go's errLevelPattern; it now accepts any level token
+// levelSeverity recognizes (so geth's "ERROR[...]", reth's "ERROR" column and
+// erigon's "[EROR]" count, not just lighthouse's ERRO and prysm's level=),
+// plus the two phrases that mark an auth failure on a line with no level
+// field at all. "invalid" is word-bounded so identifiers such as
+// invalid_blocks=0 on an INFO line do not pass the gate.
+var errLevelPattern = regexp.MustCompile(`(?i)authentication failed|\binvalid\b`)
+
+func hasErrLevel(line string) bool {
+	if _, ok := levelSeverity(line); ok {
+		return true
+	}
+	return errLevelPattern.MatchString(line)
+}
 
 const learnRPCBase = "https://learn.valve.city/rpc"
 
@@ -42,8 +53,13 @@ var signatures = []signature{
 		learnURL: learnRPCBase + "#syncing",
 	},
 	{
+		// Word boundaries matter here: without them "401" matches inside
+		// any hash, block number or slot (about 1.5% of random 64-hex
+		// hashes contain it), turning ordinary error lines into critical
+		// JWT alerts. "jwt.hex" and "--jwt-secret" still match, since "."
+		// and "-" are boundaries.
 		name:            "engine-auth",
-		pattern:         regexp.MustCompile(`(?i)jwt|401|unauthorized`),
+		pattern:         regexp.MustCompile(`(?i)\bjwt\b|\b401\b|\bunauthorized\b`),
 		severity:        "critical",
 		explain:         "The execution and beacon clients can't authenticate to each other over the engine API. This is almost always a mismatched or missing JWT secret file — check both clients point at the same jwt.hex.",
 		learnURL:        learnRPCBase + "#jwt-secret",
@@ -90,16 +106,35 @@ var signatures = []signature{
 	},
 }
 
-// levelSeverity maps an unclassified line's log-level word to a Hit
-// severity, checked in this priority order since a line could in principle
-// contain more than one level word.
+// levelSeverity maps an unclassified line's log level to a Hit severity,
+// checked in this priority order since a line could in principle carry more
+// than one level token.
+//
+// The level is matched as a whole token, never as a substring: matching
+// bare "erro", "warn" or "crit" turned healthy INFO lines reporting
+// errors=0, warnings: 0 or fork-choice "criteria" into error, warn and
+// critical hits. Two shapes are recognised:
+//
+//   - an upper-case level column, as written by lighthouse (ERRO, CRIT),
+//     geth (ERROR[date|time], WARN [...]), reth (ERROR, WARN after the
+//     timestamp) and erigon ([EROR], [WARN]). Upper case only, since the
+//     same words in lower case are ordinary message text ("no error").
+//   - a level key/value field, as written by prysm and logfmt loggers
+//     (level=error, lvl=eror) or JSON loggers ("level":"error"), where the
+//     value is matched case-insensitively.
 var (
-	levelCriticalRe = regexp.MustCompile(`(?i)crit|fatal`)
-	// "erro" (not "error") so lighthouse-pulse's abbreviated ERRO level tag
-	// matches too — "error" still matches since it contains "erro".
-	levelErrorRe = regexp.MustCompile(`(?i)erro`)
-	levelWarnRe  = regexp.MustCompile(`(?i)warn`)
+	levelCriticalRe = levelRe(`CRIT|CRITICAL|FATAL`, `crit|critical|fatal`)
+	levelErrorRe    = levelRe(`ERROR|ERRO|EROR`, `error|erro|eror|err`)
+	levelWarnRe     = levelRe(`WARN|WARNING`, `warn|warning`)
 )
+
+// levelRe builds one severity's matcher from its upper-case column tokens
+// and its (case-insensitive) key/value spellings.
+func levelRe(columnTokens, fieldValues string) *regexp.Regexp {
+	return regexp.MustCompile(`\b(?:` + columnTokens + `)\b` +
+		`|(?i:\b(?:level|lvl)=["']?(?:` + fieldValues + `)\b)` +
+		`|(?i:"level"\s*:\s*"(?:` + fieldValues + `)")`)
+}
 
 func levelSeverity(line string) (string, bool) {
 	switch {

@@ -91,8 +91,10 @@ func (c *Client) Latest(ctx context.Context) (Release, error) {
 
 // CompareSemver returns -1, 0, or 1 comparing a to b. It strips a single leading
 // "v". It compares the dotted numeric components major.minor.patch, and reads a
-// missing or non-numeric component as 0. A pre-release (the part after "-")
-// sorts below its release. Two pre-releases compare by their text.
+// missing or non-numeric component as 0. Build metadata (the part after "+")
+// is ignored, as semver 2.0 requires. A pre-release (the part after "-")
+// sorts below its release, and two pre-releases compare by semver 2.0
+// precedence (see comparePrerelease).
 func CompareSemver(a, b string) int {
 	aCore, aPre := splitVersion(a)
 	bCore, bPre := splitVersion(b)
@@ -109,13 +111,77 @@ func CompareSemver(a, b string) int {
 	if aPre != "" && bPre == "" {
 		return -1
 	}
-	return strings.Compare(aPre, bPre)
+	return comparePrerelease(aPre, bPre)
 }
 
-// splitVersion drops one leading "v" and separates the numeric core from the
-// pre-release text after the first "-".
+// comparePrerelease orders two non-empty pre-release strings by semver 2.0
+// section 11: dot-separated identifiers compared left to right, numeric
+// identifiers numerically, alphanumeric ones in ASCII order, a numeric
+// identifier below an alphanumeric one, and a longer list above a shorter
+// list it extends. Plain text comparison got the common rc.10 vs rc.2 case
+// backwards, which would hide a newer release candidate.
+func comparePrerelease(a, b string) int {
+	aIDs := strings.Split(a, ".")
+	bIDs := strings.Split(b, ".")
+	for i := 0; i < len(aIDs) && i < len(bIDs); i++ {
+		if n := compareIdentifier(aIDs[i], bIDs[i]); n != 0 {
+			return n
+		}
+	}
+	switch {
+	case len(aIDs) < len(bIDs):
+		return -1
+	case len(aIDs) > len(bIDs):
+		return 1
+	}
+	return 0
+}
+
+// compareIdentifier compares one pre-release identifier pair. Numeric
+// identifiers are compared by digit count and then by digits, which is
+// numeric order without parsing, so an identifier too long for an int
+// cannot overflow into a wrong answer.
+func compareIdentifier(a, b string) int {
+	aNum, bNum := isNumeric(a), isNumeric(b)
+	switch {
+	case aNum && bNum:
+		a, b = strings.TrimLeft(a, "0"), strings.TrimLeft(b, "0")
+		if len(a) != len(b) {
+			if len(a) < len(b) {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a, b)
+	case aNum:
+		return -1
+	case bNum:
+		return 1
+	}
+	return strings.Compare(a, b)
+}
+
+func isNumeric(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// splitVersion drops one leading "v" and any "+build" metadata, then
+// separates the numeric core from the pre-release text after the first "-".
+// Metadata has to go first: left in place it made "3+meta" unparseable, so
+// v1.2.3+meta read as patch 0.
 func splitVersion(v string) (core, pre string) {
 	v = strings.TrimPrefix(v, "v")
+	if i := strings.IndexByte(v, '+'); i >= 0 {
+		v = v[:i]
+	}
 	if i := strings.IndexByte(v, '-'); i >= 0 {
 		return v[:i], v[i+1:]
 	}

@@ -41,8 +41,13 @@ type Watcher struct {
 	exec  executor.Executor
 	units []string
 
+	// ring is a fixed-capacity circular buffer. It grows by append until it
+	// holds ringSize hits; after that each new hit overwrites the oldest in
+	// place at index next, so a full ring costs no allocation per line.
+	// Recent unrolls it back into oldest-first order.
 	mu   sync.Mutex
-	ring []Hit // newest last; capped at ringSize
+	ring []Hit
+	next int // index of the oldest hit (the next slot to overwrite) once full
 
 	subsMu sync.Mutex
 	subs   map[chan Hit]struct{}
@@ -126,14 +131,11 @@ func (w *Watcher) handleLine(unit, line string) {
 	}
 
 	w.mu.Lock()
-	w.ring = append(w.ring, hit)
-	if len(w.ring) > ringSize {
-		// Copy into a fresh slice (not just re-slice) so the trimmed
-		// prefix's backing array is released rather than the buffer's
-		// capacity growing unbounded over the watcher's lifetime.
-		trimmed := make([]Hit, ringSize)
-		copy(trimmed, w.ring[len(w.ring)-ringSize:])
-		w.ring = trimmed
+	if len(w.ring) < ringSize {
+		w.ring = append(w.ring, hit)
+	} else {
+		w.ring[w.next] = hit
+		w.next = (w.next + 1) % ringSize
 	}
 	w.mu.Unlock()
 
@@ -147,8 +149,14 @@ func (w *Watcher) Recent(n int) []Hit {
 	if n <= 0 || n > len(w.ring) {
 		n = len(w.ring)
 	}
+	// Logical index 0 is the oldest hit, at physical index w.next (which
+	// stays 0 until the ring first fills). The newest n are logical
+	// indices len-n .. len-1; map each back onto the ring.
+	size := len(w.ring)
 	out := make([]Hit, n)
-	copy(out, w.ring[len(w.ring)-n:])
+	for i := range out {
+		out[i] = w.ring[(w.next+size-n+i)%size]
+	}
 	return out
 }
 
@@ -193,15 +201,14 @@ func Classify(unit, line string, now time.Time) (Hit, bool) {
 }
 
 // classify matches line against the signature table (first match wins); if
-// none match, an error-ish line (matching an (?i)erro|warn|crit|fatal level
-// word — "erro" rather than "error" so lighthouse-pulse's abbreviated ERRO
-// tag is caught too) still produces an unclassified Hit (Signature ""),
-// severity taken from the level word. A benign line with neither yields
+// none match, an error-ish line (one carrying a warn, error or critical
+// level token or level= field; see levelSeverity) still produces an
+// unclassified Hit (Signature ""), severity taken from that level. A benign line with neither yields
 // ok=false — no Hit at all.
 func classify(unit, line string, now time.Time) (Hit, bool) {
 	for _, sig := range signatures {
 		if sig.pattern.MatchString(line) {
-			if sig.requireErrLevel && !errLevelPattern.MatchString(line) {
+			if sig.requireErrLevel && !hasErrLevel(line) {
 				continue
 			}
 			return Hit{

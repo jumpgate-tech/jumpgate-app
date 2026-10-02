@@ -151,6 +151,26 @@ func TestCompareSemver(t *testing.T) {
 		{"garbage reads as zero", "abc", "0.0.0", 0},
 		{"garbage component", "1.x.3", "1.0.3", 0},
 		{"garbage vs real", "1.2.garbage", "1.2.5", -1},
+
+		// Semver 2.0 section 11: pre-release identifiers are compared
+		// dot-separated field by field, numeric fields numerically. Plain
+		// text comparison put rc.10 below rc.2.
+		{"numeric prerelease field compares numerically", "1.2.3-rc.10", "1.2.3-rc.2", 1},
+		{"numeric prerelease field less", "1.2.3-rc.2", "1.2.3-rc.10", -1},
+		{"numeric identifier below alphanumeric", "1.0.0-alpha.1", "1.0.0-alpha.beta", -1},
+		{"alphanumeric compares in ASCII order", "1.0.0-beta", "1.0.0-alpha", 1},
+		{"more fields outrank a matching prefix", "1.0.0-alpha.1", "1.0.0-alpha", 1},
+		{"spec example chain alpha.beta < beta", "1.0.0-alpha.beta", "1.0.0-beta", -1},
+		{"spec example chain beta.2 < beta.11", "1.0.0-beta.2", "1.0.0-beta.11", -1},
+		{"spec example chain beta.11 < rc.1", "1.0.0-beta.11", "1.0.0-rc.1", -1},
+		{"hyphen inside a prerelease field is kept", "1.0.0-rc-2", "1.0.0-rc-1", 1},
+
+		// Semver 2.0 section 10: build metadata after "+" is ignored for
+		// precedence. Previously "3+meta" failed to parse and read as patch 0.
+		{"build metadata ignored on release", "v1.2.3+meta", "1.2.3", 0},
+		{"build metadata does not zero the patch", "1.2.3+meta", "1.2.2", 1},
+		{"build metadata ignored on prerelease", "1.2.3-rc.1+build.5", "1.2.3-rc.1", 0},
+		{"different build metadata still equal", "1.2.3+a", "1.2.3+b", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
