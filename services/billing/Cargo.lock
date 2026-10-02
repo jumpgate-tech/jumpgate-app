@@ -80,6 +80,7 @@ dependencies = [
  "bs58",
  "hmac",
  "http-body-util",
+ "libc",
  "rand",
  "rusqlite",
  "serde",

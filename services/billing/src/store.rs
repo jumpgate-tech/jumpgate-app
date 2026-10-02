@@ -66,11 +66,24 @@ pub struct Store {
 
 impl Store {
     /// Open the store at `path`, run the schema, and seed default pricing.
-    /// The file is set to owner-only (0600) on unix.
+    /// On unix the file and its `-wal` and `-shm` companions are owner-only
+    /// (0600). A missing file is created 0600 before SQLite opens it, because
+    /// SQLite gives the WAL files the main file's mode when it creates them;
+    /// a chmod after the fact would leave them at the umask's 0644.
     pub fn open(path: &Path) -> Result<Store> {
+        create_owner_only(path)?;
         let conn = Connection::open(path)?;
         let store = Store::init(conn)?;
+        // The pre-create covers a fresh file. These cover a file, or WAL
+        // files, left behind at a looser mode by an older build.
         set_owner_only(path)?;
+        for suffix in ["-wal", "-shm"] {
+            let companion = format!("{}{suffix}", path.display());
+            match set_owner_only(Path::new(&companion)) {
+                Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+                other => other?,
+            }
+        }
         Ok(store)
     }
 
@@ -607,6 +620,29 @@ fn set_owner_only(_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Create `path` empty at 0600 if it does not exist yet. An existing file is
+/// left alone (its mode is fixed by [`set_owner_only`] after the open). SQLite
+/// treats a zero-length file as a new database.
+#[cfg(unix)]
+fn create_owner_only(path: &Path) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+    {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(not(unix))]
+fn create_owner_only(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -966,6 +1002,39 @@ mod tests {
         let (remaining, reserved, _) = verify.get_account("0xconcurrent").unwrap().unwrap();
         assert_eq!(remaining, 0, "every available credit was reserved");
         assert_eq!(reserved, 55, "the reservation total matches what was granted");
+        remove_db(&path);
+    }
+
+    // --- file modes -------------------------------------------------------
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fresh_database_and_its_wal_files_are_owner_only() {
+        // SQLite gives the -wal and -shm files the main file's mode at the
+        // moment it creates them. If the main file is born 0644 from the
+        // umask and only chmod'ed afterwards, the WAL, which holds recent
+        // writes, stays world-readable. Check all three while the store is
+        // still open: SQLite deletes the WAL files on the last close.
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = temp_account_db_path("modes");
+        let store = Store::open(&path).unwrap();
+        store.upsert_account("0xmodes", 1, 0, 0).unwrap();
+
+        for file in [
+            path.display().to_string(),
+            format!("{}-wal", path.display()),
+            format!("{}-shm", path.display()),
+        ] {
+            let mode = std::fs::metadata(&file)
+                .unwrap_or_else(|e| panic!("{file} should exist: {e}"))
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "{file} must be owner-only, got {mode:o}");
+        }
+
+        drop(store);
         remove_db(&path);
     }
 }

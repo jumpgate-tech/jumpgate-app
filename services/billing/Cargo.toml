@@ -31,6 +31,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 subtle = "2"
 
+# geteuid(), to check who owns an existing socket directory before binding.
+# Already in the tree through tokio, so this adds no new crate.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 # Drive the router in tests with no real socket (ServiceExt::oneshot), and read
 # the response body.

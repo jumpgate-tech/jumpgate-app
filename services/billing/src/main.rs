@@ -100,15 +100,16 @@ fn open_manager(flags: &Flags) -> billing::Result<KeyManager> {
 
 fn keys_create(args: &[String]) -> billing::Result<()> {
     let flags = Flags::parse(args);
-    let km = open_manager(&flags)?;
-
-    let rate = match (flags.per_second, flags.per_day) {
-        (Some(per_second), Some(per_day)) => Rate::Limited {
-            per_second,
-            per_day,
-        },
-        _ => Rate::Unlimited,
+    // Check the flags before opening the database, so a usage error touches
+    // nothing on disk.
+    let rate = match rate_from_flags(flags.per_second, flags.per_day) {
+        Ok(rate) => rate,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            exit(2);
+        }
     };
+    let km = open_manager(&flags)?;
     let config = KeyConfig {
         label: flags.label.unwrap_or_default(),
         account_address: flags.account,
@@ -124,6 +125,20 @@ fn keys_create(args: &[String]) -> billing::Result<()> {
     println!("  raw key (shown once): {raw}");
     println!("  keys in map: {}", km.key_count());
     Ok(())
+}
+
+/// The key's rate from `--per-second` and `--per-day`. [`Rate::Limited`]
+/// carries both limits, so both flags or neither: a lone flag is an error,
+/// never a silent fall back to an unthrottled key.
+fn rate_from_flags(per_second: Option<i64>, per_day: Option<i64>) -> Result<Rate, &'static str> {
+    match (per_second, per_day) {
+        (Some(per_second), Some(per_day)) => Ok(Rate::Limited {
+            per_second,
+            per_day,
+        }),
+        (None, None) => Ok(Rate::Unlimited),
+        _ => Err("--per-second and --per-day must be given together, or not at all"),
+    }
 }
 
 fn keys_list(args: &[String]) -> billing::Result<()> {
@@ -244,8 +259,8 @@ fn price_set(args: &[String]) -> billing::Result<()> {
     let credits = parse_int(&flags.positionals[1]);
     let chain = flags.chain.unwrap_or(0);
     let book = open_book(&flags)?;
-    book.set_price(&method, chain, credits)?;
-    println!("set {method} (chain {chain}) = {credits} credits");
+    let stored = book.set_price(&method, chain, credits)?;
+    println!("set {stored} (chain {chain}) = {credits} credits");
     Ok(())
 }
 
@@ -435,4 +450,26 @@ fn usage() {
     eprintln!(
         "  ({RELAY_TOKEN_ENV} must be set for serve; it gates /internal/authenticate only)"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_flags_need_both_limits_or_neither() {
+        assert_eq!(rate_from_flags(None, None), Ok(Rate::Unlimited));
+        assert_eq!(
+            rate_from_flags(Some(10), Some(1000)),
+            Ok(Rate::Limited {
+                per_second: 10,
+                per_day: 1000
+            })
+        );
+        // A lone limit used to fall through to Unlimited: the operator asked
+        // for a throttle and silently got none. A key's rate carries both
+        // limits or neither, so a lone flag is an error.
+        assert!(rate_from_flags(Some(10), None).is_err());
+        assert!(rate_from_flags(None, Some(1000)).is_err());
+    }
 }
