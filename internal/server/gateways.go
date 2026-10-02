@@ -1853,10 +1853,17 @@ func (s *Server) handleGatewayWipe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ex, _, ok := s.gatewayExecutor(w, cfg, gw)
+	ex, host, ok := s.gatewayExecutor(w, cfg, gw)
 	if !ok {
 		return
 	}
+	// The placement machine's slot, which is the one handleGatewayProvision
+	// claims for the same container.
+	release, ok := s.claimTargetOp(w, host.ID)
+	if !ok {
+		return
+	}
+	defer release()
 
 	resolved, _ := resolveGateway(cfg, gw)
 	dsvc := setup.GatewayService(gw.ID, resolved)

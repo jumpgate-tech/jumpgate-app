@@ -120,6 +120,10 @@ type targetEntry struct {
 
 	setup *setupRun
 
+	// opBusy is set while a destructive operation (wipe, reset, clear) is
+	// running against this target. See claimTargetOp.
+	opBusy bool
+
 	// Network-diagnostics state, guarded by its own mutex because auto-run
 	// goroutines touch it while entry.mu may be held by slow executor
 	// dials. See diag.go for the gate semantics.
@@ -208,6 +212,14 @@ func (sr *setupRun) append(ev setup.Event) {
 		}
 	}
 	sr.mu.Unlock()
+}
+
+// isRunning reads running under the run's own lock, which finish writes it
+// under.
+func (sr *setupRun) isRunning() bool {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	return sr.running
 }
 
 func (sr *setupRun) finish(err error) {
@@ -859,14 +871,49 @@ func (s *Server) claimSetupRun(w http.ResponseWriter, id string) (claimedRun, bo
 	entry := s.reg.get(id)
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
-	if entry.setup != nil && entry.setup.running {
+	if entry.setup != nil && entry.setup.isRunning() {
 		writeError(w, http.StatusConflict, "setup is already running for this target")
+		return claimedRun{}, false
+	}
+	if entry.opBusy {
+		writeError(w, http.StatusConflict, "a wipe, reset or clear is running on this target; start setup once it has finished")
 		return claimedRun{}, false
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	run := newSetupRun(cancel)
 	entry.setup = run
 	return claimedRun{id: id, run: run, ctx: ctx, cancel: cancel}, true
+}
+
+// claimTargetOp reserves the target for one destructive operation (wipe,
+// reset, clear-and-resync), answering 409 and returning false when a setup or
+// provision run holds the target's slot or another such operation is already
+// running. The caller must call release when it is done.
+//
+// These operations take turns with setup runs for the reason claimSetupRun
+// gives: they drive the same executor against the same machine. A wipe
+// interleaved with a provision removes the container the provision is
+// creating, or creates one against a volume the wipe is deleting. They do not
+// take the setup slot itself, because that would replace the last run whose
+// events .../setup/stream replays with an empty one.
+func (s *Server) claimTargetOp(w http.ResponseWriter, id string) (release func(), ok bool) {
+	entry := s.reg.get(id)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.setup != nil && entry.setup.isRunning() {
+		writeError(w, http.StatusConflict, "setup is running for this target; wait for it to finish before wiping, resetting or clearing")
+		return nil, false
+	}
+	if entry.opBusy {
+		writeError(w, http.StatusConflict, "another wipe, reset or clear is already running on this target")
+		return nil, false
+	}
+	entry.opBusy = true
+	return func() {
+		entry.mu.Lock()
+		entry.opBusy = false
+		entry.mu.Unlock()
+	}, true
 }
 
 // releaseSetupRun undoes a claim whose run never started, so a retry is not
@@ -1276,6 +1323,12 @@ func (s *Server) handleServiceClear(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+
+	release, ok := s.claimTargetOp(w, id)
+	if !ok {
+		return
+	}
+	defer release()
 
 	if err := ops.ClearService(r.Context(), ex, *target.Wire, svc); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
