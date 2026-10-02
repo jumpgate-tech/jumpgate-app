@@ -19,6 +19,7 @@ import {
   useDeleteVpn,
   useVpnAction,
   useProvisionVpnServer,
+  useSetVpnServerEndpoint,
   useEnrollVpnDevice,
   useRevokeVpnDevice,
   useDeleteVpnServer,
@@ -37,6 +38,7 @@ vi.mock("../api", async () => {
     vpnUp: vi.fn(),
     vpnDown: vi.fn(),
     provisionVpnServer: vi.fn(),
+    setVpnServerEndpoint: vi.fn(),
     enrollVpnDevice: vi.fn(),
     revokeVpnDevice: vi.fn(),
     deleteVpnServer: vi.fn(),
@@ -111,6 +113,7 @@ beforeEach(() => {
   vi.mocked(api.vpnUp).mockReset();
   vi.mocked(api.vpnDown).mockReset();
   vi.mocked(api.provisionVpnServer).mockReset();
+  vi.mocked(api.setVpnServerEndpoint).mockReset();
   vi.mocked(api.enrollVpnDevice).mockReset();
   vi.mocked(api.revokeVpnDevice).mockReset();
   vi.mocked(api.deleteVpnServer).mockReset();
@@ -281,6 +284,25 @@ describe("useProvisionVpnServer", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.provisionVpnServer).toHaveBeenCalledWith({ id: "srv-1" });
     expect(result.current.data?.firewallHint).toBe("open udp 51820");
+    await waitFor(() => expect(api.getVpnServers).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("useSetVpnServerEndpoint", () => {
+  it("sets the endpoint through its own route and invalidates the servers list", async () => {
+    const localWrapper = makeSharedWrapper();
+    vi.mocked(api.getVpnServers).mockResolvedValue([makeServer("srv-1")]);
+    vi.mocked(api.setVpnServerEndpoint).mockResolvedValue(makeServer("srv-1"));
+
+    const list = renderHook(() => useVpnServers(), { wrapper: localWrapper });
+    await waitFor(() => expect(list.result.current.isSuccess).toBe(true));
+
+    const { result } = renderHook(() => useSetVpnServerEndpoint(), { wrapper: localWrapper });
+    result.current.mutate({ id: "srv-1", endpointHost: "vpn.example.com" });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(api.setVpnServerEndpoint).toHaveBeenCalledWith("srv-1", "vpn.example.com");
+    expect(api.provisionVpnServer).not.toHaveBeenCalled();
     await waitFor(() => expect(api.getVpnServers).toHaveBeenCalledTimes(2));
   });
 });

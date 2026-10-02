@@ -18,6 +18,7 @@ vi.mock("../../api", async () => {
     getVpnServerStatus: vi.fn(),
     getVpnStatus: vi.fn(),
     provisionVpnServer: vi.fn(),
+    setVpnServerEndpoint: vi.fn(),
     enrollVpnDevice: vi.fn(),
     revokeVpnDevice: vi.fn(),
     deleteVpnServer: vi.fn(),
@@ -67,6 +68,7 @@ beforeEach(() => {
   vi.mocked(api.getVpnServerStatus).mockReset().mockResolvedValue(STATUS_DOWN);
   vi.mocked(api.getVpnStatus).mockReset().mockResolvedValue(STATUS_DOWN);
   vi.mocked(api.provisionVpnServer).mockReset();
+  vi.mocked(api.setVpnServerEndpoint).mockReset();
   vi.mocked(api.enrollVpnDevice).mockReset();
   vi.mocked(api.revokeVpnDevice).mockReset().mockResolvedValue(undefined);
   vi.mocked(api.deleteVpnServer).mockReset().mockResolvedValue(undefined);
@@ -113,6 +115,22 @@ describe("PrivateAccess", () => {
     expect(screen.getByText("endpoint not set")).toBeInTheDocument();
     // Enroll is disabled until an endpoint exists.
     expect(screen.getByText("Enroll")).toBeDisabled();
+  });
+
+  // Setting the endpoint must not re-provision: a provision call carrying only
+  // the id and host fell back to the defaults (this machine, 10.9.0.1/24, port
+  // 51820), which failed for a remote server and renumbered a local one.
+  it("Set endpoint updates only the endpoint and never re-provisions", async () => {
+    vi.mocked(api.getVpnServers).mockResolvedValue([serverWith({ endpoint: "" })]);
+    vi.mocked(api.setVpnServerEndpoint).mockResolvedValue(serverWith({ endpoint: "vpn.example.com:51820" }));
+
+    renderScreen();
+    const input = await screen.findByPlaceholderText("vpn.example.com or 203.0.113.7");
+    fireEvent.change(input, { target: { value: " vpn.example.com " } });
+    fireEvent.click(screen.getByText("Set endpoint"));
+
+    await waitFor(() => expect(api.setVpnServerEndpoint).toHaveBeenCalledWith("wg0", "vpn.example.com"));
+    expect(api.provisionVpnServer).not.toHaveBeenCalled();
   });
 
   it("enrolling surfaces the returned config with Copy and Download", async () => {

@@ -340,6 +340,7 @@ func TestVPNServerRoutesRequireToken(t *testing.T) {
 		{"POST", "/api/vpn-servers/x/up"},
 		{"POST", "/api/vpn-servers/x/peers"},
 		{"POST", "/api/vpn-servers/x/peers/remove"},
+		{"POST", "/api/vpn-servers/x/endpoint"},
 	}
 	for _, rt := range routes {
 		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
@@ -349,5 +350,115 @@ func TestVPNServerRoutesRequireToken(t *testing.T) {
 				t.Fatalf("%s %s without token: got %d, want 401", rt.method, rt.path, res.StatusCode)
 			}
 		})
+	}
+}
+
+// newRemoteVPNServerTestServer registers an SSH machine "boxa" and records which
+// machine every executor was resolved for, so a test can tell "ran on boxa" from
+// "fell back to this host", the difference the endpoint bug turned on.
+func newRemoteVPNServerTestServer(t *testing.T) (*apiTestServer, *wgHostFake, *[]string) {
+	t.Helper()
+	host := newWGHost()
+	var mu sync.Mutex
+	targets := []string{}
+	a := newAPITestServerWithExecutor(t, func(tg config.Target) (executor.Executor, error) {
+		mu.Lock()
+		targets = append(targets, tg.ID)
+		mu.Unlock()
+		return host, nil
+	})
+	if _, err := a.srv.updateConfig(func(c *config.Config) error {
+		c.Targets = append(c.Targets, config.Target{ID: "boxa", Mode: "ssh", SSH: &executor.SSHConfig{Host: "10.0.0.5"}})
+		return nil
+	}); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	return a, host, &targets
+}
+
+// Setting the endpoint is a record-only change. The endpoint is only the
+// Endpoint line of a device .conf and never part of the server's own conf, so
+// it must not touch the host at all (no executor, no root check, no wg-quick
+// bounce) and must leave the machine, address and port exactly as provisioned.
+func TestVPNServerSetEndpointDoesNotTouchTheHost(t *testing.T) {
+	a, host, targets := newRemoteVPNServerTestServer(t)
+	host.listenPort = "51999"
+	provision(t, a, map[string]any{"id": "home", "targetId": "boxa", "address": "10.20.0.1/24", "listenPort": 51999})
+
+	host.mu.Lock()
+	callsBefore := len(host.calls)
+	host.mu.Unlock()
+	resolvedBefore := len(*targets)
+
+	res := a.do(t, "POST", "/api/vpn-servers/home/endpoint", map[string]any{"endpointHost": "vpn.example.com"})
+	if res.StatusCode != http.StatusOK {
+		res.Body.Close()
+		t.Fatalf("set endpoint: got %d, want 200", res.StatusCode)
+	}
+	sv := decodeJSON[vpnServerView](t, res)
+	if sv.Endpoint != "vpn.example.com:51999" {
+		t.Errorf("endpoint = %q, want vpn.example.com:51999 (the server's own listen port)", sv.Endpoint)
+	}
+	if sv.TargetID != "boxa" || sv.Address != "10.20.0.1/24" || sv.ListenPort != 51999 || sv.Interface != "jumpgate0" {
+		t.Errorf("set endpoint rewrote the server: %+v", sv)
+	}
+	host.mu.Lock()
+	callsAfter := len(host.calls)
+	host.mu.Unlock()
+	if callsAfter != callsBefore || len(*targets) != resolvedBefore {
+		t.Errorf("set endpoint ran %d host commands and resolved %d executors; it must do neither",
+			callsAfter-callsBefore, len(*targets)-resolvedBefore)
+	}
+}
+
+func TestVPNServerSetEndpointValidates(t *testing.T) {
+	a, _ := newVPNServerTestServer(t)
+	provision(t, a, map[string]any{"id": "home"})
+	for name, body := range map[string]map[string]any{
+		"empty":     {"endpointHost": "  "},
+		"with port": {"endpointHost": "vpn.example.com:51820"},
+		"space":     {"endpointHost": "vpn example.com"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res := a.do(t, "POST", "/api/vpn-servers/home/endpoint", body)
+			res.Body.Close()
+			if res.StatusCode != http.StatusBadRequest {
+				t.Fatalf("got %d, want 400", res.StatusCode)
+			}
+		})
+	}
+	res := a.do(t, "POST", "/api/vpn-servers/nope/endpoint", map[string]any{"endpointHost": "h.example.com"})
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown server: got %d, want 404", res.StatusCode)
+	}
+}
+
+// Re-provisioning an existing server with fields omitted keeps the stored
+// values rather than resetting them to defaults. Before, an omitted targetId
+// meant "this host", so a remote server was re-provisioned on the desktop (a
+// 502 without root, or silently moved and renumbered with it).
+func TestVPNServerReprovisionKeepsStoredFieldsWhenOmitted(t *testing.T) {
+	a, host, targets := newRemoteVPNServerTestServer(t)
+	host.listenPort = "51999"
+	provision(t, a, map[string]any{"id": "home", "targetId": "boxa", "address": "10.20.0.1/24", "listenPort": 51999})
+
+	*targets = (*targets)[:0]
+	res := a.do(t, "POST", "/api/vpn-servers", map[string]any{"id": "home", "endpointHost": "vpn.example.com"})
+	if res.StatusCode != http.StatusOK {
+		res.Body.Close()
+		t.Fatalf("re-provision: got %d, want 200", res.StatusCode)
+	}
+	sv := decodeJSON[vpnServerProvisionResponse](t, res).Server
+	if sv.TargetID != "boxa" || sv.Address != "10.20.0.1/24" || sv.ListenPort != 51999 {
+		t.Errorf("re-provision reset stored fields to defaults: %+v", sv)
+	}
+	if sv.Endpoint != "vpn.example.com:51999" {
+		t.Errorf("endpoint = %q, want vpn.example.com:51999", sv.Endpoint)
+	}
+	for _, id := range *targets {
+		if id != "boxa" {
+			t.Errorf("re-provision resolved an executor for %q, want only boxa", id)
+		}
 	}
 }
