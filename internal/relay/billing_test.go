@@ -70,10 +70,22 @@ func newBillingStub(t *testing.T) *billingStub {
 	return st
 }
 
+// minimalReply is the smallest reply billing actually sends: an enabled key with
+// an unlimited rate and no constraints. The stubs here once answered with a flat
+// shape billing never produced, which is how the decoding bug hid; they speak
+// billing's real shape now, and contract_test.go pins it to billing's own test.
+const minimalReply = `{"id":"k1","label":"prod","enabled":true,"account_address":null,
+	"credit_exempt":false,"allow_trace":false,"rate":"unlimited",
+	"constraints":{"origins":[],"method_allow":[],"method_block":[],
+	               "networks":[],"ip_allow":[],"ip_deny":[]}}`
+
 func TestBillingClientAuthenticatesOverUnixSocket(t *testing.T) {
 	stub := newBillingStub(t)
-	stub.body = `{"id":"k1","label":"prod","enabled":true,"allow_trace":false,
-	              "method_block":["debug_traceCall"],"per_second_limit":50}`
+	stub.body = `{"id":"k1","label":"prod","enabled":true,"account_address":null,
+	              "credit_exempt":false,"allow_trace":false,
+	              "rate":{"limited":{"per_second":50,"per_day":0}},
+	              "constraints":{"origins":[],"method_allow":[],"method_block":["debug_traceCall"],
+	                             "networks":[],"ip_allow":[],"ip_deny":[]}}`
 
 	c := NewBillingClient(stub.socket, "relay-token")
 	rec, err := c.Authenticate(context.Background(), "jg_secret")
@@ -99,7 +111,7 @@ func TestBillingClientAuthenticatesOverUnixSocket(t *testing.T) {
 // never reach this path.
 func TestBillingClientSendsTheRelayToken(t *testing.T) {
 	stub := newBillingStub(t)
-	stub.body = `{"id":"k1","enabled":true}`
+	stub.body = minimalReply
 
 	c := NewBillingClient(stub.socket, "relay-token")
 	if _, err := c.Authenticate(context.Background(), "jg_secret"); err != nil {
@@ -118,7 +130,7 @@ func TestBillingClientSendsTheRelayToken(t *testing.T) {
 // relay exists to prevent one hop earlier.
 func TestBillingClientNeverPutsTheKeyInTheURL(t *testing.T) {
 	stub := newBillingStub(t)
-	stub.body = `{"id":"k1","enabled":true}`
+	stub.body = minimalReply
 
 	c := NewBillingClient(stub.socket, "relay-token")
 	if _, err := c.Authenticate(context.Background(), "jg_verysecret"); err != nil {
@@ -198,7 +210,7 @@ func TestBillingClientMissingSocketIsAnOutage(t *testing.T) {
 // context governs.
 func TestBillingClientRespectsContext(t *testing.T) {
 	stub := newBillingStub(t)
-	stub.body = `{"id":"k1","enabled":true}`
+	stub.body = minimalReply
 
 	c := NewBillingClient(stub.socket, "relay-token")
 	ctx, cancel := context.WithCancel(context.Background())

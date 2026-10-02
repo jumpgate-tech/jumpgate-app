@@ -2416,4 +2416,143 @@ mod tests {
         assert!(socket_parent_problem(0, 0o1777, 1000).is_some());
         assert!(socket_parent_problem(1001, 0o700, 1000).is_some());
     }
+
+    // --- the relay contract: /internal/authenticate's wire shape --------------
+    //
+    // The relay is written in Go and decodes this reply into its own struct, so
+    // neither compiler notices when the two drift apart. They did once: the
+    // relay read flat `method_allow`, `per_second_limit`, ... fields that this
+    // service never sends, and every per-key constraint and rate limit decoded
+    // empty. The fixture below is the contract. This test pins what this side
+    // emits and the relay's own test decodes the same file, so a change on
+    // either side fails a test instead of silently disarming a policy.
+
+    /// The checked-in fixture, shared with the relay's Go tests.
+    fn contract_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../internal/relay/testdata/authenticate_contract.json")
+    }
+
+    /// One key record as the store holds it, before it is shaped for the wire.
+    fn contract_record(
+        id: &str,
+        account_address: Option<&str>,
+        credit_exempt: bool,
+        allow_trace: bool,
+        rate: Rate,
+    ) -> KeyRecord {
+        KeyRecord {
+            id: id.to_string(),
+            label: format!("{id}-label"),
+            account_address: account_address.map(str::to_string),
+            credit_exempt,
+            allow_trace,
+            rate,
+            created_at: 1_700_000_000,
+            disabled_at: None,
+            expires_at: None,
+        }
+    }
+
+    /// The (kind, value) rows as the store would list them.
+    fn contract_pairs(rows: &[(&str, &str)]) -> Vec<(String, String)> {
+        rows.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// The representative replies the fixture pins, by case name. Between them
+    /// they cover a limited and an unlimited rate, every constraint kind with
+    /// more than one value, a kind the view does not know, and a key with no
+    /// constraints at all.
+    fn contract_cases() -> Vec<(&'static str, AuthenticateView)> {
+        vec![
+            (
+                "limited_with_every_constraint",
+                AuthenticateView::build(
+                    contract_record(
+                        "key_limited",
+                        Some("0x00000000000000000000000000000000000000aa"),
+                        false,
+                        true,
+                        Rate::Limited {
+                            per_second: 50,
+                            per_day: 100_000,
+                        },
+                    ),
+                    contract_pairs(&[
+                        ("origin", "https://app.example.com"),
+                        ("origin", "https://staging.example.com"),
+                        ("method_allow", "eth_call"),
+                        ("method_allow", "eth_getBalance"),
+                        ("method_block", "debug_traceCall"),
+                        ("method_block", "eth_sendRawTransaction"),
+                        ("network", "369"),
+                        ("network", "943"),
+                        ("ip_allow", "203.0.113.0/24"),
+                        ("ip_allow", "198.51.100.7"),
+                        ("ip_deny", "203.0.113.66"),
+                        ("ip_deny", "2001:db8::/32"),
+                        // An unknown kind is dropped, never sent, so the relay
+                        // never sees a bucket this view does not define.
+                        ("not_a_kind", "ignored"),
+                    ]),
+                ),
+            ),
+            (
+                "unlimited_without_constraints",
+                AuthenticateView::build(
+                    contract_record("key_unlimited", None, true, false, Rate::Unlimited),
+                    Vec::new(),
+                ),
+            ),
+            (
+                "per_day_only",
+                AuthenticateView::build(
+                    contract_record(
+                        "key_daily",
+                        Some("0x00000000000000000000000000000000000000bb"),
+                        false,
+                        false,
+                        Rate::Limited {
+                            per_second: 0,
+                            per_day: 5_000,
+                        },
+                    ),
+                    contract_pairs(&[("network", "1")]),
+                ),
+            ),
+        ]
+    }
+
+    #[test]
+    fn authenticate_view_matches_the_relay_contract_fixture() {
+        let cases: Vec<serde_json::Value> = contract_cases()
+            .into_iter()
+            .map(|(name, view)| json!({ "case": name, "record": view }))
+            .collect();
+        let mut want = serde_json::to_string_pretty(&cases).unwrap();
+        want.push('\n');
+
+        let path = contract_fixture_path();
+        if std::env::var_os("UPDATE_CONTRACT").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, &want).unwrap();
+            return;
+        }
+        let got = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "read the contract fixture {}: {e}. Run with UPDATE_CONTRACT=1 to create it",
+                path.display()
+            )
+        });
+        assert!(
+            got == want,
+            "/internal/authenticate no longer matches the relay contract fixture at {}.\n\
+             If the change is deliberate, rerun with UPDATE_CONTRACT=1 and change the\n\
+             relay's decoding (internal/relay/billing.go) in the same commit.\n\
+             --- fixture ---\n{got}\n--- billing now emits ---\n{want}",
+            path.display()
+        );
+    }
 }
