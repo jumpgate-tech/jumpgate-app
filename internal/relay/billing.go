@@ -39,7 +39,10 @@ type BillingClient struct {
 
 	// prices remembers what each method costs. Guarded by priceMu.
 	priceMu sync.RWMutex
-	prices  map[string]int64
+	prices  map[string]cachedPrice
+
+	// now is the clock. Nil means time.Now.
+	now func() time.Time
 }
 
 // NewBillingClient dials the billing service over a unix socket.
@@ -220,54 +223,96 @@ const pricePath = "/internal/price"
 // zero is not.
 const fallbackPrice = 1
 
-// PriceOf reports what one call costs in credits, remembering each answer.
+// priceTTL is how long a price the store gave is trusted. Prices change on an
+// operator's clock, so minutes is fresh enough, and it keeps the store off the
+// hot path.
+const priceTTL = 5 * time.Minute
+
+// priceRetryAfter is how long a failed lookup waits before the store is asked
+// again. Without it an outage would put a dead-socket timeout on every call.
+const priceRetryAfter = 5 * time.Second
+
+// cachedPrice is one remembered answer. A price that came from the store is
+// good; a fallback is not, and expires on the much shorter retry window.
+type cachedPrice struct {
+	credits int64
+	good    bool
+	expires time.Time
+}
+
+// PriceOf reports what one call costs in credits.
 //
-// Prices move on an operator's clock rather than a customer's, so asking once
-// per method and chain is enough. Asking per request would put a round trip back
-// on the hot path that the credit lease exists to remove.
+// Prices move on an operator's clock rather than a customer's, so a store answer
+// is remembered for priceTTL. Asking per request would put a round trip back on
+// the hot path that the credit lease exists to remove. A failed lookup is never
+// remembered as the price: it charges the last good price if there is one, or
+// the fallback, and asks again after priceRetryAfter.
 func (c *BillingClient) PriceOf(ctx context.Context, method string, chainID int) int64 {
 	key := fmt.Sprintf("%s:%d", method, chainID)
+	now := c.clock()
 
 	c.priceMu.RLock()
 	cached, ok := c.prices[key]
 	c.priceMu.RUnlock()
-	if ok {
-		return cached
+	if ok && now.Before(cached.expires) {
+		return cached.credits
 	}
 
-	price := c.fetchPrice(ctx, method, chainID)
+	entry := cachedPrice{good: true, expires: now.Add(priceTTL)}
+	price, err := c.fetchPrice(ctx, method, chainID)
+	switch {
+	case err == nil:
+		entry.credits = price
+	case ok && cached.good:
+		// A price the operator set beats the fallback. Keep charging it and ask
+		// again after the retry window.
+		entry.credits = cached.credits
+		entry.expires = now.Add(priceRetryAfter)
+	default:
+		entry = cachedPrice{credits: fallbackPrice, expires: now.Add(priceRetryAfter)}
+	}
 
 	c.priceMu.Lock()
 	if c.prices == nil {
-		c.prices = make(map[string]int64)
+		c.prices = make(map[string]cachedPrice)
 	}
-	c.prices[key] = price
+	c.prices[key] = entry
 	c.priceMu.Unlock()
-	return price
+	return entry.credits
 }
 
-func (c *BillingClient) fetchPrice(ctx context.Context, method string, chainID int) int64 {
+func (c *BillingClient) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+func (c *BillingClient) fetchPrice(ctx context.Context, method string, chainID int) (int64, error) {
 	target := fmt.Sprintf("%s%s?method=%s&chain=%d", c.base, pricePath, url.QueryEscape(method), chainID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return fallbackPrice
+		return 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return fallbackPrice
+		return 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fallbackPrice
+		return 0, fmt.Errorf("relay: price lookup: status %d", resp.StatusCode)
 	}
 
 	var out struct {
 		Credits int64 `json:"credits"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Credits <= 0 {
-		return fallbackPrice
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, fmt.Errorf("relay: price lookup: %w", err)
 	}
-	return out.Credits
+	if out.Credits <= 0 {
+		return 0, fmt.Errorf("relay: price lookup: non-positive price %d", out.Credits)
+	}
+	return out.Credits, nil
 }
