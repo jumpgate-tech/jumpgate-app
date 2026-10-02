@@ -94,8 +94,20 @@ func writeFrame(w io.Writer, opcode byte, payload []byte, masked bool) error {
 // §5.5.2 requires; the client side of a one-shot request/response exchange
 // passes nil and just skips the ping.
 func readMessage(br *bufio.Reader, max int64, requireMasked bool, onPing func([]byte) error) ([]byte, error) {
+	return readFrames(br, max, requireMasked, onPing, nil)
+}
+
+// readFrames is readMessage with a hook that runs before every frame. A server
+// Conn uses it to push its read deadline out per FRAME rather than per message,
+// so a pong counts as a sign of life even though no message follows it.
+func readFrames(br *bufio.Reader, max int64, requireMasked bool, onPing func([]byte) error, beforeFrame func() error) ([]byte, error) {
 	var msg []byte
 	for {
+		if beforeFrame != nil {
+			if err := beforeFrame(); err != nil {
+				return nil, err
+			}
+		}
 		fin, opcode, payload, err := readFrame(br, max-int64(len(msg)), requireMasked)
 		if err != nil {
 			return nil, err

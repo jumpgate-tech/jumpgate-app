@@ -54,13 +54,14 @@ type stubStreams struct {
 	kinds   []string
 	pushes  map[string]func(json.RawMessage)
 	stopped []string
+	losts   map[string]func()
 }
 
 func newStubStreams() *stubStreams {
-	return &stubStreams{pushes: map[string]func(json.RawMessage){}}
+	return &stubStreams{pushes: map[string]func(json.RawMessage){}, losts: map[string]func(){}}
 }
 
-func (s *stubStreams) Subscribe(_ context.Context, _ int, kind string, _ json.RawMessage, notify func(json.RawMessage)) (StreamHandle, error) {
+func (s *stubStreams) Subscribe(_ context.Context, _ int, kind string, _ json.RawMessage, notify func(json.RawMessage), lost func()) (StreamHandle, error) {
 	if !SupportedSubscription(kind) {
 		return nil, ErrSubscriptionUnsupported
 	}
@@ -68,7 +69,18 @@ func (s *stubStreams) Subscribe(_ context.Context, _ int, kind string, _ json.Ra
 	defer s.mu.Unlock()
 	s.kinds = append(s.kinds, kind)
 	s.pushes[kind] = notify
+	s.losts[kind] = lost
 	return stubHandle{s: s, kind: kind}, nil
+}
+
+// drop plays a stream giving up on a subscriber that fell too far behind.
+func (s *stubStreams) drop(kind string) {
+	s.mu.Lock()
+	lost := s.losts[kind]
+	s.mu.Unlock()
+	if lost != nil {
+		lost()
+	}
 }
 
 func (s *stubStreams) push(kind string, payload string) {

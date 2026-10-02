@@ -156,12 +156,12 @@ func TestStreamsShareOnePollLoopPerChain(t *testing.T) {
 	t.Cleanup(streams.Stop)
 
 	var a, b atomic.Int64
-	h1, err := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) { a.Add(1) })
+	h1, err := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) { a.Add(1) }, nil)
 	if err != nil {
 		t.Fatalf("subscribe 1: %v", err)
 	}
 	defer h1.Close()
-	h2, err := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) { b.Add(1) })
+	h2, err := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) { b.Add(1) }, nil)
 	if err != nil {
 		t.Fatalf("subscribe 2: %v", err)
 	}
@@ -183,8 +183,8 @@ func TestStreamsRunOneLoopPerChain(t *testing.T) {
 	streams := NewPollerStreams(caller, 50*time.Millisecond)
 	t.Cleanup(streams.Stop)
 
-	h1, _ := streams.Subscribe(context.Background(), 1, "newHeads", nil, func(json.RawMessage) {})
-	h2, _ := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) {})
+	h1, _ := streams.Subscribe(context.Background(), 1, "newHeads", nil, func(json.RawMessage) {}, nil)
+	h2, _ := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) {}, nil)
 	defer h1.Close()
 	defer h2.Close()
 
@@ -201,8 +201,8 @@ func TestStreamsStopTheLoopWhenTheLastSubscriberLeaves(t *testing.T) {
 	streams := NewPollerStreams(caller, 20*time.Millisecond)
 	t.Cleanup(streams.Stop)
 
-	h1, _ := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) {})
-	h2, _ := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) {})
+	h1, _ := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) {}, nil)
+	h2, _ := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) {}, nil)
 
 	h1.Close()
 	if got := streams.LoopCount(); got != 1 {
@@ -225,7 +225,7 @@ func TestStreamsRefuseAnUnsupportedKind(t *testing.T) {
 	streams := NewPollerStreams(newScriptedCaller(), time.Second)
 	t.Cleanup(streams.Stop)
 
-	_, err := streams.Subscribe(context.Background(), 369, "newPendingTransactions", nil, func(json.RawMessage) {})
+	_, err := streams.Subscribe(context.Background(), 369, "newPendingTransactions", nil, func(json.RawMessage) {}, nil)
 	if err == nil {
 		t.Fatal("err = nil, want the subscription refused")
 	}
@@ -248,7 +248,7 @@ func TestStreamsDeliverTheBlock(t *testing.T) {
 		case got <- m:
 		default:
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestStreamsDeliverLogs(t *testing.T) {
 		case got <- m:
 		default:
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("subscribe logs: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestStreamsDeliverSyncingOnChangeOnly(t *testing.T) {
 	var count atomic.Int64
 	h, err := streams.Subscribe(context.Background(), 369, "syncing", nil, func(json.RawMessage) {
 		count.Add(1)
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("subscribe syncing: %v", err)
 	}
@@ -410,15 +410,15 @@ func TestStreamsShareOneLoopAcrossKinds(t *testing.T) {
 	streams := NewPollerStreams(caller, 50*time.Millisecond)
 	t.Cleanup(streams.Stop)
 
-	h1, err := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) {})
+	h1, err := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) {}, nil)
 	if err != nil {
 		t.Fatalf("newHeads: %v", err)
 	}
-	h2, err := streams.Subscribe(context.Background(), 369, "logs", nil, func(json.RawMessage) {})
+	h2, err := streams.Subscribe(context.Background(), 369, "logs", nil, func(json.RawMessage) {}, nil)
 	if err != nil {
 		t.Fatalf("logs: %v", err)
 	}
-	h3, err := streams.Subscribe(context.Background(), 369, "syncing", nil, func(json.RawMessage) {})
+	h3, err := streams.Subscribe(context.Background(), 369, "syncing", nil, func(json.RawMessage) {}, nil)
 	if err != nil {
 		t.Fatalf("syncing: %v", err)
 	}

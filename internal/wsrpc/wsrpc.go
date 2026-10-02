@@ -38,6 +38,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -109,12 +110,23 @@ func (o *Options) tlsConfig(serverName string) *tls.Config {
 
 // Conn is a WebSocket connection past its opening handshake.
 //
-// It is not safe for concurrent use. Nothing in this tree needs that: every
-// caller is one goroutine asking one endpoint one thing.
+// One goroutine may read while others write. Writes are serialised inside the
+// Conn, because a server's read loop answers pings itself while notification
+// writers share the same socket, and a per-write deadline has to be set and
+// used as one step. Two concurrent readers are still not supported.
 type Conn struct {
 	conn net.Conn
 	br   *bufio.Reader
 	max  int64
+
+	// wmu makes a write and its deadline one step. Without it one writer could
+	// set a deadline that another writer's frame then runs under.
+	wmu sync.Mutex
+	// writeTimeout bounds every frame write, and idleTimeout bounds the wait
+	// for every incoming frame. Zero means unbounded, which suits a one-shot
+	// probe under a context deadline and nothing that stays open.
+	writeTimeout time.Duration
+	idleTimeout  time.Duration
 
 	// isServer marks a Conn Accept built, on the server side of the
 	// handshake. It picks the mask direction for every frame this Conn
@@ -305,25 +317,61 @@ func handshake(conn net.Conn, host, path string, max int64) (*Conn, error) {
 // client, unmasked if Accept built it as a server. RFC 6455 §5.1 requires
 // exactly one of those for each side and forbids the other.
 func (c *Conn) WriteText(payload []byte) error {
-	return writeFrame(c.conn, opcodeText, payload, !c.isServer)
+	return c.write(opcodeText, payload)
+}
+
+// write sends one frame under the write lock, with the write timeout applied
+// to that frame alone.
+func (c *Conn) write(opcode byte, payload []byte) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	if c.writeTimeout > 0 {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+			return err
+		}
+	}
+	return writeFrame(c.conn, opcode, payload, !c.isServer)
 }
 
 // ReadMessage returns the next complete data message, reassembling
-// continuation frames and skipping control frames — except that on the
-// server side, a ping gets a pong back first, as RFC 6455 §5.5.2 requires.
+// continuation frames and skipping control frames — except that a ping gets a
+// pong back first, as RFC 6455 §5.5.2 requires of either end.
+//
+// The two ends treat a failed pong differently. A server that cannot write is
+// talking to a client that is gone, so the read fails and the session ends. A
+// client is usually a one-shot probe that wants the answer behind the ping, and
+// failing it over a courtesy reply would turn a working endpoint into a wrong
+// verdict, so a client ignores the failure and keeps reading.
 func (c *Conn) ReadMessage() ([]byte, error) {
-	var onPing func([]byte) error
-	if c.isServer {
-		onPing = c.WritePong
+	onPing := c.WritePong
+	if !c.isServer {
+		onPing = func(payload []byte) error {
+			_ = c.WritePong(payload)
+			return nil
+		}
 	}
-	return readMessage(c.br, c.max, c.isServer, onPing)
+	var beforeFrame func() error
+	if c.idleTimeout > 0 {
+		beforeFrame = func() error {
+			return c.conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
+		}
+	}
+	return readFrames(c.br, c.max, c.isServer, onPing, beforeFrame)
 }
 
 // WritePong answers a ping with a pong carrying the same payload, per RFC
 // 6455 §5.5.3. Exported so a caller driving its own read loop — rather than
 // ReadMessage's automatic reply — can still answer one.
 func (c *Conn) WritePong(payload []byte) error {
-	return writeFrame(c.conn, opcodePong, payload, !c.isServer)
+	return c.write(opcodePong, payload)
+}
+
+// WritePing sends a ping, per RFC 6455 §5.5.2. The peer must answer with a
+// pong, and that answer is the only sign of life a listen-only client gives.
+// It is what lets a server with an idle timeout tell a quiet subscriber from a
+// dead one.
+func (c *Conn) WritePing(payload []byte) error {
+	return c.write(opcodePing, payload)
 }
 
 // WriteClose sends a close frame carrying a status code and a reason, per RFC
@@ -333,13 +381,25 @@ func (c *Conn) WriteClose(code uint16, reason string) error {
 	payload := make([]byte, 2+len(reason))
 	binary.BigEndian.PutUint16(payload, code)
 	copy(payload[2:], reason)
-	return writeFrame(c.conn, opcodeClose, payload, !c.isServer)
+	return c.write(opcodeClose, payload)
 }
 
 // SetDeadline bounds the next reads and writes. A caller reading an open-ended
 // stream — waiting for a subscription notification that may never come — uses
 // this to decide how long "never" is.
 func (c *Conn) SetDeadline(t time.Time) error { return c.conn.SetDeadline(t) }
+
+// SetWriteTimeout bounds every later frame write by d, counted from the start
+// of that write. A server streaming to a client that has stopped reading uses
+// it so the write fails instead of blocking whatever is waiting on it. Call it
+// before the Conn is shared between goroutines.
+func (c *Conn) SetWriteTimeout(d time.Duration) { c.writeTimeout = d }
+
+// SetIdleTimeout makes ReadMessage fail when no frame of any kind arrives for
+// d. Every frame resets the timer, a pong included, so a client that only
+// listens stays alive by answering pings. It overrides any read deadline the
+// caller set. Call it before the Conn is shared between goroutines.
+func (c *Conn) SetIdleTimeout(d time.Duration) { c.idleTimeout = d }
 
 // Close releases the connection and stops the context watchdog, if Dial
 // installed one. It is safe to call more than once.

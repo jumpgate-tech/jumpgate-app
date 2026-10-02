@@ -114,29 +114,85 @@ func parseHexUint(s string) (uint64, error) {
 //
 // This is the economic argument for terminating WebSocket at the relay. A
 // native setup opens one upstream connection per subscriber; here a thousand
-// subscribers on one chain still cost one eth_blockNumber per interval. It also
-// means a slow subscriber cannot slow the upstream, only itself.
+// subscribers on one chain still cost one eth_blockNumber per interval.
+//
+// Sharing one loop is also a hazard: a loop that waited on any one subscriber
+// would let a single client that stopped reading silence the chain for
+// everyone. So the loop never delivers anything itself. It hands each payload
+// to the subscriber's own bounded queue, which a goroutine per subscriber
+// drains, and a slow subscriber can only slow itself.
 type PollerStreams struct {
 	caller   RPCCaller
 	interval time.Duration
+	// queueLen is how many undelivered payloads one subscriber may hold before
+	// it is dropped. Tests shrink it.
+	queueLen int
 
 	mu    sync.Mutex
 	loops map[int]*chainLoop
 }
+
+// defaultSubscriberQueue is sized for a burst, not a backlog. A block with many
+// matching logs arrives all at once, and a healthy client drains it in
+// milliseconds; a client still this far behind is not keeping up, and holding
+// more for it only delays the disconnect it needs.
+const defaultSubscriberQueue = 1024
 
 // NewPollerStreams builds the stream manager.
 func NewPollerStreams(caller RPCCaller, interval time.Duration) *PollerStreams {
 	if interval <= 0 {
 		interval = defaultPollInterval
 	}
-	return &PollerStreams{caller: caller, interval: interval, loops: make(map[int]*chainLoop)}
+	return &PollerStreams{
+		caller:   caller,
+		interval: interval,
+		queueLen: defaultSubscriberQueue,
+		loops:    make(map[int]*chainLoop),
+	}
 }
 
-// subscriber is one client's interest in a chain.
+// subscriber is one client's interest in a chain, and the queue between the
+// poll loop and that client.
 type subscriber struct {
+	id     int
 	kind   string
 	filter json.RawMessage
-	notify func(json.RawMessage)
+	queue  chan json.RawMessage
+	// closed ends the sender. Whoever removes the subscriber from its loop
+	// closes it, under the loop's lock, so it is closed exactly once.
+	closed chan struct{}
+	// lost is told when the subscriber is dropped for falling behind.
+	lost func()
+}
+
+// offer queues one payload without ever blocking the poll loop. It reports
+// false when the queue is full.
+func (sub *subscriber) offer(payload json.RawMessage) bool {
+	select {
+	case sub.queue <- payload:
+		return true
+	default:
+		return false
+	}
+}
+
+// send delivers queued payloads until the subscriber is removed.
+func (sub *subscriber) send(notify func(json.RawMessage)) {
+	for {
+		select {
+		case <-sub.closed:
+			return
+		case payload := <-sub.queue:
+			// A detach that raced this receive wins, so nothing is delivered
+			// after Close has returned to a caller that could see it.
+			select {
+			case <-sub.closed:
+				return
+			default:
+			}
+			notify(payload)
+		}
+	}
 }
 
 // chainLoop is one chain's poll loop and its subscribers.
@@ -150,30 +206,80 @@ type chainLoop struct {
 
 	mu     sync.Mutex
 	nextID int
-	subs   map[int]subscriber
+	subs   map[int]*subscriber
 }
 
-// fanoutKind delivers a payload to every subscriber of one kind.
+// fanoutKind queues a payload for every subscriber of one kind. It never
+// waits on a subscriber, so the loop runs at the upstream's pace whatever any
+// one client is doing.
 func (l *chainLoop) fanoutKind(kind string, payload json.RawMessage) {
 	l.mu.Lock()
-	targets := make([]func(json.RawMessage), 0, len(l.subs))
+	targets := make([]*subscriber, 0, len(l.subs))
 	for _, sub := range l.subs {
 		if sub.kind == kind {
-			targets = append(targets, sub.notify)
+			targets = append(targets, sub)
 		}
 	}
 	l.mu.Unlock()
 
-	for _, notify := range targets {
-		notify(payload)
+	for _, sub := range targets {
+		if !sub.offer(payload) {
+			l.drop(sub)
+		}
+	}
+}
+
+// drop removes a subscriber that fell a whole queue behind, and reports the
+// loss rather than silently skipping its events. Skipping would hand the client
+// a stream with holes it cannot see; reporting lets its session end, and the
+// client reconnects knowing it may have missed something.
+//
+// lost runs on its own goroutine, not the sender's. The sender is most likely
+// stuck in the very write that made it fall behind, and ending the session is
+// what unblocks that write — so waiting for the sender first would wait for
+// the write timeout at best. It is not run on the loop either, which must
+// never wait on a client.
+func (l *chainLoop) drop(sub *subscriber) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// A subscriber that detached meanwhile is not dropped, or told, twice.
+	if l.subs[sub.id] != sub {
+		return
+	}
+	delete(l.subs, sub.id)
+	close(sub.closed)
+	if sub.lost != nil {
+		go sub.lost()
+	}
+}
+
+// remove detaches one subscriber and ends its sender. It does not wait for the
+// sender: a sender may be stuck in a write to a client that stopped reading,
+// and the caller is usually that client's own teardown.
+func (l *chainLoop) remove(id int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if sub, ok := l.subs[id]; ok {
+		delete(l.subs, id)
+		close(sub.closed)
+	}
+}
+
+// removeAll ends every subscriber's sender. It is for shutdown.
+func (l *chainLoop) removeAll() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for id, sub := range l.subs {
+		delete(l.subs, id)
+		close(sub.closed)
 	}
 }
 
 // logsSubscribers snapshots the log watchers and their filters.
-func (l *chainLoop) logsSubscribers() []subscriber {
+func (l *chainLoop) logsSubscribers() []*subscriber {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	out := make([]subscriber, 0, len(l.subs))
+	out := make([]*subscriber, 0, len(l.subs))
 	for _, sub := range l.subs {
 		if sub.kind == "logs" {
 			out = append(out, sub)
@@ -221,13 +327,14 @@ func (s *PollerStreams) Stop() {
 	for _, loop := range loops {
 		loop.cancel()
 		<-loop.done
+		loop.removeAll()
 	}
 }
 
 // Subscribe attaches one subscriber, starting the chain's loop if it is the
 // first. The returned handle detaches it, and the loop stops when the last one
 // leaves — a chain nobody watches must not keep calling a paid upstream.
-func (s *PollerStreams) Subscribe(ctx context.Context, chainID int, kind string, filter json.RawMessage, notify func(json.RawMessage)) (StreamHandle, error) {
+func (s *PollerStreams) Subscribe(ctx context.Context, chainID int, kind string, filter json.RawMessage, notify func(json.RawMessage), lost func()) (StreamHandle, error) {
 	if !SupportedSubscription(kind) {
 		return nil, fmt.Errorf("%w: %s is not supported over this endpoint", ErrSubscriptionUnsupported, kind)
 	}
@@ -241,11 +348,19 @@ func (s *PollerStreams) Subscribe(ctx context.Context, chainID int, kind string,
 
 	loop.mu.Lock()
 	loop.nextID++
-	id := loop.nextID
-	loop.subs[id] = subscriber{kind: kind, filter: filter, notify: notify}
+	sub := &subscriber{
+		id:     loop.nextID,
+		kind:   kind,
+		filter: filter,
+		queue:  make(chan json.RawMessage, s.queueLen),
+		closed: make(chan struct{}),
+		lost:   lost,
+	}
+	loop.subs[sub.id] = sub
 	loop.mu.Unlock()
 
-	return &streamHandle{streams: s, chainID: chainID, id: id}, nil
+	go sub.send(notify)
+	return &streamHandle{streams: s, chainID: chainID, id: sub.id}, nil
 }
 
 // startLoop begins polling one chain. The caller holds s.mu.
@@ -254,7 +369,7 @@ func (s *PollerStreams) startLoop(chainID int) *chainLoop {
 	loop := &chainLoop{
 		cancel: cancel,
 		done:   make(chan struct{}),
-		subs:   make(map[int]subscriber),
+		subs:   make(map[int]*subscriber),
 	}
 
 	go func() {
@@ -346,7 +461,10 @@ func (s *PollerStreams) deliverLogs(ctx context.Context, chainID int, loop *chai
 			continue
 		}
 		for _, entry := range entries {
-			sub.notify(entry)
+			if !sub.offer(entry) {
+				loop.drop(sub)
+				break
+			}
 		}
 	}
 }
@@ -398,6 +516,10 @@ func (s *PollerStreams) readLogs(ctx context.Context, chainID int, block uint64,
 }
 
 // detach removes one subscriber and stops the loop when it was the last.
+//
+// Waiting on loop.done cannot hang behind a client: the loop only ever queues
+// for subscribers and never writes to one, and cancelling its context unblocks
+// any upstream call it is in.
 func (s *PollerStreams) detach(chainID, id int) {
 	s.mu.Lock()
 	loop, ok := s.loops[chainID]
@@ -405,9 +527,7 @@ func (s *PollerStreams) detach(chainID, id int) {
 		s.mu.Unlock()
 		return
 	}
-	loop.mu.Lock()
-	delete(loop.subs, id)
-	loop.mu.Unlock()
+	loop.remove(id)
 
 	if loop.count() > 0 {
 		s.mu.Unlock()
