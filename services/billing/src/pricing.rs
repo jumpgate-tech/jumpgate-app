@@ -204,12 +204,24 @@ impl PriceBook {
 
     /// Set the price of one method on one chain. It rejects a non-positive price
     /// with [`Error::InvalidPrice`] before any write, so the SQL CHECK never has
-    /// to fire. On success it upserts the row, writes an audit row, and updates
-    /// the in-memory maps.
-    pub fn set_price(&self, method: &str, chain_id: i64, credits: i64) -> Result<()> {
+    /// to fire. On success it upserts the row, writes an audit row, updates the
+    /// in-memory maps, and returns the method name it stored under.
+    ///
+    /// The name is normalized the way lookups are: trimmed, then mapped to the
+    /// canonical spelling when the method is known, so `"ETH_GETLOGS"` prices
+    /// the live `eth_getLogs` row. Storing the raw spelling would write a row
+    /// no lookup ever reads. An unknown method is still accepted, stored
+    /// trimmed, and that spelling becomes its canonical one.
+    pub fn set_price(&self, method: &str, chain_id: i64, credits: i64) -> Result<String> {
         if credits <= 0 {
             return Err(Error::InvalidPrice(credits));
         }
+        let trimmed = method.trim();
+        let method = match trimmed {
+            "*" => trimmed.to_string(),
+            _ => self.normalize(trimmed).unwrap_or_else(|| trimmed.to_string()),
+        };
+        let method = method.as_str();
         // Database first, then memory. A failed write must not leave the map
         // ahead of the store.
         self.store.upsert_price(method, chain_id, credits)?;
@@ -227,7 +239,7 @@ impl PriceBook {
                 .entry(method.to_lowercase())
                 .or_insert_with(|| method.to_string());
         }
-        Ok(())
+        Ok(method.to_string())
     }
 
     /// Every price row as (method, chain_id, credits), sorted. The CLI reads this
@@ -340,6 +352,33 @@ mod tests {
         drop(conn);
 
         remove_db(&path);
+    }
+
+    #[test]
+    fn set_price_stores_a_known_method_under_its_canonical_name() {
+        // Lookups normalize to the canonical name, so a price stored under any
+        // other casing would never be read. It must land on the live row.
+        let book = PriceBook::new(Store::open_in_memory().unwrap()).unwrap();
+        let stored = book.set_price(" ETH_GETLOGS ", 0, 90).unwrap();
+        assert_eq!(stored, "eth_getLogs");
+        assert_eq!(book.price_of_normalized("eth_getLogs", 1).1, 90);
+        assert!(
+            book.all_prices().iter().all(|(m, _, _)| m != "ETH_GETLOGS" && m != " ETH_GETLOGS "),
+            "no stray row under the raw spelling"
+        );
+    }
+
+    #[test]
+    fn set_price_accepts_an_unknown_method_trimmed() {
+        // An unknown method is still accepted: the operator may price a method
+        // before the table knows it. It is stored trimmed, and its spelling
+        // becomes the canonical one for later case variants.
+        let book = PriceBook::new(Store::open_in_memory().unwrap()).unwrap();
+        assert_eq!(book.set_price("  custom_method ", 0, 7).unwrap(), "custom_method");
+        assert_eq!(book.normalize("CUSTOM_METHOD").as_deref(), Some("custom_method"));
+        assert_eq!(book.price_of_normalized("Custom_Method", 1).1, 7);
+        // The "*" default row keeps its name.
+        assert_eq!(book.set_price("*", 0, 30).unwrap(), "*");
     }
 
     #[test]

@@ -244,8 +244,8 @@ fn price_set(args: &[String]) -> billing::Result<()> {
     let credits = parse_int(&flags.positionals[1]);
     let chain = flags.chain.unwrap_or(0);
     let book = open_book(&flags)?;
-    book.set_price(&method, chain, credits)?;
-    println!("set {method} (chain {chain}) = {credits} credits");
+    let stored = book.set_price(&method, chain, credits)?;
+    println!("set {stored} (chain {chain}) = {credits} credits");
     Ok(())
 }
 

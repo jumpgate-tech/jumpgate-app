@@ -641,7 +641,9 @@ async fn list_pricing(State(state): State<AppState>) -> Json<Vec<PriceView>> {
 }
 
 /// Set a method price. The chain comes from `?chain=N` (default 0). The price
-/// book rejects a non-positive price with a 400.
+/// book rejects a non-positive price with a 400. The response names the
+/// canonical method the price was stored under, which can differ from the
+/// path's spelling (`ETH_GETLOGS` stores `eth_getLogs`).
 async fn set_pricing(
     State(state): State<AppState>,
     Path(method): Path<String>,
@@ -649,10 +651,10 @@ async fn set_pricing(
     Json(req): Json<SetPriceRequest>,
 ) -> std::result::Result<Json<PriceView>, ApiError> {
     let chain_id = q.chain;
-    {
+    let method = {
         let pb = state.prices.lock().expect("prices lock");
-        pb.set_price(&method, chain_id, req.credits)?;
-    }
+        pb.set_price(&method, chain_id, req.credits)?
+    };
     Ok(Json(PriceView {
         method,
         chain_id,
@@ -1393,6 +1395,36 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+        remove_db(&path);
+    }
+
+    #[tokio::test]
+    async fn put_pricing_reports_and_stores_the_canonical_method_name() {
+        let (app, path) = test_app("pricingcase");
+
+        // A non-canonical spelling still changes the live eth_getLogs price,
+        // and the response names the row that was actually written.
+        let (status, body) = send(
+            &app,
+            json_req(
+                "PUT",
+                "/admin/pricing/ETH_GETLOGS",
+                TOKEN,
+                json!({ "credits": 123 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["method"], "eth_getLogs");
+
+        let (_, body) = send(&app, get("/admin/pricing", Some(TOKEN))).await;
+        let rows = body.as_array().unwrap();
+        assert!(rows.iter().all(|p| p["method"] != "ETH_GETLOGS"));
+        let row = rows
+            .iter()
+            .find(|p| p["method"] == "eth_getLogs" && p["chain_id"] == 0)
+            .unwrap();
+        assert_eq!(row["credits"], 123);
         remove_db(&path);
     }
 
