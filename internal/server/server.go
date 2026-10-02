@@ -124,6 +124,14 @@ type Server struct {
 	// against every upstream a gateway fronts.
 	capMu     sync.Mutex
 	capChecks map[string]capabilitiesResponse
+	// capFlights is the probe currently running per gateway id, also guarded
+	// by capMu. See sharedCapabilityProbe.
+	capFlights map[string]*capFlight
+
+	// capProbe and capTimeout replace the real probe and its deadline. They
+	// are nil and zero outside tests, where a real probe dials real sockets.
+	capProbe   func(context.Context, config.Config, config.Gateway) capabilitiesResponse
+	capTimeout time.Duration
 
 	// chainsMu guards the cached full chain catalogue (id + name for every
 	// chain the feed knows) that backs the network-search picker. The feed is

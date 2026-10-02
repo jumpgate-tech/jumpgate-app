@@ -155,18 +155,105 @@ func (s *Server) handleGatewayCapabilities(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), capabilitiesTimeout)
-	defer cancel()
-
-	res := probeGatewayCapabilities(ctx, capabilities.NewProber(), cfg, gw)
-	s.storeCapabilities(gw.ID, res)
+	res, ok := s.sharedCapabilityProbe(r.Context(), cfg, gw)
+	if !ok {
+		// The caller went away while waiting on someone else's probe, so
+		// there is nobody left to answer.
+		return
+	}
 	writeJSON(w, http.StatusOK, res)
 }
 
-// cachedCapabilities / storeCapabilities keep the last capability probe per
-// gateway id, guarded by capMu — mirroring storeTLSVerification /
-// lastTLSVerification, with the one difference that this cache DOES expire
-// (capabilitiesTTL). See the field comment on Server.capChecks for why.
+func defaultCapProbe(ctx context.Context, cfg config.Config, gw config.Gateway) capabilitiesResponse {
+	return probeGatewayCapabilities(ctx, capabilities.NewProber(), cfg, gw)
+}
+
+// capFlight is one capability probe in progress. Callers that arrive while it
+// runs wait on done and take res, rather than starting a probe of their own.
+type capFlight struct {
+	done    chan struct{}
+	res     capabilitiesResponse
+	waiters int // callers parked on done, read by tests
+}
+
+// sharedCapabilityProbe runs one probe per gateway at a time. Without it,
+// every screen load that missed the cache dialed every upstream again, so a
+// few tabs opened together multiplied exactly the load the cache exists to
+// avoid. A ?refresh=1 that arrives mid-probe joins it too, since the answer
+// it is waiting for is already a fresh one.
+//
+// The probe runs on a context detached from the first caller's request. If it
+// were tied to that request, the first caller closing its tab would cancel
+// the probe for everyone else waiting on it. capabilitiesTimeout still bounds
+// it.
+//
+// A probe that ran out of time is not cached. Its rows read "unreachable"
+// because the clock stopped them, not because the upstreams are down, and
+// caching that would show a table of dead upstreams for the whole TTL. The
+// callers already waiting still get it, since it is the best answer there is.
+//
+// ok is false only when ctx ends while the caller is waiting on another
+// caller's probe.
+func (s *Server) sharedCapabilityProbe(ctx context.Context, cfg config.Config, gw config.Gateway) (capabilitiesResponse, bool) {
+	s.capMu.Lock()
+	if f, running := s.capFlights[gw.ID]; running {
+		f.waiters++
+		s.capMu.Unlock()
+		select {
+		case <-f.done:
+			return f.res, true
+		case <-ctx.Done():
+			return capabilitiesResponse{}, false
+		}
+	}
+	f := &capFlight{done: make(chan struct{})}
+	if s.capFlights == nil {
+		s.capFlights = map[string]*capFlight{}
+	}
+	s.capFlights[gw.ID] = f
+	s.capMu.Unlock()
+
+	timeout := s.capTimeout
+	if timeout == 0 {
+		timeout = capabilitiesTimeout
+	}
+	probe := s.capProbe
+	if probe == nil {
+		probe = defaultCapProbe
+	}
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	res := probe(pctx, cfg, gw)
+	complete := pctx.Err() == nil
+	cancel()
+
+	s.capMu.Lock()
+	if complete {
+		if s.capChecks == nil {
+			s.capChecks = map[string]capabilitiesResponse{}
+		}
+		s.capChecks[gw.ID] = res
+	}
+	f.res = res
+	delete(s.capFlights, gw.ID)
+	s.capMu.Unlock()
+	close(f.done)
+	return res, true
+}
+
+// capWaiters reports how many callers are waiting on gid's running probe.
+func (s *Server) capWaiters(gid string) int {
+	s.capMu.Lock()
+	defer s.capMu.Unlock()
+	if f, ok := s.capFlights[gid]; ok {
+		return f.waiters
+	}
+	return 0
+}
+
+// cachedCapabilities reads the last complete capability probe per gateway id,
+// guarded by capMu — mirroring lastTLSVerification, with the one difference
+// that this cache DOES expire (capabilitiesTTL). See the field comment on
+// Server.capChecks for why. sharedCapabilityProbe is the only writer.
 func (s *Server) cachedCapabilities(gid string) (capabilitiesResponse, bool) {
 	s.capMu.Lock()
 	defer s.capMu.Unlock()
@@ -175,15 +262,6 @@ func (s *Server) cachedCapabilities(gid string) (capabilitiesResponse, bool) {
 		return capabilitiesResponse{}, false
 	}
 	return res, true
-}
-
-func (s *Server) storeCapabilities(gid string, res capabilitiesResponse) {
-	s.capMu.Lock()
-	defer s.capMu.Unlock()
-	if s.capChecks == nil {
-		s.capChecks = map[string]capabilitiesResponse{}
-	}
-	s.capChecks[gid] = res
 }
 
 // ---------------------------------------------------------------------
