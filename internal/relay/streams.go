@@ -127,6 +127,10 @@ type PollerStreams struct {
 	// queueLen is how many undelivered payloads one subscriber may hold before
 	// it is dropped. Tests shrink it.
 	queueLen int
+	// beforeAttach, when set, runs after Subscribe has found a loop and before
+	// it attaches to it. It is nil outside tests, which use it to park
+	// Subscribe in the window where the loop can be cancelled under it.
+	beforeAttach func()
 
 	mu    sync.Mutex
 	loops map[int]*chainLoop
@@ -207,6 +211,11 @@ type chainLoop struct {
 	mu     sync.Mutex
 	nextID int
 	subs   map[int]*subscriber
+	// retired is set, under mu, when the loop is taken out of service. A
+	// Subscribe that found this loop before it was retired sees the flag under
+	// the same lock it would attach under, and goes back for a live loop
+	// instead of attaching to one that will never tick again.
+	retired bool
 }
 
 // fanoutKind queues a payload for every subscriber of one kind. It never
@@ -256,19 +265,30 @@ func (l *chainLoop) drop(sub *subscriber) {
 // remove detaches one subscriber and ends its sender. It does not wait for the
 // sender: a sender may be stuck in a write to a client that stopped reading,
 // and the caller is usually that client's own teardown.
-func (l *chainLoop) remove(id int) {
+//
+// When that leaves the loop empty, remove retires it in the same critical
+// section and reports true. Deciding "empty" and "retired" in one step is the
+// point: a gap between them is exactly where a new subscriber could attach to
+// a loop that is about to be cancelled.
+func (l *chainLoop) remove(id int) (retired bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if sub, ok := l.subs[id]; ok {
 		delete(l.subs, id)
 		close(sub.closed)
 	}
+	if len(l.subs) == 0 {
+		l.retired = true
+	}
+	return l.retired
 }
 
-// removeAll ends every subscriber's sender. It is for shutdown.
+// removeAll retires the loop and ends every subscriber's sender. It is for
+// shutdown.
 func (l *chainLoop) removeAll() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.retired = true
 	for id, sub := range l.subs {
 		delete(l.subs, id)
 		close(sub.closed)
@@ -301,12 +321,6 @@ func (l *chainLoop) hasKind(kind string) bool {
 	return false
 }
 
-func (l *chainLoop) count() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.subs)
-}
-
 // LoopCount reports how many chains are being polled. Tests and metrics read it.
 func (s *PollerStreams) LoopCount() int {
 	s.mu.Lock()
@@ -325,28 +339,51 @@ func (s *PollerStreams) Stop() {
 	s.mu.Unlock()
 
 	for _, loop := range loops {
+		// Retire before cancelling, so a Subscribe still holding this loop
+		// goes back for a live one rather than attaching to a dead one.
+		loop.removeAll()
 		loop.cancel()
 		<-loop.done
-		loop.removeAll()
 	}
 }
 
 // Subscribe attaches one subscriber, starting the chain's loop if it is the
 // first. The returned handle detaches it, and the loop stops when the last one
 // leaves — a chain nobody watches must not keep calling a paid upstream.
+//
+// The loop is found under s.mu and joined under loop.mu, and the last
+// subscriber can leave in between. Joining then would hand the caller a
+// success reply and an id for a stream that never fires, so a retired loop
+// sends Subscribe back for a live one.
 func (s *PollerStreams) Subscribe(ctx context.Context, chainID int, kind string, filter json.RawMessage, notify func(json.RawMessage), lost func()) (StreamHandle, error) {
 	if !SupportedSubscription(kind) {
 		return nil, fmt.Errorf("%w: %s is not supported over this endpoint", ErrSubscriptionUnsupported, kind)
 	}
-	s.mu.Lock()
-	loop, ok := s.loops[chainID]
-	if !ok {
-		loop = s.startLoop(chainID)
-		s.loops[chainID] = loop
-	}
-	s.mu.Unlock()
+	for {
+		s.mu.Lock()
+		loop, ok := s.loops[chainID]
+		if !ok {
+			loop = s.startLoop(chainID)
+			s.loops[chainID] = loop
+		}
+		s.mu.Unlock()
 
+		if s.beforeAttach != nil {
+			s.beforeAttach()
+		}
+		if handle, ok := s.attach(loop, chainID, kind, filter, notify, lost); ok {
+			return handle, nil
+		}
+	}
+}
+
+// attach joins one subscriber to loop, unless the loop has been retired.
+func (s *PollerStreams) attach(loop *chainLoop, chainID int, kind string, filter json.RawMessage, notify func(json.RawMessage), lost func()) (StreamHandle, bool) {
 	loop.mu.Lock()
+	if loop.retired {
+		loop.mu.Unlock()
+		return nil, false
+	}
 	loop.nextID++
 	sub := &subscriber{
 		id:     loop.nextID,
@@ -360,7 +397,7 @@ func (s *PollerStreams) Subscribe(ctx context.Context, chainID int, kind string,
 	loop.mu.Unlock()
 
 	go sub.send(notify)
-	return &streamHandle{streams: s, chainID: chainID, id: sub.id}, nil
+	return &streamHandle{streams: s, loop: loop, chainID: chainID, id: sub.id}, true
 }
 
 // startLoop begins polling one chain. The caller holds s.mu.
@@ -520,20 +557,20 @@ func (s *PollerStreams) readLogs(ctx context.Context, chainID int, block uint64,
 // Waiting on loop.done cannot hang behind a client: the loop only ever queues
 // for subscribers and never writes to one, and cancelling its context unblocks
 // any upstream call it is in.
-func (s *PollerStreams) detach(chainID, id int) {
+//
+// Retiring the loop and unregistering it both happen under s.mu, so a
+// Subscribe never finds a retired loop still registered and spins on it.
+func (s *PollerStreams) detach(loop *chainLoop, chainID, id int) {
 	s.mu.Lock()
-	loop, ok := s.loops[chainID]
-	if !ok {
+	if !loop.remove(id) {
 		s.mu.Unlock()
 		return
 	}
-	loop.remove(id)
-
-	if loop.count() > 0 {
-		s.mu.Unlock()
-		return
+	// The handle names its own loop, not just the chain. A handle that
+	// outlived Stop must not unregister the loop that replaced its own.
+	if s.loops[chainID] == loop {
+		delete(s.loops, chainID)
 	}
-	delete(s.loops, chainID)
 	s.mu.Unlock()
 
 	loop.cancel()
@@ -544,12 +581,13 @@ func (s *PollerStreams) detach(chainID, id int) {
 // session releases every handle on disconnect and a client may also unsubscribe.
 type streamHandle struct {
 	streams *PollerStreams
+	loop    *chainLoop
 	chainID int
 	id      int
 	once    sync.Once
 }
 
 func (h *streamHandle) Close() error {
-	h.once.Do(func() { h.streams.detach(h.chainID, h.id) })
+	h.once.Do(func() { h.streams.detach(h.loop, h.chainID, h.id) })
 	return nil
 }

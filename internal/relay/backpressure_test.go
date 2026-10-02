@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -189,6 +190,39 @@ func TestWSSessionKeepsAListenOnlyClientThatAnswersPings(t *testing.T) {
 	if got := h.read(t); got["result"] != "0x1" {
 		t.Errorf("got %v, want the session still serving", got)
 	}
+}
+
+// A subscriber must never be attached to a loop that detach has already
+// cancelled. Subscribe finds the loop under one lock and attaches under
+// another, and the last subscriber leaving in between used to cancel the loop
+// under the newcomer, which then got a success reply and an id and never
+// received an event. The hook parks Subscribe in exactly that window.
+func TestStreamsSubscribeNeverAttachesToACancelledLoop(t *testing.T) {
+	caller := newScriptedCaller()
+	caller.advance()
+	streams := NewPollerStreams(caller, 10*time.Millisecond)
+	t.Cleanup(streams.Stop)
+
+	first, err := streams.Subscribe(context.Background(), 369, "newHeads", nil, func(json.RawMessage) {}, nil)
+	if err != nil {
+		t.Fatalf("subscribe first: %v", err)
+	}
+	var once sync.Once
+	streams.beforeAttach = func() { once.Do(func() { first.Close() }) }
+
+	var got atomic.Int64
+	h, err := streams.Subscribe(context.Background(), 369, "newHeads", nil,
+		func(json.RawMessage) { got.Add(1) }, nil)
+	if err != nil {
+		t.Fatalf("subscribe second: %v", err)
+	}
+	defer h.Close()
+
+	if n := streams.LoopCount(); n != 1 {
+		t.Fatalf("poll loops = %d, want 1 serving the subscriber that just attached", n)
+	}
+	keepAdvancing(t, caller)
+	waitFor(t, func() bool { return got.Load() > 0 })
 }
 
 // When a stream drops a subscriber for falling behind, the session ends the
