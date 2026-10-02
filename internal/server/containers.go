@@ -621,7 +621,9 @@ func (s *Server) handleContainerWipe(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	rep, wipeErr := ops.WipeService(r.Context(), ex, dsvc)
+	opCtx, opDone := s.criticalOp(r)
+	defer opDone()
+	rep, wipeErr := ops.WipeService(opCtx, ex, dsvc)
 
 	// The state is read back even after a failure. A wipe that failed on the
 	// cascade has already removed and re-created the container, and the
@@ -694,12 +696,14 @@ func (s *Server) handleContainerReset(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	rep, wipeErr := ops.WipeService(r.Context(), ex, dsvc)
+	opCtx, opDone := s.criticalOp(r)
+	defer opDone()
+	rep, wipeErr := ops.WipeService(opCtx, ex, dsvc)
 
 	// Gateways elsewhere in the fleet that front this devnet: same stale-head
 	// problem, different machine, so they are bounced with their own target's
 	// executor and folded into the same report.
-	remoteErr := s.restartRemoteFronts(r.Context(), cfg, t, resolvedDevnet(t.Devnet), &rep)
+	remoteErr := s.restartRemoteFronts(opCtx, cfg, t, resolvedDevnet(t.Devnet), &rep)
 
 	st, stErr := ops.ServiceStatus(r.Context(), ex, dsvc)
 	if stErr != nil {

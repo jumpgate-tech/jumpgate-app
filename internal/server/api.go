@@ -1381,7 +1381,9 @@ func (s *Server) handleServiceClear(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	if err := ops.ClearService(r.Context(), ex, *target.Wire, svc); err != nil {
+	opCtx, opDone := s.criticalOp(r)
+	defer opDone()
+	if err := ops.ClearService(opCtx, ex, *target.Wire, svc); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}

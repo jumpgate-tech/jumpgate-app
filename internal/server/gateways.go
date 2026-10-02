@@ -1867,7 +1867,9 @@ func (s *Server) handleGatewayWipe(w http.ResponseWriter, r *http.Request) {
 
 	resolved, _ := resolveGateway(cfg, gw)
 	dsvc := setup.GatewayService(gw.ID, resolved)
-	rep, wipeErr := ops.WipeService(r.Context(), ex, dsvc)
+	opCtx, opDone := s.criticalOp(r)
+	defer opDone()
+	rep, wipeErr := ops.WipeService(opCtx, ex, dsvc)
 
 	st, stErr := ops.ServiceStatus(r.Context(), ex, dsvc)
 	if stErr != nil {

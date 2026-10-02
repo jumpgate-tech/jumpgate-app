@@ -9,12 +9,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/valve-tech/valve-node-app/internal/ai"
@@ -100,6 +102,11 @@ type Config struct {
 // Server is the valve-node-app local HTTP server.
 type Server struct {
 	cfg Config
+
+	// critical counts destructive operations in flight (clear, wipe). Shutdown
+	// waits for them; see criticalOp.
+	critical       sync.WaitGroup
+	criticalActive atomic.Int64
 
 	// cfgMu serializes read-modify-write access to the on-disk
 	// internal/config file across concurrent API requests.
@@ -289,7 +296,41 @@ func tokensEqual(a, b string) bool {
 
 // ListenAndServe runs the server until ctx is canceled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
-	return serveUntil(ctx, newHTTPServer(s.cfg.Bind, s.Handler()), shutdownGrace)
+	err := serveUntil(ctx, newHTTPServer(s.cfg.Bind, s.Handler()), shutdownGrace)
+	s.waitCritical()
+	return err
+}
+
+// criticalTimeout bounds one destructive operation. It is generous: a clear
+// deletes hundreds of gigabytes, and stopping halfway is the outcome this
+// exists to prevent.
+const criticalTimeout = 15 * time.Minute
+
+// criticalOp gives a destructive, multi-step operation a context its client
+// cannot cancel, and registers it so shutdown waits for it.
+//
+// A clear stops a unit, deletes its data and starts it again. Run on the
+// request's context, a closed tab or a Ctrl-C between those steps left the
+// node stopped with half its data gone. Detached, the operation either
+// finishes or hits criticalTimeout; a second Ctrl-C still kills the process
+// outright, which is the operator's explicit choice.
+func (s *Server) criticalOp(r *http.Request) (context.Context, func()) {
+	s.critical.Add(1)
+	s.criticalActive.Add(1)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), criticalTimeout)
+	return ctx, func() {
+		cancel()
+		s.criticalActive.Add(-1)
+		s.critical.Done()
+	}
+}
+
+// waitCritical blocks until every destructive operation has finished.
+func (s *Server) waitCritical() {
+	if n := s.criticalActive.Load(); n > 0 {
+		log.Printf("jumpgate: waiting for %d destructive operation(s) to finish; press Ctrl-C again to force", n)
+	}
+	s.critical.Wait()
 }
 
 // shutdownGrace bounds how long a listener waits for its requests to finish
