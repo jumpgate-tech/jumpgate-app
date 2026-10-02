@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -216,6 +217,13 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Refuse before touching the host, so the other server is left exactly as
+	// it was.
+	if other, ok := vpnServerOnInterface(cfg, id, targetID, iface); ok {
+		writeError(w, http.StatusConflict, vpnInterfaceTakenMessage(other))
+		return
+	}
+
 	ex, ok := s.hostExecutor(w, cfg, targetID)
 	if !ok {
 		return
@@ -247,13 +255,22 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 	}
 
 	created := false
+	var taken *config.VPNServer
 	cfg, err = s.updateConfig(func(c *config.Config) error {
+		// Checked again under the config lock, in case a concurrent provision
+		// claimed the interface after the check above.
+		if other, ok := vpnServerOnInterface(*c, id, targetID, iface); ok {
+			taken = &other
+			return errors.New(vpnInterfaceTakenMessage(other))
+		}
 		for i := range c.VPNServers {
 			if c.VPNServers[i].ID != id {
 				continue
 			}
 			// Re-provision keeps the peers: the server key is idempotent, so
-			// every config already handed out stays valid.
+			// every config already handed out stays valid, and ProvisionServer
+			// carries the [Peer] sections of the host conf over, so every
+			// device recorded here is still admitted there.
 			c.VPNServers[i].TargetID = targetID
 			c.VPNServers[i].Interface = iface
 			c.VPNServers[i].Address = address
@@ -271,6 +288,10 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 		})
 		return nil
 	})
+	if taken != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -463,9 +484,9 @@ func (s *Server) handleVPNServerDown(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------
 
 // handleVPNServerUp brings a disconnected server back up from its EXISTING conf
-// via StartServer — not a re-provision, so its identity and every enrolled peer
-// survive the disconnect/reconnect (re-provisioning would overwrite the conf and
-// drop the peers).
+// via StartServer, not a re-provision: the conf is left untouched, so its
+// identity and every enrolled peer come back as they were, and a reconnect
+// needs none of provisioning's root-level rewrites.
 func (s *Server) handleVPNServerUp(w http.ResponseWriter, r *http.Request) {
 	cfg, sv, ok := s.vpnServerByID(w, r)
 	if !ok {
@@ -668,6 +689,29 @@ func (s *Server) handleVPNServerRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// vpnServerOnInterface returns the server record, other than id, that already
+// owns iface on targetID. Two records on one (machine, interface) pair would
+// share one conf, key and wg interface, so provisioning the second rewrote the
+// first's [Interface] and bounced it, and its devices then appeared under both.
+// With the default jumpgate0 every second server on a machine collided.
+func vpnServerOnInterface(cfg config.Config, id, targetID, iface string) (config.VPNServer, bool) {
+	for _, sv := range cfg.VPNServers {
+		if sv.ID != id && strings.TrimSpace(sv.TargetID) == strings.TrimSpace(targetID) && sv.Interface == iface {
+			return sv, true
+		}
+	}
+	return config.VPNServer{}, false
+}
+
+func vpnInterfaceTakenMessage(other config.VPNServer) string {
+	machine := "this host"
+	if strings.TrimSpace(other.TargetID) != "" {
+		machine = fmt.Sprintf("machine %q", other.TargetID)
+	}
+	return fmt.Sprintf("server %q already runs on interface %s on %s — pick another interface, or re-provision %q instead",
+		other.ID, other.Interface, machine, other.ID)
 }
 
 // derefOr returns *p, or def when p is nil.

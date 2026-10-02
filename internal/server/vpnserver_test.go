@@ -434,6 +434,54 @@ func TestVPNServerSetEndpointValidates(t *testing.T) {
 	}
 }
 
+// Two server records cannot share an interface on one machine: they would be
+// the same conf, key and wg interface, so provisioning the second rewrote the
+// first's [Interface] and bounced it. With the default jumpgate0 this collided
+// on every second server. The refusal must come before any host command.
+func TestVPNServerProvisionRejectsSecondServerOnSameInterface(t *testing.T) {
+	a, host, _ := newRemoteVPNServerTestServer(t)
+	provision(t, a, map[string]any{"id": "home"})
+
+	host.mu.Lock()
+	callsBefore := len(host.calls)
+	host.mu.Unlock()
+	res := a.do(t, "POST", "/api/vpn-servers", map[string]any{"id": "work"})
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("second server on this host's jumpgate0: got %d, want 409", res.StatusCode)
+	}
+	if !strings.Contains(string(body), "home") || !strings.Contains(string(body), "jumpgate0") {
+		t.Errorf("refusal should name the server and interface it collides with: %s", body)
+	}
+	host.mu.Lock()
+	callsAfter := len(host.calls)
+	host.mu.Unlock()
+	if callsAfter != callsBefore {
+		t.Errorf("ran %d host commands before refusing; the collision must be caught first", callsAfter-callsBefore)
+	}
+
+	// The same interface name on another machine, or another interface on this
+	// one, is a different server and is fine. Re-provisioning home itself is too.
+	provision(t, a, map[string]any{"id": "remote", "targetId": "boxa"})
+	provision(t, a, map[string]any{"id": "work", "interface": "jumpgate1"})
+	res = a.do(t, "POST", "/api/vpn-servers", map[string]any{"id": "home"})
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("re-provisioning home: got %d, want 200", res.StatusCode)
+	}
+
+	// Moving an existing server onto another's interface collides the same way.
+	res = a.do(t, "POST", "/api/vpn-servers", map[string]any{"id": "work", "interface": "jumpgate0"})
+	res.Body.Close()
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("moving work onto home's interface: got %d, want 409", res.StatusCode)
+	}
+	if n := len(decodeJSON[[]vpnServerView](t, a.do(t, "GET", "/api/vpn-servers", nil))); n != 3 {
+		t.Errorf("server count = %d, want 3 (home, remote, work)", n)
+	}
+}
+
 // Re-provisioning an existing server with fields omitted keeps the stored
 // values rather than resetting them to defaults. Before, an omitted targetId
 // meant "this host", so a remote server was re-provisioned on the desktop (a

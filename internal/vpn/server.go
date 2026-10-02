@@ -60,7 +60,9 @@ func (p ServerParams) validate() error {
 //
 // It is idempotent: the server's key is generated only if absent, so
 // re-provisioning keeps the server's identity (and therefore every peer config
-// already handed out stays valid). The private key is generated ON THE HOST and
+// already handed out stays valid), and the [Peer] sections already in the conf
+// are carried over (see writeServerConf), so it keeps every enrolled device
+// admitted too. The private key is generated ON THE HOST and
 // never transits this app — only the public key is read back.
 //
 // It VERIFIES rather than trusts: a wg-quick that exits 0 can still have failed,
@@ -166,11 +168,10 @@ func DeprovisionServer(ctx context.Context, exec executor.Executor, iface string
 }
 
 // StartServer brings an already-provisioned server back UP from its existing
-// on-host conf — the reverse of a disconnect (Down). Crucially, unlike
-// ProvisionServer it does NOT rewrite the conf, so peers enrolled since
-// provisioning (which AddPeer persisted with `wg-quick save`) survive a
-// disconnect/reconnect. Reconnecting through ProvisionServer instead would
-// overwrite the conf with the peerless template and silently drop every device.
+// on-host conf — the reverse of a disconnect (Down). Unlike ProvisionServer it
+// does not touch the conf at all, so the peers AddPeer persisted there with
+// `wg-quick save` come back exactly as they were, and a reconnect never needs
+// root-level rewrites or the provisioning prerequisites.
 //
 // It refuses when there is no conf to bring up (a wiped server) rather than
 // quietly minting a fresh, peerless, new-keyed server in its place. Verifies the
@@ -278,12 +279,27 @@ func ensureServerKey(ctx context.Context, exec executor.Executor, iface string) 
 // int), so they are safe to interpolate into the format string; only the key —
 // the one untrusted-to-this-app value — comes from the shell, as printf's
 // argument, never the format.
+//
+// Only the [Interface] block is rewritten. Every [Peer] section already in an
+// existing conf is carried over, because that file is where the enrolled
+// devices live on the host: AddPeer persists them there with `wg-quick save`,
+// and the wg-quick up that follows reads them back from it. Writing a fresh
+// [Interface]-only file dropped every device on the host while our records
+// still listed them as enrolled. The host conf stays authoritative for who is
+// admitted (enroll and revoke act on the host first, then the record), so the
+// peers are copied from it rather than re-added from config.json.
+//
+// The new file is built beside the old one and moved into place only if that
+// succeeded, so a failed read never leaves a truncated, peerless conf.
 func writeServerConf(ctx context.Context, exec executor.Executor, p ServerParams) error {
 	conf := serverConfPath(p.Iface)
 	key := serverKeyPath(p.Iface)
+	tmp := conf + ".tmp"
 	build := fmt.Sprintf(
-		"umask 077; printf '[Interface]\\nPrivateKey = %%s\\nAddress = %s\\nListenPort = %d\\n' \"$(cat %s)\" > %s",
-		strings.TrimSpace(p.Address), p.ListenPort, shellArg(key), shellArg(conf))
+		"umask 077; { printf '[Interface]\\nPrivateKey = %%s\\nAddress = %s\\nListenPort = %d\\n' \"$(cat %s)\"; "+
+			"if [ -f %s ]; then printf '\\n'; sed -n '/^\\[Peer\\]/,$p' %s; fi; } > %s && mv %s %s",
+		strings.TrimSpace(p.Address), p.ListenPort, shellArg(key),
+		shellArg(conf), shellArg(conf), shellArg(tmp), shellArg(tmp), shellArg(conf))
 	if res, err := exec.Run(ctx, build, nil); err != nil {
 		return fmt.Errorf("vpn: writing %s: %w", conf, err)
 	} else if res.ExitCode != 0 {
