@@ -1,7 +1,11 @@
 package vpn
 
 import (
+	"bytes"
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,6 +13,123 @@ import (
 )
 
 const testServerPub = "kxUUFA0cGVlclB1YmxpY0tleXNlcnZlclB1YmtleT0="
+
+// confShellExecutor runs the command that writes the server conf through a
+// REAL shell, with /etc/wireguard redirected to a temp dir, and hands every
+// other command to the scripted fake. Asserting on the command string alone
+// cannot show what the shell leaves in the file, and what it leaves there
+// (whether the [Peer] sections survive) is the whole question.
+type confShellExecutor struct {
+	*fakeExecutor
+	dir string
+}
+
+func (c confShellExecutor) Run(ctx context.Context, cmd string, opts *executor.RunOpts) (executor.Result, error) {
+	if !strings.Contains(cmd, "printf") || !strings.Contains(cmd, ".conf") {
+		return c.fakeExecutor.Run(ctx, cmd, opts)
+	}
+	_, _ = c.fakeExecutor.Run(ctx, cmd, opts) // still record the call
+	sh := exec.CommandContext(ctx, "sh", "-c", strings.ReplaceAll(cmd, "/etc/wireguard", c.dir))
+	var stdout, stderr bytes.Buffer
+	sh.Stdout, sh.Stderr = &stdout, &stderr
+	err := sh.Run()
+	res := executor.Result{Stdout: stdout.String(), Stderr: stderr.String()}
+	if ee, ok := err.(*exec.ExitError); ok {
+		res.ExitCode = ee.ExitCode()
+	} else if err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+// savedConf is /etc/wireguard/jumpgate0.conf as `wg-quick save` leaves it
+// after two devices were enrolled with AddPeer.
+const savedConf = `[Interface]
+Address = 10.9.0.1/24
+ListenPort = 51820
+PrivateKey = SERVERPRIVATEKEY
+
+[Peer]
+PublicKey = cGVlck9uZVB1YmxpY0tleXBlZXJPbmVQdWJsaWNLZXk=
+AllowedIPs = 10.9.0.2/32
+
+[Peer]
+PublicKey = cGVlclR3b1B1YmxpY0tleXBlZXJUd29QdWJsaWNLZXk=
+AllowedIPs = 10.9.0.3/32
+`
+
+func newConfShellHost(t *testing.T, existingConf string) (confShellExecutor, string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "jumpgate0.privatekey"), []byte("SERVERPRIVATEKEY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conf := filepath.Join(dir, "jumpgate0.conf")
+	if existingConf != "" {
+		if err := os.WriteFile(conf, []byte(existingConf), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return confShellExecutor{fakeExecutor: scriptHealthyServer(), dir: dir}, conf
+}
+
+// Re-provisioning must keep the enrolled devices. The host conf is where
+// AddPeer persists them (`wg-quick save`) and where wg-quick up reads them back
+// from, so rewriting it with only an [Interface] block left config.json
+// listing devices the host no longer admitted. The [Interface] is still
+// rewritten, so a re-provision can change the address or port.
+func TestProvisionServer_ReprovisionKeepsPersistedPeers(t *testing.T) {
+	host, conf := newConfShellHost(t, savedConf)
+	host.script("listen-port", executor.Result{Stdout: "51999\n"})
+
+	p := healthyParams()
+	p.ListenPort = 51999
+	if _, err := ProvisionServer(context.Background(), host, p); err != nil {
+		t.Fatalf("ProvisionServer: %v", err)
+	}
+	got, err := os.ReadFile(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(got)
+	for _, want := range []string{
+		"PrivateKey = SERVERPRIVATEKEY",
+		"ListenPort = 51999",
+		"cGVlck9uZVB1YmxpY0tleXBlZXJPbmVQdWJsaWNLZXk=",
+		"AllowedIPs = 10.9.0.2/32",
+		"cGVlclR3b1B1YmxpY0tleXBlZXJUd29QdWJsaWNLZXk=",
+		"AllowedIPs = 10.9.0.3/32",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("re-provisioned conf is missing %q:\n%s", want, s)
+		}
+	}
+	if n := strings.Count(s, "[Interface]"); n != 1 {
+		t.Errorf("conf has %d [Interface] blocks, want 1:\n%s", n, s)
+	}
+	if n := strings.Count(s, "[Peer]"); n != 2 {
+		t.Errorf("conf has %d [Peer] blocks, want 2:\n%s", n, s)
+	}
+	if strings.Contains(s, "ListenPort = 51820") {
+		t.Errorf("the old [Interface] survived the re-provision:\n%s", s)
+	}
+}
+
+// A first provision has no conf to carry peers from, and must still write one.
+func TestProvisionServer_FirstProvisionWritesInterfaceOnly(t *testing.T) {
+	host, conf := newConfShellHost(t, "")
+	if _, err := ProvisionServer(context.Background(), host, healthyParams()); err != nil {
+		t.Fatalf("ProvisionServer: %v", err)
+	}
+	got, err := os.ReadFile(conf)
+	if err != nil {
+		t.Fatalf("no conf written: %v", err)
+	}
+	s := string(got)
+	if !strings.Contains(s, "[Interface]") || !strings.Contains(s, "ListenPort = 51820") || strings.Contains(s, "[Peer]") {
+		t.Errorf("first-provision conf = %q, want an [Interface] on 51820 and no peers", s)
+	}
+}
 
 // scriptHealthyServer wires a fake host where every provisioning command
 // succeeds and the interface comes up listening on 51820.

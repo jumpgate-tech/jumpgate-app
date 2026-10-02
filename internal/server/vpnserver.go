@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -41,6 +42,9 @@ func (s *Server) registerVPNServerRoutes(mux *http.ServeMux) {
 	// Revoke a device. The public key is the stable identifier but carries "/"
 	// and "+", so it travels in the body, not the path.
 	mux.HandleFunc("POST /api/vpn-servers/{id}/peers/remove", s.handleVPNServerRevoke)
+	// Set the public endpoint devices dial. A record-only update, separate from
+	// provision, because the endpoint never reaches the host (see the handler).
+	mux.HandleFunc("POST /api/vpn-servers/{id}/endpoint", s.handleVPNServerSetEndpoint)
 }
 
 // ---------------------------------------------------------------------
@@ -179,9 +183,25 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 			"a server id must be lower-case letters, digits, dot, dash or underscore (starting with a letter or digit), at most 39 characters")
 		return
 	}
-	iface := derefOr(req.Interface, defaultServerIface)
-	address := derefOr(req.Address, defaultServerAddress)
-	port := defaultServerPort
+	cfg, err := s.loadConfig()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// A field the request omits falls back to the stored record when this id
+	// already exists, and to the defaults only for a new server. Defaulting an
+	// existing server would silently move it: an omitted targetId means "this
+	// host", so a remote server would be re-provisioned on the desktop and its
+	// record rewritten to point there, renumbered with the default address and
+	// port.
+	targetID, iface, address, port := "", defaultServerIface, defaultServerAddress, defaultServerPort
+	if existing, ok := cfg.FindVPNServer(id); ok {
+		targetID, iface, address, port = existing.TargetID, existing.Interface, existing.Address, existing.ListenPort
+	}
+	targetID = derefOr(req.TargetID, targetID)
+	iface = derefOr(req.Interface, iface)
+	address = derefOr(req.Address, address)
 	if req.ListenPort != nil {
 		port = *req.ListenPort
 	}
@@ -197,12 +217,13 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	// Refuse before touching the host, so the other server is left exactly as
+	// it was.
+	if other, ok := vpnServerOnInterface(cfg, id, targetID, iface); ok {
+		writeError(w, http.StatusConflict, vpnInterfaceTakenMessage(other))
 		return
 	}
-	targetID := derefOr(req.TargetID, "")
+
 	ex, ok := s.hostExecutor(w, cfg, targetID)
 	if !ok {
 		return
@@ -219,8 +240,11 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 
 	// The endpoint host devices dial: an explicit override, else the SSH host
 	// of a fleet target, else unknown (local host with no public name).
+	// A stored endpoint is kept over the derived SSH host, since the operator
+	// may have set a public name the SSH address is not.
 	endpointHost := derefOr(req.EndpointHost, "")
-	if endpointHost == "" {
+	stored, _ := cfg.FindVPNServer(id)
+	if endpointHost == "" && stored.Endpoint == "" {
 		if t, ok := findTarget(cfg, targetID); ok && t.Mode == "ssh" && t.SSH != nil {
 			endpointHost = t.SSH.Host
 		}
@@ -231,13 +255,22 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 	}
 
 	created := false
+	var taken *config.VPNServer
 	cfg, err = s.updateConfig(func(c *config.Config) error {
+		// Checked again under the config lock, in case a concurrent provision
+		// claimed the interface after the check above.
+		if other, ok := vpnServerOnInterface(*c, id, targetID, iface); ok {
+			taken = &other
+			return errors.New(vpnInterfaceTakenMessage(other))
+		}
 		for i := range c.VPNServers {
 			if c.VPNServers[i].ID != id {
 				continue
 			}
 			// Re-provision keeps the peers: the server key is idempotent, so
-			// every config already handed out stays valid.
+			// every config already handed out stays valid, and ProvisionServer
+			// carries the [Peer] sections of the host conf over, so every
+			// device recorded here is still admitted there.
 			c.VPNServers[i].TargetID = targetID
 			c.VPNServers[i].Interface = iface
 			c.VPNServers[i].Address = address
@@ -255,6 +288,10 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 		})
 		return nil
 	})
+	if taken != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -270,6 +307,69 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 		FirewallHint:       info.FirewallHint,
 		EndpointConfigured: sv.Endpoint != "",
 	})
+}
+
+// ---------------------------------------------------------------------
+// POST /api/vpn-servers/{id}/endpoint  (set the public endpoint)
+// ---------------------------------------------------------------------
+
+type vpnSetEndpointRequest struct {
+	EndpointHost string `json:"endpointHost"` // public host or domain devices dial; the port is the server's own
+}
+
+// handleVPNServerSetEndpoint records the public host devices dial. It is
+// deliberately NOT a re-provision: the endpoint appears only in the Endpoint
+// line of the device .conf rendered at enrollment, never in the server's own
+// conf on the host, so there is nothing to change there. Going through
+// provision instead needed root on the host, bounced the interface (dropping
+// every connected device for a metadata edit) and, with the request's other
+// fields omitted, re-provisioned with the defaults on the wrong machine.
+//
+// Configs already handed out keep whatever endpoint they were minted with; this
+// changes only the configs issued from now on.
+func (s *Server) handleVPNServerSetEndpoint(w http.ResponseWriter, r *http.Request) {
+	_, sv, ok := s.vpnServerByID(w, r)
+	if !ok {
+		return
+	}
+	var req vpnSetEndpointRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	host := strings.TrimSpace(req.EndpointHost)
+	// A bracketed IPv6 literal is accepted the way people paste it; JoinHostPort
+	// adds the brackets back.
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if host == "" || strings.ContainsAny(host, " \t/") {
+		writeError(w, http.StatusBadRequest, "endpointHost must be the public host or domain devices dial, like vpn.example.com")
+		return
+	}
+	// The port is always the server's listen port, so a host:port here is a
+	// mistake that would render as host:port:port. A bare IPv6 address does not
+	// split, so it is not caught by this.
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"endpointHost is the host only; the port is the server's listen port (%d)", sv.ListenPort))
+		return
+	}
+	endpoint := net.JoinHostPort(host, strconv.Itoa(sv.ListenPort))
+
+	cfg, err := s.updateConfig(func(c *config.Config) error {
+		for i := range c.VPNServers {
+			if c.VPNServers[i].ID == sv.ID {
+				c.VPNServers[i].Endpoint = endpoint
+				return nil
+			}
+		}
+		return fmt.Errorf("server %q vanished while setting its endpoint", sv.ID)
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	updated, _ := cfg.FindVPNServer(sv.ID)
+	writeJSON(w, http.StatusOK, vpnServerViewFrom(updated))
 }
 
 // ---------------------------------------------------------------------
@@ -384,9 +484,9 @@ func (s *Server) handleVPNServerDown(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------
 
 // handleVPNServerUp brings a disconnected server back up from its EXISTING conf
-// via StartServer — not a re-provision, so its identity and every enrolled peer
-// survive the disconnect/reconnect (re-provisioning would overwrite the conf and
-// drop the peers).
+// via StartServer, not a re-provision: the conf is left untouched, so its
+// identity and every enrolled peer come back as they were, and a reconnect
+// needs none of provisioning's root-level rewrites.
 func (s *Server) handleVPNServerUp(w http.ResponseWriter, r *http.Request) {
 	cfg, sv, ok := s.vpnServerByID(w, r)
 	if !ok {
@@ -589,6 +689,29 @@ func (s *Server) handleVPNServerRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// vpnServerOnInterface returns the server record, other than id, that already
+// owns iface on targetID. Two records on one (machine, interface) pair would
+// share one conf, key and wg interface, so provisioning the second rewrote the
+// first's [Interface] and bounced it, and its devices then appeared under both.
+// With the default jumpgate0 every second server on a machine collided.
+func vpnServerOnInterface(cfg config.Config, id, targetID, iface string) (config.VPNServer, bool) {
+	for _, sv := range cfg.VPNServers {
+		if sv.ID != id && strings.TrimSpace(sv.TargetID) == strings.TrimSpace(targetID) && sv.Interface == iface {
+			return sv, true
+		}
+	}
+	return config.VPNServer{}, false
+}
+
+func vpnInterfaceTakenMessage(other config.VPNServer) string {
+	machine := "this host"
+	if strings.TrimSpace(other.TargetID) != "" {
+		machine = fmt.Sprintf("machine %q", other.TargetID)
+	}
+	return fmt.Sprintf("server %q already runs on interface %s on %s — pick another interface, or re-provision %q instead",
+		other.ID, other.Interface, machine, other.ID)
 }
 
 // derefOr returns *p, or def when p is nil.

@@ -1570,6 +1570,19 @@ export function provisionVpnServer(
   });
 }
 
+// setVpnServerEndpoint records the public host devices dial (the port is the
+// server's own listen port). It is a record-only update, not a re-provision:
+// the endpoint is only the Endpoint line of the device configs issued from now
+// on, so the host is not touched and the server's machine, address and port
+// stay as provisioned. Returns the updated server.
+export function setVpnServerEndpoint(id: string, endpointHost: string): Promise<VpnServerView> {
+  return request<VpnServerView>(`/api/vpn-servers/${encodeURIComponent(id)}/endpoint`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ endpointHost }),
+  });
+}
+
 export function getVpnServer(id: string): Promise<VpnServerView> {
   return request<VpnServerView>(`/api/vpn-servers/${encodeURIComponent(id)}`);
 }

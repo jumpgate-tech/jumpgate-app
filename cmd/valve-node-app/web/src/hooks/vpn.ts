@@ -104,6 +104,20 @@ export function useProvisionVpnServer() {
   });
 }
 
+// useSetVpnServerEndpoint sets a provisioned server's public endpoint without
+// re-provisioning it (see api.setVpnServerEndpoint). The server's endpoint
+// changed, so ["vpnServers"] is invalidated.
+export function useSetVpnServerEndpoint() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, endpointHost }: { id: string; endpointHost: string }) =>
+      api.setVpnServerEndpoint(id, endpointHost),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["vpnServers"] });
+    },
+  });
+}
+
 // useEnrollVpnDevice adds a peer to a server. The returned VpnEnrollResult
 // carries the peer's full client config — emitted only here — so it is left on
 // the resolved data for the caller to surface (mutation.data?.config); the

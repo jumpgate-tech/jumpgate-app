@@ -25,6 +25,7 @@ import {
   useDeleteVpn,
   useVpnAction,
   useProvisionVpnServer,
+  useSetVpnServerEndpoint,
   useEnrollVpnDevice,
   useRevokeVpnDevice,
   useVpnServerAction,
@@ -96,7 +97,7 @@ function ServerCard({ server, firewallHint }: { server: api.VpnServerView; firew
   const revoke = useRevokeVpnDevice();
   const action = useVpnServerAction();
   const del = useDeleteVpnServer();
-  const setEndpoint = useProvisionVpnServer();
+  const setEndpoint = useSetVpnServerEndpoint();
 
   const [deviceName, setDeviceName] = useState("");
   const [fullTunnel, setFullTunnel] = useState(false);
@@ -105,13 +106,12 @@ function ServerCard({ server, firewallHint }: { server: api.VpnServerView; firew
   // operator dismisses it. Jumpgate keeps no copy, so this is the only place
   // it ever appears.
   const [handoff, setHandoff] = useState<api.VpnEnrollResult | null>(null);
-  const [localHint, setLocalHint] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
 
   const endpointSet = server.endpoint !== "";
   const status = statusQ.data;
   const up = status?.up ?? false;
-  const hint = localHint ?? firewallHint ?? `ufw allow ${server.listenPort}/udp`;
+  const hint = firewallHint ?? `ufw allow ${server.listenPort}/udp`;
   const machine = server.targetId || "this machine";
 
   async function handleEnroll() {
@@ -131,10 +131,10 @@ function ServerCard({ server, firewallHint }: { server: api.VpnServerView; firew
   async function handleSetEndpoint() {
     setError(null);
     try {
-      // Provision is idempotent: the same id with an endpointHost updates the
-      // endpoint on the existing server rather than standing up a new one.
-      const res = await setEndpoint.mutateAsync({ id: server.id, endpointHost: endpointHost.trim() });
-      setLocalHint(res.firewallHint);
+      // A record-only update, never a re-provision: provisioning again with just
+      // the id and host fell back to the defaults (this machine, 10.9.0.1/24,
+      // port 51820), which failed for a remote server and renumbered a local one.
+      await setEndpoint.mutateAsync({ id: server.id, endpointHost: endpointHost.trim() });
       setEndpointHost("");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
