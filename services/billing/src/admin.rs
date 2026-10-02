@@ -198,10 +198,16 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
 ///    protection — on Linux and macOS, directory permissions gate whether
 ///    another user's process can reach the socket at all, so both the
 ///    directory mode and the socket file mode are set, not just one.
-/// 2. Any file already at `path` is unlinked first. A crashed process leaves
-///    its socket file behind; binding to an existing path then fails with
-///    `EADDRINUSE` unless the stale file is removed first. A dangling unix
-///    socket file carries no data, so removing it is safe.
+///    A directory that already exists is never chmod'ed: it may be shared
+///    (`/tmp`), and it is the operator's to set. It is checked instead, and
+///    refused unless the current user owns it and it is not world-writable
+///    without the sticky bit (see [`socket_parent_problem`]).
+/// 2. A socket file already at `path` is unlinked first. A crashed process
+///    leaves its socket file behind; binding to an existing path then fails
+///    with `EADDRINUSE` unless the stale file is removed first. A dangling
+///    unix socket file carries no data, so removing it is safe. Anything at
+///    `path` that is not a socket (a regular file, a symlink, a directory) is
+///    refused, never removed, so a mistyped path cannot delete a file.
 /// 3. The socket file itself is set to `0600` once it exists, so a
 ///    same-directory, different-user read (were the directory mode ever
 ///    loosened by mistake) still hits a permission error.
@@ -235,19 +241,74 @@ pub async fn serve_unix(path: &FsPath, state: AppState) -> Result<()> {
 fn bind_unix(path: &FsPath) -> Result<tokio::net::UnixListener> {
     use std::os::unix::fs::PermissionsExt;
 
+    use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt};
+
+    let refuse = |reason: String| Error::UnsafeSocketPath {
+        path: path.to_path_buf(),
+        reason,
+    };
+
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)?;
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        match std::fs::metadata(parent) {
+            Ok(meta) => {
+                if !meta.is_dir() {
+                    return Err(refuse(format!("{} is not a directory", parent.display())));
+                }
+                // SAFETY: geteuid takes no arguments, cannot fail, and touches
+                // no memory we own.
+                let euid = unsafe { libc::geteuid() };
+                if let Some(reason) = socket_parent_problem(meta.uid(), meta.mode(), euid) {
+                    return Err(refuse(format!("{}: {reason}", parent.display())));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Ours to create, so ours to lock down. `mode` applies to every
+                // missing ancestor too; the explicit chmod pins the leaf at
+                // exactly 0700 whatever the umask.
+                std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
 
-    // Ignore the error: the common case is "no such file", which is exactly
-    // the state we want before a bind. A real removal failure (e.g. a
-    // permission problem) still surfaces at the `bind` call below.
-    let _ = std::fs::remove_file(path);
+    // `symlink_metadata`, so a symlink at the path is judged as a symlink,
+    // not as whatever it points to.
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_socket() => std::fs::remove_file(path)?,
+        Ok(_) => return Err(refuse("a file that is not a socket is already there".into())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
 
     let listener = tokio::net::UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     Ok(listener)
+}
+
+/// Why an existing directory is unfit to hold the admin socket, or `None` if
+/// it is fit. Pure, so a test can cover ownership cases it could not set up
+/// on disk without root.
+///
+/// - It must be owned by `euid`. Another user's directory (root's `/tmp`, as
+///   a normal user) lets that user replace the socket or loosen the mode.
+/// - It must not be world-writable without the sticky bit. In such a
+///   directory any local user can rename or replace the socket. With the
+///   sticky bit (`/tmp` is `1777`) only the entry's owner can, so it passes.
+#[cfg(unix)]
+fn socket_parent_problem(owner_uid: u32, mode: u32, euid: u32) -> Option<String> {
+    if owner_uid != euid {
+        return Some(format!(
+            "the directory is owned by uid {owner_uid}, not the current uid {euid}"
+        ));
+    }
+    if mode & 0o002 != 0 && mode & 0o1000 == 0 {
+        return Some(format!(
+            "the directory is world-writable without the sticky bit (mode {:o})",
+            mode & 0o7777
+        ));
+    }
+    None
 }
 
 /// A unix listener that only hands `axum::serve` a connection from the
@@ -982,6 +1043,7 @@ impl From<Error> for ApiError {
             | Error::MissingAdminToken
             | Error::MissingRelayToken
             | Error::AddrNotLoopback(_)
+            | Error::UnsafeSocketPath { .. }
             | Error::Sqlite(_)
             | Error::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
@@ -2223,11 +2285,14 @@ mod tests {
         let sock_path = temp_socket_path("unixstale");
         let dir = sock_path.parent().unwrap().to_path_buf();
 
-        // Simulate a crashed process: the directory and a plain file already
-        // sit at the socket path. `UnixListener::bind` refuses to bind over an
-        // existing path, so this only works if `serve_unix` unlinks it first.
+        // Simulate a crashed process: the directory and a dead socket file
+        // already sit at the socket path. Dropping a std listener closes it
+        // but leaves the file behind, exactly as a crash does.
+        // `UnixListener::bind` refuses to bind over an existing path, so this
+        // only works if `serve_unix` unlinks it first.
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(&sock_path, b"stale").unwrap();
+        drop(std::os::unix::net::UnixListener::bind(&sock_path).unwrap());
+        assert!(sock_path.exists(), "the stale socket file must be left behind");
 
         let sock_path_for_task = sock_path.clone();
         let handle = tokio::spawn(async move {
@@ -2244,5 +2309,79 @@ mod tests {
         handle.abort();
         let _ = std::fs::remove_dir_all(&dir);
         remove_db(&dbpath);
+    }
+
+    /// A throwaway directory under `/tmp` that the test, not `bind_unix`,
+    /// creates. Same short-path reasoning as [`temp_socket_path`].
+    fn existing_socket_dir(tag: &str, mode: u32) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_socket_path(tag).parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+        dir
+    }
+
+    fn dir_mode(dir: &std::path::Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(dir).unwrap().permissions().mode() & 0o7777
+    }
+
+    #[tokio::test]
+    async fn bind_unix_leaves_an_existing_parent_directory_mode_alone() {
+        // `billing serve --socket /tmp/billing.sock` must not turn /tmp into
+        // 0700. A directory the operator already made is theirs to set; the
+        // bind only checks it.
+        let dir = existing_socket_dir("unixkeep", 0o750);
+        let sock_path = dir.join("b.sock");
+
+        let listener = bind_unix(&sock_path).expect("an owned 0750 directory is acceptable");
+        assert_eq!(dir_mode(&dir), 0o750, "the existing directory's mode must not change");
+
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn bind_unix_refuses_a_world_writable_parent_without_the_sticky_bit() {
+        // Anyone can rename or replace entries in a 0777 directory, including
+        // the socket, so it is refused, and its mode is left as found.
+        let dir = existing_socket_dir("unixopen", 0o777);
+        let sock_path = dir.join("b.sock");
+
+        let err = bind_unix(&sock_path).expect_err("a 0777 parent must be refused");
+        assert!(matches!(err, Error::UnsafeSocketPath { .. }), "got: {err}");
+        assert_eq!(dir_mode(&dir), 0o777, "a refused directory's mode must not change");
+        assert!(!sock_path.exists(), "nothing may be bound in a refused directory");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn bind_unix_never_unlinks_a_file_that_is_not_a_socket() {
+        // A mistyped `--socket` pointing at a real file must be an error, not
+        // a silent delete.
+        let dir = existing_socket_dir("unixfile", 0o700);
+        let sock_path = dir.join("b.sock");
+        std::fs::write(&sock_path, b"precious").unwrap();
+
+        let err = bind_unix(&sock_path).expect_err("a regular file at the path must be refused");
+        assert!(matches!(err, Error::UnsafeSocketPath { .. }), "got: {err}");
+        assert_eq!(std::fs::read(&sock_path).unwrap(), b"precious");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn socket_parent_problem_accepts_only_owned_and_not_open_directories() {
+        // Owned by us, private or group-readable: fine.
+        assert_eq!(socket_parent_problem(1000, 0o700, 1000), None);
+        assert_eq!(socket_parent_problem(1000, 0o755, 1000), None);
+        // Owned by us, world-writable but sticky (the /tmp shape, as root): fine.
+        assert_eq!(socket_parent_problem(0, 0o1777, 0), None);
+        // World-writable without the sticky bit: refused, whoever owns it.
+        assert!(socket_parent_problem(1000, 0o777, 1000).is_some());
+        // Owned by someone else (root's /tmp, as a normal user): refused.
+        assert!(socket_parent_problem(0, 0o1777, 1000).is_some());
+        assert!(socket_parent_problem(1001, 0o700, 1000).is_some());
     }
 }
