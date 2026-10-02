@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -124,6 +125,14 @@ type Server struct {
 	// against every upstream a gateway fronts.
 	capMu     sync.Mutex
 	capChecks map[string]capabilitiesResponse
+	// capFlights is the probe currently running per gateway id, also guarded
+	// by capMu. See sharedCapabilityProbe.
+	capFlights map[string]*capFlight
+
+	// capProbe and capTimeout replace the real probe and its deadline. They
+	// are nil and zero outside tests, where a real probe dials real sockets.
+	capProbe   func(context.Context, config.Config, config.Gateway) capabilitiesResponse
+	capTimeout time.Duration
 
 	// chainsMu guards the cached full chain catalogue (id + name for every
 	// chain the feed knows) that backs the network-search picker. The feed is
@@ -280,16 +289,45 @@ func tokensEqual(a, b string) bool {
 
 // ListenAndServe runs the server until ctx is canceled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
-	httpServer := newHTTPServer(s.cfg.Bind, s.Handler())
+	return serveUntil(ctx, newHTTPServer(s.cfg.Bind, s.Handler()), shutdownGrace)
+}
+
+// shutdownGrace bounds how long a listener waits for its requests to finish
+// once it has been told to stop, before closing their connections anyway.
+const shutdownGrace = 5 * time.Second
+
+// serveUntil runs srv until ctx is canceled, then shuts it down within grace.
+//
+// http.Server.Shutdown waits for every active request to return, but it does
+// not cancel their contexts, and the SSE handlers (setup, monitor, logs)
+// return only when their request context ends. Left alone, Shutdown and an
+// open UI tab would wait on each other forever, so Ctrl-C hung. Every request
+// context therefore derives from a base context that is canceled the moment
+// shutdown starts. That also cancels ordinary requests still in flight, which
+// is what stopping the process means anyway.
+//
+// A handler that ignores its context would still pin Shutdown, so it is
+// bounded by grace and followed by Close. That case is still a clean stop
+// from the caller's side: the process was asked to exit, and it has.
+func serveUntil(ctx context.Context, srv *http.Server, grace time.Duration) error {
+	base, cancelBase := context.WithCancel(context.Background())
+	defer cancelBase()
+	srv.BaseContext = func(net.Listener) context.Context { return base }
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- httpServer.ListenAndServe()
+		errCh <- srv.ListenAndServe()
 	}()
 
 	select {
 	case <-ctx.Done():
-		return httpServer.Shutdown(context.Background())
+		cancelBase()
+		sctx, cancel := context.WithTimeout(context.Background(), grace)
+		defer cancel()
+		if err := srv.Shutdown(sctx); err != nil {
+			srv.Close()
+		}
+		return nil
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil

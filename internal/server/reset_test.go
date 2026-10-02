@@ -131,7 +131,12 @@ func TestReset_RefusedForAnythingButTheDevnet(t *testing.T) {
 	a := newAPITestServerWithExecutor(t, f.factory)
 	addTarget(t, a)
 
-	for _, svc := range []string{"erpc", "gateway", "reth", "node", ""} {
+	// An empty service name is not in this list because it never reaches the
+	// handler: ServeMux will not match {svc} against an empty segment, so it
+	// path-cleans ".../containers//reset" with a redirect to a URL that is no
+	// route at all. That answer is the mux's plain-text 404, not this
+	// handler's JSON refusal, and there is nothing of ours to assert about it.
+	for _, svc := range []string{"erpc", "gateway", "reth", "node"} {
 		res := a.do(t, "POST", "/api/targets/local/containers/"+svc+"/reset", nil)
 		body := decode[errorDetail](t, res)
 		if res.StatusCode != http.StatusNotFound {
@@ -140,7 +145,7 @@ func TestReset_RefusedForAnythingButTheDevnet(t *testing.T) {
 		}
 		// The message has to point at the real path for a node, or the
 		// operator concludes the feature is missing and looks for another way.
-		if svc != "" && !strings.Contains(body.Error, "clear-and-resync") {
+		if !strings.Contains(body.Error, "clear-and-resync") {
 			t.Errorf("reset %q: message does not name the guarded path a node actually has: %q", svc, body.Error)
 		}
 	}

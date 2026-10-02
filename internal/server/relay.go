@@ -45,20 +45,5 @@ func (s *Server) ListenAndServeRelay(ctx context.Context) error {
 	// No authMiddleware. The data plane authenticates by key, inside the relay
 	// handler. Wrapping it here would let a session token buy customer traffic,
 	// and worse, would suggest the session token belongs on this plane at all.
-	relayServer := newHTTPServer(s.cfg.RelayBind, handler)
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- relayServer.ListenAndServe()
-	}()
-
-	select {
-	case <-ctx.Done():
-		return relayServer.Shutdown(context.Background())
-	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
-	}
+	return serveUntil(ctx, newHTTPServer(s.cfg.RelayBind, handler), shutdownGrace)
 }

@@ -36,9 +36,9 @@ func TestAddTarget_RefusesWhatItCannotDrive(t *testing.T) {
 			wantSay: "id is required",
 		},
 		{
-			name:    "a mode that does not exist",
-			body:    map[string]any{"id": "box", "mode": "carrier-pigeon"},
-			want:    http.StatusBadRequest,
+			name: "a mode that does not exist",
+			body: map[string]any{"id": "box", "mode": "carrier-pigeon"},
+			want: http.StatusBadRequest,
 			// The quotes around the modes are JSON-escaped in the body, so
 			// the match stops before them.
 			wantSay: "mode must be",

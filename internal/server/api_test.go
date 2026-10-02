@@ -858,6 +858,20 @@ func addAndWireLocalTarget(t *testing.T, a *apiTestServer) {
 		t.Fatalf("setup kickoff status = %d, want 202, body=%s", res.StatusCode, body)
 	}
 	res.Body.Close()
+
+	// The run continues in the background, and it holds the target's setup
+	// slot until it finishes. Destructive routes refuse to run while it is
+	// held, so a caller that goes on to clear or wipe must not start until
+	// the run is over.
+	run := setupRunOf(a.srv, "local")
+	if run == nil {
+		t.Fatal("setup was accepted but no run holds the slot")
+	}
+	select {
+	case <-run.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the setup run against a fake executor never finished")
+	}
 }
 
 func TestServiceActionHappyPath(t *testing.T) {

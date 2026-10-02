@@ -87,12 +87,7 @@ func (r *registry) remove(id string) {
 	}
 
 	e.mu.Lock()
-	if e.monStop != nil {
-		e.monStop()
-	}
-	if e.watchStop != nil {
-		e.watchStop()
-	}
+	e.retireObserversLocked()
 	run := e.setup
 	e.mu.Unlock()
 
@@ -114,11 +109,17 @@ type targetEntry struct {
 
 	mon     *monitor.Monitor
 	monStop context.CancelFunc
+	monDone <-chan struct{} // closed when mon is retired
 
 	watch     *logwatch.Watcher
 	watchStop context.CancelFunc
+	watchDone <-chan struct{} // closed when watch is retired
 
 	setup *setupRun
+
+	// opBusy is set while a destructive operation (wipe, reset, clear) is
+	// running against this target. See claimTargetOp.
+	opBusy bool
 
 	// Network-diagnostics state, guarded by its own mutex because auto-run
 	// goroutines touch it while entry.mu may be held by slow executor
@@ -127,6 +128,21 @@ type targetEntry struct {
 	diagLatest *DiagReport
 	diagLast   time.Time
 	diagBusy   bool
+}
+
+// retireObserversLocked stops the target's monitor and log watcher, along
+// with the diagnostics goroutines tied to their contexts, and forgets them so
+// the next getMonitor or getWatcher builds new ones from the current Wire.
+// The caller holds e.mu.
+func (e *targetEntry) retireObserversLocked() {
+	if e.monStop != nil {
+		e.monStop()
+	}
+	if e.watchStop != nil {
+		e.watchStop()
+	}
+	e.mon, e.monStop, e.monDone = nil, nil, nil
+	e.watch, e.watchStop, e.watchDone = nil, nil, nil
 }
 
 // setExec caches ex as entry's executor under entry.mu. handleAddTarget
@@ -210,6 +226,14 @@ func (sr *setupRun) append(ev setup.Event) {
 	sr.mu.Unlock()
 }
 
+// isRunning reads running under the run's own lock, which finish writes it
+// under.
+func (sr *setupRun) isRunning() bool {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	return sr.running
+}
+
 func (sr *setupRun) finish(err error) {
 	sr.mu.Lock()
 	sr.running = false
@@ -286,23 +310,26 @@ func (s *Server) getExecutorLocked(entry *targetEntry, t config.Target) (executo
 }
 
 // getMonitor returns t's monitor.Monitor, lazily creating and starting one
-// (polling forever, until the target is deleted) on first use.
-func (s *Server) getMonitor(t config.Target, refRPCBase string) (*monitor.Monitor, error) {
+// on first use. It polls until the target is deleted or setup is re-run (see
+// retireObserversLocked). retired is closed at that point: the monitor stops
+// publishing without closing its subscribers' channels, so a long-lived
+// subscriber must watch retired to know to let go.
+func (s *Server) getMonitor(t config.Target, refRPCBase string) (mon *monitor.Monitor, retired <-chan struct{}, err error) {
 	entry := s.reg.get(t.ID)
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	if entry.mon != nil {
-		return entry.mon, nil
+		return entry.mon, entry.monDone, nil
 	}
 	ex, err := s.getExecutorLocked(entry, t)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	refRPC := ""
 	if refRPCBase != "" {
 		refRPC = fmt.Sprintf("%s/evm/%d", refRPCBase, t.Wire.ChainID)
 	}
-	mon := monitor.New(monitor.Config{Exec: ex, Wire: *t.Wire, RefRPC: refRPC})
+	mon = monitor.New(monitor.Config{Exec: ex, Wire: *t.Wire, RefRPC: refRPC})
 	ctx, cancel := context.WithCancel(context.Background())
 	mon.Start(ctx)
 	// Auto-diagnostics trigger: failed connections (inactive service, zero
@@ -311,23 +338,24 @@ func (s *Server) getMonitor(t config.Target, refRPCBase string) (*monitor.Monito
 	go s.watchMonitorForDiag(ctx, t, mon)
 	entry.mon = mon
 	entry.monStop = cancel
-	return mon, nil
+	entry.monDone = ctx.Done()
+	return mon, entry.monDone, nil
 }
 
 // getWatcher returns t's logwatch.Watcher, lazily creating and starting one
-// (tailing forever, until the target is deleted) on first use.
-func (s *Server) getWatcher(t config.Target) (*logwatch.Watcher, error) {
+// on first use. Its lifetime and retired channel work as getMonitor's do.
+func (s *Server) getWatcher(t config.Target) (watch *logwatch.Watcher, retired <-chan struct{}, err error) {
 	entry := s.reg.get(t.ID)
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	if entry.watch != nil {
-		return entry.watch, nil
+		return entry.watch, entry.watchDone, nil
 	}
 	ex, err := s.getExecutorLocked(entry, t)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	watch := logwatch.New(ex, logUnits)
+	watch = logwatch.New(ex, logUnits)
 	ctx, cancel := context.WithCancel(context.Background())
 	watch.Start(ctx)
 	// Auto-diagnostics trigger: error/critical journal hits kick off a
@@ -336,7 +364,8 @@ func (s *Server) getWatcher(t config.Target) (*logwatch.Watcher, error) {
 	go s.watchLogsForDiag(ctx, t, watch)
 	entry.watch = watch
 	entry.watchStop = cancel
-	return watch, nil
+	entry.watchDone = ctx.Done()
+	return watch, entry.watchDone, nil
 }
 
 // ---------------------------------------------------------------------
@@ -832,6 +861,14 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The monitor and log watcher were built from the Wire this run is
+	// replacing, and cache it for as long as they live. Retire them now that
+	// the new Wire is saved, so anything that asks next builds from it, and
+	// again when the run ends, in case something rebuilt them from a config
+	// read before the save landed.
+	claimed.retireObservers()
+	claimed.retireOnFinish = true
+
 	s.launchSetupRun(claimed, ex, steps, wire)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
@@ -844,6 +881,22 @@ type claimedRun struct {
 	run    *setupRun
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// entry is the registry entry the claim was made on. It is held rather
+	// than looked up again so that a run outliving its target's removal
+	// cannot recreate the entry.
+	entry *targetEntry
+	// retireOnFinish retires the target's observers when the run ends. Only
+	// the node wizard sets it: it is the only run that changes the Wire they
+	// are built from.
+	retireOnFinish bool
+}
+
+// retireObservers stops and forgets the target's monitor and log watcher.
+func (c claimedRun) retireObservers() {
+	c.entry.mu.Lock()
+	c.entry.retireObserversLocked()
+	c.entry.mu.Unlock()
 }
 
 // claimSetupRun reserves the target's single setup slot, answering 409 if one
@@ -859,14 +912,49 @@ func (s *Server) claimSetupRun(w http.ResponseWriter, id string) (claimedRun, bo
 	entry := s.reg.get(id)
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
-	if entry.setup != nil && entry.setup.running {
+	if entry.setup != nil && entry.setup.isRunning() {
 		writeError(w, http.StatusConflict, "setup is already running for this target")
+		return claimedRun{}, false
+	}
+	if entry.opBusy {
+		writeError(w, http.StatusConflict, "a wipe, reset or clear is running on this target; start setup once it has finished")
 		return claimedRun{}, false
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	run := newSetupRun(cancel)
 	entry.setup = run
-	return claimedRun{id: id, run: run, ctx: ctx, cancel: cancel}, true
+	return claimedRun{id: id, run: run, ctx: ctx, cancel: cancel, entry: entry}, true
+}
+
+// claimTargetOp reserves the target for one destructive operation (wipe,
+// reset, clear-and-resync), answering 409 and returning false when a setup or
+// provision run holds the target's slot or another such operation is already
+// running. The caller must call release when it is done.
+//
+// These operations take turns with setup runs for the reason claimSetupRun
+// gives: they drive the same executor against the same machine. A wipe
+// interleaved with a provision removes the container the provision is
+// creating, or creates one against a volume the wipe is deleting. They do not
+// take the setup slot itself, because that would replace the last run whose
+// events .../setup/stream replays with an empty one.
+func (s *Server) claimTargetOp(w http.ResponseWriter, id string) (release func(), ok bool) {
+	entry := s.reg.get(id)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.setup != nil && entry.setup.isRunning() {
+		writeError(w, http.StatusConflict, "setup is running for this target; wait for it to finish before wiping, resetting or clearing")
+		return nil, false
+	}
+	if entry.opBusy {
+		writeError(w, http.StatusConflict, "another wipe, reset or clear is already running on this target")
+		return nil, false
+	}
+	entry.opBusy = true
+	return func() {
+		entry.mu.Lock()
+		entry.opBusy = false
+		entry.mu.Unlock()
+	}, true
 }
 
 // releaseSetupRun undoes a claim whose run never started, so a retry is not
@@ -894,6 +982,9 @@ func (s *Server) launchSetupRun(c claimedRun, ex executor.Executor, steps []setu
 		defer close(events)
 		runErr := setup.RunAll(c.ctx, ex, steps, &setup.State{Wire: wire, Events: events})
 		c.run.finish(runErr)
+		if c.retireOnFinish {
+			c.retireObservers()
+		}
 		// Signal that this goroutine is done touching ex — registry.remove
 		// waits on this before Close()ing the executor out from under a
 		// still-running setup step.
@@ -966,7 +1057,7 @@ func (s *Server) handleTargetMonitorStream(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	mon, err := s.getMonitor(target, cfg.RefRPCBase)
+	mon, retired, err := s.getMonitor(target, cfg.RefRPCBase)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -990,6 +1081,10 @@ func (s *Server) handleTargetMonitorStream(w http.ResponseWriter, r *http.Reques
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-retired:
+			// Setup was re-run. Ending the stream makes the EventSource
+			// reconnect, and the reconnect gets the rebuilt monitor.
 			return
 		case snap, ok := <-ch:
 			if !ok {
@@ -1023,7 +1118,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	watch, err := s.getWatcher(target)
+	watch, _, err := s.getWatcher(target)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -1061,7 +1156,7 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	watch, err := s.getWatcher(target)
+	watch, retired, err := s.getWatcher(target)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -1082,6 +1177,9 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-retired:
+			// Setup was re-run; see handleTargetMonitorStream.
 			return
 		case hit, ok := <-ch:
 			if !ok {
@@ -1141,7 +1239,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 
 	lines := req.Lines
 	if len(lines) == 0 && target.Wire != nil {
-		if watch, err := s.getWatcher(target); err == nil {
+		if watch, _, err := s.getWatcher(target); err == nil {
 			for _, hit := range watch.Recent(0) {
 				if hit.Severity == "error" || hit.Severity == "critical" {
 					lines = append(lines, hit.Line)
@@ -1167,7 +1265,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		}
 		execID = target.Wire.ExecID
 		beaconID = target.Wire.BeaconID
-		if mon, err := s.getMonitor(target, cfg.RefRPCBase); err == nil {
+		if mon, _, err := s.getMonitor(target, cfg.RefRPCBase); err == nil {
 			syncing = mon.Latest().ExecSyncing
 		}
 	}
@@ -1276,6 +1374,12 @@ func (s *Server) handleServiceClear(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+
+	release, ok := s.claimTargetOp(w, id)
+	if !ok {
+		return
+	}
+	defer release()
 
 	if err := ops.ClearService(r.Context(), ex, *target.Wire, svc); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())

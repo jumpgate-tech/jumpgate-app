@@ -611,10 +611,15 @@ func (s *Server) handleContainerWipe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, dsvc, ex, ok := s.resolveService(w, r)
+	t, dsvc, ex, ok := s.resolveService(w, r)
 	if !ok {
 		return
 	}
+	release, ok := s.claimTargetOp(w, t.ID)
+	if !ok {
+		return
+	}
+	defer release()
 
 	rep, wipeErr := ops.WipeService(r.Context(), ex, dsvc)
 
@@ -681,6 +686,13 @@ func (s *Server) handleContainerReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	// Only the devnet's own machine is claimed. The gateways bounced on
+	// other machines below are single restarts, not the wipe itself.
+	release, ok := s.claimTargetOp(w, t.ID)
+	if !ok {
+		return
+	}
+	defer release()
 
 	rep, wipeErr := ops.WipeService(r.Context(), ex, dsvc)
 
