@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ExplainRequest is the context handed to a Provider for one explain call.
@@ -62,9 +63,17 @@ const (
 // maxExplainBytes total bytes, keeping the most recent (tail) lines —
 // on the assumption that whatever just happened is most relevant to an
 // operator asking "what's wrong right now".
+//
+// A non-empty input never comes back empty. If the newest line alone is
+// over the budget, dropping whole lines would leave nothing, and a provider
+// asked to explain no lines invents a diagnosis; so that line is returned on
+// its own, cut down by truncateMiddle.
 func capLines(lines []string) []string {
 	if len(lines) > maxExplainLines {
 		lines = lines[len(lines)-maxExplainLines:]
+	}
+	if len(lines) > 0 && len(lines[len(lines)-1])+1 > maxExplainBytes {
+		return []string{truncateMiddle(lines[len(lines)-1], maxExplainBytes-1)}
 	}
 	total := 0
 	for _, l := range lines {
@@ -75,6 +84,46 @@ func capLines(lines []string) []string {
 		lines = lines[1:]
 	}
 	return lines
+}
+
+// truncateMiddle shortens s to at most limit bytes by cutting out its middle
+// and marking the cut. Both ends are kept because both are diagnostic: a log
+// line's head carries the timestamp, level, component and message (what
+// failed), and its tail usually carries the trailing error= or err= field
+// (why it failed). What makes a single line this long is almost always a
+// dumped value in between (a payload, a hex blob, a block body), which is
+// the part least worth sending. Cuts land on rune boundaries so the prompt
+// stays valid UTF-8.
+func truncateMiddle(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	const marker = " …[truncated]… "
+	keep := limit - len(marker)
+	if keep <= 0 {
+		return s[:runeStartAtOrBefore(s, limit)]
+	}
+	headEnd := runeStartAtOrBefore(s, keep/2)
+	tailStart := runeStartAtOrAfter(s, len(s)-(keep-headEnd))
+	return s[:headEnd] + marker + s[tailStart:]
+}
+
+// runeStartAtOrBefore returns the largest index <= i that begins a rune (or
+// is len(s)), so s[:index] does not split a multi-byte character.
+func runeStartAtOrBefore(s string, i int) int {
+	for i > 0 && i < len(s) && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return i
+}
+
+// runeStartAtOrAfter returns the smallest index >= i that begins a rune (or
+// is len(s)), so s[index:] does not start mid-character.
+func runeStartAtOrAfter(s string, i int) int {
+	for i < len(s) && !utf8.RuneStart(s[i]) {
+		i++
+	}
+	return i
 }
 
 // buildPrompt renders the one shared prompt template used by every
