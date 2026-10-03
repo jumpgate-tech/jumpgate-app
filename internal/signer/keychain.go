@@ -45,6 +45,9 @@ func keychainCreate(ctx context.Context, ref string) (*Key, error) {
 	if !keychainNameRE.MatchString(ref) {
 		return nil, fmt.Errorf("signer: keychain item name %q may only contain letters, digits, '.', '_' and '-'", ref)
 	}
+	if keychainExists(ctx, tool, ref) {
+		return nil, fmt.Errorf("%w: keychain item %q", ErrKeyExists, ref)
+	}
 	k, err := GenerateKey()
 	if err != nil {
 		return nil, err
@@ -52,15 +55,36 @@ func keychainCreate(ctx context.Context, ref string) (*Key, error) {
 	secret := hex.EncodeToString(k.Bytes())
 	switch tool {
 	case "security":
-		cmd := fmt.Sprintf("add-generic-password -U -a %s -s %s -w %s\n", ref, keychainService, secret)
+		cmd := fmt.Sprintf("add-generic-password -a %s -s %s -w %s\n", ref, keychainService, secret)
 		_, err = runCmd(ctx, cmd, "security", "-i")
 	case "secret-tool":
 		_, err = runCmd(ctx, secret, "secret-tool", "store", "--label=jumpgate controller key", "service", keychainService, "account", ref)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("signer: keychain store: %w", err)
+		return nil, keychainErr("store", err)
 	}
-	return k, nil
+	return verifyStored(k, func() (*Key, error) { return keychainRead(ctx, ref) })
+}
+
+// keychainExists reports whether an item is already stored. A missing item
+// makes both tools exit non-zero.
+func keychainExists(ctx context.Context, tool, ref string) bool {
+	var err error
+	if tool == "security" {
+		_, err = runCmd(ctx, "", "security", "find-generic-password", "-a", ref, "-s", keychainService)
+	} else {
+		_, err = runCmd(ctx, "", "secret-tool", "lookup", "service", keychainService, "account", ref)
+	}
+	return err == nil
+}
+
+// keychainErr wraps a tool failure. On Linux the usual cause is a headless box
+// with no Secret Service, so the error names the file store.
+func keychainErr(op string, err error) error {
+	if hostOS == "linux" {
+		return fmt.Errorf("signer: keychain %s: %w (is a Secret Service running? on a headless box use --store file)", op, err)
+	}
+	return fmt.Errorf("signer: keychain %s: %w", op, err)
 }
 
 func keychainRead(ctx context.Context, ref string) (*Key, error) {
@@ -75,7 +99,7 @@ func keychainRead(ctx context.Context, ref string) (*Key, error) {
 		return nil, ErrNoKeychain
 	}
 	if err != nil {
-		return nil, fmt.Errorf("signer: keychain read: %w", err)
+		return nil, keychainErr("read", err)
 	}
 	return keyFromHex(out)
 }

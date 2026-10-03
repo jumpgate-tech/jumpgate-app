@@ -32,6 +32,9 @@ func onePasswordCreate(ctx context.Context, ref string) (*Key, error) {
 	if lookPath("op") != nil {
 		return nil, fmt.Errorf("signer: the 1Password CLI `op` is not installed")
 	}
+	if _, err := runCmd(ctx, "", "op", "item", "get", item, "--vault", vault); err == nil {
+		return nil, fmt.Errorf("%w: 1Password item %q in vault %q", ErrKeyExists, item, vault)
+	}
 	k, err := GenerateKey()
 	if err != nil {
 		return nil, err
@@ -66,7 +69,7 @@ func onePasswordCreate(ctx context.Context, ref string) (*Key, error) {
 	if _, err := runCmd(ctx, "", "op", "item", "create", "--vault", vault, "--template", path); err != nil {
 		return nil, fmt.Errorf("signer: 1Password store: %w", err)
 	}
-	return k, nil
+	return verifyStored(k, func() (*Key, error) { return onePasswordRead(ctx, ref) })
 }
 
 func onePasswordRead(ctx context.Context, ref string) (*Key, error) {

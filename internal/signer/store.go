@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -70,6 +71,24 @@ func Create(ctx context.Context, store Store, ref string) (*Key, error) {
 		return onePasswordCreate(ctx, ref)
 	}
 	return nil, fmt.Errorf("signer: unknown key store %q", store)
+}
+
+// ErrKeyExists means Create refused to replace a key that is already stored:
+// paired agents trust that key's address.
+var ErrKeyExists = errors.New("signer: a key already exists there; refusing to replace it")
+
+// verifyStored reads a freshly written key back the way Open would and insists
+// it is the key just generated, so a store command that exited 0 without
+// storing anything cannot hand back a key that does not exist anywhere.
+func verifyStored(k *Key, read func() (*Key, error)) (*Key, error) {
+	got, err := read()
+	if err != nil {
+		return nil, fmt.Errorf("signer: key was not readable after storing it: %w", err)
+	}
+	if got.Address() != k.Address() {
+		return nil, fmt.Errorf("signer: the stored key does not match the generated one; not using it")
+	}
+	return k, nil
 }
 
 func keyFromHex(s string) (*Key, error) {
