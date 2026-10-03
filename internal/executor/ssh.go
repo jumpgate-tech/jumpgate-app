@@ -16,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +26,13 @@ import (
 // sshExecutor runs commands and moves files on a remote host over SSH.
 type sshExecutor struct {
 	client *ssh.Client
+
+	// kills tracks group kills still running after a cancelled Run returned,
+	// so Close can let them finish before it tears down the connection.
+	// closed, under mu, stops new ones from starting once Close has begun.
+	mu     sync.Mutex
+	closed bool
+	kills  sync.WaitGroup
 }
 
 // NewSSH dials user@host:port (default port 22) using the private key at
@@ -78,20 +86,39 @@ func (s *sshExecutor) Run(ctx context.Context, cmd string, opts *RunOpts) (Resul
 	// stdoutPipe) so Run cannot hang forever past ctx cancellation.
 	//
 	// Closing the session does not stop the command on the box, though, so
-	// first the goroutine kills the command's process group, whose id the
-	// wrapper reported on its first stdout line (see wrapInProcessGroup).
+	// the goroutine then kills the command's process group, whose id the
+	// wrapper reports on its first stdout line (see wrapInProcessGroup). If
+	// that line has not arrived yet it waits up to markerWait for it first;
+	// that wait is the only delay cancellation adds to Run. The kill itself
+	// runs after the session is closed and Run may return before it ends.
 	var pgid atomic.Int64
+	firstLine := make(chan struct{}) // closed once the first stdout line is in
+	copyDone := make(chan struct{})  // closed once stdout hits EOF or errors
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = session.Signal(ssh.SIGTERM) // honoured by OpenSSH >= 7.9; harmless otherwise
-			if pg := pgid.Load(); pg > 1 {
-				s.killGroup(int(pg))
-			}
-			_ = session.Close()
 		case <-done:
+			return
+		}
+		wait := time.NewTimer(markerWait)
+		defer wait.Stop()
+		select {
+		case <-firstLine:
+		case <-copyDone:
+		case <-done:
+		case <-wait.C:
+		}
+		// Register the kill before closing the session lets Run return, so a
+		// caller's Close right after Run waits for it.
+		pg := pgid.Load()
+		kill := pg > 1 && s.startKill()
+		_ = session.Signal(ssh.SIGTERM) // honoured by OpenSSH >= 7.9; harmless otherwise
+		_ = session.Close()
+		if kill {
+			defer s.kills.Done()
+			s.killGroup(int(pg))
 		}
 	}()
 
@@ -116,6 +143,7 @@ func (s *sshExecutor) Run(ctx context.Context, cmd string, opts *RunOpts) (Resul
 		streamFn = opts.Stream
 	}
 	w := &lineStreamer{buf: &stdoutBuf, fn: streamFn, onFirst: func(line string) bool {
+		defer close(firstLine) // after the Store, so the canceller sees the pgid
 		if !strings.HasPrefix(line, pgidMarker) {
 			return false
 		}
@@ -128,6 +156,7 @@ func (s *sshExecutor) Run(ctx context.Context, cmd string, opts *RunOpts) (Resul
 	copyErrCh := make(chan error, 1)
 	go func() {
 		_, err := io.Copy(w, stdoutPipe)
+		close(copyDone)
 		copyErrCh <- err
 	}()
 
@@ -159,21 +188,46 @@ func (s *sshExecutor) Run(ctx context.Context, cmd string, opts *RunOpts) (Resul
 	return result, nil
 }
 
-// killGroup stops a cancelled command's process group on a fresh session. It
-// gets its own short budget because the caller's context is already done.
-func (s *sshExecutor) killGroup(pgid int) {
-	kctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	sess, err := s.client.NewSession()
-	if err != nil {
-		return
+// markerWait bounds how long a cancelled Run waits for the marker line before
+// giving up on killing the command's group.
+const markerWait = 2 * time.Second
+
+// killGroupBudget bounds killGroup, opening the session included.
+const killGroupBudget = 10 * time.Second
+
+// startKill registers a group kill with Close. It reports false once Close
+// has begun, when the connection is going away and a kill could not be sent.
+func (s *sshExecutor) startKill() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
 	}
-	defer sess.Close()
-	done := make(chan struct{})
-	go func() { _ = sess.Run(killGroupCmd(pgid)); close(done) }()
+	s.kills.Add(1)
+	return true
+}
+
+// killGroup stops a cancelled command's process group on a fresh session. The
+// caller's context is already done, so it has its own budget, and the whole
+// sequence is inside it: NewSession takes no context and blocks on a stalled
+// connection. A session still stalled when the budget runs out is abandoned;
+// its goroutine ends when the client is closed.
+func (s *sshExecutor) killGroup(pgid int) {
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		sess, err := s.client.NewSession()
+		if err != nil {
+			return
+		}
+		defer sess.Close()
+		_ = sess.Run(killGroupCmd(pgid))
+	}()
+	budget := time.NewTimer(killGroupBudget)
+	defer budget.Stop()
 	select {
-	case <-done:
-	case <-kctx.Done():
+	case <-finished:
+	case <-budget.C:
 	}
 }
 
@@ -228,7 +282,13 @@ func readFileCmd(remotePath string) string {
 	return fmt.Sprintf("base64 < %s", shQuote(remotePath))
 }
 
+// Close waits for any group kill a cancelled Run left running (each bounded
+// by killGroupBudget), then closes the connection.
 func (s *sshExecutor) Close() error {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.kills.Wait()
 	return s.client.Close()
 }
 

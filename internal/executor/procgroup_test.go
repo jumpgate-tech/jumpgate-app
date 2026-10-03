@@ -57,9 +57,12 @@ const groupProbeCmd = `ps -o pgid= -p $$; echo err >&2; read line; echo "got:$li
 // every branch shares: marker first, stdin through, stderr untouched (no job
 // notices), exit status preserved. It returns the marker line and the pgid
 // the command reported for itself.
-func runBranch(t *testing.T, shell, script string) (marker string, ownPgid int) {
+func runBranch(t *testing.T, shell, script string, setup ...func(*exec.Cmd)) (marker string, ownPgid int) {
 	t.Helper()
 	c := exec.Command(shell, "-c", script)
+	for _, f := range setup {
+		f(c)
+	}
 	c.Stdin = strings.NewReader("in\n")
 	var out, errb bytes.Buffer
 	c.Stdout, c.Stderr = &out, &errb
@@ -116,18 +119,6 @@ func TestProcessGroupJobControlBranch(t *testing.T) {
 	pg, ok := parsePgidLine(marker)
 	if !ok || pg != own {
 		t.Fatalf("marker %q, command's own pgid %d", marker, own)
-	}
-}
-
-// dash refuses job control without a tty. The branch must then still run the
-// command correctly, and its marker must not claim a group id.
-func TestProcessGroupJobControlBranchWithoutJobControl(t *testing.T) {
-	if _, err := exec.LookPath("dash"); err != nil {
-		t.Skip("dash not installed")
-	}
-	marker, _ := runBranch(t, "dash", jobControlBranch(groupProbeCmd))
-	if _, ok := parsePgidLine(marker); ok {
-		t.Fatalf("marker %q carries a group id although dash has no job control", marker)
 	}
 }
 

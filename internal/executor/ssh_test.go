@@ -50,8 +50,9 @@ func startTestSSHD(t *testing.T) (testSSHD, string) {
 }
 
 // startTestSSHDWith starts an in-process sshd that runs handler for every
-// session, and returns it with the path of a client key it accepts.
-func startTestSSHDWith(t *testing.T, handler gliderssh.Handler) (testSSHD, string) {
+// session, and returns it with the path of a client key it accepts. configure,
+// if given, may adjust the server before it starts.
+func startTestSSHDWith(t *testing.T, handler gliderssh.Handler, configure ...func(*gliderssh.Server)) (testSSHD, string) {
 	t.Helper()
 
 	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
@@ -77,6 +78,9 @@ func startTestSSHDWith(t *testing.T, handler gliderssh.Handler) (testSSHD, strin
 		Handler: handler,
 	}
 	srv.AddHostKey(hostSigner)
+	for _, f := range configure {
+		f(srv)
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

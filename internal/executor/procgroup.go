@@ -74,9 +74,10 @@ func parsePgidLine(line string) (int, bool) {
 }
 
 // killGroupCmd stops a process group: TERM, then up to five seconds for it to
-// exit, then KILL.
+// exit, then KILL. It uses the POSIX "kill -s SIGNAL" form because dash's
+// kill builtin does not accept "-TERM" before "--" (ruling R8).
 func killGroupCmd(pgid int) string {
 	g := strconv.Itoa(pgid)
-	return "kill -TERM -- -" + g + " 2>/dev/null; i=0; while [ $i -lt 5 ] && kill -0 -- -" + g +
-		" 2>/dev/null; do sleep 1; i=$((i+1)); done; kill -KILL -- -" + g + " 2>/dev/null; exit 0"
+	return "kill -s TERM -- -" + g + " 2>/dev/null; i=0; while [ $i -lt 5 ] && kill -s 0 -- -" + g +
+		" 2>/dev/null; do sleep 1; i=$((i+1)); done; kill -s KILL -- -" + g + " 2>/dev/null; exit 0"
 }
