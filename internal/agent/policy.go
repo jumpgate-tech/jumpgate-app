@@ -183,9 +183,21 @@ func writeAtomic(path string, b []byte) error {
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
+	return syncDir(dir)
+}
+
+// syncDir is a variable so a test can make the directory fsync fail.
+var syncDir = func(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("agent: open %s to sync it: %w", dir, err)
+	}
+	if err := d.Sync(); err != nil {
 		d.Close()
+		return fmt.Errorf("agent: sync directory %s: %w", dir, err)
+	}
+	if err := d.Close(); err != nil {
+		return fmt.Errorf("agent: close directory %s: %w", dir, err)
 	}
 	return nil
 }

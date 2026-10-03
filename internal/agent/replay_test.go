@@ -50,7 +50,9 @@ func TestAdmitEnforcesIncreasingSeqAndPersistsIt(t *testing.T) {
 func TestAdmitRejectsAReplayedNonceWithinItsWindow(t *testing.T) {
 	r, _ := newReplay(t)
 	exp := uint64(t0.Unix() + 120)
-	_ = r.Admit(addr(1), 1, nonce(7), exp, t0)
+	if err := r.Admit(addr(1), 1, nonce(7), exp, t0); err != nil {
+		t.Fatal(err)
+	}
 	var rej *Reject
 	if err := r.Admit(addr(1), 2, nonce(7), exp, t0); !errors.As(err, &rej) || rej.Code != intent.ReasonReplayedNonce {
 		t.Fatalf("err = %v, want replayed_nonce", err)
@@ -92,5 +94,22 @@ func TestOpenReplayFailsClosed(t *testing.T) {
 	}
 	if _, err := OpenReplay(corrupt); !errors.Is(err, ErrReplayState) {
 		t.Fatal("InitReplay overwrote an existing (corrupt) file; it must only create")
+	}
+}
+
+// If the directory fsync fails the rename is not known to be durable, so Admit
+// must refuse and leave its in-memory state untouched.
+func TestAdmitFailsWhenTheDirectorySyncFails(t *testing.T) {
+	r, _ := newReplay(t)
+	orig := syncDir
+	syncDir = func(string) error { return errors.New("injected dir sync failure") }
+	defer func() { syncDir = orig }()
+
+	exp := uint64(t0.Unix() + 120)
+	if err := r.Admit(addr(1), 5, nonce(1), exp, t0); err == nil {
+		t.Fatal("Admit succeeded although the directory sync failed")
+	}
+	if got := r.LastSeq(addr(1)); got != 0 {
+		t.Fatalf("LastSeq = %d after a failed Admit, want 0", got)
 	}
 }
