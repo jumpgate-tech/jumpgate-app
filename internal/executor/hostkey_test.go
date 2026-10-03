@@ -246,7 +246,7 @@ func TestAppendHostKey_ReportsAPathItCannotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := appendHostKey(filepath.Join(blocker, "sub", "known_hosts"), "10.0.0.9:22", testHostKey(t))
+	err := RecordHostKey(filepath.Join(blocker, "sub", "known_hosts"), "10.0.0.9:22", testHostKey(t))
 	if err == nil {
 		t.Fatal("recording a host key under a regular file reported success")
 	}

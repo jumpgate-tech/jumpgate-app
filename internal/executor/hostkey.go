@@ -28,7 +28,7 @@ func tofuHostKeyCallback(hostKeyFile string) ssh.HostKeyCallback {
 			return err
 		}
 		if known == nil {
-			return appendHostKey(hostKeyFile, hostname, key)
+			return RecordHostKey(hostKeyFile, hostname, key)
 		}
 		if !bytes.Equal(known.Marshal(), key.Marshal()) {
 			return fmt.Errorf("host key mismatch for %s: presented %s key does not match the key on record in %s (possible man-in-the-middle attack, or the host was rebuilt)", hostname, key.Type(), hostKeyFile)
@@ -70,9 +70,9 @@ func lookupHostKey(hostKeyFile, hostname string) (ssh.PublicKey, error) {
 	return nil, nil
 }
 
-// appendHostKey records key for hostname in hostKeyFile, creating the file
+// RecordHostKey records key for hostname in hostKeyFile, creating the file
 // with mode 0600 if it doesn't already exist.
-func appendHostKey(hostKeyFile, hostname string, key ssh.PublicKey) error {
+func RecordHostKey(hostKeyFile, hostname string, key ssh.PublicKey) error {
 	// Local path: filepath is correct here (see the file comment above).
 	if dir := filepath.Dir(hostKeyFile); dir != "" {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
