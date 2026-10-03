@@ -27,7 +27,16 @@ func DialSSH(ctx context.Context, cfg SSHConfig) (*ssh.Client, error) {
 	}
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(port))
 
-	auth, release, err := authMethods(cfg)
+	// One deadline covers the whole dial: connect, handshake and any agent
+	// signing. The caller's context can only shorten it.
+	deadline := time.Now().Add(handshakeTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	dialCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+
+	auth, release, err := authMethods(cfg, deadline)
 	if err != nil {
 		return nil, err
 	}
@@ -36,39 +45,53 @@ func DialSSH(ctx context.Context, cfg SSHConfig) (*ssh.Client, error) {
 	if hostKey == nil {
 		hostKey = tofuHostKeyCallback(cfg.HostKeyFile)
 	}
-	clientCfg := &ssh.ClientConfig{User: cfg.User, Auth: auth, HostKeyCallback: hostKey, Timeout: handshakeTimeout}
+	// No ClientConfig.Timeout: the connect is bounded by dialCtx and the
+	// handshake by the watchdog below.
+	clientCfg := &ssh.ClientConfig{User: cfg.User, Auth: auth, HostKeyCallback: hostKey}
 
 	var conn net.Conn
 	if cfg.Jump != nil {
-		jump, err := DialSSH(ctx, *cfg.Jump)
+		jump, err := DialSSH(dialCtx, *cfg.Jump)
 		if err != nil {
 			return nil, fmt.Errorf("jump host %s: %w", cfg.Jump.Host, err)
 		}
-		through, err := jump.DialContext(ctx, "tcp", addr)
+		through, err := jump.DialContext(dialCtx, "tcp", addr)
 		if err != nil {
 			jump.Close()
 			return nil, fmt.Errorf("via jump host %s: %w", cfg.Jump.Host, err)
 		}
 		conn = &jumpConn{Conn: through, jump: jump}
 	} else {
-		d := net.Dialer{Timeout: handshakeTimeout}
-		conn, err = d.DialContext(ctx, "tcp", addr)
+		var d net.Dialer
+		conn, err = d.DialContext(dialCtx, "tcp", addr)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	deadline := time.Now().Add(handshakeTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = conn.SetDeadline(deadline)
+	// Watchdog: closing conn is the only way to abort a stalled handshake.
+	// SetDeadline is no use here, a channel through a jump host does not
+	// support it. Closing also unblocks a wedged agent via release.
+	stop := context.AfterFunc(dialCtx, func() {
+		conn.Close()
+		release()
+	})
 	c, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
+	if !stop() && err == nil {
+		// The watchdog fired just as the handshake finished: conn is closed.
+		c.Close()
+		err = dialCtx.Err()
+	}
 	if err != nil {
 		conn.Close()
+		if cerr := dialCtx.Err(); cerr != nil {
+			if errors.Is(cerr, context.DeadlineExceeded) && ctx.Err() == nil {
+				return nil, fmt.Errorf("ssh handshake with %s timed out after %v: %w", addr, handshakeTimeout, cerr)
+			}
+			return nil, fmt.Errorf("ssh handshake with %s: %w", addr, cerr)
+		}
 		return nil, err
 	}
-	_ = conn.SetDeadline(time.Time{})
 	return ssh.NewClient(c, chans, reqs), nil
 }
 
@@ -85,17 +108,13 @@ func (c *jumpConn) Close() error {
 	return err
 }
 
-// authMethods offers KeyPath first, then ssh-agent keys. The key file goes
-// first because an agent that is locked or refuses to sign (a failed sign
-// aborts the whole publickey method) must not block a key that works.
-// Passphrase-protected key files are supported only through an agent.
 // authMethods builds one publickey method offering the KeyPath key first and
 // then the ssh-agent's keys. It is one method because the ssh client tries
 // each method name once, so separate file and agent methods would silently
 // drop the second. The key file goes first so an agent that is locked or fails
 // to sign (which aborts the method) cannot block a key that works.
 // Passphrase-protected key files are supported only through an agent.
-func authMethods(cfg SSHConfig) (methods []ssh.AuthMethod, release func(), err error) {
+func authMethods(cfg SSHConfig, deadline time.Time) (methods []ssh.AuthMethod, release func(), err error) {
 	var fileSigner ssh.Signer
 	var agentClient agent.ExtendedAgent
 	var agentConn net.Conn
@@ -105,7 +124,9 @@ func authMethods(cfg SSHConfig) (methods []ssh.AuthMethod, release func(), err e
 		}
 	}
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
-		if c, err := net.Dial("unix", sock); err == nil {
+		d := net.Dialer{Deadline: deadline}
+		if c, err := d.Dial("unix", sock); err == nil {
+			_ = c.SetDeadline(deadline) // a wedged agent cannot outlast the dial
 			agentConn = c
 			agentClient = agent.NewClient(c)
 		}

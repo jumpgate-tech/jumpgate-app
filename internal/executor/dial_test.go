@@ -111,3 +111,102 @@ func shortTempDir(t *testing.T) string {
 	t.Cleanup(func() { os.RemoveAll(d) })
 	return d
 }
+
+func shortHandshakeTimeout(t *testing.T) {
+	t.Helper()
+	old := handshakeTimeout
+	handshakeTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { handshakeTimeout = old })
+}
+
+// listenAndStall accepts TCP connections and never speaks.
+func listenAndStall(t *testing.T, network, addr string) net.Listener {
+	t.Helper()
+	ln, err := net.Listen(network, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+		}
+	}()
+	return ln
+}
+
+// A target behind a jump host that accepts the forwarded channel and then
+// stalls must still hit the handshake deadline: the forwarded channel's
+// SetDeadline is unsupported, so the deadline cannot rely on it.
+func TestDialSSHHandshakeDeadlineAppliesThroughAJumpHost(t *testing.T) {
+	shortHandshakeTimeout(t)
+	jump, keyPath := startTestSSHDWithForwarding(t)
+	silent := listenAndStall(t, "tcp", "127.0.0.1:0").Addr().(*net.TCPAddr)
+
+	start := time.Now()
+	_, err := DialSSH(context.Background(), SSHConfig{
+		Host: "127.0.0.1", Port: silent.Port, User: "x", KeyPath: keyPath,
+		HostKey: ssh.InsecureIgnoreHostKey(),
+		Jump: &SSHConfig{Host: jump.host, Port: jump.port, User: "x", KeyPath: keyPath,
+			HostKey: ssh.FixedHostKey(jump.hostKey)},
+	})
+	if err == nil {
+		t.Fatal("handshake against a silent target succeeded")
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatalf("took %v; the handshake deadline did not apply through the jump host", time.Since(start))
+	}
+}
+
+// Cancelling the context aborts a stalled handshake on the direct path.
+func TestDialSSHContextCancelAbortsTheHandshake(t *testing.T) {
+	silent := listenAndStall(t, "tcp", "127.0.0.1:0").Addr().(*net.TCPAddr)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(200 * time.Millisecond); cancel() }()
+	start := time.Now()
+	_, err := DialSSH(ctx, SSHConfig{
+		Host: "127.0.0.1", Port: silent.Port, User: "x",
+		KeyPath: writeTempKey(t), HostKey: ssh.InsecureIgnoreHostKey(),
+	})
+	if err == nil {
+		t.Fatal("handshake succeeded")
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatalf("took %v; cancel did not abort the handshake", time.Since(start))
+	}
+}
+
+// An ssh-agent that accepts and never answers must not hold DialSSH past the
+// handshake deadline.
+func TestDialSSHBoundsAWedgedAgent(t *testing.T) {
+	shortHandshakeTimeout(t)
+	sock := filepath.Join(shortTempDir(t), "agent.sock")
+	listenAndStall(t, "unix", sock)
+	t.Setenv("SSH_AUTH_SOCK", sock)
+
+	d := startTestSSHDAcceptingOnly(t, mustPublicKey(t))
+	start := time.Now()
+	_, err := DialSSH(context.Background(), SSHConfig{
+		Host: d.host, Port: d.port, User: "x", HostKey: ssh.FixedHostKey(d.hostKey),
+	})
+	if err == nil {
+		t.Fatal("DialSSH succeeded with a wedged agent")
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatalf("took %v; a wedged agent was not bounded", time.Since(start))
+	}
+}
+
+func mustPublicKey(t *testing.T) ssh.PublicKey {
+	t.Helper()
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	k, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
