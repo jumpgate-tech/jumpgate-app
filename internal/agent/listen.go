@@ -83,12 +83,48 @@ func peerAllowed(p Policy, uid int, gids []int, jumpgateGID int) bool {
 
 type peerKey struct{}
 
-// Serve answers POST /v1/intent until ctx is done.
+// peerGate decides whether a connection's peer may use the socket. It is a
+// variable so a test can stand in for a second uid.
+var peerGate = func(a *Agent, c net.Conn, jumpgateGID int) bool {
+	uid, gids, err := peerCred(c)
+	if err != nil {
+		return false
+	}
+	p, _ := LoadPolicy(a.cfg.PolicyPath)
+	return peerAllowed(p, uid, gids, jumpgateGID)
+}
+
+// gatedListener closes a refused peer's connection inside Accept, before
+// net/http reads a byte of it, and hands only allowed connections on. A
+// refusal is not an error: Accept moves on to the next connection, so one
+// stranger cannot stop Serve.
+type gatedListener struct {
+	net.Listener
+	allow func(net.Conn) bool
+}
+
+func (l gatedListener) Accept() (net.Conn, error) {
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		if l.allow(c) {
+			return c, nil
+		}
+		c.Close()
+	}
+}
+
+// Serve answers POST /v1/intent until ctx is done. Peers are gated at
+// Accept; the handler checks again as defence in depth.
 func Serve(ctx context.Context, a *Agent, ln net.Listener) error {
 	gid := JumpgateGID()
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/intent", func(w http.ResponseWriter, r *http.Request) {
 		if allowed, _ := r.Context().Value(peerKey{}).(bool); !allowed {
+			// Close rather than drain the body for keep-alive.
+			w.Header().Set("Connection", "close")
 			http.Error(w, "not allowed on this socket", http.StatusForbidden)
 			return
 		}
@@ -116,12 +152,7 @@ func Serve(ctx context.Context, a *Agent, ln net.Listener) error {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
-			uid, gids, err := peerCred(c)
-			if err != nil {
-				return context.WithValue(ctx, peerKey{}, false)
-			}
-			p, _ := LoadPolicy(a.cfg.PolicyPath)
-			return context.WithValue(ctx, peerKey{}, peerAllowed(p, uid, gids, gid))
+			return context.WithValue(ctx, peerKey{}, peerGate(a, c, gid))
 		},
 	}
 	go func() {
@@ -130,7 +161,8 @@ func Serve(ctx context.Context, a *Agent, ln net.Listener) error {
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()
-	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+	gated := gatedListener{Listener: ln, allow: func(c net.Conn) bool { return peerGate(a, c, gid) }}
+	if err := srv.Serve(gated); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

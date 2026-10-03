@@ -15,6 +15,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/ops"
 	"github.com/valve-tech/jumpgate/internal/signer"
 )
 
@@ -215,10 +216,17 @@ func TestServiceActionRunsOpsAndValidatesInput(t *testing.T) {
 
 func TestLogsReadClampsN(t *testing.T) {
 	r := newRig(t, true)
-	r.send(t, intent.KindLogsRead, intent.LogsReadPayload{N: 1_000_000}, nil)
-	for _, c := range r.exec.cmds {
-		if !containsAll(c, "journalctl", "-n 2000") {
-			t.Fatalf("journalctl not clamped to 2000: %s", c)
+	rc, res := r.send(t, intent.KindLogsRead, intent.LogsReadPayload{N: 1_000_000}, nil)
+	if rc.Status != intent.StatusOK {
+		t.Fatalf("status %d: %s", rc.Status, res)
+	}
+	units := ops.NodeUnits()
+	if len(r.exec.cmds) != len(units) {
+		t.Fatalf("ran %d commands, want one journalctl per unit (%d): %v", len(r.exec.cmds), len(units), r.exec.cmds)
+	}
+	for k, unit := range units {
+		if c := r.exec.cmds[k]; !containsAll(c, "journalctl", "-u "+unit+" ", "-n 2000 ") {
+			t.Fatalf("command %d = %q, want journalctl for %s clamped to -n 2000", k, c, unit)
 		}
 	}
 }
