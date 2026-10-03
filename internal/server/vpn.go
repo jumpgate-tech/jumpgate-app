@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/valve-tech/valve-node-app/internal/config"
-	"github.com/valve-tech/valve-node-app/internal/executor"
-	"github.com/valve-tech/valve-node-app/internal/vpn"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/vpn"
 )
 
 // defaultVPNInterface is the OS interface name an overlay comes up on when the

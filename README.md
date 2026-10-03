@@ -1,6 +1,6 @@
-# valve-node-app
+# jumpgate
 
-**valve-node-app** sets up and monitors an Ethereum, PulseChain, or PulseChain-v4
+**jumpgate** (formerly valve-node-app) sets up and monitors an Ethereum, PulseChain, or PulseChain-v4
 node — one binary, guided setup, sync monitoring, and AI-generated log
 explanations, all behind a token-gated local web UI.
 
@@ -71,7 +71,7 @@ a trusted, private network.
 - The **SSH user must be root** — setup writes systemd units under
   `/etc/systemd/system`, manages services via `systemctl`, and installs
   binaries to `/usr/local/bin`. In **local mode** (setting up the same
-  machine valve-node-app itself is running on), run valve-node-app as root. Preflight
+  machine jumpgate itself is running on), run jumpgate as root. Preflight
   checks this (`id -u`) and fails fast with a clear message if it isn't met.
 - Node services (the execution and beacon clients) run as the dedicated
   unprivileged `valve-node-app` system user, which setup creates. (In v0.1–v0.2
@@ -82,12 +82,12 @@ a trusted, private network.
 ### Download a release
 
 Grab the archive for your platform from the
-[latest release](https://github.com/valve-tech/valve-node-app/releases/latest),
+[latest release](https://github.com/valve-tech/jumpgate/releases/latest),
 extract it, and run the binary:
 
 ```bash
-tar xzf valve-node-app_<os>_<arch>.tar.gz   # the Windows archive is a .zip
-./valve-node-app
+tar xzf jumpgate_<os>_<arch>.tar.gz   # the Windows archive is a .zip
+./jumpgate
 ```
 
 This prints a local URL with a one-time session token and opens it in your
@@ -105,16 +105,16 @@ browser automatically.
 Requires Go 1.25+ and Node 22+.
 
 ```bash
-git clone https://github.com/valve-tech/valve-node-app.git
-cd valve-node-app
-cd cmd/valve-node-app/web && npm ci && npm run build && cd ../../..
-go build -o valve-node-app ./cmd/valve-node-app
-./valve-node-app
+git clone https://github.com/valve-tech/jumpgate.git
+cd jumpgate
+cd cmd/jumpgate/web && npm ci && npm run build && cd ../../..
+go build -o jumpgate ./cmd/jumpgate
+./jumpgate
 ```
 
 ## How it's built
 
-valve-node-app is a single Go binary with the web UI (Vite + TypeScript)
+jumpgate is a single Go binary with the web UI (Vite + TypeScript)
 compiled to static assets and embedded directly into the binary via
 `go:embed`. There's no separate frontend server and no external dependency
 to run — just the binary.
@@ -124,27 +124,27 @@ token for every request (via `Authorization: Bearer`, a cookie set from the
 initial `?token=` link, or the query parameter itself), so nothing on your
 machine can drive it without that token.
 
-valve-node-app itself always runs locally — the UI and API bind to your own
+jumpgate itself always runs locally — the UI and API bind to your own
 machine. What it sets up can be **local** (the same machine) or **remote
 over SSH**: point a target at a `host:port` + root SSH credentials and
-valve-node-app drives the whole install/wire/start/handshake flow on that box
-instead, so you can run valve-node-app on a laptop while it provisions a
+jumpgate drives the whole install/wire/start/handshake flow on that box
+instead, so you can run jumpgate on a laptop while it provisions a
 dedicated server. Both modes need root on the target for setup itself (see
 Requirements above); the node services it installs run unprivileged.
 
 ## Contributing
 
-The web UI (`cmd/valve-node-app/web/`) has no end-to-end (Playwright) test suite
+The web UI (`cmd/jumpgate/web/`) has no end-to-end (Playwright) test suite
 by design for v1 — the API layer it talks to (`internal/server`) is fully
 covered by Go tests, and the UI itself is a thin, framework-free render
 layer over that API. Verify UI changes with:
 
 ```bash
-cd cmd/valve-node-app/web && npm run build   # tsc --noEmit (strict) + vite build
+cd cmd/jumpgate/web && npm run build   # tsc --noEmit (strict) + vite build
 go build ./...                            # confirms the rebuilt dist/ still embeds
 ```
 
-then a manual smoke test: run `./valve-node-app --no-open` against a scratch
+then a manual smoke test: run `./jumpgate --no-open` against a scratch
 `$HOME` and curl the printed token URL.
 
 ## Learn more

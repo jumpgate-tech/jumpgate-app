@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/valve-tech/valve-node-app/internal/config"
-	"github.com/valve-tech/valve-node-app/internal/executor"
-	"github.com/valve-tech/valve-node-app/internal/vpn"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/vpn"
 )
 
 // Defaults for a provisioned server when the request does not specify them: a

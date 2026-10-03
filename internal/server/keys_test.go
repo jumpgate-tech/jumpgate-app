@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/valve-tech/valve-node-app/internal/relay"
+	"github.com/valve-tech/jumpgate/internal/relay"
 )
 
 // Key management rides the control plane, behind the session token. It is the

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/catalog"
 )
 
 // TestInstallIDStableAndPersisted is the guard for the gateway-URL churn bug:
@@ -22,7 +22,7 @@ func TestInstallIDStableAndPersisted(t *testing.T) {
 		t.Fatal("installID returned empty")
 	}
 
-	path := filepath.Join(home, ".valve-node-app", "install-id")
+	path := filepath.Join(home, ".jumpgate", "install-id")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("install-id was not persisted: %v", err)

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/catalog"
 )
 
 // The pure helpers. Each is small enough that its whole behaviour is a table,

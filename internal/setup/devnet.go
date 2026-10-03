@@ -30,9 +30,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/executor"
-	"github.com/valve-tech/valve-node-app/internal/ops"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/ops"
 )
 
 // devnetReadyTimeout/devnetPollInterval bound the wait for a freshly created

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/valve-tech/valve-node-app/internal/config"
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // The failure paths. Each of these is a branch an operator only ever meets on
@@ -23,7 +23,7 @@ func TestUnreadableConfigIs500Everywhere(t *testing.T) {
 
 	// Corrupt the config the server reads. The API test server points HOME at
 	// a temp dir, so this touches nothing real.
-	dir := filepath.Join(a.home, ".valve-node-app")
+	dir := filepath.Join(a.home, ".jumpgate")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

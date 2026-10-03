@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 const testServerPub = "kxUUFA0cGVlclB1YmxpY0tleXNlcnZlclB1YmtleT0="

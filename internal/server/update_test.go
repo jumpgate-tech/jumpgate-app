@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/valve-tech/valve-node-app/internal/updatecheck"
+	"github.com/valve-tech/jumpgate/internal/updatecheck"
 )
 
 // fakeUpdater is a test double for updateSource. It returns a canned release

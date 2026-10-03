@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Build Jumpgate.app — a double-clickable macOS application bundle around the
-# tray/tiny-app build of valve-node-app.
+# tray/tiny-app build of jumpgate.
 #
 # Why a bundle (vs. just `go build -tags tray` and running the binary):
 #   - A bare Mach-O binary is a "background" process to the OS: no Dock icon,
@@ -14,7 +14,7 @@
 # The tray build needs CGo (WebKit via webview_go), so this is macOS-only and
 # cannot cross-compile. Requires: go, rsvg-convert, iconutil, sips.
 #
-# Usage:  cmd/valve-node-app/build-macos-app.sh [output-dir]
+# Usage:  cmd/jumpgate/build-macos-app.sh [output-dir]
 #   output-dir defaults to the repo root, producing <repo>/Jumpgate.app
 set -euo pipefail
 
@@ -24,7 +24,7 @@ OUT_DIR="${1:-$REPO_ROOT}"
 
 APP_NAME="Jumpgate"
 BUNDLE_ID="city.valve.jumpgate"
-EXE_NAME="valve-node-app"
+EXE_NAME="jumpgate"
 APP="$OUT_DIR/$APP_NAME.app"
 
 VERSION="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo "dev")"
@@ -38,9 +38,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # --- compile the tray binary straight into the bundle -----------------------
 echo "--> go build -tags tray (CGo)"
 CGO_ENABLED=1 go build -tags tray \
-	-ldflags "-s -w -X github.com/valve-tech/valve-node-app/internal/buildinfo.version=$VERSION" \
+	-ldflags "-s -w -X github.com/valve-tech/jumpgate/internal/buildinfo.version=$VERSION" \
 	-o "$APP/Contents/MacOS/$EXE_NAME" \
-	"$REPO_ROOT/cmd/valve-node-app"
+	"$REPO_ROOT/cmd/jumpgate"
 
 # --- icon: icon.svg -> AppIcon.icns -----------------------------------------
 echo "--> rendering AppIcon.icns from icon.svg"

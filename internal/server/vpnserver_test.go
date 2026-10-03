@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/valve-tech/valve-node-app/internal/config"
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // wgHostFake is a stateful WireGuard host: it remembers the peers added via

@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"runtime"
 
-	"github.com/valve-tech/valve-node-app/internal/ops"
+	"github.com/valve-tech/jumpgate/internal/ops"
 )
 
 // dockerStatusResponse is what GET /api/docker returns for the local machine.

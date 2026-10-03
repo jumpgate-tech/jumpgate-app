@@ -53,9 +53,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/executor"
-	"github.com/valve-tech/valve-node-app/internal/wsrpc"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/wsrpc"
 )
 
 // The assertion ids, stable so a UI can branch on them without matching prose.

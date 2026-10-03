@@ -16,13 +16,13 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/ai"
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/config"
-	"github.com/valve-tech/valve-node-app/internal/executor"
-	"github.com/valve-tech/valve-node-app/internal/logwatch"
-	"github.com/valve-tech/valve-node-app/internal/monitor"
-	"github.com/valve-tech/valve-node-app/internal/ops"
+	"github.com/valve-tech/jumpgate/internal/ai"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/logwatch"
+	"github.com/valve-tech/jumpgate/internal/monitor"
+	"github.com/valve-tech/jumpgate/internal/ops"
 )
 
 // ---------------------------------------------------------------------
@@ -174,7 +174,7 @@ func (f *fakeAIProvider) Explain(_ context.Context, req ai.ExplainRequest) (stri
 // apiTestServer bundles a running httptest.Server with the token that
 // authorizes it and the underlying *Server, wired with fake executor/AI
 // factories and an isolated HOME (so internal/config reads/writes a temp
-// dir, never the real user's ~/.valve-node-app).
+// dir, never the real user's ~/.jumpgate).
 type apiTestServer struct {
 	ts     *httptest.Server
 	token  string

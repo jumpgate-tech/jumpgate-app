@@ -48,12 +48,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/chainlist"
-	"github.com/valve-tech/valve-node-app/internal/config"
-	"github.com/valve-tech/valve-node-app/internal/executor"
-	"github.com/valve-tech/valve-node-app/internal/ops"
-	"github.com/valve-tech/valve-node-app/internal/setup"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/chainlist"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/ops"
+	"github.com/valve-tech/jumpgate/internal/setup"
 )
 
 // gatewayIDPattern is what an id may look like. It is deliberately narrow:

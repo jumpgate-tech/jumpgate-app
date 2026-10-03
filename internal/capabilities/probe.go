@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/wsrpc"
+	"github.com/valve-tech/jumpgate/internal/wsrpc"
 )
 
 // Defaults for a zero-configuration Prober.

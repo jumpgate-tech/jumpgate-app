@@ -1,5 +1,5 @@
 // Package server implements the token-gated local HTTP server that serves
-// the embedded web UI and the JSON API for valve-node-app.
+// the embedded web UI and the JSON API for jumpgate.
 package server
 
 import (
@@ -19,19 +19,19 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/ai"
-	"github.com/valve-tech/valve-node-app/internal/buildinfo"
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/chainlist"
-	"github.com/valve-tech/valve-node-app/internal/config"
-	"github.com/valve-tech/valve-node-app/internal/executor"
-	"github.com/valve-tech/valve-node-app/internal/setup"
-	"github.com/valve-tech/valve-node-app/internal/updatecheck"
+	"github.com/valve-tech/jumpgate/internal/ai"
+	"github.com/valve-tech/jumpgate/internal/buildinfo"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/chainlist"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/setup"
+	"github.com/valve-tech/jumpgate/internal/updatecheck"
 )
 
 // cookieName is the name of the cookie that carries the session token once
 // it has been established via the ?token= query parameter.
-const cookieName = "valve_node_token"
+const cookieName = "jumpgate_token"
 
 // Config configures a Server.
 type Config struct {
@@ -99,7 +99,7 @@ type Config struct {
 	NewLocalExecutor func() executor.Executor
 }
 
-// Server is the valve-node-app local HTTP server.
+// Server is the jumpgate local HTTP server.
 type Server struct {
 	cfg Config
 

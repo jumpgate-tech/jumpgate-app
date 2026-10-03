@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/valve-tech/valve-node-app/internal/config"
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // A ProtonVPN-style `.conf` with a private key, for the save/redaction tests.

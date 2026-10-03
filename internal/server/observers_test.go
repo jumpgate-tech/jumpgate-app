@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/config"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/config"
 )
 
 // rewire re-runs the node wizard on "local" with wire and waits for the run

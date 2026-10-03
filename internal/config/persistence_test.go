@@ -13,12 +13,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // isolate points HOME at a fresh temp dir, so these never touch the real
-// ~/.valve-node-app.
+// ~/.jumpgate.
 func isolate(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -36,7 +36,7 @@ func TestDir_IsUnderHomeAndIsNotCreated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dir: %v", err)
 	}
-	if dir != filepath.Join(home, ".valve-node-app") {
+	if dir != filepath.Join(home, ".jumpgate") {
 		t.Errorf("Dir = %q, want it under HOME", dir)
 	}
 	// Reading where state WOULD live must not create it — Dir is called on
@@ -278,7 +278,7 @@ func TestLoad_AnUnreadableConfigIsNotTreatedAsMissing(t *testing.T) {
 func TestSave_ReportsADirectoryItCannotCreate(t *testing.T) {
 	home := isolate(t)
 	// A regular file where the state directory belongs.
-	if err := os.WriteFile(filepath.Join(home, ".valve-node-app"), []byte("in the way"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".jumpgate"), []byte("in the way"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -286,7 +286,7 @@ func TestSave_ReportsADirectoryItCannotCreate(t *testing.T) {
 	if err == nil {
 		t.Fatal("Save reported success with nowhere to write")
 	}
-	if !strings.Contains(err.Error(), ".valve-node-app") {
+	if !strings.Contains(err.Error(), ".jumpgate") {
 		t.Errorf("the error does not name the path in the way: %v", err)
 	}
 }

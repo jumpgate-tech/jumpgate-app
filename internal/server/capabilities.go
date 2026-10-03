@@ -37,10 +37,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/capabilities"
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/config"
-	"github.com/valve-tech/valve-node-app/internal/setup"
+	"github.com/valve-tech/jumpgate/internal/capabilities"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/setup"
 )
 
 // capabilitiesTimeout bounds the whole request. It is generous relative to

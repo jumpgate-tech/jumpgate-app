@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/crypto/curve25519"
 
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // PeerKey is a WireGuard (Curve25519) keypair, base64-std encoded like `wg`.

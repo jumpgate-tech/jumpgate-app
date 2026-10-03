@@ -1,4 +1,4 @@
-// Package config persists valve-node-app's own local state — the targets it
+// Package config persists jumpgate's own local state — the targets it
 // knows how to manage, and the AI provider it's configured to use for log
 // explanations — to a single JSON file under the user's home directory. It
 // performs no validation of the domain data it stores (that's the caller's
@@ -15,8 +15,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // defaultRefRPCBase is the public demo-key reference RPC base URL, used
@@ -24,7 +24,7 @@ import (
 // to get the per-chain reference endpoint.
 const defaultRefRPCBase = "https://rpc.valve.city/v1/vk_Et-4emAlBIym1PjiCogh5p7IuGtS-Rpj"
 
-// Target is one machine valve-node-app can set up and monitor a node on.
+// Target is one machine jumpgate can set up and monitor a node on.
 //
 // Wire and Devnet are two INDEPENDENT things a target may host, not two
 // spellings of one. A machine can run a devnet and nothing else, or a full
@@ -208,7 +208,7 @@ type VPNPeer struct {
 	AllowedIP string `json:"allowedIp"` // the /32 overlay address assigned to this device
 }
 
-// Config is valve-node-app's persisted local state.
+// Config is jumpgate's persisted local state.
 type Config struct {
 	Targets []Target `json:"targets"`
 
@@ -605,14 +605,57 @@ func adoptDevnetReferences(g *catalog.GatewayConfig, t Target) {
 // configFileName is the file Load/Save read and write inside Dir().
 const configFileName = "config.json"
 
-// Dir returns the directory valve-node-app's local state lives in
-// (~/.valve-node-app), without creating it.
+// dirName is the controller's state directory under $HOME.
+const dirName = ".jumpgate"
+
+// legacyDirName is where releases before the rename kept the same state.
+const legacyDirName = ".valve-node-app"
+
+// Dir returns the directory jumpgate's local state lives in (~/.jumpgate),
+// without creating it.
 func Dir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("config: resolve home directory: %w", err)
 	}
-	return filepath.Join(home, ".valve-node-app"), nil
+	return filepath.Join(home, dirName), nil
+}
+
+// MigrateLegacyDir moves ~/.valve-node-app to ~/.jumpgate once, and leaves a
+// MOVED pointer file in the old place. It is a rename, not a copy, so secrets
+// (provider keys, VPN private keys) never exist twice on disk. It reports
+// whether it moved anything. Both directories holding a config is an error:
+// merging two configs silently would lose one of them.
+func MigrateLegacyDir() (bool, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, fmt.Errorf("config: resolve home directory: %w", err)
+	}
+	legacy := filepath.Join(home, legacyDirName)
+	current := filepath.Join(home, dirName)
+
+	if _, err := os.Stat(filepath.Join(legacy, configFileName)); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("config: inspect %s: %w", legacy, err)
+	}
+	if _, err := os.Stat(filepath.Join(current, configFileName)); err == nil {
+		return false, fmt.Errorf("config: both %s and %s hold a config.json; keep one and remove the other", legacy, current)
+	}
+	// An empty ~/.jumpgate (created by something that never wrote a config)
+	// would make the rename fail; remove it only if it is empty.
+	_ = os.Remove(current)
+	if err := os.Rename(legacy, current); err != nil {
+		return false, fmt.Errorf("config: move %s to %s: %w", legacy, current, err)
+	}
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		return true, fmt.Errorf("config: recreate %s for the pointer file: %w", legacy, err)
+	}
+	note := []byte("jumpgate moved this directory to " + current + "\n")
+	if err := os.WriteFile(filepath.Join(legacy, "MOVED"), note, 0o600); err != nil {
+		return true, fmt.Errorf("config: write pointer file: %w", err)
+	}
+	return true, nil
 }
 
 func filePath() (string, error) {
@@ -623,7 +666,7 @@ func filePath() (string, error) {
 	return filepath.Join(dir, configFileName), nil
 }
 
-// Load reads Config from ~/.valve-node-app/config.json. A missing file is not an
+// Load reads Config from ~/.jumpgate/config.json. A missing file is not an
 // error: it returns the zero Config (with RefRPCBase defaulted). RefRPCBase
 // is defaulted whenever it's empty, whether that's because the file doesn't
 // exist yet or because a stored config happens to have it blank.
@@ -658,7 +701,7 @@ func Load() (Config, error) {
 	return c, nil
 }
 
-// Save writes c to ~/.valve-node-app/config.json, creating the directory if
+// Save writes c to ~/.jumpgate/config.json, creating the directory if
 // needed. The write is atomic (write to a temp file in the same directory,
 // then rename over the target) and the file is mode 0600, since it may
 // contain an AI provider API key.

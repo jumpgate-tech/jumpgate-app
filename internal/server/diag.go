@@ -10,10 +10,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/config"
-	"github.com/valve-tech/valve-node-app/internal/logwatch"
-	"github.com/valve-tech/valve-node-app/internal/monitor"
-	"github.com/valve-tech/valve-node-app/internal/ops"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/logwatch"
+	"github.com/valve-tech/jumpgate/internal/monitor"
+	"github.com/valve-tech/jumpgate/internal/ops"
 )
 
 // DiagReport is one stored diagnostics run: the ladder's items in order

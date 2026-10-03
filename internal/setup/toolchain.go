@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // neededToolchains returns the deduplicated, sorted union of

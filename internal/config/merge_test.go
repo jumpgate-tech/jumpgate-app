@@ -3,7 +3,7 @@ package config
 import (
 	"testing"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/catalog"
 )
 
 // gw is a terse gateway literal for these tables.

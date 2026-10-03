@@ -10,7 +10,7 @@ package buildinfo
 //
 // The release build overrides it:
 //
-//	-ldflags "-X github.com/valve-tech/valve-node-app/internal/buildinfo.version=v0.4.0"
+//	-ldflags "-X github.com/valve-tech/jumpgate/internal/buildinfo.version=v0.4.0"
 var version = "dev"
 
 // releaseRepo is the "owner/repo" the update check polls for new releases. It

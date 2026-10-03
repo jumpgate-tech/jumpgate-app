@@ -3,8 +3,8 @@ package config
 import (
 	"fmt"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/ops"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/ops"
 )
 
 // OrphanedContainer is a container valve-node-app stopped managing but did NOT

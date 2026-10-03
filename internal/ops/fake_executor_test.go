@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // fakeExecutor mirrors internal/setup's and internal/monitor's test double:

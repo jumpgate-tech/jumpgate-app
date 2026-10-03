@@ -23,16 +23,16 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: cmd/valve-node-app/web/package-lock.json
+          cache-dependency-path: cmd/jumpgate/web/package-lock.json
 
       - name: Build web UI
         run: |
-          cd cmd/valve-node-app/web
+          cd cmd/jumpgate/web
           npm ci
           npm run build
 
       - name: Verify web/dist is committed and reproducible
-        run: git diff --exit-code cmd/valve-node-app/web/dist
+        run: git diff --exit-code cmd/jumpgate/web/dist
 
       - name: go vet
         run: go vet ./...
@@ -41,7 +41,7 @@ jobs:
         run: go test ./...
 
       - name: go build (headless)
-        run: go build ./cmd/valve-node-app
+        run: go build ./cmd/jumpgate
 
       - name: cross-compile check (windows, darwin — headless)
         run: |

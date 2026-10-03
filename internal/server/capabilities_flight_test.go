@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/config"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/config"
 )
 
 // capGateway is the smallest gateway the capabilities route will probe. The

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/executor"
-	"github.com/valve-tech/valve-node-app/internal/logwatch"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/logwatch"
 )
 
 // DiagnoseOpts carries the app-host-side context NetworkDiagnostics needs

@@ -53,7 +53,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/wsrpc"
+	"github.com/valve-tech/jumpgate/internal/wsrpc"
 )
 
 // FeedURL is the canonical ethereum-lists/chains feed. ~1.1 MB, ~2660 chains

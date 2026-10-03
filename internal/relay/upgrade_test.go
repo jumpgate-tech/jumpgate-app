@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/wsrpc"
+	"github.com/valve-tech/jumpgate/internal/wsrpc"
 )
 
 // The relay must TERMINATE a WebSocket, not proxy it. Proxying would send the

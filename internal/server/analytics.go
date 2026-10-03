@@ -26,9 +26,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/metrics"
-	"github.com/valve-tech/valve-node-app/internal/setup"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/metrics"
+	"github.com/valve-tech/jumpgate/internal/setup"
 )
 
 // bucketView is one cumulative histogram bucket.

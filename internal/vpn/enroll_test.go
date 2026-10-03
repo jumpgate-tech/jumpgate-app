@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // a valid base64-std WireGuard key (32 bytes) built from a byte pattern, so the

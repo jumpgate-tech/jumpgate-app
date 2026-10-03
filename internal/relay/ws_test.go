@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/wsrpc"
+	"github.com/valve-tech/jumpgate/internal/wsrpc"
 )
 
 // The relay terminates the customer's WebSocket and speaks plain HTTP to every

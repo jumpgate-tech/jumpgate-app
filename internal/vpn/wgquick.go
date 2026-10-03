@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // WgQuick brings a tunnel up on a host via `wg-quick`, run through an

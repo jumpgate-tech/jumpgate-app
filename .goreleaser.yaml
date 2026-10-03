@@ -7,7 +7,7 @@ before:
 
 builds:
   - id: jumpgate
-    main: ./cmd/valve-node-app
+    main: ./cmd/jumpgate
     binary: jumpgate
     env:
       - CGO_ENABLED=0
@@ -16,7 +16,7 @@ builds:
     # git tag goreleaser is building.
     ldflags:
       - -s -w
-      - -X github.com/valve-tech/valve-node-app/internal/buildinfo.version={{.Version}}
+      - -X github.com/valve-tech/jumpgate/internal/buildinfo.version={{.Version}}
     goos:
       - darwin
       - linux

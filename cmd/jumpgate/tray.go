@@ -9,7 +9,7 @@
 // default build deliberately avoids so the shipped binary stays pure-Go and
 // cross-compilable. Build the desktop variant with:
 //
-//	go build -tags tray ./cmd/valve-node-app
+//	go build -tags tray ./cmd/jumpgate
 //
 // then run it with --tray. On macOS a menubar status item is installed too
 // (see statusitem_darwin.go): the app runs as a menubar accessory (no Dock

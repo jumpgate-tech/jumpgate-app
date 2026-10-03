@@ -18,8 +18,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // Unit names, matching internal/setup/steps.go and internal/monitor/monitor.go.

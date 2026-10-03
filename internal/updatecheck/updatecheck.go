@@ -65,7 +65,7 @@ func (c *Client) Latest(ctx context.Context) (Release, error) {
 		return Release{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "valve-node-app")
+	req.Header.Set("User-Agent", "jumpgate")
 
 	resp, err := c.http.Do(req)
 	if err != nil {

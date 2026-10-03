@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/wsrpc"
+	"github.com/valve-tech/jumpgate/internal/wsrpc"
 )
 
 // maxBodyBytes caps a request body the relay must read to apply method policy.

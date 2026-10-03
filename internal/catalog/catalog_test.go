@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // allExecIDs / allBeaconIDs enumerate every client id in the catalog by

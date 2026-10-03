@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/wsrpc"
+	"github.com/valve-tech/jumpgate/internal/wsrpc"
 )
 
 // Metering must not stop at the upgrade. A WebSocket is the cheapest way to send

@@ -1,4 +1,4 @@
-module github.com/valve-tech/valve-node-app
+module github.com/valve-tech/jumpgate
 
 go 1.25.0
 

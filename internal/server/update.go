@@ -15,9 +15,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/buildinfo"
-	"github.com/valve-tech/valve-node-app/internal/config"
-	"github.com/valve-tech/valve-node-app/internal/updatecheck"
+	"github.com/valve-tech/jumpgate/internal/buildinfo"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/updatecheck"
 )
 
 // updateSource fetches the latest published release. The real one talks to

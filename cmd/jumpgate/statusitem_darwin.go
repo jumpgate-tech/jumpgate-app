@@ -97,7 +97,7 @@ void valveSetHealth(int kind); // defined below; install paints an initial dot
 // others — as a template NSImage, so macOS tints it for the light/dark menubar.
 // Drawn with NSBezierPath rather than shipping a PNG so it stays crisp at any
 // backing scale. flipped:YES gives a top-left origin matching the 24-unit grid
-// the mark is authored in (shared with cmd/valve-node-app/icon.svg).
+// the mark is authored in (shared with cmd/jumpgate/icon.svg).
 static NSImage *valveHubImage(void) {
     const CGFloat S = 18.0;
     NSImage *img = [NSImage imageWithSize:NSMakeSize(S, S) flipped:YES

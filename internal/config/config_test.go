@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // catalog cannot import config (config already imports catalog), so
@@ -52,7 +52,7 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 					Host:        "1.2.3.4",
 					User:        "root",
 					KeyPath:     "/home/me/.ssh/id_ed25519",
-					HostKeyFile: "/home/me/.valve-node-app/known_hosts",
+					HostKeyFile: "/home/me/.jumpgate/known_hosts",
 					Port:        2222,
 				},
 				Wire: &catalog.WireConfig{
@@ -157,7 +157,7 @@ func TestVPNSecretStoredInPrivateFile(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	path := filepath.Join(home, ".valve-node-app", "config.json")
+	path := filepath.Join(home, ".jumpgate", "config.json")
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
@@ -195,7 +195,7 @@ func TestVPNsOmittedWhenEmpty(t *testing.T) {
 	if err := (Config{AIProvider: "groq"}).Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".valve-node-app", "config.json"))
+	data, err := os.ReadFile(filepath.Join(home, ".jumpgate", "config.json"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestVPNServerPersistsNoPrivateKey(t *testing.T) {
 	if err := c.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".valve-node-app", "config.json"))
+	data, err := os.ReadFile(filepath.Join(home, ".jumpgate", "config.json"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestVPNServersOmittedWhenEmpty(t *testing.T) {
 	if err := (Config{AIProvider: "groq"}).Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".valve-node-app", "config.json"))
+	data, err := os.ReadFile(filepath.Join(home, ".jumpgate", "config.json"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestSaveWritesMode0600(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	info, err := os.Stat(filepath.Join(home, ".valve-node-app", "config.json"))
+	info, err := os.Stat(filepath.Join(home, ".jumpgate", "config.json"))
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestSaveIsAtomicNoLeftoverTempFile(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	entries, err := os.ReadDir(filepath.Join(home, ".valve-node-app"))
+	entries, err := os.ReadDir(filepath.Join(home, ".jumpgate"))
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
@@ -366,8 +366,8 @@ func TestDirIsHomeDotValveNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dir: %v", err)
 	}
-	if d != filepath.Join(home, ".valve-node-app") {
-		t.Errorf("Dir() = %q, want %q", d, filepath.Join(home, ".valve-node-app"))
+	if d != filepath.Join(home, ".jumpgate") {
+		t.Errorf("Dir() = %q, want %q", d, filepath.Join(home, ".jumpgate"))
 	}
 }
 
@@ -380,7 +380,7 @@ func TestDirIsHomeDotValveNode(t *testing.T) {
 // version of the code can no longer produce.
 func writeRawConfig(t *testing.T, home, body string) {
 	t.Helper()
-	dir := filepath.Join(home, ".valve-node-app")
+	dir := filepath.Join(home, ".jumpgate")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +458,7 @@ func TestLoad_MigratesAPerTargetGatewayToATopLevelOne(t *testing.T) {
 	if err := c.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(home, ".valve-node-app", configFileName))
+	raw, err := os.ReadFile(filepath.Join(home, ".jumpgate", configFileName))
 	if err != nil {
 		t.Fatal(err)
 	}

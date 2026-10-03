@@ -23,9 +23,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/executor"
-	"github.com/valve-tech/valve-node-app/internal/metrics"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/metrics"
 )
 
 // ErrMetricsOff is returned when the operator has turned the gateway's

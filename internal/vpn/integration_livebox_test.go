@@ -33,7 +33,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // liveExecutor dials the box from the JUMPGATE_LIVEBOX_* env, or skips the test

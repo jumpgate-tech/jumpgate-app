@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/wsrpc"
+	"github.com/valve-tech/jumpgate/internal/wsrpc"
 )
 
 // ErrSubscriptionUnsupported is a subscription kind v1 cannot synthesise over

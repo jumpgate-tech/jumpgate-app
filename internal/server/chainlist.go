@@ -30,9 +30,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/catalog"
-	"github.com/valve-tech/valve-node-app/internal/chainlist"
-	"github.com/valve-tech/valve-node-app/internal/config"
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/chainlist"
+	"github.com/valve-tech/jumpgate/internal/config"
 )
 
 // chainlistTimeout bounds the whole discovery — one feed fetch plus a bounded

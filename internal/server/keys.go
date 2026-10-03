@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/valve-tech/valve-node-app/internal/relay"
+	"github.com/valve-tech/jumpgate/internal/relay"
 )
 
 // maxKeyRequestBytes caps the create-key body. It holds a label and nothing

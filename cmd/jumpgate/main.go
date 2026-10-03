@@ -1,4 +1,4 @@
-// Command valve-node-app sets up and monitors an Ethereum / PulseChain /
+// Command jumpgate sets up and monitors an Ethereum / PulseChain /
 // PulseChain-v4 node: one binary, guided setup, sync monitoring, and AI log
 // explanations, fronted by a local token-gated web UI.
 package main
@@ -19,10 +19,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/valve-tech/valve-node-app/internal/buildinfo"
-	"github.com/valve-tech/valve-node-app/internal/config"
-	"github.com/valve-tech/valve-node-app/internal/relay"
-	"github.com/valve-tech/valve-node-app/internal/server"
+	"github.com/valve-tech/jumpgate/internal/buildinfo"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/relay"
+	"github.com/valve-tech/jumpgate/internal/server"
 )
 
 //go:embed all:web/dist
@@ -63,18 +63,24 @@ func main() {
 		fmt.Fprintln(os.Stderr, warning)
 	}
 
-	// Load (or lazily create on first Save) valve-node-app's local state —
-	// known targets, AI provider settings — from ~/.valve-node-app/config.json.
+	if moved, err := config.MigrateLegacyDir(); err != nil {
+		log.Fatalf("jumpgate: %v", err)
+	} else if moved {
+		fmt.Fprintln(os.Stderr, "jumpgate: moved ~/.valve-node-app to ~/.jumpgate")
+	}
+
+	// Load (or lazily create on first Save) jumpgate's local state —
+	// known targets, AI provider settings — from ~/.jumpgate/config.json.
 	// The server re-reads it per-request rather than holding this value, so
 	// it's only loaded here to fail fast on a corrupt file before the
 	// server starts serving.
 	if _, err := config.Load(); err != nil {
-		log.Fatalf("valve-node-app: load config: %v", err)
+		log.Fatalf("jumpgate: load config: %v", err)
 	}
 
 	uiFS, err := fs.Sub(embeddedUI, "web/dist")
 	if err != nil {
-		log.Fatalf("valve-node-app: embedded UI: %v", err)
+		log.Fatalf("jumpgate: embedded UI: %v", err)
 	}
 
 	// The relay's credential never arrives as a flag. A flag lands in the
@@ -91,14 +97,14 @@ func main() {
 		// A half-configured relay is fatal rather than quietly off. Serving
 		// unmetered traffic is worse than serving none: the operator sells
 		// access and would be giving it away with nothing to report it.
-		log.Fatalf("valve-node-app: relay: %v", err)
+		log.Fatalf("jumpgate: relay: %v", err)
 	}
 
 	// Key management is the operator's surface and uses the ADMIN credential,
 	// which mints and revokes keys. The relay's credential cannot do either.
 	adminClient, err := relay.BuildAdmin(*billingSocket, os.Getenv("JUMPGATE_ADMIN_TOKEN"))
 	if err != nil {
-		log.Fatalf("valve-node-app: key store: %v", err)
+		log.Fatalf("jumpgate: key store: %v", err)
 	}
 	// Assign only when non-nil. A nil *AdminClient inside a non-nil interface
 	// would pass every nil check and then panic on the first click, instead of
@@ -137,9 +143,9 @@ func main() {
 	go func() {
 		for _, r := range s.AutostartOverlays(ctx) {
 			if r.Err != nil {
-				log.Printf("valve-node-app: autostart overlay %q: %v", r.ID, r.Err)
+				log.Printf("jumpgate: autostart overlay %q: %v", r.ID, r.Err)
 			} else {
-				log.Printf("valve-node-app: autostart overlay %q is up", r.ID)
+				log.Printf("jumpgate: autostart overlay %q is up", r.ID)
 			}
 		}
 	}()
@@ -151,7 +157,7 @@ func main() {
 	if relayHandler != nil {
 		go func() {
 			if err := s.ListenAndServeRelay(ctx); err != nil {
-				log.Printf("valve-node-app: relay data plane: %v", err)
+				log.Printf("jumpgate: relay data plane: %v", err)
 			}
 		}()
 		// The background loops are not optional. Without them leased credits are
@@ -167,7 +173,7 @@ func main() {
 	// --tray still works for running the tray binary straight from a shell.
 	if *tray || inAppBundle() {
 		if !trayBuilt {
-			log.Fatalf("valve-node-app: --tray needs a build made with the tray tag: go build -tags tray ./cmd/valve-node-app")
+			log.Fatalf("jumpgate: --tray needs a build made with the tray tag: go build -tags tray ./cmd/jumpgate")
 		}
 		// The window is the foreground; HTTP runs behind it. runWindow must own
 		// the main goroutine (the platform webview owns the UI run loop), so the
@@ -176,7 +182,7 @@ func main() {
 		srvErr := make(chan error, 1)
 		go func() { srvErr <- s.ListenAndServe(ctx) }()
 		if err := waitReady(ctx, *bind); err != nil {
-			log.Fatalf("valve-node-app: server did not come up: %v", err)
+			log.Fatalf("jumpgate: server did not come up: %v", err)
 		}
 		runWindow(ctx, url)
 		stop()
@@ -189,7 +195,7 @@ func main() {
 	}
 
 	if err := s.ListenAndServe(ctx); err != nil {
-		log.Fatalf("valve-node-app: server: %v", err)
+		log.Fatalf("jumpgate: server: %v", err)
 	}
 }
 
@@ -261,7 +267,7 @@ func waitReady(ctx context.Context, bind string) error {
 
 // bindWarningLine returns a loud warning line when bind's host is not
 // loopback (127.0.0.1 or localhost — the server's safe default), or "" if
-// it is. valve-node-app's local server is token-gated but plain HTTP: binding
+// it is. jumpgate's local server is token-gated but plain HTTP: binding
 // it beyond loopback puts full control of every configured target (setup,
 // shell-equivalent install/build commands, log access) on the network
 // reachable at that address, over an unencrypted channel a network

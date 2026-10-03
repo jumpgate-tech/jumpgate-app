@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/valve-tech/valve-node-app/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // newDockerTestServer builds an API test server whose LOCAL executor is fake,
