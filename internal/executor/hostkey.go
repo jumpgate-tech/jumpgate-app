@@ -92,3 +92,10 @@ func appendHostKey(hostKeyFile, hostname string, key ssh.PublicKey) error {
 	}
 	return nil
 }
+
+// TOFUHostKeyCallback is the exported form of the trust-on-first-use policy
+// NewSSH applies, so callers (and tests of the config migration) can check a
+// known_hosts file against a presented key without dialling.
+func TOFUHostKeyCallback(hostKeyFile string) ssh.HostKeyCallback {
+	return tofuHostKeyCallback(hostKeyFile)
+}

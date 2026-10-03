@@ -408,7 +408,7 @@ func requireLinuxRoot(ctx context.Context, e executor.Executor) error {
 		return fmt.Errorf("preflight: uname: %w", err)
 	}
 	if osName := strings.TrimSpace(res.Stdout); osName != "Linux" {
-		return fmt.Errorf("preflight: a systemd gateway targets a Linux host, but this one reports %q — run the gateway on the %q backend instead, or point valve-node-app at a Linux target over SSH.", osName, BackendDocker)
+		return fmt.Errorf("preflight: a systemd gateway targets a Linux host, but this one reports %q — run the gateway on the %q backend instead, or point jumpgate at a Linux target over SSH.", osName, BackendDocker)
 	}
 
 	res, err = e.Run(ctx, "id -u", nil)
@@ -416,7 +416,7 @@ func requireLinuxRoot(ctx context.Context, e executor.Executor) error {
 		return fmt.Errorf("preflight: id -u: %w", err)
 	}
 	if uid := strings.TrimSpace(res.Stdout); uid != "0" {
-		return fmt.Errorf("preflight: installing a systemd unit needs root on the target (SSH as root, or run valve-node-app as root in local mode); id -u reported %q.", uid)
+		return fmt.Errorf("preflight: installing a systemd unit needs root on the target (SSH as root, or run jumpgate as root in local mode); id -u reported %q.", uid)
 	}
 	return nil
 }
@@ -535,7 +535,7 @@ func (p *gatewayPlan) probePort(ctx context.Context, e executor.Executor, st *St
 				port, found)})
 			return nil
 		}
-		return fmt.Errorf("preflight: port %d is already in use by something other than valve-node-app's %s:\n%s", port, what, found)
+		return fmt.Errorf("preflight: port %d is already in use by something other than jumpgate's %s:\n%s", port, what, found)
 	}
 	return nil
 }

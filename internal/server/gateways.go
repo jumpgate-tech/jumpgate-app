@@ -1554,7 +1554,7 @@ func (s *Server) handleGatewayDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "removed",
-		"note": fmt.Sprintf("valve-node-app has forgotten this gateway. Its container %q on machine %q was NOT touched — stop or wipe it before removing it if you wanted it gone.",
+		"note": fmt.Sprintf("jumpgate has forgotten this gateway. Its container %q on machine %q was NOT touched — stop or wipe it before removing it if you wanted it gone.",
 			ops.ERPCContainerNameFor(removed.ID), removed.Placement.TargetID),
 	})
 }
@@ -1690,7 +1690,7 @@ func (s *Server) handleGatewayTrustCert(w http.ResponseWriter, r *http.Request) 
 	// serving a files/ACME certificate is refused: there is no root of ours.
 	if front.CertSource != catalog.CertInternal || path == "" {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(
-			"this gateway is served with the %q certificate source, not Caddy's own authority, so there is no internal root for valve-node-app to install — a files or ACME certificate is trusted by whoever issued it",
+			"this gateway is served with the %q certificate source, not Caddy's own authority, so there is no internal root for jumpgate to install — a files or ACME certificate is trusted by whoever issued it",
 			front.CertSource))
 		return
 	}

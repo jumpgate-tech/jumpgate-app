@@ -439,7 +439,7 @@ func newContainerView(t config.Target, id string, dsvc ops.DockerService, st ops
 	}
 	if !v.Configured && st.Exists() {
 		v.Warnings = append(v.Warnings,
-			"This container exists but valve-node-app has no saved configuration for it — it was created somewhere else, or its configuration was removed. Saving one below is what makes re-creating it possible.")
+			"This container exists but jumpgate has no saved configuration for it — it was created somewhere else, or its configuration was removed. Saving one below is what makes re-creating it possible.")
 	}
 	return v
 }

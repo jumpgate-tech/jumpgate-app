@@ -201,7 +201,7 @@ func beaconAPIItem(ctx context.Context, e executor.Executor, w catalog.WireConfi
 }
 
 func inboundItem(opts DiagnoseOpts, execP2P, beaconTCP int) CheckItem {
-	why := "This is the only probe run from OUTSIDE the target (from the machine running valve-node-app): it dials " +
+	why := "This is the only probe run from OUTSIDE the target (from the machine running jumpgate): it dials " +
 		"the target's public p2p TCP ports directly, so it catches hosting-provider firewalls and NAT that " +
 		"an on-box listener check can't see. UDP can't be verified this way, so a pass here is necessary but " +
 		"not sufficient for discovery."

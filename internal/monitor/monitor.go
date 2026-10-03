@@ -1,4 +1,4 @@
-// Package monitor polls a valve-node-app target's execution client, beacon
+// Package monitor polls a jumpgate target's execution client, beacon
 // client, disk, and systemd service state on a fixed interval, keeping the
 // latest reading and fanning it out to subscribers (the SSE stream). Every
 // target probe goes through an executor.Executor as a shell command (`curl
@@ -50,7 +50,7 @@ func beaconAPIAddr(w catalog.WireConfig) string {
 	return fmt.Sprintf("http://%s:%d", w.RPCBind(), w.BeaconHTTP())
 }
 
-// Snapshot is one point-in-time reading of a valve-node-app target's health.
+// Snapshot is one point-in-time reading of a jumpgate target's health.
 type Snapshot struct {
 	At             time.Time `json:"at"`
 	ExecSyncing    bool      `json:"execSyncing"`

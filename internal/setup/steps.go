@@ -88,7 +88,7 @@ func preflightCheck(ctx context.Context, e executor.Executor, w catalog.WireConf
 	}
 	osName := strings.TrimSpace(res.Stdout)
 	if osName != "Linux" {
-		return fmt.Errorf("preflight: setup targets a Linux host, but this one reports %q — run valve-node-app against a Linux server; from a macOS/Windows machine, add a Linux target over SSH instead.", osName)
+		return fmt.Errorf("preflight: setup targets a Linux host, but this one reports %q — run jumpgate against a Linux server; from a macOS/Windows machine, add a Linux target over SSH instead.", osName)
 	}
 
 	res, err = e.Run(ctx, "id -u", nil)
@@ -96,7 +96,7 @@ func preflightCheck(ctx context.Context, e executor.Executor, w catalog.WireConf
 		return fmt.Errorf("preflight: id -u: %w", err)
 	}
 	if uid := strings.TrimSpace(res.Stdout); uid != "0" {
-		return fmt.Errorf("preflight: setup needs root on the target to install systemd units, manage services with systemctl, and write binaries to /usr/local/bin (SSH as root, or run valve-node-app as root in local mode); id -u reported %q.", uid)
+		return fmt.Errorf("preflight: setup needs root on the target to install systemd units, manage services with systemctl, and write binaries to /usr/local/bin (SSH as root, or run jumpgate as root in local mode); id -u reported %q.", uid)
 	}
 
 	minBytes, err := minDiskBytesFor(w)

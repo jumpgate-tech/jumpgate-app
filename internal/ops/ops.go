@@ -1,10 +1,10 @@
-// Package ops implements the day-2 operator actions valve-node-app exposes on
+// Package ops implements the day-2 operator actions jumpgate exposes on
 // top of a wired target: starting/stopping/restarting the exec/beacon
 // systemd services, clearing a service's data for a fresh resync, disk
 // usage/size estimates, endpoint reachability, and a live (never-mutating)
 // firewall checklist. Every func here takes a context.Context and an
 // executor.Executor first (local or SSH — this package never knows which),
-// per the same architectural seam every other package in valve-node-app is
+// per the same architectural seam every other package in jumpgate is
 // built on.
 package ops
 

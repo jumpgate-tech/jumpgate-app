@@ -403,6 +403,7 @@ func (c Config) GatewaysOn(targetID string) []Gateway {
 // next provision, which is unavoidable: two containers cannot share a name,
 // and they never could, which is precisely the bug this model fixes.
 func (c *Config) migrate() {
+	c.repointLegacyPaths()
 	taken := make(map[string]bool, len(c.Gateways))
 	for _, g := range c.Gateways {
 		taken[g.ID] = true
@@ -750,4 +751,41 @@ func (c Config) Save() error {
 	}
 	success = true
 	return nil
+}
+
+// repointLegacyPaths rewrites every stored LOCAL path that lies inside the
+// legacy ~/.valve-node-app directory to the same relative path under
+// ~/.jumpgate. Paths are stored absolute (handleAddTarget joins them onto
+// Dir()), so after MigrateLegacyDir moves the directory they would point at
+// nothing; for HostKeyFile that is a security failure, not a nuisance, because
+// trust-on-first-use recreates the missing file empty and then trusts whatever
+// key the host presents.
+//
+// The local-path fields are Target.SSH.HostKeyFile and Target.SSH.KeyPath;
+// nothing else in Config holds a controller-side path (gateway, devnet, wire
+// and VPN configs name on-box paths or carry inline text). On-box paths such
+// as /var/lib/valve-node-app are outside the legacy directory and untouched.
+// Idempotent: a repointed path no longer lies inside the legacy directory.
+func (c *Config) repointLegacyPaths() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	legacy := filepath.Join(home, legacyDirName)
+	current := filepath.Join(home, dirName)
+	repoint := func(p string) string {
+		if p == legacy {
+			return current
+		}
+		if rest, ok := strings.CutPrefix(p, legacy+string(filepath.Separator)); ok {
+			return filepath.Join(current, rest)
+		}
+		return p
+	}
+	for i := range c.Targets {
+		if ssh := c.Targets[i].SSH; ssh != nil {
+			ssh.HostKeyFile = repoint(ssh.HostKeyFile)
+			ssh.KeyPath = repoint(ssh.KeyPath)
+		}
+	}
 }

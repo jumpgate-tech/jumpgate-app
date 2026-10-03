@@ -237,7 +237,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 // authMiddleware enforces the session token on every request. The token may
-// arrive as an Authorization: Bearer header, a valve_node_token cookie, or a
+// arrive as an Authorization: Bearer header, a jumpgate_token cookie, or a
 // ?token= query parameter. A valid ?token= query parameter sets the cookie
 // and redirects to the same path without the query parameter.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {

@@ -531,7 +531,7 @@ type catalogResponse struct {
 	Clients  []catalogClient   `json:"clients"`
 }
 
-// handleHost reports the OS/arch valve-node-app itself is running on. The
+// handleHost reports the OS/arch jumpgate itself is running on. The
 // targets UI uses this — not the browser's platform — to decide whether
 // local setup (running a node on this same machine) is viable: setup needs
 // a Linux host, so on darwin/windows this machine is a controller only.

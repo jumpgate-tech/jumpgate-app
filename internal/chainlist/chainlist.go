@@ -22,7 +22,7 @@
 //     operator has paid for is the best upstream on offer and the probe is the
 //     only way to know it works. A slot with no key stored is not probed — it
 //     could only 401 — and comes back rejected, naming the key to go and get.
-//   - The operator may be offline. valve-node-app runs on freshly imaged
+//   - The operator may be offline. jumpgate runs on freshly imaged
 //     boxes and air-gapped racks. When the feed is unreachable, a vendored
 //     snapshot (vendored.go) stands in, so upstream discovery degrades to a
 //     known-good list instead of an empty one.

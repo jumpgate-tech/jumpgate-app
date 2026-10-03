@@ -1,4 +1,4 @@
-// Package catalog is the pure-data knowledge base for valve-node-app: the
+// Package catalog is the pure-data knowledge base for jumpgate: the
 // networks it knows how to configure (Ethereum, PulseChain, PulseChain
 // Testnet v4), the execution/beacon clients it knows how to run on each,
 // and the systemd unit templates that pair an execution client with a
@@ -13,7 +13,7 @@ package catalog
 
 import "fmt"
 
-// Network describes one of the chains valve-node-app can configure an
+// Network describes one of the chains jumpgate can configure an
 // execution+beacon client pair for.
 type Network struct {
 	ChainID       int    // 1 | 369 | 943
@@ -76,7 +76,7 @@ type Network struct {
 // figures do arrive the fix is mechanical: delete this constant and give
 // ExpectedBytes a per-(client, tier, chain) lookup. Do not scatter `/ 2`
 // back through the codebase; the UI mirrors this one value deliberately
-// (see FULL_TIER_FRACTION in cmd/valve-node-app/web/src/wizard.ts).
+// (see FULL_TIER_FRACTION in cmd/jumpgate/web/src/wizard.ts).
 const fullTierFraction = 0.5
 
 // ExpectedBytes returns the expected on-disk dataset size, in bytes, for a
@@ -106,7 +106,7 @@ func ExpectedBytes(chainID int, archive bool) (uint64, error) {
 	return uint64(sizeTB * 1e12), nil
 }
 
-// Client describes one execution or beacon client valve-node-app knows how to
+// Client describes one execution or beacon client jumpgate knows how to
 // obtain and wire up.
 type Client struct {
 	ID   string // "reth" "go-pulse" "erigon-pulse" "geth" "lighthouse-pulse" "prysm-pulse" "lighthouse"
@@ -143,7 +143,7 @@ type Client struct {
 	// Gotchas records operator-facing caveats about running this client
 	// that the catalog knows but deliberately does not act on — typically
 	// because the caveat is conditional on a version or environment
-	// valve-node-app does not itself produce, so applying it
+	// jumpgate does not itself produce, so applying it
 	// unconditionally would be wrong (see erigon-pulse's --externalcl note
 	// in clients.go for the worked example).
 	//

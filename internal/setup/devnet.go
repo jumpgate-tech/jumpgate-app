@@ -193,7 +193,7 @@ func (p *devnetPlan) checkPortsFree(ctx context.Context, e executor.Executor) er
 			return fmt.Errorf("preflight: probe listeners on port %d: %w", port, err)
 		}
 		if res.ExitCode == 0 && strings.TrimSpace(res.Stdout) != "" {
-			return fmt.Errorf("preflight: port %d is already in use by something other than valve-node-app's devnet:\n%s", port, strings.TrimSpace(res.Stdout))
+			return fmt.Errorf("preflight: port %d is already in use by something other than jumpgate's devnet:\n%s", port, strings.TrimSpace(res.Stdout))
 		}
 	}
 	return nil
