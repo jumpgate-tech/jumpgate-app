@@ -27,9 +27,9 @@ func mail(t *testing.T) eip712.TypedData {
 	a := func(s string) eip712.Address { x, _ := eip712.ParseAddress(s); return x }
 	return eip712.TypedData{
 		Types: eip712.Types{
-			"EIP712Domain": {{"name", "string"}, {"version", "string"}, {"chainId", "uint256"}, {"verifyingContract", "address"}},
-			"Person":       {{"name", "string"}, {"wallet", "address"}},
-			"Mail":         {{"from", "Person"}, {"to", "Person"}, {"contents", "string"}},
+			"EIP712Domain": {eip712.Field{Name: "name", Type: "string"}, eip712.Field{Name: "version", Type: "string"}, eip712.Field{Name: "chainId", Type: "uint256"}, eip712.Field{Name: "verifyingContract", Type: "address"}},
+			"Person":       {eip712.Field{Name: "name", Type: "string"}, eip712.Field{Name: "wallet", Type: "address"}},
+			"Mail":         {eip712.Field{Name: "from", Type: "Person"}, eip712.Field{Name: "to", Type: "Person"}, eip712.Field{Name: "contents", Type: "string"}},
 		},
 		PrimaryType: "Mail",
 		Domain: map[string]any{"name": "Ether Mail", "version": "1", "chainId": big.NewInt(1),
