@@ -76,7 +76,7 @@ type Network struct {
 // figures do arrive the fix is mechanical: delete this constant and give
 // ExpectedBytes a per-(client, tier, chain) lookup. Do not scatter `/ 2`
 // back through the codebase; the UI mirrors this one value deliberately
-// (see FULL_TIER_FRACTION in cmd/jumpgate/web/src/wizard.ts).
+// (see FULL_TIER_FRACTION in cmd/jumpgate/web/src/screens/Machine/wizardModel.ts).
 const fullTierFraction = 0.5
 
 // ExpectedBytes returns the expected on-disk dataset size, in bytes, for a

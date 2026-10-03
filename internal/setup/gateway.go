@@ -125,7 +125,7 @@ const gatewayChainIDCall = `{"jsonrpc":"2.0","id":1,"method":"eth_chainId","para
 // Note for the systemd backend: the unit runs as catalog.ServiceUser, and
 // this plan does not create that account or install the erpc binary. Both
 // are the node plan's job. A systemd gateway is therefore an addition to a
-// box valve-node-app already provisioned; a gateway on a bare machine is
+// box jumpgate already provisioned; a gateway on a bare machine is
 // what the docker backend is for.
 // gatewayID identifies WHICH gateway is being provisioned: its container
 // name, unit name and config path are all derived from it, so two gateways

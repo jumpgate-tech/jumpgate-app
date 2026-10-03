@@ -94,7 +94,7 @@ var clients = map[string]Client{
 		// brings their own pre-v2.3.0 binary, so it is recorded as
 		// metadata for them rather than baked into the command line.
 		Gotchas: []string{
-			"Only on erigon-pulse older than v2.3.0: add --externalcl to disable the experimental internal consensus layer. From v2.3.0 it is off by default, and valve-node-app builds from the default branch, so the units it renders do not pass it.",
+			"Only on erigon-pulse older than v2.3.0: add --externalcl to disable the experimental internal consensus layer. From v2.3.0 it is off by default, and jumpgate builds from the default branch, so the units it renders do not pass it.",
 		},
 	},
 	"geth": {

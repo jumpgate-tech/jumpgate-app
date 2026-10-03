@@ -98,7 +98,7 @@ func TrustStoreCommand(goos, certPath, gatewayID string) (TrustStoreInstall, err
 
 	default:
 		return TrustStoreInstall{}, fmt.Errorf(
-			"valve-node-app has no automatic trust-store install for %q — install %s into that machine's trust store by hand", goos, certPath)
+			"jumpgate has no automatic trust-store install for %q — install %s into that machine's trust store by hand", goos, certPath)
 	}
 }
 

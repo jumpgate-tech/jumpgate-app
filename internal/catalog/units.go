@@ -106,7 +106,7 @@ func (w WireConfig) ExecP2P() int {
 
 // RPCBind returns the host address the exec/beacon HTTP RPC binds to,
 // resolving the empty value to the loopback default (127.0.0.1). This is
-// also the address valve-node-app's own on-box probes (monitor, diagnostics,
+// also the address jumpgate's own on-box probes (monitor, diagnostics,
 // setup handshake) must target — a client bound to a single non-loopback
 // address no longer answers on 127.0.0.1.
 func (w WireConfig) RPCBind() string {

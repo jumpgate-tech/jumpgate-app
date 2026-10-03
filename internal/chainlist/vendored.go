@@ -1,6 +1,6 @@
 package chainlist
 
-// Vendored snapshot of the chainlist feed for the chains valve-node-app knows
+// Vendored snapshot of the chainlist feed for the chains jumpgate knows
 // how to provision (catalog.Networks): Ethereum, PulseChain and PulseChain
 // Testnet v4.
 //

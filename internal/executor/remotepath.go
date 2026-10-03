@@ -2,7 +2,7 @@ package executor
 
 import "path"
 
-// Remote paths are POSIX paths, always — the targets valve-node-app drives are
+// Remote paths are POSIX paths, always — the targets jumpgate drives are
 // Linux hosts, no matter what the control plane runs on. The stdlib's
 // "path/filepath" is deliberately host-dependent: on a Windows control plane
 // filepath.Dir("/var/lib/valve-node-app/369/jwt.hex") returns

@@ -7,7 +7,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/ops"
 )
 
-// OrphanedContainer is a container valve-node-app stopped managing but did NOT
+// OrphanedContainer is a container jumpgate stopped managing but did NOT
 // stop. It is persisted rather than derived: migrate() runs in memory and is
 // only written back by the next Save, so a notice computed at load would
 // disappear on the first save while the container kept serving.

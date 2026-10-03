@@ -145,10 +145,10 @@ func preflightCheck(ctx context.Context, e executor.Executor, w catalog.WireConf
 	return nil
 }
 
-// ownActiveUnitPorts checks whether valve-node-app's own systemd units are
+// ownActiveUnitPorts checks whether jumpgate's own systemd units are
 // already active and, if so, returns the set of ports the busy-port check
 // should exempt for them. This is what makes preflight idempotent when
-// re-running setup (resume/upgrade) against a box where valve-node-app is
+// re-running setup (resume/upgrade) against a box where jumpgate is
 // already up: without it, the port scan can't tell our own units'
 // listeners from a stranger's and fails every re-run.
 //

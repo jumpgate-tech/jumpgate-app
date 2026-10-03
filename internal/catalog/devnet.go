@@ -148,7 +148,7 @@ type DevnetConfig struct {
 }
 
 // DefaultPlatform is the --platform a devnet falls back to: the architecture
-// valve-node-app itself was built for.
+// jumpgate itself was built for.
 //
 // It duplicates ops.DefaultPlatform rather than calling it because ops imports
 // catalog and the dependency cannot run the other way. The duplication is four

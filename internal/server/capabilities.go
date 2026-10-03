@@ -432,9 +432,9 @@ func unprobedCapabilityViews(reason string) []capabilityView {
 // machine may be exactly where the upstream lives, in which case an address
 // that machine's own loopback interface serves is perfectly fine for eRPC to
 // use. probeAddressFor answers "what URL can THIS PROCESS — the
-// valve-node-app instance answering this very HTTP request — dial?", and
+// jumpgate instance answering this very HTTP request — dial?", and
 // this process is not necessarily anywhere near the gateway's machine at
-// all: it is wherever the operator is running valve-node-app, commonly their
+// all: it is wherever the operator is running jumpgate, commonly their
 // own laptop, reaching fleet boxes over SSH. Two concrete consequences:
 //
 //   - A managed devnet is ALWAYS probed at its PUBLISHED address

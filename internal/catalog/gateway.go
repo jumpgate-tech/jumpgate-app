@@ -55,10 +55,10 @@ const defaultERPCMetricsPort = 4001
 // the REFERENCE means the address is re-derived on every render and cannot
 // go stale.
 const (
-	// UpstreamManagedNode is a chain client valve-node-app set up on one of
+	// UpstreamManagedNode is a chain client jumpgate set up on one of
 	// its targets (config.Target.Wire). TargetID names the machine.
 	UpstreamManagedNode = "managed-node"
-	// UpstreamManagedDevnet is a devnet container valve-node-app runs on one
+	// UpstreamManagedDevnet is a devnet container jumpgate runs on one
 	// of its targets (config.Target.Devnet). TargetID names the machine.
 	UpstreamManagedDevnet = "managed-devnet"
 	// UpstreamExternal is a URL nobody here manages: a public mainnet or

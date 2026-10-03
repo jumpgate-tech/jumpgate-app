@@ -2,7 +2,7 @@ package ops
 
 // Docker backend for the eRPC gateway.
 //
-// WHY this exists at all: everything else valve-node-app provisions is a
+// WHY this exists at all: everything else jumpgate provisions is a
 // chain client — gigabytes of chain data, a dedicated service account, a
 // hardened systemd unit, a Linux-only toolchain. The eRPC gateway is none
 // of that. It is one static Go binary, one YAML file, and one TCP port,
@@ -136,7 +136,7 @@ type DockerInfo struct {
 }
 
 // WindowsContainers reports whether the engine is in Windows-container
-// mode, where none of the Linux images valve-node-app ships can run. It is
+// mode, where none of the Linux images jumpgate ships can run. It is
 // a distinct failure from "no docker" and deserves its own message: the fix
 // is "switch to Linux containers", not "install docker".
 func (d DockerInfo) WindowsContainers() bool {
@@ -306,7 +306,7 @@ func PlatformForArch(arch string) string {
 }
 
 // DefaultPlatform is the --platform every run/build renderer falls back to
-// when nothing better is known: the architecture valve-node-app ITSELF was
+// when nothing better is known: the architecture jumpgate ITSELF was
 // built for.
 //
 // That is the right last resort because the container backend exists for the

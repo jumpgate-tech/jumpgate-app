@@ -1,6 +1,6 @@
 package ops
 
-// One lifecycle surface for every docker-backed service valve-node-app runs:
+// One lifecycle surface for every docker-backed service jumpgate runs:
 // start / stop / restart / wipe / status, over executor.Executor, local or
 // SSH alike.
 //
@@ -383,7 +383,7 @@ func ContainerRemoveArgs(name string) []string {
 
 // VolumeRemoveArgs renders the removal of ONE named volume. One call per
 // volume, never `docker volume prune`: prune deletes every unused volume on
-// the target, including volumes belonging to things valve-node-app did not
+// the target, including volumes belonging to things jumpgate did not
 // create.
 func VolumeRemoveArgs(name string) []string {
 	return []string{"volume", "rm", name}
