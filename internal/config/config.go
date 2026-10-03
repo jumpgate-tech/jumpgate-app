@@ -17,6 +17,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/filelock"
 )
 
 // defaultRefRPCBase is the public demo-key reference RPC base URL, used
@@ -678,6 +679,63 @@ func filePath() (string, error) {
 // "move this if it is present", which is idempotent, and a version field
 // would only add a second thing that can be wrong.
 func Load() (Config, error) {
+	lp, err := lockPath()
+	if err != nil {
+		return Config{}, err
+	}
+	h, err := filelock.Lock(lp, false)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: lock: %w", err)
+	}
+	defer h.Unlock()
+	return load()
+}
+
+// lockFileName sits beside config.json. The lock is on a separate file
+// because Save replaces config.json by rename, and a lock on the old inode
+// would not exclude a writer that opened the new one.
+const lockFileName = "config.json.lock"
+
+func lockPath() (string, error) {
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("config: create %s: %w", dir, err)
+	}
+	return filepath.Join(dir, lockFileName), nil
+}
+
+// Update loads the config, applies fn, and saves it, holding an exclusive
+// lock across all three so another process's edit can never be lost between
+// this one's read and write. If fn fails nothing is saved.
+func Update(fn func(*Config) error) (Config, error) {
+	lp, err := lockPath()
+	if err != nil {
+		return Config{}, err
+	}
+	h, err := filelock.Lock(lp, true)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: lock: %w", err)
+	}
+	defer h.Unlock()
+
+	c, err := load()
+	if err != nil {
+		return Config{}, err
+	}
+	if err := fn(&c); err != nil {
+		return Config{}, err
+	}
+	if err := c.Save(); err != nil {
+		return Config{}, err
+	}
+	return c, nil
+}
+
+// load is Load without the lock; callers must hold it.
+func load() (Config, error) {
 	path, err := filePath()
 	if err != nil {
 		return Config{}, err

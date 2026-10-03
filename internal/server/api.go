@@ -384,17 +384,7 @@ func (s *Server) loadConfig() (config.Config, error) {
 func (s *Server) updateConfig(fn func(c *config.Config) error) (config.Config, error) {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
-	c, err := config.Load()
-	if err != nil {
-		return config.Config{}, err
-	}
-	if err := fn(&c); err != nil {
-		return config.Config{}, err
-	}
-	if err := c.Save(); err != nil {
-		return config.Config{}, err
-	}
-	return c, nil
+	return config.Update(fn)
 }
 
 func findTarget(cfg config.Config, id string) (config.Target, bool) {
