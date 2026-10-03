@@ -426,3 +426,8 @@ func parseActive(output string) (execActive, beaconActive bool) {
 	get := func(i int) bool { return i < len(lines) && strings.TrimSpace(lines[i]) == "active" }
 	return get(0), get(1)
 }
+
+// PollOnce takes one snapshot without starting the polling loop. The agent
+// answers status.read with it; head lag is computed by the controller, which
+// holds the reference RPC.
+func (m *Monitor) PollOnce(ctx context.Context) Snapshot { return m.poll(ctx) }

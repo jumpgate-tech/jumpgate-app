@@ -751,3 +751,6 @@ func sshAllowedItem(tcp string) CheckItem {
 func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
+
+// NodeUnits are the node's two systemd units, for callers that tail their logs.
+func NodeUnits() []string { return []string{execUnitName, beaconUnitName} }
