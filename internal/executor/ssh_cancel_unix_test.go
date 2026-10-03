@@ -224,3 +224,35 @@ func TestSSH_CloseRightAfterCancelStillKillsTheCommand(t *testing.T) {
 	_ = ex.Close()
 	assertProcessGone(t, pid)
 }
+
+// Close must always reach client.Close within closeWaitBudget, even when a
+// kill never finishes. A kill's Signal or session Close can block forever on
+// a stalled transport, and only client.Close can unblock it. The test
+// registers a kill that never ends, as a kill stuck in such a write would be.
+func TestSSH_CloseDoesNotWaitForeverOnAStuckKill(t *testing.T) {
+	old := closeWaitBudget
+	closeWaitBudget = 300 * time.Millisecond
+	t.Cleanup(func() { closeWaitBudget = old })
+
+	d, keyPath := startTestSSHD(t)
+	ex, err := NewSSH(newSSHConfig(t, d, keyPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := ex.(*sshExecutor)
+	if !s.startKill() {
+		t.Fatal("startKill refused before Close")
+	}
+	t.Cleanup(s.kills.Done)
+
+	closed := make(chan struct{})
+	go func() { _ = ex.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(closeWaitBudget + 2*time.Second):
+		t.Fatal("Close did not return within its budget while a kill was stuck")
+	}
+	if _, err := ex.Run(context.Background(), "true", nil); err == nil {
+		t.Fatal("Run succeeded after Close: the connection was not closed")
+	}
+}

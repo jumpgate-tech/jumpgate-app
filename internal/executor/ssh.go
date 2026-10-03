@@ -195,6 +195,11 @@ const markerWait = 2 * time.Second
 // killGroupBudget bounds killGroup, opening the session included.
 const killGroupBudget = 10 * time.Second
 
+// closeWaitBudget bounds how long Close waits for in-flight kills before it
+// closes the connection anyway. It covers a kill's full budget plus its
+// SIGTERM and session close. A variable so a test can shorten it.
+var closeWaitBudget = killGroupBudget + 2*time.Second
+
 // startKill registers a group kill with Close. It reports false once Close
 // has begun, when the connection is going away and a kill could not be sent.
 func (s *sshExecutor) startKill() bool {
@@ -282,13 +287,23 @@ func readFileCmd(remotePath string) string {
 	return fmt.Sprintf("base64 < %s", shQuote(remotePath))
 }
 
-// Close waits for any group kill a cancelled Run left running (each bounded
-// by killGroupBudget), then closes the connection.
+// Close lets any group kill a cancelled Run left running finish, then closes
+// the connection. It waits at most closeWaitBudget: a kill can be stuck in a
+// write to a stalled transport, which only client.Close can unblock, so the
+// connection is closed when the budget runs out whether or not the kills are
+// done.
 func (s *sshExecutor) Close() error {
 	s.mu.Lock()
 	s.closed = true
 	s.mu.Unlock()
-	s.kills.Wait()
+	killsDone := make(chan struct{})
+	go func() { s.kills.Wait(); close(killsDone) }()
+	budget := time.NewTimer(closeWaitBudget)
+	defer budget.Stop()
+	select {
+	case <-killsDone:
+	case <-budget.C:
+	}
 	return s.client.Close()
 }
 
