@@ -164,3 +164,18 @@ func TestPinnedHostKeySurvivesMigration(t *testing.T) {
 		t.Fatalf("the pinned key was refused after migration: %v", err)
 	}
 }
+
+func TestConfirmedHostsFileLivesInTheConfigDirAndIsNotTheTOFUFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	got, err := ConfirmedHostsFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".jumpgate", "confirmed_hosts"); got != want {
+		t.Fatalf("ConfirmedHostsFile = %q, want %q", got, want)
+	}
+	if filepath.Base(got) == "known_hosts" {
+		t.Fatal("must not share the trust-on-first-use file")
+	}
+}

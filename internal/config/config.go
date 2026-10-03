@@ -623,6 +623,18 @@ func Dir() (string, error) {
 	return filepath.Join(home, dirName), nil
 }
 
+// ConfirmedHostsFile is the host-key store Strict reads: keys a person
+// explicitly confirmed. Only executor.RecordHostKey after such a confirmation
+// writes it; trust-on-first-use writes Target.SSH.HostKeyFile instead and is
+// never consulted for strict checks.
+func ConfirmedHostsFile() (string, error) {
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "confirmed_hosts"), nil
+}
+
 // MigrateLegacyDir moves ~/.valve-node-app to ~/.jumpgate once, and leaves a
 // MOVED pointer file in the old place. It is a rename, not a copy, so secrets
 // (provider keys, VPN private keys) never exist twice on disk. It reports

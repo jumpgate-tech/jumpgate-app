@@ -71,7 +71,9 @@ func lookupHostKey(hostKeyFile, hostname string) (ssh.PublicKey, error) {
 }
 
 // RecordHostKey records key for hostname in hostKeyFile, creating the file
-// with mode 0600 if it doesn't already exist.
+// with mode 0600 if it doesn't already exist. Trust-on-first-use uses it for
+// HostKeyFile; the CLI also calls it, after an explicit human confirmation,
+// on the confirmed-hosts file Strict reads. Those two files must stay apart.
 func RecordHostKey(hostKeyFile, hostname string, key ssh.PublicKey) error {
 	// Local path: filepath is correct here (see the file comment above).
 	if dir := filepath.Dir(hostKeyFile); dir != "" {

@@ -51,7 +51,13 @@ func DialSSH(ctx context.Context, cfg SSHConfig) (*ssh.Client, error) {
 
 	var conn net.Conn
 	if cfg.Jump != nil {
-		jump, err := DialSSH(dialCtx, *cfg.Jump)
+		jumpCfg := *cfg.Jump
+		if cfg.HostKey != nil && jumpCfg.HostKey == nil {
+			// A strict dial must never trust-on-first-use its jump host;
+			// the callback is keyed by hostname, so it serves both hops.
+			jumpCfg.HostKey = cfg.HostKey
+		}
+		jump, err := DialSSH(dialCtx, jumpCfg)
 		if err != nil {
 			return nil, fmt.Errorf("jump host %s: %w", cfg.Jump.Host, err)
 		}

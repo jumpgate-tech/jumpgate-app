@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -35,22 +36,18 @@ func (e *UnknownHostError) Unwrap() error { return ErrUnknownHost }
 // an operator can compare it with the console of the box.
 func Fingerprint(key ssh.PublicKey) string { return ssh.FingerprintSHA256(key) }
 
-// Strict accepts a host only if its key is already recorded, in jumpgate's own
-// file or in one of the operator's OpenSSH known_hosts files. Unlike
-// trust-on-first-use it never records anything itself: an unknown host is an
+// Strict accepts a host only if its key was confirmed by a person: recorded in
+// confirmedFile (written only by RecordHostKey after an explicit confirmation,
+// never by trust-on-first-use) or listed in one of the operator's OpenSSH
+// known_hosts files. It never records anything itself: an unknown host is an
 // *UnknownHostError the caller must put in front of a person.
-func Strict(jumpgateFile string, opensshFiles ...string) ssh.HostKeyCallback {
+//
+// The OpenSSH files are always consulted, even when confirmedFile matches: a
+// different key or a @revoked entry there is a hard error.
+func Strict(confirmedFile string, opensshFiles ...string) ssh.HostKeyCallback {
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-		known, err := lookupHostKey(jumpgateFile, hostname)
-		if err != nil {
-			return err
-		}
-		if known != nil {
-			if !bytes.Equal(known.Marshal(), key.Marshal()) {
-				return fmt.Errorf("host key mismatch for %s: presented %s does not match %s on record in %s (possible man-in-the-middle, or the host was rebuilt)",
-					hostname, Fingerprint(key), Fingerprint(known), jumpgateFile)
-			}
-			return nil
+		if _, ok := remote.(*net.TCPAddr); !ok || remote == nil {
+			remote = remoteFromHostname(hostname)
 		}
 		var present []string
 		for _, f := range opensshFiles {
@@ -58,6 +55,7 @@ func Strict(jumpgateFile string, opensshFiles ...string) ssh.HostKeyCallback {
 				present = append(present, f)
 			}
 		}
+		opensshOK := false
 		if len(present) > 0 {
 			cb, err := knownhosts.New(present...)
 			if err != nil {
@@ -65,19 +63,73 @@ func Strict(jumpgateFile string, opensshFiles ...string) ssh.HostKeyCallback {
 			}
 			err = cb(hostname, remote, key)
 			var keyErr *knownhosts.KeyError
+			var revoked *knownhosts.RevokedError
 			switch {
 			case err == nil:
-				return nil
-			case errors.As(err, &keyErr) && len(keyErr.Want) > 0:
+				opensshOK = true
+			case errors.As(err, &revoked):
+				return fmt.Errorf("host key for %s is revoked in your OpenSSH known_hosts: %w", hostname, err)
+			case errors.As(err, &keyErr) && len(keyErr.Want) > 0 && !onlyCertAuthorities(keyErr.Want):
 				return fmt.Errorf("host key mismatch for %s against your OpenSSH known_hosts: %w", hostname, err)
 			case errors.As(err, &keyErr):
-				// Not listed there either: fall through to unknown.
+				// Unknown there (or only a CA covers it): not confirmed.
 			default:
 				return err
 			}
 		}
+		known, err := lookupHostKey(confirmedFile, hostname)
+		if err != nil {
+			return err
+		}
+		if known != nil {
+			if !bytes.Equal(known.Marshal(), key.Marshal()) {
+				return fmt.Errorf("host key mismatch for %s: presented %s does not match %s on record in %s (possible man-in-the-middle, or the host was rebuilt)",
+					hostname, Fingerprint(key), Fingerprint(known), confirmedFile)
+			}
+			return nil
+		}
+		if opensshOK {
+			return nil
+		}
 		return &UnknownHostError{Host: hostname, Fingerprint: Fingerprint(key), Key: key}
 	}
+}
+
+// remoteFromHostname builds the *net.TCPAddr knownhosts insists on when the
+// caller passed none (or something else).
+func remoteFromHostname(hostname string) net.Addr {
+	host, portStr, err := net.SplitHostPort(hostname)
+	if err != nil {
+		host, portStr = hostname, "22"
+	}
+	port, _ := strconv.Atoi(portStr)
+	a := &net.TCPAddr{Port: port}
+	if ip := net.ParseIP(host); ip != nil {
+		a.IP = ip
+	}
+	return a
+}
+
+// onlyCertAuthorities reports whether every entry that "wants" a different key
+// is a @cert-authority line. knownhosts does not expose the marker, so the
+// source line is re-read; if it cannot be read the entry counts as a pinned
+// key, the safe direction (a mismatch refuses).
+func onlyCertAuthorities(want []knownhosts.KnownKey) bool {
+	for _, k := range want {
+		data, err := os.ReadFile(k.Filename)
+		if err != nil {
+			return false
+		}
+		lines := strings.Split(string(data), "\n")
+		if k.Line < 1 || k.Line > len(lines) {
+			return false
+		}
+		f := strings.Fields(lines[k.Line-1])
+		if len(f) == 0 || f[0] != "@cert-authority" {
+			return false
+		}
+	}
+	return true
 }
 
 // errCaptured stops the handshake once the key is in hand.
@@ -103,6 +155,11 @@ func CaptureHostKey(ctx context.Context, cfg SSHConfig) (ssh.PublicKey, error) {
 
 	var conn net.Conn
 	if cfg.Jump != nil {
+		// Never authenticate to a jump host nobody confirmed, and never
+		// fall back to trust-on-first-use for it.
+		if cfg.Jump.HostKey == nil {
+			return nil, fmt.Errorf("jump host %s has no host-key policy: confirm the jump host first", cfg.Jump.Host)
+		}
 		jump, err := DialSSH(dialCtx, *cfg.Jump)
 		if err != nil {
 			return nil, fmt.Errorf("jump host %s: %w", cfg.Jump.Host, err)
