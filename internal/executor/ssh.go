@@ -16,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -75,11 +76,20 @@ func (s *sshExecutor) Run(ctx context.Context, cmd string, opts *RunOpts) (Resul
 	// the session on ctx.Done() tears down its underlying channel, which
 	// unblocks the io.Copy below (it returns an error reading the now-closed
 	// stdoutPipe) so Run cannot hang forever past ctx cancellation.
+	//
+	// Closing the session does not stop the command on the box, though, so
+	// first the goroutine kills the command's process group, whose id the
+	// wrapper reported on its first stdout line (see wrapInProcessGroup).
+	var pgid atomic.Int64
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
 		select {
 		case <-ctx.Done():
+			_ = session.Signal(ssh.SIGTERM) // honoured by OpenSSH >= 7.9; harmless otherwise
+			if pg := pgid.Load(); pg > 1 {
+				s.killGroup(int(pg))
+			}
 			_ = session.Close()
 		case <-done:
 		}
@@ -97,7 +107,7 @@ func (s *sshExecutor) Run(ctx context.Context, cmd string, opts *RunOpts) (Resul
 		session.Stdin = opts.Stdin
 	}
 
-	if err := session.Start(cmd); err != nil {
+	if err := session.Start(wrapInProcessGroup(cmd)); err != nil {
 		return Result{}, fmt.Errorf("start ssh command: %w", err)
 	}
 
@@ -105,7 +115,15 @@ func (s *sshExecutor) Run(ctx context.Context, cmd string, opts *RunOpts) (Resul
 	if opts != nil {
 		streamFn = opts.Stream
 	}
-	w := &lineStreamer{buf: &stdoutBuf, fn: streamFn}
+	w := &lineStreamer{buf: &stdoutBuf, fn: streamFn, onFirst: func(line string) bool {
+		if !strings.HasPrefix(line, pgidMarker) {
+			return false
+		}
+		if pg, ok := parsePgidLine(line); ok {
+			pgid.Store(int64(pg))
+		}
+		return true // a marker without a group id (pgidNone) is swallowed too
+	}}
 
 	copyErrCh := make(chan error, 1)
 	go func() {
@@ -139,6 +157,24 @@ func (s *sshExecutor) Run(ctx context.Context, cmd string, opts *RunOpts) (Resul
 	}
 
 	return result, nil
+}
+
+// killGroup stops a cancelled command's process group on a fresh session. It
+// gets its own short budget because the caller's context is already done.
+func (s *sshExecutor) killGroup(pgid int) {
+	kctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sess, err := s.client.NewSession()
+	if err != nil {
+		return
+	}
+	defer sess.Close()
+	done := make(chan struct{})
+	go func() { _ = sess.Run(killGroupCmd(pgid)); close(done) }()
+	select {
+	case <-done:
+	case <-kctx.Done():
+	}
 }
 
 // WriteFile writes content to path on the remote host. The content travels on

@@ -22,12 +22,58 @@ type lineStreamer struct {
 	fn       StreamFunc
 	line     []byte
 	overflow bool
+
+	// onFirst, if set, sees the first complete line (without its line
+	// ending) and reports whether to swallow it, in which case that line
+	// reaches neither buf nor fn. It is cleared after the first line. Until
+	// then the line is held back in first.
+	onFirst func(line string) bool
+	first   []byte
 }
 
+// maxFirstLine bounds how much onFirst interception holds back. A first line
+// longer than this cannot be the marker, so it is released as output.
+const maxFirstLine = 256
+
 func (w *lineStreamer) Write(p []byte) (int, error) {
+	if w.onFirst == nil {
+		w.write(p)
+		return len(p), nil
+	}
+	i := bytes.IndexByte(p, '\n')
+	if i < 0 {
+		w.first = append(w.first, p...)
+		if len(w.first) > maxFirstLine {
+			w.releaseFirst()
+		}
+		return len(p), nil
+	}
+	w.first = append(w.first, p[:i+1]...)
+	line := bytes.TrimSuffix(w.first[:len(w.first)-1], []byte{'\r'})
+	swallow := w.onFirst(string(line))
+	if swallow {
+		w.first = nil
+		w.onFirst = nil
+	} else {
+		w.releaseFirst()
+	}
+	w.write(p[i+1:])
+	return len(p), nil
+}
+
+// releaseFirst ends interception and passes the held-back bytes on as output.
+func (w *lineStreamer) releaseFirst() {
+	held := w.first
+	w.first = nil
+	w.onFirst = nil
+	w.write(held)
+}
+
+// write captures p into buf and splits it into lines for fn.
+func (w *lineStreamer) write(p []byte) {
 	w.buf.Write(p)
 	if w.fn == nil {
-		return len(p), nil
+		return
 	}
 	for _, b := range p {
 		if b == '\n' {
@@ -42,7 +88,6 @@ func (w *lineStreamer) Write(p []byte) (int, error) {
 		}
 		w.line = append(w.line, b)
 	}
-	return len(p), nil
 }
 
 // emit delivers the currently buffered line to fn (trimming a trailing '\r'
@@ -64,6 +109,10 @@ func (w *lineStreamer) emit() {
 // command's output didn't end in a newline). Call once after the writer has
 // seen all input.
 func (w *lineStreamer) Flush() {
+	if w.onFirst != nil {
+		// An unterminated first line is output, never a marker.
+		w.releaseFirst()
+	}
 	if w.fn != nil && !w.overflow && len(w.line) > 0 {
 		w.fn(string(w.line))
 	}

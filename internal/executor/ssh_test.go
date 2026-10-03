@@ -31,6 +31,28 @@ type testSSHD struct {
 
 func startTestSSHD(t *testing.T) (testSSHD, string) {
 	t.Helper()
+	return startTestSSHDWith(t, func(s gliderssh.Session) {
+		c := exec.CommandContext(s.Context(), "sh", "-c", s.RawCommand())
+		c.Stdout = s
+		c.Stderr = s.Stderr()
+		c.Stdin = s
+		runErr := c.Run()
+		code := 0
+		if runErr != nil {
+			if exitErr, ok := runErr.(*exec.ExitError); ok {
+				code = exitErr.ExitCode()
+			} else {
+				code = 1
+			}
+		}
+		_ = s.Exit(code)
+	})
+}
+
+// startTestSSHDWith starts an in-process sshd that runs handler for every
+// session, and returns it with the path of a client key it accepts.
+func startTestSSHDWith(t *testing.T, handler gliderssh.Handler) (testSSHD, string) {
+	t.Helper()
 
 	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -52,22 +74,7 @@ func startTestSSHD(t *testing.T) (testSSHD, string) {
 		PublicKeyHandler: func(ctx gliderssh.Context, key gliderssh.PublicKey) bool {
 			return true
 		},
-		Handler: func(s gliderssh.Session) {
-			c := exec.CommandContext(s.Context(), "sh", "-c", s.RawCommand())
-			c.Stdout = s
-			c.Stderr = s.Stderr()
-			c.Stdin = s
-			runErr := c.Run()
-			code := 0
-			if runErr != nil {
-				if exitErr, ok := runErr.(*exec.ExitError); ok {
-					code = exitErr.ExitCode()
-				} else {
-					code = 1
-				}
-			}
-			_ = s.Exit(code)
-		},
+		Handler: handler,
 	}
 	srv.AddHostKey(hostSigner)
 
