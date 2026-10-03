@@ -837,3 +837,11 @@ func TestFirewall_RPCNotPublic_LANWarns(t *testing.T) {
 		t.Errorf("Detail %q should name the LAN-bound port", it.Detail)
 	}
 }
+
+// The review's case: a relative DataDir passed the old containment check, so
+// rm -rf ran relative to the SSH login directory.
+func TestClearPathsRejectsARelativeDataDir(t *testing.T) {
+	if _, err := clearPaths("data", []string{"reth"}); err == nil {
+		t.Fatal("clearPaths accepted a relative DataDir")
+	}
+}

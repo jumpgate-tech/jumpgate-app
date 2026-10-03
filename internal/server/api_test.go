@@ -1746,3 +1746,23 @@ func TestDiskFreeUnknownTargetIs404(t *testing.T) {
 		t.Fatalf("status = %d, want 404", res.StatusCode)
 	}
 }
+
+func TestStartSetupRejectsAnUnsafeDataDir(t *testing.T) {
+	a := newAPITestServer(t)
+
+	res := a.do(t, "POST", "/api/targets", config.Target{ID: "local", Mode: "local"})
+	res.Body.Close()
+
+	wire := catalog.WireConfig{
+		ChainID:  369,
+		ExecID:   "reth",
+		BeaconID: "lighthouse-pulse",
+		DataDir:  "/etc",
+	}
+	res = a.do(t, "POST", "/api/targets/local/setup", wire)
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "data directory") {
+		t.Fatalf("status = %d body=%s, want 400 naming the data directory", res.StatusCode, body)
+	}
+}

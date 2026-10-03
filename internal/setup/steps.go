@@ -34,6 +34,9 @@ const (
 // Plan returns the ordered steps for the config: preflight, account,
 // toolchain, install-exec, install-beacon, snapshot, wire, start, handshake.
 func Plan(w catalog.WireConfig) ([]Step, error) {
+	if err := catalog.ValidateDataDir(w.DataDir); err != nil {
+		return nil, fmt.Errorf("setup: %w", err)
+	}
 	execClient, ok := catalog.ClientByID(w.ExecID)
 	if !ok || execClient.Kind != "exec" {
 		return nil, fmt.Errorf("setup: %q is not a known execution client id", w.ExecID)

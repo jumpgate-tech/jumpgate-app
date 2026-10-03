@@ -998,3 +998,11 @@ func TestAuthErrorLinesMatchWholeWordsOnly(t *testing.T) {
 		t.Fatalf("authErrorLines = %q, want only the two real auth failures", got)
 	}
 }
+
+func TestPlanRejectsAnUnsafeDataDir(t *testing.T) {
+	w := testWire()
+	w.DataDir = "/var"
+	if _, err := Plan(w); err == nil {
+		t.Fatal("Plan accepted DataDir /var")
+	}
+}

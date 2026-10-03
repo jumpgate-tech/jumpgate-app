@@ -810,6 +810,10 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	if wire.JWTPath == "" {
 		wire.JWTPath = defaultJWTPath(wire.DataDir)
 	}
+	if err := catalog.ValidateDataDir(wire.DataDir); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	steps, err := setup.Plan(wire)
 	if err != nil {

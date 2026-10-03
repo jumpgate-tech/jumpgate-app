@@ -167,6 +167,9 @@ func ClearService(ctx context.Context, e executor.Executor, w catalog.WireConfig
 // sibling of DataDir (not "/" and not DataDir itself), which an exact-match
 // check would have let through.
 func clearPaths(dataDir string, subdirs []string) ([]string, error) {
+	if err := catalog.ValidateDataDir(dataDir); err != nil {
+		return nil, fmt.Errorf("refusing to clear: %w", err)
+	}
 	if dataDir == "" {
 		return nil, fmt.Errorf("refusing to clear: DataDir is empty")
 	}
