@@ -78,7 +78,7 @@ func onePasswordCreate(ctx context.Context, ref string) (*Key, error) {
 	}
 	out, err := runCmd(ctx, "", "op", "item", "create", "--vault", vault, "--template", path, "--format", "json")
 	if err != nil {
-		return nil, fmt.Errorf("signer: 1Password store: %w", err)
+		return nil, fmt.Errorf("signer: 1Password store failed (an item %q may have been created in vault %q; check and remove it by hand): %w", item, vault, err)
 	}
 	var created struct {
 		ID string `json:"id"`

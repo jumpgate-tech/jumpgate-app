@@ -521,3 +521,51 @@ func TestPlainNotFoundOnLinuxReadHasNoServiceHint(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// realRunCmd is the production runner, captured before any test swaps runCmd.
+var realRunCmd = runCmd
+
+// The fakes in the other tests build *cmdError by hand; this one runs real
+// subprocesses so the production runner is what produces the error type the
+// not-found checks depend on.
+func TestRealRunnerReportsExitCodeAndStderr(t *testing.T) {
+	cases := []struct {
+		script     string
+		code       int
+		stderr     string
+		darwinMiss bool
+		linuxMiss  bool
+	}{
+		{"exit 44", 44, "", true, false},
+		{"exit 1", 1, "", false, true},
+		{"echo boom >&2; exit 2", 2, "boom", false, false},
+		{"echo secretvalue; echo oops >&2; exit 1", 1, "oops", false, false},
+	}
+	for _, c := range cases {
+		_, err := realRunCmd(context.Background(), "", "sh", "-c", c.script)
+		var ce *cmdError
+		if !errors.As(err, &ce) {
+			t.Fatalf("%q: err = %T %v, want *cmdError", c.script, err, err)
+		}
+		if ce.ExitCode != c.code || strings.TrimSpace(ce.Stderr) != c.stderr {
+			t.Errorf("%q: code %d stderr %q", c.script, ce.ExitCode, ce.Stderr)
+		}
+		if strings.Contains(err.Error(), "secretvalue") {
+			t.Errorf("stdout leaked into the error text: %v", err)
+		}
+		if got := keychainNotFound("security", err); got != c.darwinMiss {
+			t.Errorf("%q: darwin not-found = %v", c.script, got)
+		}
+		if got := keychainNotFound("secret-tool", err); got != c.linuxMiss {
+			t.Errorf("%q: linux not-found = %v", c.script, got)
+		}
+	}
+	if _, err := realRunCmd(context.Background(), "", "jumpgate-no-such-tool-xyz"); err == nil {
+		t.Fatal("want an error for a missing program")
+	} else if ce := new(*cmdError); errors.As(err, ce) && (*ce).ExitCode != -1 {
+		t.Errorf("exit code for a process that never started = %d, want -1", (*ce).ExitCode)
+	}
+	if out, err := realRunCmd(context.Background(), "in", "cat"); err != nil || out != "in" {
+		t.Fatalf("success path = %q, %v", out, err)
+	}
+}

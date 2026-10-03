@@ -32,13 +32,20 @@ var (
 		var out, errb bytes.Buffer
 		c.Stdout, c.Stderr = &out, &errb
 		if err := c.Run(); err != nil {
-			return "", fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(errb.String()))
+			ce := &cmdError{Name: name, ExitCode: -1, Stdout: out.String(), Stderr: errb.String(), Err: err}
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				ce.ExitCode = ee.ExitCode()
+			}
+			return "", ce
 		}
 		return out.String(), nil
 	}
 )
 
-// cmdError is a failed tool run. Callers read the exit code and streams to
+// cmdError is a failed tool run. Stdout is kept only so callers can tell an
+// empty result from a non-empty one; Error never prints it, because a tool's
+// stdout can be key material. Callers read the exit code and streams to
 // tell "not found" apart from any other failure.
 type cmdError struct {
 	Name           string
