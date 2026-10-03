@@ -8,6 +8,8 @@ import (
 	"context"
 	"io"
 	"io/fs"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // Result is the outcome of a Run call. A non-zero ExitCode is NOT reported as
@@ -39,11 +41,18 @@ type Executor interface {
 	Close() error
 }
 
-// SSHConfig configures NewSSH.
+// SSHConfig configures NewSSH and DialSSH.
 type SSHConfig struct {
 	Host        string
 	User        string
-	KeyPath     string
+	KeyPath     string // optional when an ssh-agent is available
 	HostKeyFile string
 	Port        int // 0 => 22
+	// Jump, if set, is dialled first and this host is reached through it
+	// (ProxyJump). It may itself have a Jump.
+	Jump *SSHConfig `json:"jump,omitempty"`
+	// HostKey overrides host-key checking. Nil keeps trust-on-first-use
+	// against HostKeyFile, which is what the web UI relies on until it moves
+	// onto agents. It is never persisted.
+	HostKey ssh.HostKeyCallback `json:"-"`
 }

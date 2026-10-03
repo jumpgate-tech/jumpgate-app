@@ -115,6 +115,40 @@ func writePrivateKey(t *testing.T, priv ed25519.PrivateKey) string {
 	return path
 }
 
+// writeTempKey writes a fresh client private key and returns its path.
+func writeTempKey(t *testing.T) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	return writePrivateKey(t, priv)
+}
+
+// startTestSSHDAcceptingOnly starts an sshd that authenticates only allowed.
+func startTestSSHDAcceptingOnly(t *testing.T, allowed ssh.PublicKey) testSSHD {
+	t.Helper()
+	d, _ := startTestSSHDWith(t, func(s gliderssh.Session) { _ = s.Exit(0) }, func(srv *gliderssh.Server) {
+		srv.PublicKeyHandler = func(_ gliderssh.Context, key gliderssh.PublicKey) bool {
+			return bytes.Equal(key.Marshal(), allowed.Marshal())
+		}
+	})
+	return d
+}
+
+// startTestSSHDWithForwarding starts an sshd that allows direct-tcpip, so it
+// can serve as a jump host.
+func startTestSSHDWithForwarding(t *testing.T) (testSSHD, string) {
+	t.Helper()
+	return startTestSSHDWith(t, func(s gliderssh.Session) { _ = s.Exit(0) }, func(srv *gliderssh.Server) {
+		srv.LocalPortForwardingCallback = func(gliderssh.Context, string, uint32) bool { return true }
+		srv.ChannelHandlers = map[string]gliderssh.ChannelHandler{
+			"session":      gliderssh.DefaultSessionHandler,
+			"direct-tcpip": gliderssh.DirectTCPIPHandler,
+		}
+	})
+}
+
 func newSSHConfig(t *testing.T, d testSSHD, keyPath string) SSHConfig {
 	t.Helper()
 	return SSHConfig{

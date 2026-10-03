@@ -12,9 +12,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,39 +32,19 @@ type sshExecutor struct {
 	kills  sync.WaitGroup
 }
 
-// NewSSH dials user@host:port (default port 22) using the private key at
-// cfg.KeyPath, verifying the remote host key against cfg.HostKeyFile using a
-// trust-on-first-use policy: an unknown host's key is appended to
-// HostKeyFile (created 0600 on first use); a known host presenting a
-// different key is rejected with an error.
-func NewSSH(cfg SSHConfig) (Executor, error) {
-	port := cfg.Port
-	if port == 0 {
-		port = 22
-	}
-	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(port))
+// NewSSH dials cfg with no caller deadline beyond the handshake timeout.
+func NewSSH(cfg SSHConfig) (Executor, error) { return NewSSHContext(context.Background(), cfg) }
 
-	keyBytes, err := os.ReadFile(cfg.KeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("read private key %s: %w", cfg.KeyPath, err)
-	}
-	signer, err := ssh.ParsePrivateKey(keyBytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse private key %s: %w", cfg.KeyPath, err)
-	}
-
-	config := &ssh.ClientConfig{
-		User:            cfg.User,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: tofuHostKeyCallback(cfg.HostKeyFile),
-		Timeout:         10 * time.Second,
-	}
-
-	client, err := ssh.Dial("tcp", addr, config)
+// NewSSHContext dials cfg (see DialSSH) and returns an executor over the
+// connection. With no cfg.HostKey the remote host key is verified against
+// cfg.HostKeyFile by trust-on-first-use: an unknown host's key is appended
+// (file created 0600 on first use); a known host presenting a different key
+// is rejected.
+func NewSSHContext(ctx context.Context, cfg SSHConfig) (Executor, error) {
+	client, err := DialSSH(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-
 	return &sshExecutor{client: client}, nil
 }
 
