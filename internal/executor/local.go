@@ -93,6 +93,10 @@ func (l *local) Run(ctx context.Context, cmd string, opts *RunOpts) (Result, err
 		return Result{}, err
 	}
 
+	if opts != nil && opts.Stdin != nil {
+		c.Stdin = opts.Stdin
+	}
+
 	if err := c.Start(); err != nil {
 		return Result{}, err
 	}

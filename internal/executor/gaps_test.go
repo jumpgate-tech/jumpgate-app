@@ -118,7 +118,7 @@ func TestLocalReadFile_RoundTripsAndReportsAMissingFile(t *testing.T) {
 // filepath.Dir there would emit `\var\lib\…` into the mkdir -p and break
 // every unit, config and JWT write against every Linux target.
 func TestWriteFileCmd_UsesPOSIXPathsAndQuotesEverything(t *testing.T) {
-	cmd := writeFileCmd("/var/lib/valve-node-app/erpc.yaml", []byte("hello"), 0o600)
+	cmd := writeFileCmd("/var/lib/valve-node-app/erpc.yaml", 0o600)
 
 	if strings.Contains(cmd, `\`) {
 		t.Errorf("a host separator leaked into the remote command: %s", cmd)
@@ -129,23 +129,20 @@ func TestWriteFileCmd_UsesPOSIXPathsAndQuotesEverything(t *testing.T) {
 	if !strings.Contains(cmd, "chmod 600") {
 		t.Errorf("the mode is not applied: %s", cmd)
 	}
-	// The content travels base64-encoded, so a payload with quotes, newlines
-	// or metacharacters cannot break out of the command.
-	if strings.Contains(cmd, "hello") {
-		t.Errorf("the payload was inlined rather than encoded: %s", cmd)
+	// The content travels on stdin, so a payload with quotes, newlines or
+	// metacharacters cannot break out of the command.
+	if !strings.Contains(cmd, "cat >") {
+		t.Errorf("the content is not read from stdin: %s", cmd)
 	}
 }
 
-func TestWriteFileCmd_AHostilePathAndPayloadStayQuoted(t *testing.T) {
-	cmd := writeFileCmd("/tmp/it's there/f", []byte("$(whoami)\n'; rm -rf /"), 0o644)
+func TestWriteFileCmd_AHostilePathStaysQuoted(t *testing.T) {
+	cmd := writeFileCmd("/tmp/it's there/f", 0o644)
 
 	// Single quotes in the path are escaped rather than terminating the
 	// quoted string.
-	if strings.Contains(cmd, "rm -rf /") {
-		t.Errorf("the payload reached the command line verbatim: %s", cmd)
-	}
-	if !strings.Contains(cmd, "base64 -d") {
-		t.Errorf("the payload is not decoded remotely: %s", cmd)
+	if !strings.Contains(cmd, `'/tmp/it'"'"'s there'`) {
+		t.Errorf("the path's single quote was not escaped: %s", cmd)
 	}
 }
 

@@ -70,7 +70,6 @@ func TestWriteFileCmd_BuildsPOSIXRemotePaths(t *testing.T) {
 	tests := []struct {
 		name        string
 		path        string
-		content     []byte
 		mode        fs.FileMode
 		wantMkdir   string
 		wantTargets string
@@ -79,35 +78,32 @@ func TestWriteFileCmd_BuildsPOSIXRemotePaths(t *testing.T) {
 		{
 			name:        "jwt secret",
 			path:        "/var/lib/valve-node-app/369/jwt.hex",
-			content:     []byte("0xdeadbeef"),
 			mode:        0o600,
 			wantMkdir:   "mkdir -p '/var/lib/valve-node-app/369'",
-			wantTargets: "> '/var/lib/valve-node-app/369/jwt.hex'",
-			wantChmod:   "chmod 600 '/var/lib/valve-node-app/369/jwt.hex'",
+			wantTargets: `mv -f "$tmp" '/var/lib/valve-node-app/369/jwt.hex'`,
+			wantChmod:   `chmod 600 "$tmp"`,
 		},
 		{
 			name:        "systemd unit",
 			path:        "/etc/systemd/system/valve-node-app-exec.service",
-			content:     []byte("[Unit]\n"),
 			mode:        0o644,
 			wantMkdir:   "mkdir -p '/etc/systemd/system'",
-			wantTargets: "> '/etc/systemd/system/valve-node-app-exec.service'",
-			wantChmod:   "chmod 644 '/etc/systemd/system/valve-node-app-exec.service'",
+			wantTargets: `mv -f "$tmp" '/etc/systemd/system/valve-node-app-exec.service'`,
+			wantChmod:   `chmod 644 "$tmp"`,
 		},
 		{
 			name:        "deeply nested config",
 			path:        "/opt/valve/etc/clients/lighthouse/config.toml",
-			content:     nil,
 			mode:        0o640,
 			wantMkdir:   "mkdir -p '/opt/valve/etc/clients/lighthouse'",
-			wantTargets: "> '/opt/valve/etc/clients/lighthouse/config.toml'",
-			wantChmod:   "chmod 640 '/opt/valve/etc/clients/lighthouse/config.toml'",
+			wantTargets: `mv -f "$tmp" '/opt/valve/etc/clients/lighthouse/config.toml'`,
+			wantChmod:   `chmod 640 "$tmp"`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd := writeFileCmd(tt.path, tt.content, tt.mode)
+			cmd := writeFileCmd(tt.path, tt.mode)
 
 			for _, want := range []string{tt.wantMkdir, tt.wantTargets, tt.wantChmod} {
 				if !strings.Contains(cmd, want) {

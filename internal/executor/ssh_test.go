@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -375,5 +376,58 @@ func TestSSH_TOFU_MismatchedHostKeyErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "host key") {
 		t.Errorf("error = %q, want it to contain %q", err.Error(), "host key")
+	}
+}
+
+// The content must never appear in the remote command line: any local user on
+// the target can read every process's arguments from /proc.
+func TestWriteFileCmdCarriesNoContent(t *testing.T) {
+	cmd := writeFileCmd("/etc/wireguard/jumpgate0.conf", 0o600)
+	for _, frag := range []string{"base64", "printf"} {
+		if strings.Contains(cmd, frag) {
+			t.Errorf("command still embeds content via %s: %s", frag, cmd)
+		}
+	}
+	if !strings.Contains(cmd, "umask 077") {
+		t.Errorf("temp file is not created under umask 077: %s", cmd)
+	}
+}
+
+// Parent directories keep the caller's umask. Only the temp file is created
+// 077, so a new directory a service must traverse is not made 0700 root.
+func TestWriteFileDoesNotTightenNewParentDirs(t *testing.T) {
+	cmd := writeFileCmd("/var/lib/x/y/file", 0o644)
+	mk := strings.Index(cmd, "mkdir -p")
+	um := strings.Index(cmd, "umask 077")
+	if mk < 0 || um < 0 || mk > um {
+		t.Fatalf("mkdir -p must run before umask 077 takes effect: %s", cmd)
+	}
+}
+
+func TestSSH_WriteFile_LargeContentAndMode(t *testing.T) {
+	d, keyPath := startTestSSHD(t)
+	ex, err := NewSSH(newSSHConfig(t, d, keyPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ex.Close()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "sub", "big.bin")
+	content := bytes.Repeat([]byte("0123456789abcdef"), 64*1024) // 1 MiB: far past ARG_MAX for argv
+	if err := ex.WriteFile(context.Background(), target, content, 0o640); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("content mismatch (err %v, %d bytes)", err, len(got))
+	}
+	fi, _ := os.Stat(target)
+	if fi.Mode().Perm() != 0o640 {
+		t.Fatalf("mode = %o, want 640", fi.Mode().Perm())
+	}
+	entries, _ := os.ReadDir(filepath.Dir(target))
+	if len(entries) != 1 {
+		t.Fatalf("temp file left behind: %v", entries)
 	}
 }

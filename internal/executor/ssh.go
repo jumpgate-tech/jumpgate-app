@@ -93,6 +93,10 @@ func (s *sshExecutor) Run(ctx context.Context, cmd string, opts *RunOpts) (Resul
 		return Result{}, fmt.Errorf("ssh stdout pipe: %w", err)
 	}
 
+	if opts != nil && opts.Stdin != nil {
+		session.Stdin = opts.Stdin
+	}
+
 	if err := session.Start(cmd); err != nil {
 		return Result{}, fmt.Errorf("start ssh command: %w", err)
 	}
@@ -137,11 +141,13 @@ func (s *sshExecutor) Run(ctx context.Context, cmd string, opts *RunOpts) (Resul
 	return result, nil
 }
 
-// WriteFile writes content to path on the remote host by piping a
-// base64-encoded copy through the remote `base64 -d` and setting mode with
-// `chmod`. No SFTP subsystem is required.
+// WriteFile writes content to path on the remote host. The content travels on
+// the session's stdin, never in the command line, where any local user on the
+// target could read it from /proc. It is written to a temp file created under
+// umask 077, chmod'ed, then renamed into place, so the file is never readable
+// wider than its final mode and a reader never sees it half-written.
 func (s *sshExecutor) WriteFile(ctx context.Context, path string, content []byte, mode fs.FileMode) error {
-	res, err := s.Run(ctx, writeFileCmd(path, content, mode), nil)
+	res, err := s.Run(ctx, writeFileCmd(path, mode), &RunOpts{Stdin: bytes.NewReader(content)})
 	if err != nil {
 		return err
 	}
@@ -151,21 +157,15 @@ func (s *sshExecutor) WriteFile(ctx context.Context, path string, content []byte
 	return nil
 }
 
-// writeFileCmd builds the single POSIX shell line that WriteFile ships to the
-// target. It is a pure function of its inputs — no client, no context — so the
-// remote path construction can be asserted directly in tests, on any host OS.
-// remoteDir (not filepath.Dir) is what keeps this correct when the control
-// plane is Windows: filepath.Dir would emit `\var\lib\...` into the mkdir -p,
-// breaking every unit/config/jwt write against every Linux target.
-func writeFileCmd(remotePath string, content []byte, mode fs.FileMode) string {
-	encoded := base64.StdEncoding.EncodeToString(content)
+// writeFileCmd builds the POSIX shell line WriteFile runs. mkdir -p runs
+// first, under the caller's umask, so a new parent directory a service must
+// traverse is not created 0700; only the temp file is created under 077.
+// remoteDir (not filepath.Dir) keeps this correct on a Windows control plane.
+func writeFileCmd(remotePath string, mode fs.FileMode) string {
+	q := shQuote(remotePath)
 	return fmt.Sprintf(
-		"mkdir -p %s && printf %%s %s | base64 -d > %s && chmod %o %s",
-		shQuote(remoteDir(remotePath)),
-		shQuote(encoded),
-		shQuote(remotePath),
-		mode.Perm(),
-		shQuote(remotePath),
+		"mkdir -p %s && (umask 077 && tmp=$(mktemp %s.XXXXXX) && cat > \"$tmp\" && chmod %o \"$tmp\" && mv -f \"$tmp\" %s || { rm -f \"$tmp\"; exit 1; })",
+		shQuote(remoteDir(remotePath)), shQuote(remotePath), mode.Perm(), q,
 	)
 }
 

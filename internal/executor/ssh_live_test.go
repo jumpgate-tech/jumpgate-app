@@ -175,6 +175,10 @@ func (s *sshServer) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 		s.calls = append(s.calls, payload.Command)
 		s.mu.Unlock()
 
+		// A real sshd lets the command read its stdin; drain it so the client's
+		// stdin copy finishes before the exit status arrives.
+		_, _ = io.Copy(io.Discard, ch)
+
 		r := s.replyFor(payload.Command)
 		_, _ = io.WriteString(ch, r.stdout)
 		_, _ = io.WriteString(ch.Stderr(), r.stderr)
@@ -288,9 +292,9 @@ func TestSSHRun_ACanceledContextStopsTheCommand(t *testing.T) {
 	}
 }
 
-// WriteFile round-trips through the real base64 pipeline: the executor
-// encodes, and the remote side is asked to decode into place.
-func TestSSHWriteFile_ShipsAnEncodedPayloadAndChecksTheExit(t *testing.T) {
+// WriteFile sends the content on stdin, so the command line that reaches the
+// server carries the destination and mode but never the payload.
+func TestSSHWriteFile_KeepsThePayloadOutOfTheCommandLine(t *testing.T) {
 	srv, key := newSSHServer(t)
 	e := srv.dial(t, key)
 
@@ -301,20 +305,15 @@ func TestSSHWriteFile_ShipsAnEncodedPayloadAndChecksTheExit(t *testing.T) {
 
 	var cmd string
 	for _, c := range srv.callLog() {
-		if strings.Contains(c, "base64 -d") {
+		if strings.Contains(c, "mktemp") {
 			cmd = c
 		}
 	}
 	if cmd == "" {
 		t.Fatal("no write command reached the server")
 	}
-	// The payload travels encoded, so YAML's newlines and quotes cannot
-	// break out of the shell command.
-	if strings.Contains(cmd, "chainId") {
-		t.Errorf("the payload was inlined rather than encoded: %s", cmd)
-	}
-	if !strings.Contains(cmd, base64.StdEncoding.EncodeToString(content)) {
-		t.Errorf("the encoded payload is not in the command: %s", cmd)
+	if strings.Contains(cmd, "chainId") || strings.Contains(cmd, base64.StdEncoding.EncodeToString(content)) {
+		t.Errorf("the payload was put in the command line: %s", cmd)
 	}
 	if !strings.Contains(cmd, "chmod 600") {
 		t.Errorf("the mode was not applied: %s", cmd)
@@ -325,7 +324,7 @@ func TestSSHWriteFile_ShipsAnEncodedPayloadAndChecksTheExit(t *testing.T) {
 // here leaves a gateway pointing at a config that was never written.
 func TestSSHWriteFile_AFailedRemoteWriteIsAnError(t *testing.T) {
 	srv, key := newSSHServer(t)
-	srv.script("base64 -d", reply{stderr: "No space left on device", exitCode: 1})
+	srv.script("mktemp", reply{stderr: "No space left on device", exitCode: 1})
 	e := srv.dial(t, key)
 
 	err := e.WriteFile(context.Background(), "/var/lib/valve-node-app/erpc.yaml", []byte("x"), 0o600)

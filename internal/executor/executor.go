@@ -6,6 +6,7 @@ package executor
 
 import (
 	"context"
+	"io"
 	"io/fs"
 )
 
@@ -20,9 +21,12 @@ type Result struct {
 // StreamFunc is called once per stdout line, in order, as it arrives.
 type StreamFunc func(line string)
 
-// RunOpts controls Run behavior. Stream may be nil.
+// RunOpts controls Run behavior. Every field may be zero.
 type RunOpts struct {
 	Stream StreamFunc
+	// Stdin, if set, is copied to the command's standard input. WriteFile
+	// uses it so file content never appears in a command line.
+	Stdin io.Reader
 }
 
 // Executor runs commands and moves files, either locally or over SSH.
