@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // ErrNoKeychain means this machine has no keychain tool. It is an error rather
@@ -45,7 +46,11 @@ func keychainCreate(ctx context.Context, ref string) (*Key, error) {
 	if !keychainNameRE.MatchString(ref) {
 		return nil, fmt.Errorf("signer: keychain item name %q may only contain letters, digits, '.', '_' and '-'", ref)
 	}
-	if keychainExists(ctx, tool, ref) {
+	exists, err := keychainExists(ctx, tool, ref)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
 		return nil, fmt.Errorf("%w: keychain item %q", ErrKeyExists, ref)
 	}
 	k, err := GenerateKey()
@@ -63,19 +68,45 @@ func keychainCreate(ctx context.Context, ref string) (*Key, error) {
 	if err != nil {
 		return nil, keychainErr("store", err)
 	}
-	return verifyStored(k, func() (*Key, error) { return keychainRead(ctx, ref) })
+	k2, err := verifyStored(k, func() (*Key, error) { return keychainRead(ctx, ref) })
+	if err != nil {
+		return nil, fmt.Errorf("signer: a key was written to keychain item %q (service %s) but could not be verified; inspect or remove that item by hand: %w", ref, keychainService, err)
+	}
+	return k2, nil
 }
 
-// keychainExists reports whether an item is already stored. A missing item
-// makes both tools exit non-zero.
-func keychainExists(ctx context.Context, tool, ref string) bool {
+// keychainNotFound recognises each tool's "no such item" result and nothing
+// else. Assumptions: `security` exits 44 (errSecItemNotFound); `secret-tool
+// lookup` exits 1 with empty stdout and empty stderr (a missing Secret Service
+// also exits 1, but prints an error, so it is not mistaken for absence).
+func keychainNotFound(tool string, err error) bool {
+	var ce *cmdError
+	if !errors.As(err, &ce) {
+		return false
+	}
+	if tool == "security" {
+		return ce.ExitCode == 44
+	}
+	return ce.ExitCode == 1 && strings.TrimSpace(ce.Stdout) == "" && strings.TrimSpace(ce.Stderr) == ""
+}
+
+// keychainExists reports whether an item is stored. It fails closed: only a
+// recognised not-found means absent, any other failure is an error, because
+// treating it as absent could replace a real key.
+func keychainExists(ctx context.Context, tool, ref string) (bool, error) {
 	var err error
 	if tool == "security" {
 		_, err = runCmd(ctx, "", "security", "find-generic-password", "-a", ref, "-s", keychainService)
 	} else {
 		_, err = runCmd(ctx, "", "secret-tool", "lookup", "service", keychainService, "account", ref)
 	}
-	return err == nil
+	switch {
+	case err == nil:
+		return true, nil
+	case keychainNotFound(tool, err):
+		return false, nil
+	}
+	return false, keychainErr("existence check failed", err)
 }
 
 // keychainErr wraps a tool failure. On Linux the usual cause is a headless box
@@ -99,6 +130,9 @@ func keychainRead(ctx context.Context, ref string) (*Key, error) {
 		return nil, ErrNoKeychain
 	}
 	if err != nil {
+		if keychainNotFound(keychainTool(), err) {
+			return nil, fmt.Errorf("signer: keychain read: no item %q: %w", ref, err)
+		}
 		return nil, keychainErr("read", err)
 	}
 	return keyFromHex(out)

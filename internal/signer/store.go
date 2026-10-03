@@ -38,6 +38,21 @@ var (
 	}
 )
 
+// cmdError is a failed tool run. Callers read the exit code and streams to
+// tell "not found" apart from any other failure.
+type cmdError struct {
+	Name           string
+	ExitCode       int
+	Stdout, Stderr string
+	Err            error
+}
+
+func (e *cmdError) Error() string {
+	return fmt.Sprintf("%s: %v: %s", e.Name, e.Err, strings.TrimSpace(e.Stderr))
+}
+
+func (e *cmdError) Unwrap() error { return e.Err }
+
 // DefaultStore prefers the OS keychain and falls back to a key file only when
 // no keychain tool exists, as on a headless box.
 func DefaultStore() Store {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -32,8 +33,17 @@ func onePasswordCreate(ctx context.Context, ref string) (*Key, error) {
 	if lookPath("op") != nil {
 		return nil, fmt.Errorf("signer: the 1Password CLI `op` is not installed")
 	}
-	if _, err := runCmd(ctx, "", "op", "item", "get", item, "--vault", vault); err == nil {
+	// Fail closed: only op's "isn't an item" (assumed message text) means absent.
+	// Any other failure could hide an existing item, and creating then would
+	// leave a duplicate that makes `op read` ambiguous.
+	_, getErr := runCmd(ctx, "", "op", "item", "get", item, "--vault", vault)
+	var ce *cmdError
+	switch {
+	case getErr == nil:
 		return nil, fmt.Errorf("%w: 1Password item %q in vault %q", ErrKeyExists, item, vault)
+	case errors.As(getErr, &ce) && strings.Contains(ce.Stderr, "isn't an item"):
+	default:
+		return nil, fmt.Errorf("signer: 1Password existence check failed: %w", getErr)
 	}
 	k, err := GenerateKey()
 	if err != nil {
@@ -66,10 +76,25 @@ func onePasswordCreate(ctx context.Context, ref string) (*Key, error) {
 	if err := f.Close(); err != nil {
 		return nil, err
 	}
-	if _, err := runCmd(ctx, "", "op", "item", "create", "--vault", vault, "--template", path); err != nil {
+	out, err := runCmd(ctx, "", "op", "item", "create", "--vault", vault, "--template", path, "--format", "json")
+	if err != nil {
 		return nil, fmt.Errorf("signer: 1Password store: %w", err)
 	}
-	return verifyStored(k, func() (*Key, error) { return onePasswordRead(ctx, ref) })
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(out), &created); err != nil || created.ID == "" {
+		return nil, fmt.Errorf("signer: a 1Password item %q was created in vault %q but its id could not be read, so it was not removed; delete it by hand", item, vault)
+	}
+	k2, err := verifyStored(k, func() (*Key, error) { return onePasswordRead(ctx, ref) })
+	if err != nil {
+		// Roll back exactly the item just created, by id.
+		if _, delErr := runCmd(ctx, "", "op", "item", "delete", created.ID, "--vault", vault); delErr != nil {
+			return nil, fmt.Errorf("signer: 1Password item %s was created in vault %q but could not be verified, and removing it failed (%v); delete item %s by hand: %w", created.ID, vault, delErr, created.ID, err)
+		}
+		return nil, fmt.Errorf("signer: 1Password item %s could not be verified and was removed: %w", created.ID, err)
+	}
+	return k2, nil
 }
 
 func onePasswordRead(ctx context.Context, ref string) (*Key, error) {

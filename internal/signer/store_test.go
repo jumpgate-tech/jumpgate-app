@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -189,12 +190,24 @@ func TestKeychainRejectsNamesThatCouldInjectIntoTheSecurityCommandLine(t *testin
 	}
 }
 
+// notFound is what each real tool reports for a missing item.
+func notFound(tool string) error {
+	switch tool {
+	case "security":
+		return &cmdError{Name: tool, ExitCode: 44, Stderr: "could not be found", Err: errors.New("exit status 44")}
+	case "op":
+		return &cmdError{Name: tool, ExitCode: 1, Stderr: `"x" isn't an item`, Err: errors.New("exit status 1")}
+	}
+	return &cmdError{Name: tool, ExitCode: 1, Err: errors.New("exit status 1")}
+}
+
 // memStore simulates the three backends in memory: stores on the write
 // commands, errors like the real tools when an item is missing.
 func memStore(f *fakeRunner) func(string, string, []string) (string, error) {
 	items := map[string]string{}
-	missing := errors.New("exit status 1")
+	nextID := 0
 	return func(stdin, name string, args []string) (string, error) {
+		missing := notFound(name)
 		switch {
 		case name == "security" && args[0] == "-i":
 			fs := strings.Fields(stdin)
@@ -225,12 +238,30 @@ func memStore(f *fakeRunner) func(string, string, []string) (string, error) {
 				Title  string
 				Fields []struct{ ID, Value string }
 			}
-			b, _ := os.ReadFile(args[len(args)-1])
+			tpath := ""
+			for i, a := range args {
+				if a == "--template" {
+					tpath = args[i+1]
+				}
+			}
+			b, _ := os.ReadFile(tpath)
 			if err := json.Unmarshal(b, &tm); err != nil {
 				return "", err
 			}
 			items["op:"+tm.Title] = tm.Fields[0].Value
 			items["opref:"+args[3]+"/"+tm.Title+"/"+tm.Fields[0].ID] = tm.Fields[0].Value
+			nextID++
+			id := fmt.Sprintf("id%d", nextID)
+			items["opid:"+id] = tm.Title
+			return `{"id":"` + id + `"}`, nil
+		case name == "op" && args[0] == "item" && args[1] == "delete":
+			title := items["opid:"+args[2]]
+			delete(items, "op:"+title)
+			for k := range items {
+				if strings.HasPrefix(k, "opref:") && strings.Contains(k, "/"+title+"/") {
+					delete(items, k)
+				}
+			}
 		case name == "op" && args[0] == "read":
 			v, ok := items["opref:"+strings.TrimPrefix(args[1], "op://")]
 			if !ok {
@@ -307,7 +338,7 @@ func TestCreateFailsWhenTheReadBackIsEmptyOrDifferent(t *testing.T) {
 					(name == "secret-tool" && args[0] == "lookup") || (name == "op" && args[0] == "read")
 				switch {
 				case isCheck && f.nStores == 0:
-					return "", errors.New("exit status 1")
+					return "", notFound(name)
 				case isRead:
 					if readBack == "" {
 						return "", nil
@@ -367,5 +398,126 @@ func TestOnePasswordTemplateIs0600AndRemovedWhenOpFails(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("template %s left on disk after op failed", path)
 		}
+	}
+}
+
+type storeCase struct {
+	store Store
+	goos  string
+	tool  string
+	ref   string
+}
+
+var allStoreCases = []storeCase{
+	{StoreKeychain, "darwin", "security", "controller"},
+	{StoreKeychain, "linux", "secret-tool", "controller"},
+	{StoreOnePassword, "darwin", "op", "op://Private/jumpgate-controller/credential"},
+}
+
+func isWrite(c []string) bool {
+	j := strings.Join(c, " ")
+	return strings.HasPrefix(j, "security -i") || strings.HasPrefix(j, "secret-tool store") || strings.Contains(j, "item create")
+}
+
+func TestExistenceCheckFailureThatIsNotNotFoundAbortsCreate(t *testing.T) {
+	transient := map[string]error{
+		"security":    &cmdError{Name: "security", ExitCode: 36, Stderr: "User interaction is not allowed", Err: errors.New("exit status 36")},
+		"secret-tool": &cmdError{Name: "secret-tool", ExitCode: 1, Stderr: "Cannot autolaunch D-Bus", Err: errors.New("exit status 1")},
+		"op":          &cmdError{Name: "op", ExitCode: 1, Stderr: "You are not signed in", Err: errors.New("exit status 1")},
+	}
+	for _, c := range allStoreCases {
+		f := &fakeRunner{}
+		f.fn = func(_, _ string, _ []string) (string, error) { return "", transient[c.tool] }
+		withRunner(t, f, c.goos, c.tool)
+		_, err := Create(context.Background(), c.store, c.ref)
+		if err == nil || errors.Is(err, ErrKeyExists) || !strings.Contains(err.Error(), "existence check failed") {
+			t.Fatalf("%s/%s: err = %v", c.store, c.goos, err)
+		}
+		for _, call := range f.calls {
+			if isWrite(call) {
+				t.Fatalf("%s/%s: store command ran: %v", c.store, c.goos, call)
+			}
+		}
+	}
+}
+
+func TestRecognisedNotFoundLetsCreateProceed(t *testing.T) {
+	for _, c := range allStoreCases {
+		f := &fakeRunner{}
+		f.fn = memStore(f)
+		withRunner(t, f, c.goos, c.tool)
+		if _, err := Create(context.Background(), c.store, c.ref); err != nil {
+			t.Fatalf("%s/%s: %v", c.store, c.goos, err)
+		}
+	}
+}
+
+func TestOnePasswordRollsBackExactlyTheCreatedItem(t *testing.T) {
+	f := &fakeRunner{}
+	mem := memStore(f)
+	f.fn = func(stdin, name string, args []string) (string, error) {
+		if name == "op" && args[0] == "read" {
+			return "", notFound("op") // the read-back fails
+		}
+		return mem(stdin, name, args)
+	}
+	withRunner(t, f, "darwin", "op")
+	k, err := Create(context.Background(), StoreOnePassword, "op://Private/jumpgate-controller/credential")
+	if err == nil || k != nil {
+		t.Fatalf("Create = %v, %v", k, err)
+	}
+	var deletes [][]string
+	for _, c := range f.calls {
+		if len(c) > 2 && c[1] == "item" && c[2] == "delete" {
+			deletes = append(deletes, c)
+		}
+	}
+	if len(deletes) != 1 || strings.Join(deletes[0], " ") != "op item delete id1 --vault Private" {
+		t.Fatalf("deletes = %v", deletes)
+	}
+}
+
+func TestOnePasswordReportsTheIdWhenRollbackFails(t *testing.T) {
+	f := &fakeRunner{}
+	mem := memStore(f)
+	f.fn = func(stdin, name string, args []string) (string, error) {
+		if name == "op" && args[0] == "read" {
+			return "", notFound("op")
+		}
+		if name == "op" && args[1] == "delete" {
+			return "", errors.New("vault locked")
+		}
+		return mem(stdin, name, args)
+	}
+	withRunner(t, f, "darwin", "op")
+	_, err := Create(context.Background(), StoreOnePassword, "op://Private/jumpgate-controller/credential")
+	if err == nil || !strings.Contains(err.Error(), "id1") || !strings.Contains(err.Error(), "by hand") {
+		t.Fatalf("err = %v, want the item id and a by-hand instruction", err)
+	}
+}
+
+func TestKeychainVerifyFailureSaysWhatWasWritten(t *testing.T) {
+	f := &fakeRunner{}
+	mem := memStore(f)
+	f.fn = func(stdin, name string, args []string) (string, error) {
+		if name == "security" && args[0] == "find-generic-password" && args[len(args)-1] == "-w" {
+			return "", notFound("security")
+		}
+		return mem(stdin, name, args)
+	}
+	withRunner(t, f, "darwin", "security")
+	_, err := Create(context.Background(), StoreKeychain, "controller")
+	if err == nil || !strings.Contains(err.Error(), "was written to keychain item") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPlainNotFoundOnLinuxReadHasNoServiceHint(t *testing.T) {
+	f := &fakeRunner{}
+	f.fn = memStore(f)
+	withRunner(t, f, "linux", "secret-tool")
+	_, err := Open(context.Background(), StoreKeychain, "nope")
+	if err == nil || strings.Contains(err.Error(), "Secret Service") {
+		t.Fatalf("err = %v", err)
 	}
 }
