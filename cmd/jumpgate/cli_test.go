@@ -660,3 +660,62 @@ func TestMigrateOnStartup(t *testing.T) {
 		t.Errorf("agent run migrated controller state: %v", err)
 	}
 }
+
+// M3: re-running hosts add on an existing name re-pairs the stored address,
+// so a different --ssh (or --jump, or --local) is refused up front rather
+// than confirming keys for one address and pairing another.
+func TestHostsAddRefusesToRepointAnExistingTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	_, err := config.Update(func(c *config.Config) error {
+		c.Targets = append(c.Targets,
+			config.Target{ID: "box", Mode: "ssh", SSH: &executor.SSHConfig{Host: "203.0.113.7", User: "root"}},
+			config.Target{ID: "here", Mode: "local"})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := []struct {
+		name      string
+		local     bool
+		ssh, jump string
+	}{
+		{"box", false, "root@203.0.113.8", ""},
+		{"box", false, "ops@203.0.113.7", ""},
+		{"box", false, "root@203.0.113.7:2222", ""},
+		{"box", false, "root@203.0.113.7", "ops@198.51.100.1"},
+		{"box", true, "", ""},
+		{"here", false, "root@203.0.113.7", ""},
+	}
+	for _, c := range refused {
+		err := checkExistingTarget(c.name, c.local, c.ssh, c.jump)
+		if err == nil || !strings.Contains(err.Error(), "already exists") || !strings.Contains(err.Error(), "remove") {
+			t.Errorf("%+v: err = %v, want a refusal saying how to remove and re-add", c, err)
+		}
+	}
+	for _, c := range []struct {
+		name      string
+		local     bool
+		ssh, jump string
+	}{
+		{"box", false, "root@203.0.113.7", ""},
+		{"box", false, "root@203.0.113.7:22", ""},
+		{"here", true, "", ""},
+		{"new", false, "root@203.0.113.9", ""},
+	} {
+		if err := checkExistingTarget(c.name, c.local, c.ssh, c.jump); err != nil {
+			t.Errorf("%+v: %v, want allowed", c, err)
+		}
+	}
+
+	// The refusal comes before any host-key prompt or capture.
+	if code := hostsAdd([]string{"box", "--ssh", "root@127.0.0.1:1"}); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	confirmed, _ := config.ConfirmedHostsFile()
+	if _, err := os.Stat(confirmed); err == nil {
+		t.Fatal("confirmed_hosts was written")
+	}
+}

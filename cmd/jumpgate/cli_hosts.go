@@ -62,6 +62,13 @@ func hostsAdd(args []string) int {
 		return usage("give exactly one of --ssh or --local")
 	}
 
+	if err := checkExistingTarget(name, *local, *sshArg, *jumpArg); err != nil {
+		if errors.Is(err, errBadAddress) {
+			return usage("%v", err)
+		}
+		return failed("%v", err)
+	}
+
 	ctx := context.Background()
 	target := map[string]any{"id": name, "mode": "local"}
 	if !*local {
@@ -111,6 +118,72 @@ func hostsAdd(args []string) int {
 		fmt.Printf("target %s already exists; pairing it again\n", name)
 	}
 	return streamPair(info, name, *sudo)
+}
+
+// errBadAddress marks an --ssh or --jump value that does not parse.
+var errBadAddress = errors.New("bad address")
+
+// checkExistingTarget refuses to re-run hosts add on an existing name with a
+// different address. Re-pairing pairs the address on record, so accepting a
+// new --ssh would confirm host keys for one box and pair another while the
+// operator believes the host was re-pointed.
+func checkExistingTarget(name string, local bool, sshArg, jumpArg string) error {
+	c, err := config.Load()
+	if err != nil {
+		return err
+	}
+	t, ok := findTargetByID(c, name)
+	if !ok {
+		return nil
+	}
+	recorded, want := describeTarget(t), "this machine (--local)"
+	if !local {
+		u, h, p, err := parseSSHTarget(sshArg)
+		if err != nil {
+			return fmt.Errorf("%w: --ssh: %v", errBadAddress, err)
+		}
+		want = sshAddr(u, h, p)
+		if jumpArg != "" {
+			ju, jh, jp, err := parseSSHTarget(jumpArg)
+			if err != nil {
+				return fmt.Errorf("%w: --jump: %v", errBadAddress, err)
+			}
+			want += " via " + sshAddr(ju, jh, jp)
+		}
+	}
+	if recorded == want {
+		return nil
+	}
+	return fmt.Errorf("target %s already exists for %s, not %s; re-running hosts add re-pairs the address on record. To point %s at a new address, remove it in the web app first (which forgets its pairing), then run `jumpgate hosts add %s` again", name, recorded, want, name, name)
+}
+
+func findTargetByID(c config.Config, id string) (config.Target, bool) {
+	for _, t := range c.Targets {
+		if t.ID == id {
+			return t, true
+		}
+	}
+	return config.Target{}, false
+}
+
+// describeTarget renders a target's address the way checkExistingTarget
+// renders the flags, so equal addresses compare equal.
+func describeTarget(t config.Target) string {
+	if t.Mode != "ssh" || t.SSH == nil {
+		return "this machine (--local)"
+	}
+	s := sshAddr(t.SSH.User, t.SSH.Host, t.SSH.Port)
+	if j := t.SSH.Jump; j != nil {
+		s += " via " + sshAddr(j.User, j.Host, j.Port)
+	}
+	return s
+}
+
+func sshAddr(user, host string, port int) string {
+	if port == 0 {
+		port = 22
+	}
+	return user + "@" + net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // maxConsentLine bounds what the confirmation prompt will read while waiting
