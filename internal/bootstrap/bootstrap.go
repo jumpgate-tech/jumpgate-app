@@ -12,12 +12,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -174,7 +176,8 @@ func (r runner) upload(arch string) error {
 }
 
 func (r runner) user() error {
-	_, err := r.sh("user", "getent group jumpgate >/dev/null || groupadd --system jumpgate; "+
+	// Older shadow-utils' --create-home does not create parent directories.
+	_, err := r.sh("user", "install -d -m 0755 "+path.Dir(HomeDir)+"; getent group jumpgate >/dev/null || groupadd --system jumpgate; "+
 		"id -u jumpgate >/dev/null 2>&1 || useradd --system --gid jumpgate --home-dir "+HomeDir+
 		" --create-home --shell /usr/sbin/nologin jumpgate")
 	return err
@@ -184,39 +187,100 @@ func (r runner) sshd() error {
 	if r.o.Local {
 		return nil
 	}
-	if err := r.o.Exec.WriteFile(r.ctx, DropInPath, []byte(sshdDropIn), 0o644); err != nil {
+	// Validate the key before touching the box: a malformed or multi-line key
+	// must never reach authorized_keys.
+	key, err := canonicalTransportKey(r.o.TransportKey)
+	if err != nil {
 		return &StepError{Step: "sshd", Err: err}
 	}
-	if _, err := r.sh("sshd", "PATH=$PATH:/usr/sbin:/sbin sshd -t"); err != nil {
-		_, _ = r.o.Exec.Run(r.ctx, "rm -f "+DropInPath, nil)
+	if err := r.dropIn(); err != nil {
 		return err
 	}
 	if _, err := r.sh("sshd", "systemctl reload ssh 2>/dev/null || systemctl reload sshd"); err != nil {
 		return err
 	}
+	return r.authorize(key)
+}
 
-	if strings.TrimSpace(r.o.TransportKey) == "" {
-		return &StepError{Step: "sshd", Err: fmt.Errorf("no transport key to authorize")}
+// dropIn installs the sshd drop-in, validates it, and on failure puts back
+// whatever was there before: deleting a previously good drop-in would strip
+// the Match restrictions while authorized_keys still allows forwarding.
+func (r runner) dropIn() error {
+	backup := DropInPath + ".jumpgate-bak"
+	if _, err := r.sh("sshd", fmt.Sprintf("if [ -e %s ]; then cp -p %s %s; else rm -f %s; fi", DropInPath, DropInPath, backup, backup)); err != nil {
+		return err
 	}
-	line := `restrict,port-forwarding,command="/bin/false" ` + strings.TrimSpace(r.o.TransportKey)
-	keyField := strings.Fields(r.o.TransportKey)
-	existing, _ := r.o.Exec.ReadFile(r.ctx, AuthorizedKeys)
-	if len(keyField) >= 2 && hasKeyBlob(string(existing), keyField[1]) {
-		return nil
+	if err := r.o.Exec.WriteFile(r.ctx, DropInPath, []byte(sshdDropIn), 0o644); err != nil {
+		return &StepError{Step: "sshd", Err: err}
+	}
+	// sshd is usually not on PATH for `sudo -n sh -c`.
+	if _, err := r.sh("sshd", "PATH=$PATH:/usr/sbin:/sbin sshd -t"); err != nil {
+		_, _ = r.o.Exec.Run(r.ctx, fmt.Sprintf("if [ -e %s ]; then mv -f %s %s; else rm -f %s; fi", backup, backup, DropInPath, DropInPath), nil)
+		return err
+	}
+	_, _ = r.o.Exec.Run(r.ctx, "rm -f "+backup, nil)
+	return nil
+}
+
+// authorize appends the restricted key line unless the key is already there,
+// and always leaves authorized_keys owned by the tunnel user so a re-pair
+// repairs a half-finished earlier attempt.
+func (r runner) authorize(key string) error {
+	blob := strings.Fields(key)[1]
+	// Decide existence explicitly: a failed read must never be mistaken for
+	// "no keys", or every other controller's key would be overwritten.
+	res, err := r.o.Exec.Run(r.ctx, "test -e "+AuthorizedKeys, nil)
+	if err != nil {
+		return &StepError{Step: "sshd", Err: err}
+	}
+	var existing []byte
+	switch res.ExitCode {
+	case 0:
+		existing, err = r.o.Exec.ReadFile(r.ctx, AuthorizedKeys)
+		if err != nil {
+			return &StepError{Step: "sshd", Err: fmt.Errorf("authorized_keys exists but cannot be read; refusing to overwrite it: %w", err)}
+		}
+	case 1:
+	default:
+		return &StepError{Step: "sshd", Err: fmt.Errorf("`test -e %s` exited %d: %s", AuthorizedKeys, res.ExitCode, tail(res.Stderr))}
+	}
+	if _, err := r.sh("sshd", "install -d -m 0700 -o jumpgate -g jumpgate "+HomeDir+"/.ssh"); err != nil {
+		return err
+	}
+	if hasKeyBlob(string(existing), blob) {
+		_, err := r.sh("sshd", "chown jumpgate:jumpgate "+AuthorizedKeys+" && chmod 0600 "+AuthorizedKeys)
+		return err
 	}
 	merged := strings.TrimRight(string(existing), "\n")
 	if merged != "" {
 		merged += "\n"
 	}
-	merged += line + "\n"
-	if _, err := r.sh("sshd", "install -d -m 0700 -o jumpgate -g jumpgate "+HomeDir+"/.ssh"); err != nil {
-		return err
-	}
-	if err := r.o.Exec.WriteFile(r.ctx, AuthorizedKeys, []byte(merged), 0o600); err != nil {
+	merged += `restrict,port-forwarding,command="/bin/false" ` + key + "\n"
+	// Stage, hand to the tunnel user, then rename: the final path is never
+	// root-owned, so an interruption cannot lock every tunnel login out.
+	tmp := AuthorizedKeys + ".new"
+	if err := r.o.Exec.WriteFile(r.ctx, tmp, []byte(merged), 0o600); err != nil {
 		return &StepError{Step: "sshd", Err: err}
 	}
-	_, err := r.sh("sshd", "chown jumpgate:jumpgate "+AuthorizedKeys)
+	_, err = r.sh("sshd", fmt.Sprintf("chown jumpgate:jumpgate %s && chmod 0600 %s && mv -f %s %s", tmp, tmp, tmp, AuthorizedKeys))
 	return err
+}
+
+// canonicalTransportKey accepts exactly one bare public key and returns its
+// canonical "type base64" form. Options, a second key, or a newline would
+// otherwise add an unrestricted authorized_keys line.
+func canonicalTransportKey(s string) (string, error) {
+	pub, _, opts, rest, err := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(s)))
+	if err != nil {
+		return "", fmt.Errorf("transport key: %w", err)
+	}
+	if len(opts) > 0 {
+		return "", fmt.Errorf("transport key must not carry options")
+	}
+	if len(strings.TrimSpace(string(rest))) > 0 {
+		return "", fmt.Errorf("transport key must be a single line")
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), nil
 }
 
 func (r runner) identity() (eip712.Address, error) {
@@ -266,12 +330,14 @@ func (r runner) service() error {
 	if _, err := r.sh("service", "systemctl daemon-reload && systemctl enable --now jumpgate-agent.service && systemctl restart jumpgate-agent.service"); err != nil {
 		return err
 	}
-	out, err := r.sh("service", "systemctl is-active jumpgate-agent.service")
+	// is-active exits 3 and prints the state when the unit is not active, so
+	// the state is read whatever the exit code.
+	res, err := r.o.Exec.Run(r.ctx, "systemctl is-active jumpgate-agent.service", nil)
 	if err != nil {
-		return err
+		return &StepError{Step: "service", Err: err}
 	}
-	if strings.TrimSpace(out) != "active" {
-		return &StepError{Step: "service", Err: fmt.Errorf("jumpgate-agent.service is %s; see journalctl -u jumpgate-agent", strings.TrimSpace(out))}
+	if state := strings.TrimSpace(res.Stdout); state != "active" {
+		return &StepError{Step: "service", Err: fmt.Errorf("jumpgate-agent.service is %q; see journalctl -u jumpgate-agent", state)}
 	}
 	return nil
 }
