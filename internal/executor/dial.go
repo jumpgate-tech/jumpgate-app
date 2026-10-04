@@ -47,7 +47,8 @@ func DialSSH(ctx context.Context, cfg SSHConfig) (*ssh.Client, error) {
 	}
 	// No ClientConfig.Timeout: the connect is bounded by dialCtx and the
 	// handshake by the watchdog below.
-	clientCfg := &ssh.ClientConfig{User: cfg.User, Auth: auth, HostKeyCallback: hostKey}
+	algos := hostKeyAlgorithms(cfg, addr)
+	clientCfg := &ssh.ClientConfig{User: cfg.User, Auth: auth, HostKeyCallback: hostKey, HostKeyAlgorithms: algos}
 
 	var conn net.Conn
 	if cfg.Jump != nil {
@@ -56,6 +57,9 @@ func DialSSH(ctx context.Context, cfg SSHConfig) (*ssh.Client, error) {
 			// A strict dial must never trust-on-first-use its jump host;
 			// the callback is keyed by hostname, so it serves both hops.
 			jumpCfg.HostKey = cfg.HostKey
+			if jumpCfg.HostKeyAlgorithms == nil {
+				jumpCfg.HostKeyAlgorithms = cfg.HostKeyAlgorithms
+			}
 		}
 		jump, err := DialSSH(dialCtx, jumpCfg)
 		if err != nil {
@@ -96,7 +100,7 @@ func DialSSH(ctx context.Context, cfg SSHConfig) (*ssh.Client, error) {
 			}
 			return nil, fmt.Errorf("ssh handshake with %s: %w", addr, cerr)
 		}
-		return nil, err
+		return nil, noCommonHostKey(err, addr, algos)
 	}
 	return ssh.NewClient(c, chans, reqs), nil
 }

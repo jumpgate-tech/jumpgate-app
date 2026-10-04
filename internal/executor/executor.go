@@ -55,4 +55,10 @@ type SSHConfig struct {
 	// against HostKeyFile, which is what the web UI relies on until it moves
 	// onto agents. It is never persisted.
 	HostKey ssh.HostKeyCallback `json:"-"`
+	// HostKeyAlgorithms, if set, names the host-key algorithms to ask a
+	// host:port for, most preferred first; an empty answer keeps x/crypto's
+	// defaults. Strict callers set it to KnownHostKeyAlgorithms so the host
+	// presents the key type on record rather than whichever one x/crypto
+	// prefers. It is never persisted.
+	HostKeyAlgorithms func(hostport string) []string `json:"-"`
 }

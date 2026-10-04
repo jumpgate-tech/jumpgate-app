@@ -77,13 +77,13 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	if local {
 		priv = executor.Sudo(s.newLocalExecutor())
 	} else {
-		hostKey, err := strictHostKey()
+		hostKey, algos, err := strictHostKey()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		login := *t.SSH
-		login.HostKey = hostKey
+		login.HostKey, login.HostKeyAlgorithms = hostKey, algos
 		ex, err := executor.NewSSHContext(ctx, login)
 		var unknown *executor.UnknownHostError
 		if errors.As(err, &unknown) {

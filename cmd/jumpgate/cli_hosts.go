@@ -137,17 +137,17 @@ func sshConfigFrom(login, key, jump string) (executor.SSHConfig, error) {
 	if err != nil {
 		return executor.SSHConfig{}, err
 	}
-	check, err := strictCheck()
+	check, algos, err := strictCheck()
 	if err != nil {
 		return executor.SSHConfig{}, err
 	}
-	cfg := executor.SSHConfig{Host: host, Port: port, User: user, KeyPath: key, HostKeyFile: jgFile("known_hosts"), HostKey: check}
+	cfg := executor.SSHConfig{Host: host, Port: port, User: user, KeyPath: key, HostKeyFile: jgFile("known_hosts"), HostKey: check, HostKeyAlgorithms: algos}
 	if jump != "" {
 		ju, jh, jp, err := parseSSHTarget(jump)
 		if err != nil {
 			return executor.SSHConfig{}, fmt.Errorf("--jump: %w", err)
 		}
-		cfg.Jump = &executor.SSHConfig{Host: jh, Port: jp, User: ju, KeyPath: key, HostKeyFile: jgFile("known_hosts"), HostKey: check}
+		cfg.Jump = &executor.SSHConfig{Host: jh, Port: jp, User: ju, KeyPath: key, HostKeyFile: jgFile("known_hosts"), HostKey: check, HostKeyAlgorithms: algos}
 	}
 	return cfg, nil
 }
@@ -155,16 +155,19 @@ func sshConfigFrom(login, key, jump string) (executor.SSHConfig, error) {
 // strictCheck is the host-key policy for pairing: keys a person confirmed
 // (the confirmed-hosts file) or listed in the operator's OpenSSH known_hosts.
 // It is deliberately not the trust-on-first-use file, which Strict never reads.
-func strictCheck() (ssh.HostKeyCallback, error) {
+// The second result asks each host for the key types those files hold, so a
+// host known by one type is not mistaken for a changed one.
+func strictCheck() (ssh.HostKeyCallback, func(string) []string, error) {
 	confirmed, err := config.ConfirmedHostsFile()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return executor.Strict(confirmed, filepath.Join(home, ".ssh", "known_hosts")), nil
+	known := filepath.Join(home, ".ssh", "known_hosts")
+	return executor.Strict(confirmed, known), executor.KnownHostKeyAlgorithms(confirmed, known), nil
 }
 
 // hostPort is the exact address string DialSSH hands the host-key callback,
@@ -187,7 +190,7 @@ func confirmHostKeys(ctx context.Context, cfg executor.SSHConfig, in *bufio.Read
 		fmt.Fprintf(errw, "jumpgate: "+format+"\n", a...)
 		return exitCode("failed")
 	}
-	check, err := strictCheck()
+	check, algos, err := strictCheck()
 	if err != nil {
 		return failedTo("%v", err)
 	}
@@ -201,15 +204,16 @@ func confirmHostKeys(ctx context.Context, cfg executor.SSHConfig, in *bufio.Read
 	if cfg.Jump != nil {
 		j := *cfg.Jump
 		j.Jump, j.HostKey = nil, nil // confirm the jump host by a direct connection
+		j.HostKeyAlgorithms = algos
 		hops = append(hops, hop{j})
 	}
 	target := cfg
 	if cfg.Jump != nil {
 		j := *cfg.Jump
-		j.HostKey = check
+		j.HostKey, j.HostKeyAlgorithms = check, algos
 		target.Jump = &j
 	}
-	target.HostKey = check
+	target.HostKey, target.HostKeyAlgorithms = check, algos
 	hops = append(hops, hop{target})
 
 	for _, h := range hops {

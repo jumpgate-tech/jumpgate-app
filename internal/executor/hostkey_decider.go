@@ -3,6 +3,8 @@ package executor
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
@@ -17,6 +19,31 @@ import (
 
 // ErrUnknownHost marks a host whose key nobody has confirmed yet.
 var ErrUnknownHost = errors.New("unknown SSH host")
+
+// ErrHostKeyMismatch marks a host whose presented key contradicts one on
+// record (or is revoked): a possible man-in-the-middle, or a rebuilt host.
+// Callers report it as a security failure, never as an outage.
+var ErrHostKeyMismatch = errors.New("SSH host key mismatch")
+
+// mismatchError carries a mismatch's own message and wraps both the sentinel
+// and any underlying cause.
+type mismatchError struct {
+	msg   string
+	cause error
+}
+
+func (e *mismatchError) Error() string { return e.msg }
+
+func (e *mismatchError) Unwrap() []error {
+	if e.cause == nil {
+		return []error{ErrHostKeyMismatch}
+	}
+	return []error{ErrHostKeyMismatch, e.cause}
+}
+
+func mismatchf(cause error, format string, a ...any) error {
+	return &mismatchError{msg: fmt.Sprintf(format, a...), cause: cause}
+}
 
 // UnknownHostError carries what an operator needs to confirm a host: its
 // address and key fingerprint.
@@ -68,9 +95,9 @@ func Strict(confirmedFile string, opensshFiles ...string) ssh.HostKeyCallback {
 			case err == nil:
 				opensshOK = true
 			case errors.As(err, &revoked):
-				return fmt.Errorf("host key for %s is revoked in your OpenSSH known_hosts: %w", hostname, err)
+				return mismatchf(err, "host key for %s is revoked in your OpenSSH known_hosts: %v", hostname, err)
 			case errors.As(err, &keyErr) && len(keyErr.Want) > 0 && !onlyCertAuthorities(keyErr.Want):
-				return fmt.Errorf("host key mismatch for %s against your OpenSSH known_hosts: %w", hostname, err)
+				return mismatchf(err, "host key mismatch for %s against your OpenSSH known_hosts: %v", hostname, err)
 			case errors.As(err, &keyErr):
 				// Unknown there (or only a CA covers it): not confirmed.
 			default:
@@ -83,7 +110,7 @@ func Strict(confirmedFile string, opensshFiles ...string) ssh.HostKeyCallback {
 		}
 		if known != nil {
 			if !bytes.Equal(known.Marshal(), key.Marshal()) {
-				return fmt.Errorf("host key mismatch for %s: presented %s does not match %s on record in %s (possible man-in-the-middle, or the host was rebuilt)",
+				return mismatchf(nil, "host key mismatch for %s: presented %s does not match %s on record in %s (possible man-in-the-middle, or the host was rebuilt)",
 					hostname, Fingerprint(key), Fingerprint(known), confirmedFile)
 			}
 			return nil
@@ -93,6 +120,98 @@ func Strict(confirmedFile string, opensshFiles ...string) ssh.HostKeyCallback {
 		}
 		return &UnknownHostError{Host: hostname, Fingerprint: Fingerprint(key), Key: key}
 	}
+}
+
+// KnownHostKeyAlgorithms answers, for a host:port, the host-key algorithms of
+// every key a person confirmed (confirmedFile) or listed in the OpenSSH
+// known_hosts files, so the handshake asks for a type on record. Without it
+// x/crypto asks for ECDSA first, and a box known only by its ed25519 key
+// would look like a mismatch. RSA keys expand to rsa-sha2-512 and
+// rsa-sha2-256. A host known nowhere, or covered only by a @cert-authority
+// line, gets nil: the defaults.
+func KnownHostKeyAlgorithms(confirmedFile string, opensshFiles ...string) func(hostport string) []string {
+	return func(hostport string) []string {
+		var keys []ssh.PublicKey
+		if k, err := lookupHostKey(confirmedFile, hostport); err == nil && k != nil {
+			keys = append(keys, k)
+		}
+		keys = append(keys, opensshHostKeys(hostport, opensshFiles)...)
+		var algos []string
+		seen := map[string]bool{}
+		add := func(a string) {
+			if !seen[a] {
+				seen[a] = true
+				algos = append(algos, a)
+			}
+		}
+		for _, k := range keys {
+			if k.Type() == ssh.KeyAlgoRSA {
+				add(ssh.KeyAlgoRSASHA512)
+				add(ssh.KeyAlgoRSASHA256)
+				continue
+			}
+			add(k.Type())
+		}
+		return algos
+	}
+}
+
+// opensshHostKeys lists the plain host keys the OpenSSH files hold for
+// hostport. knownhosts has no lookup, so it is asked to check a throwaway key:
+// the resulting KeyError lists every key on record for the host.
+func opensshHostKeys(hostport string, files []string) []ssh.PublicKey {
+	var present []string
+	for _, f := range files {
+		if _, err := os.Stat(f); err == nil {
+			present = append(present, f)
+		}
+	}
+	if len(present) == 0 {
+		return nil
+	}
+	cb, err := knownhosts.New(present...)
+	if err != nil {
+		return nil
+	}
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil
+	}
+	probe, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		return nil
+	}
+	var keyErr *knownhosts.KeyError
+	if !errors.As(cb(hostport, remoteFromHostname(hostport), probe), &keyErr) {
+		return nil
+	}
+	var keys []ssh.PublicKey
+	for _, w := range keyErr.Want {
+		if !onlyCertAuthorities([]knownhosts.KnownKey{w}) {
+			keys = append(keys, w.Key)
+		}
+	}
+	return keys
+}
+
+// hostKeyAlgorithms is cfg's algorithm list for addr, or nil for the
+// defaults.
+func hostKeyAlgorithms(cfg SSHConfig, addr string) []string {
+	if cfg.HostKeyAlgorithms == nil {
+		return nil
+	}
+	return cfg.HostKeyAlgorithms(addr)
+}
+
+// noCommonHostKey turns a failed negotiation under a restricted algorithm
+// list into a mismatch: the host no longer offers any key type on record.
+func noCommonHostKey(err error, addr string, offered []string) error {
+	var neg *ssh.AlgorithmNegotiationError
+	if len(offered) > 0 && errors.As(err, &neg) && neg.What == "host key" {
+		return mismatchf(err, "host key mismatch for %s: it offers none of the host key types on record (%s; it offers %s); possible man-in-the-middle, or the host was rebuilt",
+			addr, strings.Join(offered, ", "), strings.Join(neg.RequestedAlgorithms, ", "))
+	}
+	return err
 }
 
 // remoteFromHostname builds the *net.TCPAddr knownhosts insists on when the
@@ -186,8 +305,10 @@ func CaptureHostKey(ctx context.Context, cfg SSHConfig) (ssh.PublicKey, error) {
 	defer stop()
 
 	var got ssh.PublicKey
+	algos := hostKeyAlgorithms(cfg, addr)
 	_, _, _, err := ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
-		User: cfg.User,
+		User:              cfg.User,
+		HostKeyAlgorithms: algos,
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			got = key
 			return errCaptured
@@ -196,6 +317,9 @@ func CaptureHostKey(ctx context.Context, cfg SSHConfig) (ssh.PublicKey, error) {
 	if got == nil {
 		if cerr := dialCtx.Err(); cerr != nil {
 			return nil, fmt.Errorf("no host key from %s: %w", addr, cerr)
+		}
+		if merr := noCommonHostKey(err, addr, algos); merr != err {
+			return nil, merr
 		}
 		return nil, fmt.Errorf("no host key from %s: %w", addr, err)
 	}

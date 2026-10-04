@@ -31,7 +31,7 @@ func tofuHostKeyCallback(hostKeyFile string) ssh.HostKeyCallback {
 			return RecordHostKey(hostKeyFile, hostname, key)
 		}
 		if !bytes.Equal(known.Marshal(), key.Marshal()) {
-			return fmt.Errorf("host key mismatch for %s: presented %s key does not match the key on record in %s (possible man-in-the-middle attack, or the host was rebuilt)", hostname, key.Type(), hostKeyFile)
+			return mismatchf(nil, "host key mismatch for %s: presented %s key does not match the key on record in %s (possible man-in-the-middle attack, or the host was rebuilt)", hostname, key.Type(), hostKeyFile)
 		}
 		return nil
 	}

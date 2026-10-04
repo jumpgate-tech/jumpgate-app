@@ -154,17 +154,20 @@ func agentBinary(arch string) (string, error) {
 
 // strictHostKey checks a host key against keys a person confirmed: the
 // confirmed-only store (never written by trust-on-first-use) and the
-// operator's OpenSSH known_hosts. DialSSH hands it to the jump host too.
-func strictHostKey() (ssh.HostKeyCallback, error) {
+// operator's OpenSSH known_hosts. DialSSH hands it to the jump host too. The
+// second result asks each host for the key types on record, so a host known
+// by one type is not mistaken for a changed one.
+func strictHostKey() (ssh.HostKeyCallback, func(string) []string, error) {
 	confirmed, err := config.ConfirmedHostsFile()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return executor.Strict(confirmed, filepath.Join(home, ".ssh", "known_hosts")), nil
+	known := filepath.Join(home, ".ssh", "known_hosts")
+	return executor.Strict(confirmed, known), executor.KnownHostKeyAlgorithms(confirmed, known), nil
 }
 
 // agentTarget is how this controller reaches t's agent: directly for a local
@@ -183,13 +186,13 @@ func agentTarget(t config.Target) (agentclient.Target, error) {
 		if t.SSH == nil {
 			return agentclient.Target{}, fmt.Errorf("target %q has no SSH address", t.ID)
 		}
-		hostKey, err := strictHostKey()
+		hostKey, algos, err := strictHostKey()
 		if err != nil {
 			return agentclient.Target{}, err
 		}
 		at.SSH = executor.SSHConfig{
 			Host: t.SSH.Host, Port: t.SSH.Port, User: "jumpgate", KeyPath: transportKeyPath(), Jump: t.SSH.Jump,
-			HostKey: hostKey,
+			HostKey: hostKey, HostKeyAlgorithms: algos,
 		}
 	}
 	return at, nil
