@@ -300,8 +300,8 @@ func TestTrustedOverlayCIDRs(t *testing.T) {
 		TrustedOverlays: []string{"10.50.0.0/24", "10.9.0.0/24"},
 		VPNServers: []VPNServer{
 			{ID: "home", Address: "10.9.0.1/24"},   // network 10.9.0.0/24 — dup of a declared one
-			{ID: "fleet", Address: "10.20.0.1/16"},  // network 10.20.0.0/16 — new
-			{ID: "broken", Address: "not-a-cidr"},   // skipped, not fatal
+			{ID: "fleet", Address: "10.20.0.1/16"}, // network 10.20.0.0/16 — new
+			{ID: "broken", Address: "not-a-cidr"},  // skipped, not fatal
 		},
 	}
 	got := c.TrustedOverlayCIDRs()

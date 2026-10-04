@@ -988,7 +988,7 @@ func TestWire_RunStopsServicesBeforeChown(t *testing.T) {
 // matched, and setup's handshake check blamed the JWT secret for them.
 func TestAuthErrorLinesMatchWholeWordsOnly(t *testing.T) {
 	journal := strings.Join([]string{
-		"ERRO Block import failed  hash=0x9f3a401bc7e2 number=19401",       // 401 inside a hash and a number
+		"ERRO Block import failed  hash=0x9f3a401bc7e2 number=19401",        // 401 inside a hash and a number
 		"level=error msg=\"invalid block\" parent=0xjwtfe00",                // "invalid" in prose, jwt inside a hex-ish token
 		"ERRO Engine API request failed  status=401 error=\"Unauthorized\"", // a real auth failure
 		"level=error msg=\"could not verify JWT\" err=\"signature is invalid\"",
