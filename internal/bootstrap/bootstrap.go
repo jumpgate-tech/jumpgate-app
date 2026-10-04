@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -44,14 +45,63 @@ type Options struct {
 	Event           func(step, line string)
 }
 
-// StepError names the step that failed, so the operator knows what was left
-// in place.
+// StepError names the step that failed and, once Run returns it, what the
+// earlier steps left on the box, so the operator knows what a re-run will find.
 type StepError struct {
 	Step string
 	Err  error
+	// LeftInPlace is filled in by Run.
+	LeftInPlace string
 }
 
-func (e *StepError) Error() string { return "pairing step " + e.Step + ": " + e.Err.Error() }
+func (e *StepError) Error() string {
+	msg := "pairing step " + e.Step + ": " + e.Err.Error()
+	if e.LeftInPlace != "" {
+		msg += "; left in place: " + e.LeftInPlace
+	}
+	return msg
+}
+
+// leftInPlace describes what the steps before step leave on the box when step
+// fails. Every step is idempotent, so re-running hosts add resumes from here.
+func leftInPlace(step string, local bool) string {
+	binary := "the agent binary " + BinaryPath
+	user := "the jumpgate user and group (home " + HomeDir + ")"
+	sshd := "the sshd drop-in " + DropInPath + " and the restricted transport key in " + AuthorizedKeys
+	identity := "the agent key and replay record in /var/lib/jumpgate"
+	policy := "the controller's entry in /etc/jumpgate/policy.json and " + NodePath
+	var have []string
+	switch step {
+	case "preflight":
+		return "nothing; no changes were made on the box"
+	case "upload":
+		return "the box's previous agent binary, if any; at most a staged " + BinaryPath + ".new"
+	case "user":
+		have = []string{binary}
+	case "sshd":
+		return binary + ", " + user + "; the previous sshd drop-in is restored if `sshd -t` failed, and the transport key may already be in " + AuthorizedKeys
+	case "identity":
+		have = []string{binary, user}
+		if !local {
+			have = append(have, sshd)
+		}
+	case "policy":
+		have = []string{binary, user}
+		if !local {
+			have = append(have, sshd)
+		}
+		have = append(have, identity)
+	case "service":
+		have = []string{binary, user}
+		if !local {
+			have = append(have, sshd)
+		}
+		have = append(have, identity, policy, "the unit "+UnitPath)
+	default:
+		return ""
+	}
+	return strings.Join(have, ", ") + "; re-running `jumpgate hosts add` resumes from here"
+}
 func (e *StepError) Unwrap() error { return e.Err }
 
 type runner struct {
@@ -88,6 +138,15 @@ func tail(s string) string {
 // Run performs steps 1–7 of the spec and returns the agent's address. Step 8
 // (a signed round trip) is the caller's: it holds the controller's key.
 func Run(ctx context.Context, o Options) (eip712.Address, error) {
+	addr, err := run(ctx, o)
+	var se *StepError
+	if errors.As(err, &se) {
+		se.LeftInPlace = leftInPlace(se.Step, o.Local)
+	}
+	return addr, err
+}
+
+func run(ctx context.Context, o Options) (eip712.Address, error) {
 	r := runner{ctx: ctx, o: o}
 	arch, err := r.preflight()
 	if err != nil {

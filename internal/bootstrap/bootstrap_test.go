@@ -429,3 +429,54 @@ func TestSSHDValidationFindsSSHDOffPath(t *testing.T) {
 	}
 	t.Fatal("sshd -t never ran")
 }
+
+// M9: a failed pairing says what it left on the box, step by step, so the
+// operator knows what a re-run will find (and what to remove by hand).
+func TestAFailedStepSaysWhatWasLeftInPlace(t *testing.T) {
+	cases := []struct {
+		step  string
+		fail  rule
+		local bool
+		want  []string
+		not   []string
+	}{
+		{"preflight", rule{"uname -s", executor.Result{Stdout: "Darwin\n"}}, false, []string{"nothing"}, nil},
+		{"upload", rule{"sha256sum -c", executor.Result{ExitCode: 1}}, false, []string{BinaryPath + ".new"}, nil},
+		{"user", rule{"useradd", executor.Result{ExitCode: 1}}, false, []string{BinaryPath}, []string{DropInPath}},
+		{"sshd", rule{"sshd -t", executor.Result{ExitCode: 255}}, false, []string{BinaryPath, "jumpgate user", "restored"}, nil},
+		{"identity", rule{"agent init", executor.Result{ExitCode: 1}}, false, []string{BinaryPath, DropInPath, AuthorizedKeys}, []string{"agent key"}},
+		{"identity", rule{"agent init", executor.Result{ExitCode: 1}}, true, []string{BinaryPath}, []string{DropInPath, AuthorizedKeys}},
+		{"policy", rule{"agent enroll", executor.Result{ExitCode: 1}}, false, []string{"agent key", "/var/lib/jumpgate"}, []string{"policy.json"}},
+		{"service", rule{"is-active", executor.Result{Stdout: "failed\n", ExitCode: 3}}, false, []string{"policy.json", NodePath, UnitPath}, nil},
+	}
+	for _, c := range cases {
+		box := freshBox()
+		box.rules = append([]rule{c.fail}, box.rules...)
+		o := opts(t, box)
+		if c.local {
+			o.Local, o.TransportKey, o.LocalUID = true, "", 1000
+		}
+		_, err := Run(context.Background(), o)
+		var se *StepError
+		if !errors.As(err, &se) || se.Step != c.step {
+			t.Errorf("%s: err = %v", c.step, err)
+			continue
+		}
+		msg := err.Error()
+		_, left, ok := strings.Cut(msg, "left in place: ")
+		if !ok {
+			t.Errorf("%s (local %v): no left-in-place summary: %q", c.step, c.local, msg)
+			continue
+		}
+		for _, w := range c.want {
+			if !strings.Contains(left, w) {
+				t.Errorf("%s (local %v): %q does not mention %q", c.step, c.local, left, w)
+			}
+		}
+		for _, n := range c.not {
+			if strings.Contains(left, n) {
+				t.Errorf("%s (local %v): %q mentions %q", c.step, c.local, left, n)
+			}
+		}
+	}
+}
