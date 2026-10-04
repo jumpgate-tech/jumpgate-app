@@ -5,18 +5,36 @@
 set -euo pipefail
 base="${BASE:-debian:12}"
 work="$(mktemp -d)"
-trap 'docker rm -f jumpgate-e2e >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+name="jumpgate-e2e-$$"
+trap 'docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 
 scripts/build-agents.sh "$work/agents"
 ssh-keygen -q -t ed25519 -N '' -f "$work/root"
 ssh-keygen -q -t ed25519 -N '' -C jumpgate-controller -f "$work/transport"
 
 docker build -q -t jumpgate-e2e --build-arg BASE="$base" scripts/e2e >/dev/null
-docker run -d --name jumpgate-e2e --privileged --cgroupns=host \
-  -v /sys/fs/cgroup:/sys/fs/cgroup:rw -p 127.0.0.1::22 jumpgate-e2e >/dev/null
-for _ in $(seq 1 30); do docker exec jumpgate-e2e systemctl is-active ssh >/dev/null 2>&1 && break; sleep 1; done
-docker exec -i jumpgate-e2e sh -c 'cat >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys' < "$work/root.pub"
-port="$(docker port jumpgate-e2e 22/tcp | head -1 | sed 's/.*://')"
+docker run -d --name "$name" --privileged -p 127.0.0.1::22 jumpgate-e2e >/dev/null
+port="$(docker port "$name" 22/tcp | head -1 | sed 's/.*://')"
+
+# Ready means systemd finished booting (running, or degraded by some unrelated
+# unit) and sshd answers on the published port. On Ubuntu 24.04 sshd is socket
+# activated, so a connection is the right probe, not `is-active ssh`.
+ready=
+for _ in $(seq 1 60); do
+  state="$(docker exec "$name" systemctl is-system-running 2>/dev/null || true)"
+  if { [ "$state" = running ] || [ "$state" = degraded ]; } &&
+     [ -n "$(ssh-keyscan -T 2 -p "$port" 127.0.0.1 2>/dev/null)" ]; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ -z "$ready" ]; then
+  echo "container $name never became ready (systemd state: ${state:-unknown})" >&2
+  docker logs "$name" >&2 || true
+  exit 1
+fi
+docker exec -i "$name" sh -c 'cat >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys' < "$work/root.pub"
 
 JUMPGATE_E2E_PORT="$port" \
 JUMPGATE_E2E_ROOT_KEY="$work/root" \
