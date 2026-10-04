@@ -446,6 +446,8 @@ func TestClaimSetupRun_RefusesASecondRunWhileOneIsRunning(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestListenAndServe_ServesUntilTheContextIsCanceled(t *testing.T) {
+	// GET /api/targets reads the config, which takes ~/.jumpgate's lock.
+	t.Setenv("HOME", t.TempDir())
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserve a port: %v", err)
