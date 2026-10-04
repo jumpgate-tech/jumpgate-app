@@ -44,7 +44,8 @@ the approval tier.
 ## Transport: SSH-tunneled unix socket
 
 - The agent listens only on `/run/jumpgate/agent.sock`, `root:jumpgate`, mode
-  `0660`. It opens no TCP port.
+  `0660` (`0666` when local uids are enrolled, with the Accept-time peer gate
+  as the authority; see the foundations spec). It opens no TCP port.
 - Remote controllers reach it through an SSH `direct-streamlocal@openssh.com`
   channel (`ssh.Client.Dial("unix", path)` in `golang.org/x/crypto/ssh`), as a
   dedicated unprivileged `jumpgate` user that can do nothing else:
