@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -28,12 +29,29 @@ var subcommands = map[string]func(args []string) int{
 }
 
 func main() {
-	if len(os.Args) > 1 {
-		if fn, ok := subcommands[os.Args[1]]; ok {
-			os.Exit(fn(os.Args[2:]))
-		}
+	if code, handled := dispatch(os.Args, os.Stderr); handled {
+		os.Exit(code)
 	}
 	runApp()
+}
+
+// dispatch runs a subcommand. A first argument starting with "-" (or none) is
+// left to runApp so `jumpgate --bind x` keeps working; any other word that is
+// not a subcommand is a typo and must not silently start the web app.
+func dispatch(args []string, stderr io.Writer) (code int, handled bool) {
+	if len(args) < 2 || strings.HasPrefix(args[1], "-") {
+		return 0, false
+	}
+	if fn, ok := subcommands[args[1]]; ok {
+		return fn(args[2:]), true
+	}
+	names := make([]string, 0, len(subcommands))
+	for n := range subcommands {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	fmt.Fprintf(stderr, "jumpgate: unknown command %q\ncommands: %s\n(run `jumpgate` with no arguments, or with flags such as --bind, for the web app)\n", args[1], strings.Join(names, " "))
+	return exitCode("usage"), true
 }
 
 // remedies turns each rejection code, and each error code the server adds, into
@@ -92,17 +110,39 @@ func parseSSHTarget(s string) (user, host string, port int, err error) {
 		if convErr != nil || n <= 0 || n > 65535 {
 			return "", "", 0, fmt.Errorf("bad port in %q", s)
 		}
+		if h == "" {
+			return "", "", 0, fmt.Errorf("empty host in %q", s)
+		}
 		return user, h, n, nil
 	}
-	if strings.Contains(rest, ":") && !strings.HasPrefix(rest, "[") {
+	switch {
+	case strings.HasPrefix(rest, "["):
+		if !strings.HasSuffix(rest, "]") || strings.Count(rest, "[") != 1 || strings.Count(rest, "]") != 1 {
+			return "", "", 0, fmt.Errorf("unbalanced brackets in %q", s)
+		}
+	case strings.ContainsAny(rest, "[]"):
+		return "", "", 0, fmt.Errorf("unbalanced brackets in %q", s)
+	case strings.Contains(rest, ":"):
 		return "", "", 0, fmt.Errorf("bad port in %q", s)
 	}
-	return user, strings.Trim(rest, "[]"), 0, nil
+	host = strings.Trim(rest, "[]")
+	if host == "" {
+		return "", "", 0, fmt.Errorf("empty host in %q", s)
+	}
+	return user, host, 0, nil
 }
 
-func fail(format string, a ...any) int {
+// usage reports bad arguments and returns exit status 2, which means usage and
+// nothing else.
+func usage(format string, a ...any) int {
 	fmt.Fprintf(os.Stderr, "jumpgate: "+format+"\n", a...)
 	return exitCode("usage")
+}
+
+// failed reports a runtime failure or a refusal and returns exit status 1.
+func failed(format string, a ...any) int {
+	fmt.Fprintf(os.Stderr, "jumpgate: "+format+"\n", a...)
+	return exitCode("failed")
 }
 
 // jgFile is a path inside ~/.jumpgate.

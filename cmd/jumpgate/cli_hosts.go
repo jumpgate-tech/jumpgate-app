@@ -24,13 +24,13 @@ import (
 
 func cmdHosts(args []string) int {
 	if len(args) == 0 {
-		return fail("usage: jumpgate hosts add|list")
+		return usage("usage: jumpgate hosts add|list")
 	}
 	switch args[0] {
 	case "list":
 		c, err := config.Load()
 		if err != nil {
-			return fail("%v", err)
+			return failed("%v", err)
 		}
 		for _, t := range c.Targets {
 			paired := "not paired"
@@ -43,13 +43,13 @@ func cmdHosts(args []string) int {
 	case "add":
 		return hostsAdd(args[1:])
 	}
-	return fail("unknown hosts subcommand %q", args[0])
+	return usage("unknown hosts subcommand %q", args[0])
 }
 
 func hostsAdd(args []string) int {
-	const usage = "usage: jumpgate hosts add NAME (--ssh USER@HOST[:PORT] [--key PATH] [--jump USER@HOST[:PORT]] [--sudo] | --local)"
+	const usageText = "usage: jumpgate hosts add NAME (--ssh USER@HOST[:PORT] [--key PATH] [--jump USER@HOST[:PORT]] [--sudo] | --local)"
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return fail(usage)
+		return usage(usageText)
 	}
 	name := args[0]
 	fset := flag.NewFlagSet("hosts add", flag.ContinueOnError)
@@ -59,7 +59,7 @@ func hostsAdd(args []string) int {
 	sudo := fset.Bool("sudo", false, "run setup commands through sudo -n")
 	local := fset.Bool("local", false, "pair this machine")
 	if err := fset.Parse(args[1:]); err != nil || (*local == (*sshArg != "")) {
-		return fail("give exactly one of --ssh or --local")
+		return usage("give exactly one of --ssh or --local")
 	}
 
 	ctx := context.Background()
@@ -70,15 +70,28 @@ func hostsAdd(args []string) int {
 			// The server resolves paths from its own working directory.
 			abs, err := filepath.Abs(keyPath)
 			if err != nil {
-				return fail("--key: %v", err)
+				return failed("--key: %v", err)
 			}
 			keyPath = abs
 		}
+		if _, _, _, err := parseSSHTarget(*sshArg); err != nil {
+			return usage("--ssh: %v", err)
+		}
+		if *jumpArg != "" {
+			if _, _, _, err := parseSSHTarget(*jumpArg); err != nil {
+				return usage("--jump: %v", err)
+			}
+		}
+		// The host-key prompt is the only defence against trust-on-first-use,
+		// so it must be answered by a person: never from a pipe or a file.
+		if !stdinIsTerminal() {
+			return failed("host keys must be confirmed by a person at a terminal; stdin is not one, so nothing was trusted. Run `jumpgate hosts add` from an interactive shell")
+		}
 		cfg, err := sshConfigFrom(*sshArg, keyPath, *jumpArg)
 		if err != nil {
-			return fail("%v", err)
+			return failed("%v", err)
 		}
-		if code := confirmHostKeys(ctx, cfg, bufio.NewReader(os.Stdin), os.Stdout); code != 0 {
+		if code := confirmHostKeys(ctx, cfg, bufio.NewReader(os.Stdin), os.Stdout, os.Stderr); code != 0 {
 			return code
 		}
 		target = map[string]any{"id": name, "mode": "ssh", "ssh": cfg}
@@ -87,7 +100,7 @@ func hostsAdd(args []string) int {
 	exe, _ := os.Executable()
 	info, err := daemon.EnsureRunning(ctx, exe)
 	if err != nil {
-		return fail("%v", err)
+		return failed("%v", err)
 	}
 	if e := call(info, "/api/targets", target, nil); e != nil {
 		if e.Status != http.StatusConflict || e.Code != "" {
@@ -98,6 +111,13 @@ func hostsAdd(args []string) int {
 		fmt.Printf("target %s already exists; pairing it again\n", name)
 	}
 	return streamPair(info, name, *sudo)
+}
+
+// stdinIsTerminal reports whether stdin is a character device. A variable so
+// tests can stand in for a terminal; nothing else may replace it.
+var stdinIsTerminal = func() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 // sshConfigFrom builds the dial configuration for hosts add. Every hop carries
@@ -152,14 +172,18 @@ func hostPort(c executor.SSHConfig) string {
 // contradicts one already on record is a hard stop. The target is reached
 // through the jump host only after the jump host is confirmed, under the
 // strict policy, never trust-on-first-use.
-func confirmHostKeys(ctx context.Context, cfg executor.SSHConfig, in *bufio.Reader, out io.Writer) int {
+func confirmHostKeys(ctx context.Context, cfg executor.SSHConfig, in *bufio.Reader, out, errw io.Writer) int {
+	failedTo := func(format string, a ...any) int {
+		fmt.Fprintf(errw, "jumpgate: "+format+"\n", a...)
+		return exitCode("failed")
+	}
 	check, err := strictCheck()
 	if err != nil {
-		return fail("%v", err)
+		return failedTo("%v", err)
 	}
 	confirmed, err := config.ConfirmedHostsFile()
 	if err != nil {
-		return fail("%v", err)
+		return failedTo("%v", err)
 	}
 
 	type hop struct{ probe executor.SSHConfig }
@@ -181,7 +205,7 @@ func confirmHostKeys(ctx context.Context, cfg executor.SSHConfig, in *bufio.Read
 	for _, h := range hops {
 		key, err := executor.CaptureHostKey(ctx, h.probe)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "jumpgate: cannot reach %s: %v\n", h.probe.Host, err)
+			fmt.Fprintf(errw, "jumpgate: cannot reach %s: %v\n", h.probe.Host, err)
 			return exitCode("unreachable")
 		}
 		hp := hostPort(h.probe)
@@ -192,15 +216,17 @@ func confirmHostKeys(ctx context.Context, cfg executor.SSHConfig, in *bufio.Read
 			continue
 		case errors.As(err, &unknown):
 			fmt.Fprintf(out, "%s presents host key %s\nCompare it with the box's console (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`).\nType yes to trust it: ", hp, unknown.Fingerprint)
-			answer, _ := in.ReadString('\n')
-			if strings.TrimSpace(answer) != "yes" {
-				return fail("not trusted; nothing was changed")
+			// Only a complete line reading exactly "yes" is consent: any read
+			// error (EOF after a bare "yes", a closed stdin) counts as no.
+			answer, rerr := in.ReadString('\n')
+			if rerr != nil || strings.TrimSpace(answer) != "yes" {
+				return failedTo("not trusted; nothing was changed")
 			}
 			if err := executor.RecordHostKey(confirmed, hp, key); err != nil {
-				return fail("%v", err)
+				return failedTo("%v", err)
 			}
 		default:
-			fmt.Fprintf(os.Stderr, "jumpgate: %v\n", err)
+			fmt.Fprintf(errw, "jumpgate: %v\n", err)
 			return exitCode("host_key")
 		}
 	}
@@ -237,7 +263,7 @@ func streamPair(info daemon.Info, name string, sudo bool) int {
 	b, _ := json.Marshal(map[string]bool{"sudo": sudo})
 	res, err := info.Client().Do(mustRequest(context.Background(), info, "/api/targets/"+name+"/pair", b))
 	if err != nil {
-		return fail("server: %v", err)
+		return failed("server: %v", err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
@@ -279,5 +305,5 @@ func streamPair(info daemon.Info, name string, sudo bool) int {
 			fmt.Printf("[%s] %s\n", ev.Step, ev.Line)
 		}
 	}
-	return fail("the server closed the stream before pairing finished")
+	return failed("the server closed the stream before pairing finished")
 }

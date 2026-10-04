@@ -36,6 +36,13 @@ func TestParseSSHTarget(t *testing.T) {
 		"203.0.113.7":              {"", "", 0, false}, // user is required
 		"root@":                    {"", "", 0, false},
 		"root@host:notaport":       {"", "", 0, false},
+		"root@:22":                 {"", "", 0, false}, // empty host
+		"root@[]":                  {"", "", 0, false},
+		"root@[]:22":               {"", "", 0, false},
+		"root@[::1":                {"", "", 0, false}, // unbalanced brackets
+		"root@host]":               {"", "", 0, false},
+		"root@[::1]]":              {"", "", 0, false},
+		"root@[::1]":               {"root", "::1", 0, true},
 	}
 	for in, want := range cases {
 		user, host, port, err := parseSSHTarget(in)
@@ -250,9 +257,10 @@ func TestConfirmHostKeys(t *testing.T) {
 	ctx := context.Background()
 
 	// Anything but an exact "yes" trusts nothing.
-	for _, answer := range []string{"no\n", "y\n", "\n", ""} {
+	// A bare "yes" with no newline (EOF) is not consent either.
+	for _, answer := range []string{"no\n", "y\n", "\n", "", "yes"} {
 		var out strings.Builder
-		if code := confirmHostKeys(ctx, cfg, bufio.NewReader(strings.NewReader(answer)), &out); code == 0 {
+		if code := confirmHostKeys(ctx, cfg, bufio.NewReader(strings.NewReader(answer)), &out, io.Discard); code == 0 {
 			t.Fatalf("answer %q trusted the key", answer)
 		}
 		if _, err := os.Stat(confirmed); err == nil {
@@ -268,7 +276,7 @@ func TestConfirmHostKeys(t *testing.T) {
 	}
 
 	// "yes" records it in the confirmed store, under the host:port DialSSH uses.
-	if code := confirmHostKeys(ctx, cfg, bufio.NewReader(strings.NewReader("yes\n")), io.Discard); code != 0 {
+	if code := confirmHostKeys(ctx, cfg, bufio.NewReader(strings.NewReader("yes\n")), io.Discard, io.Discard); code != 0 {
 		t.Fatalf("exit %d after yes", code)
 	}
 	b, err := os.ReadFile(confirmed)
@@ -277,7 +285,7 @@ func TestConfirmHostKeys(t *testing.T) {
 	}
 
 	// Now known: no prompt (empty input would fail if one were needed).
-	if code := confirmHostKeys(ctx, cfg, bufio.NewReader(strings.NewReader("")), io.Discard); code != 0 {
+	if code := confirmHostKeys(ctx, cfg, bufio.NewReader(strings.NewReader("")), io.Discard, io.Discard); code != 0 {
 		t.Fatalf("a confirmed host prompted again: exit %d", code)
 	}
 }
@@ -297,7 +305,7 @@ func TestConfirmHostKeysMismatchIsFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	// "yes" on stdin must not matter: a mismatch is never offered for trust.
-	code := confirmHostKeys(context.Background(), cfg, bufio.NewReader(strings.NewReader("yes\n")), io.Discard)
+	code := confirmHostKeys(context.Background(), cfg, bufio.NewReader(strings.NewReader("yes\n")), io.Discard, io.Discard)
 	if code != 4 {
 		t.Fatalf("exit %d, want 4", code)
 	}
@@ -318,7 +326,7 @@ func TestConfirmHostKeysJumpFirstAndTargetUsesStrict(t *testing.T) {
 	// direct-tcpip), but the jump must have been shown and confirmed first, and
 	// the failure must be "unreachable" rather than a TOFU acceptance.
 	var out strings.Builder
-	code := confirmHostKeys(context.Background(), cfg, bufio.NewReader(strings.NewReader("yes\n")), &out)
+	code := confirmHostKeys(context.Background(), cfg, bufio.NewReader(strings.NewReader("yes\n")), &out, io.Discard)
 	if code != 3 {
 		t.Fatalf("exit %d, want 3 (target unreachable through the jump)", code)
 	}
@@ -449,5 +457,86 @@ func TestServeBothDoesNotPublishUntilReady(t *testing.T) {
 		func() error { published.Store(true); return nil })
 	if err == nil || published.Load() {
 		t.Fatalf("err = %v, published = %v", err, published.Load())
+	}
+}
+
+// ---- non-interactive consent, dispatch, exit classes ----
+
+func TestHostsAddRefusesNonTerminalStdin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("SSH_AUTH_SOCK", "")
+	old := stdinIsTerminal
+	defer func() { stdinIsTerminal = old }()
+	stdinIsTerminal = func() bool { return false }
+
+	// Port 1 on loopback is closed: any capture attempt would exit 3. The
+	// refusal comes first, so the exit is 1 and nothing is written.
+	code := hostsAdd([]string{"box", "--ssh", "root@127.0.0.1:1"})
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 (refused before any capture)", code)
+	}
+	confirmed, _ := config.ConfirmedHostsFile()
+	if _, err := os.Stat(confirmed); err == nil {
+		t.Fatal("confirmed_hosts was written")
+	}
+}
+
+func TestExitClasses(t *testing.T) {
+	if code := hostsAdd([]string{"box"}); code != 2 {
+		t.Errorf("missing --ssh/--local: exit %d, want 2", code)
+	}
+	if code := hostsAdd([]string{"box", "--ssh", "root@[::1"}); code != 2 {
+		t.Errorf("bad --ssh: exit %d, want 2", code)
+	}
+	if code := cmdKeys(nil); code != 2 {
+		t.Errorf("keys without a subcommand: exit %d, want 2", code)
+	}
+	// Runtime failures are 1: no controller key to show, a controller that
+	// already exists, an unreadable config.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if code := cmdKeys([]string{"show"}); code != 1 {
+		t.Errorf("keys show with no key: exit %d, want 1", code)
+	}
+	if code := cmdKeys([]string{"init", "--store", "file"}); code != 0 {
+		t.Fatalf("init exit %d", code)
+	}
+	if code := cmdKeys([]string{"init", "--store", "file"}); code != 1 {
+		t.Errorf("second keys init: exit %d, want 1", code)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".jumpgate", "config.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := cmdHosts([]string{"list"}); code != 1 {
+		t.Errorf("hosts list with a broken config: exit %d, want 1", code)
+	}
+	if code := failed("x"); code != 1 {
+		t.Errorf("failed() = %d", code)
+	}
+	if code := usage("x"); code != 2 {
+		t.Errorf("usage() = %d", code)
+	}
+}
+
+func TestDispatch(t *testing.T) {
+	var stderr strings.Builder
+	code, handled := dispatch([]string{"jumpgate", "statsu", "box1"}, &stderr)
+	if !handled || code != 2 {
+		t.Fatalf("typo: code %d handled %v, want 2 true", code, handled)
+	}
+	if !strings.Contains(stderr.String(), `unknown command "statsu"`) || !strings.Contains(stderr.String(), "status") {
+		t.Errorf("message = %q", stderr.String())
+	}
+	for _, args := range [][]string{{"jumpgate"}, {"jumpgate", "--bind", "127.0.0.1:1"}, {"jumpgate", "-version"}} {
+		if _, handled := dispatch(args, io.Discard); handled {
+			t.Errorf("%v was taken by dispatch; it belongs to runApp", args)
+		}
+	}
+	// A real subcommand is routed (usage error from the handler, not unknown-command).
+	if code, handled := dispatch([]string{"jumpgate", "keys"}, io.Discard); !handled || code != 2 {
+		t.Errorf("keys: %d %v", code, handled)
 	}
 }

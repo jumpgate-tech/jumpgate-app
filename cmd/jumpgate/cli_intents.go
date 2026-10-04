@@ -16,7 +16,7 @@ import (
 func cmdIntent(name, kind string) func([]string) int {
 	return func(args []string) int {
 		if len(args) != 1 {
-			return fail("usage: jumpgate %s HOST", name)
+			return usage("usage: jumpgate %s HOST", name)
 		}
 		return runIntent(args[0], kind, struct{}{})
 	}
@@ -26,7 +26,7 @@ func cmdLogs(args []string) int {
 	fset := flag.NewFlagSet("logs", flag.ContinueOnError)
 	n := fset.Int("n", intent.LogsDefaultN, "lines per unit (max 2000)")
 	if len(args) == 0 {
-		return fail("usage: jumpgate logs HOST [-n N]")
+		return usage("usage: jumpgate logs HOST [-n N]")
 	}
 	if err := fset.Parse(args[1:]); err != nil {
 		return exitCode("usage")
@@ -36,7 +36,7 @@ func cmdLogs(args []string) int {
 
 func cmdService(args []string) int {
 	if len(args) != 3 {
-		return fail("usage: jumpgate service HOST exec|beacon start|stop|restart")
+		return usage("usage: jumpgate service HOST exec|beacon start|stop|restart")
 	}
 	return runIntent(args[0], intent.KindServiceAction, intent.ServiceActionPayload{Service: args[1], Action: args[2]})
 }
@@ -56,12 +56,12 @@ func runIntent(host, kind string, payload any) int {
 	exe, _ := os.Executable()
 	info, err := daemon.EnsureRunning(ctx, exe)
 	if err != nil {
-		return fail("%v", err)
+		return failed("%v", err)
 	}
 	b, _ := json.Marshal(payload)
 	res, err := info.Client().Do(mustRequest(ctx, info, "/api/targets/"+host+"/intent/"+kind, b))
 	if err != nil {
-		return fail("server: %v", err)
+		return failed("server: %v", err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 300 {
@@ -69,7 +69,7 @@ func runIntent(host, kind string, payload any) int {
 	}
 	var r reply
 	if err := json.NewDecoder(io.LimitReader(res.Body, 32<<20)).Decode(&r); err != nil {
-		return fail("could not read the server's answer: %v", err)
+		return failed("could not read the server's answer: %v", err)
 	}
 	return printReply(os.Stdout, os.Stderr, host, r)
 }

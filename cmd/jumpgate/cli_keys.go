@@ -13,23 +13,23 @@ import (
 
 func cmdKeys(args []string) int {
 	if len(args) == 0 {
-		return fail("usage: jumpgate keys init|show")
+		return usage("usage: jumpgate keys init|show")
 	}
 	switch args[0] {
 	case "show":
 		c, err := config.Load()
 		if err != nil {
-			return fail("load config: %v", err)
+			return failed("load config: %v", err)
 		}
 		if c.Controller == nil {
-			return fail("no controller key; run `jumpgate keys init`")
+			return failed("no controller key; run `jumpgate keys init`")
 		}
 		fmt.Printf("%s (%s: %s)\n", c.Controller.Address, c.Controller.KeyStore, c.Controller.KeyRef)
 		return 0
 	case "init":
 		return keysInit(args[1:])
 	}
-	return fail("unknown keys subcommand %q", args[0])
+	return usage("unknown keys subcommand %q", args[0])
 }
 
 func keysInit(args []string) int {
@@ -41,10 +41,10 @@ func keysInit(args []string) int {
 	}
 	c, err := config.Load()
 	if err != nil {
-		return fail("load config: %v", err)
+		return failed("load config: %v", err)
 	}
 	if c.Controller != nil {
-		return fail("a controller key already exists (%s); jumpgate never replaces one silently", c.Controller.Address)
+		return failed("a controller key already exists (%s); jumpgate never replaces one silently", c.Controller.Address)
 	}
 	if *ref == "" {
 		switch signer.Store(*store) {
@@ -53,18 +53,18 @@ func keysInit(args []string) int {
 		case signer.StoreKeychain:
 			*ref = "controller"
 		case signer.StoreOnePassword:
-			return fail("--ref op://<vault>/<item>/<field> is required for 1password")
+			return usage("--ref op://<vault>/<item>/<field> is required for 1password")
 		default:
-			return fail("unknown --store %q: want file, keychain or 1password", *store)
+			return usage("unknown --store %q: want file, keychain or 1password", *store)
 		}
 	}
 	k, err := signer.Create(context.Background(), signer.Store(*store), *ref)
 	if errors.Is(err, signer.ErrKeyExists) || errors.Is(err, fs.ErrExist) { // the file store reports an existing file as ErrExist
-		return fail("a key already exists in %s at %q and jumpgate will not replace it: paired boxes trust that key's address. "+
+		return failed("a key already exists in %s at %q and jumpgate will not replace it: paired boxes trust that key's address. "+
 			"Choose another --ref, or remove the old key yourself if you are sure nothing is paired with it", *store, *ref)
 	}
 	if err != nil {
-		return fail("%v", err)
+		return failed("%v", err)
 	}
 	if _, err := config.Update(func(c *config.Config) error {
 		if c.Controller != nil {
@@ -73,7 +73,7 @@ func keysInit(args []string) int {
 		c.Controller = &config.Controller{KeyStore: *store, KeyRef: *ref, Address: k.Address().Hex()}
 		return nil
 	}); err != nil {
-		return fail("the key %s was created in %s at %q but could not be recorded: %v", k.Address().Hex(), *store, *ref, err)
+		return failed("the key %s was created in %s at %q but could not be recorded: %v", k.Address().Hex(), *store, *ref, err)
 	}
 	fmt.Println(k.Address().Hex())
 	fmt.Println("restart the server to use it: jumpgate stop")

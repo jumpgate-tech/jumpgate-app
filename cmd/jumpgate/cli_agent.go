@@ -27,7 +27,7 @@ const (
 
 func cmdAgent(args []string) int {
 	if len(args) == 0 {
-		return fail("usage: jumpgate agent init|enroll|run|reset-replay")
+		return usage("usage: jumpgate agent init|enroll|run|reset-replay")
 	}
 	fset := flag.NewFlagSet("agent "+args[0], flag.ContinueOnError)
 	state := fset.String("state-dir", defaultStateDir, "agent state directory")
@@ -50,11 +50,11 @@ func cmdAgent(args []string) int {
 		err = agentRun(*state, *conf)
 	case "reset-replay":
 		if !*yes {
-			return fail("reset-replay reopens a replay window for intents captured before now; re-run with --yes once you know why the record broke")
+			return usage("reset-replay reopens a replay window for intents captured before now; re-run with --yes once you know why the record broke")
 		}
 		err = agentResetReplay(*state)
 	default:
-		return fail("unknown agent subcommand %q", args[0])
+		return usage("unknown agent subcommand %q", args[0])
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "jumpgate agent:", err)

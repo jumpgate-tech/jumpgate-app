@@ -29,29 +29,29 @@ func cmdServe(args []string) int {
 		return exitCode("usage")
 	}
 	if _, err := config.MigrateLegacyDir(); err != nil {
-		return fail("%v", err)
+		return failed("%v", err)
 	}
 	holder, err := daemon.Acquire()
 	if err != nil {
-		return fail("%v", err)
+		return failed("%v", err)
 	}
 	defer holder.Release()
 
 	cfg, err := config.Load()
 	if err != nil {
-		return fail("load config: %v", err)
+		return failed("load config: %v", err)
 	}
 	var sgn signer.Signer
 	if cfg.Controller != nil {
 		k, err := signer.Open(context.Background(), signer.Store(cfg.Controller.KeyStore), cfg.Controller.KeyRef)
 		if err != nil {
-			return fail("load controller key: %v", err)
+			return failed("load controller key: %v", err)
 		}
 		sgn = k
 	}
 	ui, err := fs.Sub(web.FS, "dist")
 	if err != nil {
-		return fail("embedded UI: %v", err)
+		return failed("embedded UI: %v", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -61,7 +61,7 @@ func cmdServe(args []string) int {
 
 	dir, err := daemon.RunDir()
 	if err != nil {
-		return fail("%v", err)
+		return failed("%v", err)
 	}
 	sock := filepath.Join(dir, "server.sock")
 	err = serveBoth(ctx, stop, s.ListenAndServe, func(ctx context.Context) error { return s.ServeUnix(ctx, sock) },
@@ -74,7 +74,7 @@ func cmdServe(args []string) int {
 			return nil
 		})
 	if err != nil {
-		return fail("%v", err)
+		return failed("%v", err)
 	}
 	return 0
 }
@@ -145,7 +145,7 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 
 func cmdStop([]string) int {
 	if err := daemon.Stop(context.Background()); err != nil {
-		return fail("%v", err)
+		return failed("%v", err)
 	}
 	return 0
 }
