@@ -65,12 +65,27 @@ func Acquire() (*Holder, error) {
 	}
 	h, err := filelock.TryLock(filepath.Join(dir, "server.lock"))
 	if errors.Is(err, filelock.ErrLocked) {
-		return nil, ErrAlreadyRunning
+		return nil, alreadyRunning(dir)
 	}
 	if err != nil {
 		return nil, err
 	}
 	return &Holder{lock: h, dir: dir}, nil
+}
+
+// alreadyRunning wraps ErrAlreadyRunning with the holder's pid from
+// server.json when there is one. The pid is for the message only; nothing
+// signals it.
+func alreadyRunning(dir string) error {
+	b, err := os.ReadFile(filepath.Join(dir, "server.json"))
+	if err != nil {
+		return ErrAlreadyRunning
+	}
+	var info Info
+	if json.Unmarshal(b, &info) != nil || info.PID <= 0 {
+		return ErrAlreadyRunning
+	}
+	return fmt.Errorf("%w, pid %d", ErrAlreadyRunning, info.PID)
 }
 
 // Publish writes server.json (0600: it carries the session token) once the

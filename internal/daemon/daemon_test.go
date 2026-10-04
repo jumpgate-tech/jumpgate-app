@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -93,5 +94,23 @@ func TestFindSeesALiveServer(t *testing.T) {
 	fi, _ := os.Stat(filepath.Join(dir, "server.json"))
 	if fi.Mode().Perm() != 0o600 {
 		t.Errorf("server.json mode %o, want 600 (it holds the token)", fi.Mode().Perm())
+	}
+}
+
+// M7: the spec's message is "already running, pid N". The pid comes from
+// server.json and is only ever printed, never signalled.
+func TestAcquireNamesTheRunningPID(t *testing.T) {
+	isolate(t)
+	h, err := Acquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Release()
+	if err := h.Publish(Info{PID: 4242, Token: "tok"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Acquire()
+	if !errors.Is(err, ErrAlreadyRunning) || !strings.Contains(err.Error(), "already running") || !strings.Contains(err.Error(), "pid 4242") {
+		t.Fatalf("second Acquire = %v, want ErrAlreadyRunning naming pid 4242", err)
 	}
 }
