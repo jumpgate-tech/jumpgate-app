@@ -30,7 +30,7 @@ import (
 const bindFlagUsage = "address to bind the local server to. " +
 	"WARNING: binding beyond 127.0.0.1 exposes full control of your servers over plain HTTP"
 
-func main() {
+func runApp() {
 	bind := flag.String("bind", "127.0.0.1:8799", bindFlagUsage)
 	// The data plane is off unless an operator asks for it. It is a separate
 	// listener from --bind on purpose: --bind carries the session token that
