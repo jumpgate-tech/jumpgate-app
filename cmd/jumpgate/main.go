@@ -21,6 +21,7 @@ import (
 	"github.com/valve-tech/jumpgate/cmd/jumpgate/web"
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/relay"
 	"github.com/valve-tech/jumpgate/internal/server"
 )
@@ -62,13 +63,43 @@ func runApp() {
 
 	// main has already moved ~/.valve-node-app to ~/.jumpgate.
 
+	ctx, stop := shutdownContext(context.Background())
+	defer stop()
+	windowed := *tray || inAppBundle()
+
+	// One server per user (R25): the app takes the same lock as `jumpgate
+	// serve`. If a server is already up — another app launch, or one a CLI
+	// command started — open it instead of failing to bind a second one.
+	holder, running, err := claimAppInstance(ctx, 10*time.Second)
+	if err != nil {
+		log.Fatalf("jumpgate: %v", err)
+	}
+	if running != nil {
+		if *relayBind != "" || *bind != running.HTTPAddr {
+			fmt.Fprintln(os.Stderr, "jumpgate: this launch's --bind/--relay-bind flags are ignored; stop the running server first to apply them")
+		}
+		openRunningServer(ctx, *running, windowed, *noOpen)
+		return
+	}
+	defer holder.Release()
+
 	// Load (or lazily create on first Save) jumpgate's local state —
 	// known targets, AI provider settings — from ~/.jumpgate/config.json.
 	// The server re-reads it per-request rather than holding this value, so
 	// it's only loaded here to fail fast on a corrupt file before the
 	// server starts serving.
-	if _, err := config.Load(); err != nil {
+	cfg, err := config.Load()
+	if err != nil {
 		log.Fatalf("jumpgate: load config: %v", err)
+	}
+	// The CLI finds this server through server.json and sends it box
+	// commands, so it holds the controller key as serve does. A key that
+	// will not open (a locked keychain, say) must not keep the UI down: those
+	// routes answer 503 until the app is restarted.
+	sgn, err := openControllerKey(cfg)
+	if err != nil {
+		log.Printf("jumpgate: controller key not loaded, box commands are unavailable: %v", err)
+		sgn = nil
 	}
 
 	uiFS, err := fs.Sub(web.FS, "dist")
@@ -115,13 +146,12 @@ func runApp() {
 		Relay:     relayHandler,
 		Keys:      keyAdmin,
 		RelayBind: *relayBind,
+		Signer:    sgn,
+		Shutdown:  stop,
 	})
 
-	url := fmt.Sprintf("http://%s/?token=%s", *bind, token)
+	url := appURL(daemon.Info{HTTPAddr: *bind, Token: token})
 	fmt.Println(url)
-
-	ctx, stop := shutdownContext(context.Background())
-	defer stop()
 
 	// Warm the update check in the background so the first UI poll is instant.
 	// It respects the disabled setting and reports failures through the API,
@@ -164,7 +194,7 @@ func runApp() {
 	// Launched by double-clicking the macOS .app bundle, the OS passes no
 	// flags — so a bundled build enters tray mode on its own. An explicit
 	// --tray still works for running the tray binary straight from a shell.
-	if *tray || inAppBundle() {
+	if windowed {
 		if !trayBuilt {
 			log.Fatalf("jumpgate: --tray needs a build made with the tray tag: go build -tags tray ./cmd/jumpgate")
 		}
@@ -173,7 +203,7 @@ func runApp() {
 		// server goes to a background goroutine. Closing the window returns from
 		// runWindow; we then cancel ctx to shut the server down cleanly.
 		srvErr := make(chan error, 1)
-		go func() { srvErr <- s.ListenAndServe(ctx) }()
+		go func() { srvErr <- serveAndPublish(ctx, stop, s, holder, *bind, token) }()
 		if err := waitReady(ctx, *bind); err != nil {
 			log.Fatalf("jumpgate: server did not come up: %v", err)
 		}
@@ -187,8 +217,29 @@ func runApp() {
 		openBrowser(url)
 	}
 
-	if err := s.ListenAndServe(ctx); err != nil {
+	if err := serveAndPublish(ctx, stop, s, holder, *bind, token); err != nil {
+		holder.Release()
 		log.Fatalf("jumpgate: server: %v", err)
+	}
+}
+
+// openRunningServer shows the already-running server instead of starting a
+// second one: in the tray window when this launch is windowed, otherwise in
+// the browser. server.json is 0600 in a 0700 directory, so its token is this
+// user's own.
+func openRunningServer(ctx context.Context, info daemon.Info, windowed, noOpen bool) {
+	url := appURL(info)
+	fmt.Fprintf(os.Stderr, "jumpgate: already running, pid %d; opening it\n", info.PID)
+	fmt.Println(url)
+	if windowed {
+		if !trayBuilt {
+			log.Fatalf("jumpgate: --tray needs a build made with the tray tag: go build -tags tray ./cmd/jumpgate")
+		}
+		runWindow(ctx, url)
+		return
+	}
+	if !noOpen {
+		openBrowser(url)
 	}
 }
 

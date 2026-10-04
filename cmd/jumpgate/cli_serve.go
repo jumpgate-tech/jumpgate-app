@@ -9,16 +9,13 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/valve-tech/jumpgate/cmd/jumpgate/web"
-	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/server"
-	"github.com/valve-tech/jumpgate/internal/signer"
 )
 
 func cmdServe(args []string) int {
@@ -38,13 +35,9 @@ func cmdServe(args []string) int {
 	if err != nil {
 		return failed("load config: %v", err)
 	}
-	var sgn signer.Signer
-	if cfg.Controller != nil {
-		k, err := signer.Open(context.Background(), signer.Store(cfg.Controller.KeyStore), cfg.Controller.KeyRef)
-		if err != nil {
-			return failed("load controller key: %v", err)
-		}
-		sgn = k
+	sgn, err := openControllerKey(cfg)
+	if err != nil {
+		return failed("load controller key: %v", err)
 	}
 	ui, err := fs.Sub(web.FS, "dist")
 	if err != nil {
@@ -56,20 +49,7 @@ func cmdServe(args []string) int {
 	token := server.NewSessionToken()
 	s := server.New(server.Config{Bind: *bind, Token: token, UI: ui, Signer: sgn, Shutdown: stop})
 
-	dir, err := daemon.RunDir()
-	if err != nil {
-		return failed("%v", err)
-	}
-	sock := filepath.Join(dir, "server.sock")
-	err = serveBoth(ctx, stop, s.ListenAndServe, func(ctx context.Context) error { return s.ServeUnix(ctx, sock) },
-		func() error { return waitForSocket(ctx, sock, 2*time.Second) },
-		func() error {
-			if err := holder.Publish(daemon.Info{PID: os.Getpid(), Socket: sock, HTTPAddr: *bind, Token: token, Version: buildinfo.Version(), StartedAt: time.Now().UTC()}); err != nil {
-				return fmt.Errorf("publish: %w", err)
-			}
-			fmt.Fprintf(os.Stderr, "jumpgate server on %s and %s\n", *bind, sock)
-			return nil
-		})
+	err = serveAndPublish(ctx, stop, s, holder, *bind, token)
 	if err != nil {
 		return failed("%v", err)
 	}

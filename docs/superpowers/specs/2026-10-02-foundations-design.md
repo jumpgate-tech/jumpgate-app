@@ -284,7 +284,14 @@ enrollment is what opens the socket to mode `0666` (see the agent section).
   cancel, so a closed browser tab, a dropped connection or a shutdown does not
   leave a half-cleared data directory.
 - The tray/web entry point takes the same lock and writes the same file, so the two
-  binaries never run two servers for one user.
+  binaries never run two servers for one user (R25). It also serves
+  `server.sock` and holds the controller key as `serve` does, so CLI commands
+  that find it work against it; a key that will not open is logged and those
+  routes answer 503 rather than keeping the UI down. When another server
+  already holds the lock, the app opens that server's URL from `server.json`
+  (in the tray window when launched windowed, otherwise the browser) and exits
+  instead of starting a second server; its own `--bind`/`--relay-bind` flags
+  are then ignored, with a note on stderr.
 - To let `jumpgate serve` serve the web UI, the `//go:embed all:web/dist`
   moves into a small package at `cmd/jumpgate/web`.
 

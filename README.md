@@ -68,7 +68,9 @@ a trusted, private network.
 
 The `jumpgate` binary also has a command line for managing boxes from a
 terminal. Run `jumpgate` with no arguments (or with flags such as `--bind`) for
-the web app as before.
+the web app as before. The web app and `jumpgate serve` share one server per
+user: if one is already running, launching the app opens it instead of
+starting a second.
 
 ```bash
 jumpgate keys init                      # create the controller signing key (keychain, or a 0600 file)
