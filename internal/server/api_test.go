@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -512,6 +513,35 @@ func TestAddSSHTargetDialsAndDefaultsHostKeyFile(t *testing.T) {
 	added := decodeJSON[config.Target](t, res)
 	if added.SSH == nil || added.SSH.HostKeyFile == "" {
 		t.Fatalf("added.SSH = %+v, want a defaulted HostKeyFile", added.SSH)
+	}
+}
+
+// M1: trust-on-first-use writes the target's HostKeyFile. A client-chosen
+// path could aim it at confirmed_hosts, which Strict trusts, so the server
+// always picks the file itself, for the jump host too.
+func TestAddSSHTargetIgnoresAClientChosenHostKeyFile(t *testing.T) {
+	a := newAPITestServer(t)
+	confirmed, err := config.ConfirmedHostsFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := a.do(t, "POST", "/api/targets", config.Target{
+		ID:   "box1",
+		Mode: "ssh",
+		SSH: &executor.SSHConfig{
+			Host: "10.0.0.5", User: "root", KeyPath: "/home/me/.ssh/id_ed25519", HostKeyFile: confirmed,
+			Jump: &executor.SSHConfig{Host: "10.0.0.1", User: "ops", HostKeyFile: confirmed},
+		},
+	})
+	if res.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("status = %d, want 201, body=%s", res.StatusCode, body)
+	}
+	added := decodeJSON[config.Target](t, res)
+	dir, _ := config.Dir()
+	want := filepath.Join(dir, "known_hosts")
+	if added.SSH.HostKeyFile != want || added.SSH.Jump == nil || added.SSH.Jump.HostKeyFile != want {
+		t.Fatalf("HostKeyFile = %q, jump %+v; want both %q", added.SSH.HostKeyFile, added.SSH.Jump, want)
 	}
 }
 

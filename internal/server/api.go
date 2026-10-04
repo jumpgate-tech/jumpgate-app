@@ -628,17 +628,21 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "ssh targets need host, user, and a key path or a running ssh-agent")
 			return
 		}
-		if t.SSH.HostKeyFile == "" {
-			dir, err := config.Dir()
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			// LOCAL path: known_hosts lives in the operator's own config dir
-			// on the control plane and is read/written with os.ReadFile, so
-			// filepath (host separator) is correct here — unlike the target
-			// paths below, which are always POSIX.
-			t.SSH.HostKeyFile = filepath.Join(dir, "known_hosts")
+		dir, err := config.Dir()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		// LOCAL path: known_hosts lives in the operator's own config dir
+		// on the control plane and is read/written with os.ReadFile, so
+		// filepath (host separator) is correct here — unlike the target
+		// paths below, which are always POSIX.
+		//
+		// The server always picks it, ignoring any client value, for every
+		// hop: trust-on-first-use writes this file, and a client-chosen path
+		// could point it at confirmed_hosts, which Strict trusts.
+		for hop := t.SSH; hop != nil; hop = hop.Jump {
+			hop.HostKeyFile = filepath.Join(dir, "known_hosts")
 		}
 	}
 
