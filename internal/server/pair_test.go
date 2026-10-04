@@ -14,9 +14,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	gliderssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
@@ -261,5 +263,94 @@ func TestEnsureTransportKeyIsStable(t *testing.T) {
 	}
 	if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(a)); err != nil {
 		t.Fatalf("not an authorized_keys line: %v", err)
+	}
+}
+
+// A dangling symlink at the key path is an error, never a reason to generate
+// a key (and never a loop).
+func TestEnsureTransportKeyRefusesADanglingSymlink(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	path := transportKeyPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(os.Getenv("HOME"), "dotfiles", "missing"), path); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := ensureTransportKey(); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), path) {
+			t.Fatalf("err = %v, want an error naming %s", err, path)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ensureTransportKey did not return within 5s")
+	}
+	if fi, err := os.Lstat(path); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the symlink was replaced: %v %v", fi, err)
+	}
+	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), "dotfiles", "missing")); !os.IsNotExist(err) {
+		t.Fatalf("a key was written through the symlink: %v", err)
+	}
+}
+
+// Concurrent first pairings all get the same key, and none reads a
+// half-written file.
+func TestEnsureTransportKeyConcurrentFirstUseAgrees(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	const n = 16
+	lines := make([]string, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			lines[i], errs[i] = ensureTransportKey()
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("call %d: %v", i, errs[i])
+		}
+		if lines[i] != lines[0] {
+			t.Fatalf("call %d returned a different key:\n%s\n%s", i, lines[i], lines[0])
+		}
+	}
+	if fi, err := os.Stat(filepath.Dir(transportKeyPath())); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("ssh dir: %v %v", fi, err)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(transportKeyPath()))
+	if len(entries) != 1 {
+		t.Fatalf("temp files left behind: %v", entries)
+	}
+}
+
+// An existing key is returned as is, never replaced.
+func TestEnsureTransportKeyKeepsAnExistingKey(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	block, _ := ssh.MarshalPrivateKey(priv, "")
+	path := transportKeyPath()
+	_ = os.MkdirAll(filepath.Dir(path), 0o700)
+	want := pem.EncodeToMemory(block)
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pub, _ := ssh.NewPublicKey(priv.Public())
+	line, err := ensureTransportKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line != strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub)))+" jumpgate-controller" {
+		t.Fatalf("line %q is not the existing key", line)
+	}
+	if got, _ := os.ReadFile(path); string(got) != string(want) {
+		t.Fatal("the key file was rewritten")
 	}
 }
