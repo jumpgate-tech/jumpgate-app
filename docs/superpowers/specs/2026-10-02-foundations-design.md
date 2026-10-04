@@ -341,7 +341,12 @@ sub-project 0; this sub-project does not ship before that check lands.
      files are always consulted, so a `@revoked` entry or a different key there
      is fatal even when the confirmed store matches. TOFU never writes the
      confirmed store and Strict never reads the TOFU file, so a key
-     auto-accepted by the web UI cannot count as confirmed by the CLI.
+     auto-accepted by the web UI cannot count as confirmed by the CLI. To keep
+     that true, the server always sets a new target's `HostKeyFile` (and each
+     jump hop's) to `~/.jumpgate/known_hosts` and ignores a client-supplied
+     path. Every mismatch or revocation wraps `executor.ErrHostKeyMismatch`;
+     strict dials also set `SSHConfig.HostKeyAlgorithms` to
+     `KnownHostKeyAlgorithms(confirmedFile, opensshFiles...)`.
    - `CaptureHostKey` + `RecordHostKey` (the CLI's confirm flow): capture
      connects far enough to read the key and hangs up before authenticating;
      the CLI prints the SHA256 fingerprint, a person confirms, and
