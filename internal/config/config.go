@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -53,6 +54,29 @@ type Target struct {
 	// Config.Gateways and clears it, so it is never written back out (see
 	// migrate). Nothing but the migration may read it.
 	LegacyGateway *catalog.GatewayConfig `json:"gateway,omitempty"`
+
+	// Agent is set once a jumpgate agent on this machine has been paired
+	// with this controller. Nil means intents cannot be sent to it.
+	Agent *AgentPairing `json:"agent,omitempty"`
+}
+
+// AgentPairing records that a target runs a paired jumpgate agent.
+type AgentPairing struct {
+	Address   string    `json:"address"` // the agent's signing address, fixed at pairing
+	PairedAt  time.Time `json:"pairedAt"`
+	Transport string    `json:"transport"` // "ssh" | "local"
+	NextSeq   uint64    `json:"nextSeq"`   // next intent sequence for this controller
+	// Socket overrides the agent's socket path, for tests and local
+	// development. Empty means the agent's default, /run/jumpgate/agent.sock.
+	Socket string `json:"socket,omitempty"`
+}
+
+// Controller is this machine's signing identity. The key itself is never here:
+// KeyRef names where it lives (a path, a keychain item, an op:// reference).
+type Controller struct {
+	KeyStore string `json:"keyStore"` // "file" | "keychain" | "1password"
+	KeyRef   string `json:"keyRef"`
+	Address  string `json:"address"`
 }
 
 // GatewayPlacement is WHERE a gateway runs. It is a property OF the gateway,
@@ -290,6 +314,10 @@ type Config struct {
 	// about a discarded key names the chain and a masked fingerprint, never the
 	// key itself.
 	Notices []string `json:"notices,omitempty"`
+
+	// Controller is this machine's signing identity, set by `jumpgate keys
+	// init`. Nil until then.
+	Controller *Controller `json:"controller,omitempty"`
 }
 
 // ValveKeyPlaceholder is the ${NAME} slot valve's own endpoints carry, and so

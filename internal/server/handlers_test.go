@@ -164,6 +164,7 @@ func TestAddTarget_RefusesAWireSuppliedByTheCaller(t *testing.T) {
 }
 
 func TestAddTarget_RejectsWhatCannotBeATarget(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "") // no agent, so "ssh with no key" has no way in
 	f := newFleet()
 	a := newAPITestServerWithExecutor(t, f.factory)
 
@@ -183,6 +184,21 @@ func TestAddTarget_RejectsWhatCannotBeATarget(t *testing.T) {
 				t.Fatalf("got %d, want 400", res.StatusCode)
 			}
 		})
+	}
+}
+
+// A running ssh-agent can stand in for a key path.
+func TestAddTarget_AcceptsAnSSHAgentInPlaceOfAKeyPath(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+	f := newFleet()
+	a := newAPITestServerWithExecutor(t, f.factory)
+
+	res := a.do(t, "POST", "/api/targets", map[string]any{
+		"id": "agentbox", "mode": "ssh", "ssh": map[string]string{"host": "h", "user": "ops"},
+	})
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("got %d, want 201", res.StatusCode)
 	}
 }
 

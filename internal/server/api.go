@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -120,6 +121,9 @@ type targetEntry struct {
 	// opBusy is set while a destructive operation (wipe, reset, clear) is
 	// running against this target. See claimTargetOp.
 	opBusy bool
+
+	// intentMu serialises intents to this target's agent; see handleIntent.
+	intentMu sync.Mutex
 
 	// Network-diagnostics state, guarded by its own mutex because auto-run
 	// goroutines touch it while entry.mu may be held by slow executor
@@ -327,7 +331,7 @@ func (s *Server) getMonitor(t config.Target, refRPCBase string) (mon *monitor.Mo
 	}
 	refRPC := ""
 	if refRPCBase != "" {
-		refRPC = fmt.Sprintf("%s/evm/%d", refRPCBase, t.Wire.ChainID)
+		refRPC = refRPCURL(refRPCBase, t.Wire.ChainID)
 	}
 	mon = monitor.New(monitor.Config{Exec: ex, Wire: *t.Wire, RefRPC: refRPC})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -385,6 +389,11 @@ func (s *Server) updateConfig(fn func(c *config.Config) error) (config.Config, e
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 	return config.Update(fn)
+}
+
+// refRPCURL is the per-chain reference endpoint under base.
+func refRPCURL(base string, chainID int) string {
+	return fmt.Sprintf("%s/evm/%d", base, chainID)
 }
 
 func findTarget(cfg config.Config, id string) (config.Target, bool) {
@@ -460,6 +469,11 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/targets/{id}/logs/stream", s.handleLogsStream)
 
 	mux.HandleFunc("POST /api/targets/{id}/explain", s.handleExplain)
+
+	// Agent routes. Both make the server sign with the controller key, which
+	// is why they live here behind authMiddleware's Origin check.
+	mux.HandleFunc("POST /api/targets/{id}/intent/{kind}", s.handleIntent)
+	mux.HandleFunc("POST /api/targets/{id}/pair", s.handlePair)
 
 	// The literal "clear" segment is more specific than the {action}
 	// wildcard below it and wins for an exact match — Go 1.22+ ServeMux
@@ -610,8 +624,8 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if t.Mode == "ssh" {
-		if t.SSH == nil || t.SSH.Host == "" || t.SSH.User == "" || t.SSH.KeyPath == "" {
-			writeError(w, http.StatusBadRequest, "ssh mode requires ssh.host, ssh.user, and ssh.keyPath")
+		if t.SSH == nil || t.SSH.Host == "" || t.SSH.User == "" || (t.SSH.KeyPath == "" && os.Getenv("SSH_AUTH_SOCK") == "") {
+			writeError(w, http.StatusBadRequest, "ssh targets need host, user, and a key path or a running ssh-agent")
 			return
 		}
 		if t.SSH.HostKeyFile == "" {

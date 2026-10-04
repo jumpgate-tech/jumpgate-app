@@ -23,6 +23,8 @@ import (
 // ---------------------------------------------------------------------
 
 func TestAddTarget_RefusesWhatItCannotDrive(t *testing.T) {
+	// With no ssh-agent, a key path is the only way in.
+	t.Setenv("SSH_AUTH_SOCK", "")
 	tests := []struct {
 		name    string
 		body    any
@@ -47,7 +49,7 @@ func TestAddTarget_RefusesWhatItCannotDrive(t *testing.T) {
 			name:    "ssh with no ssh block",
 			body:    map[string]any{"id": "box", "mode": "ssh"},
 			want:    http.StatusBadRequest,
-			wantSay: "ssh.host",
+			wantSay: "host",
 		},
 		{
 			name: "ssh missing a key path",
@@ -55,7 +57,7 @@ func TestAddTarget_RefusesWhatItCannotDrive(t *testing.T) {
 				"host": "10.0.0.9", "user": "root",
 			}},
 			want:    http.StatusBadRequest,
-			wantSay: "keyPath",
+			wantSay: "key path",
 		},
 	}
 

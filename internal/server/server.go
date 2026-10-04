@@ -28,6 +28,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/setup"
+	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/updatecheck"
 )
 
@@ -104,6 +105,11 @@ type Config struct {
 	// Docker readiness gate probes. Injectable for tests (a fake that scripts
 	// docker probes); nil selects executor.NewLocal.
 	NewLocalExecutor func() executor.Executor
+
+	// Signer is the controller key the intent and pair routes sign with. Only
+	// this server process ever holds it. Nil means those routes answer 503
+	// with code "no_controller_key".
+	Signer signer.Signer
 }
 
 // Server is the jumpgate local HTTP server.

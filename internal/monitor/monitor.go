@@ -234,22 +234,28 @@ func (m *Monitor) poll(ctx context.Context) Snapshot {
 	return snap
 }
 
-// fetchRefHead fetches eth_blockNumber from the public reference RPC
-// directly over net/http (not the Executor — this runs from the app host,
-// not the target). Any failure (RefRPC unset, transport error, non-200,
-// unparseable body) yields 0, not an error.
+// fetchRefHead fetches the reference head from the monitor's RefRPC; see
+// FetchRefHead.
 func (m *Monitor) fetchRefHead(ctx context.Context) uint64 {
-	if m.cfg.RefRPC == "" {
+	return FetchRefHead(ctx, m.httpClient, m.cfg.RefRPC)
+}
+
+// FetchRefHead fetches eth_blockNumber from the public reference RPC at url
+// using hc. This runs locally (it is a public endpoint, not the target). Any
+// failure (url empty, transport error, non-200, unparseable body) yields 0,
+// never an error.
+func FetchRefHead(ctx context.Context, hc *http.Client, url string) uint64 {
+	if url == "" {
 		return 0
 	}
 	body := `{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}`
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.cfg.RefRPC, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
 		return 0
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	res, err := m.httpClient.Do(req)
+	res, err := hc.Do(req)
 	if err != nil {
 		return 0
 	}
