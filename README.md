@@ -64,6 +64,36 @@ loopback-only regardless, and the security checklist grades the bind
 bind fails) — remember the RPC is unauthenticated, so only ever bind it to
 a trusted, private network.
 
+## Command line
+
+The `jumpgate` binary also has a command line for managing boxes from a
+terminal. Run `jumpgate` with no arguments (or with flags such as `--bind`) for
+the web app as before.
+
+```bash
+jumpgate keys init                      # create the controller signing key (keychain, or a 0600 file)
+jumpgate hosts add box-a --ssh root@203.0.113.7   # pair a box (or: --local for this machine)
+jumpgate status box-a                   # also: disk, endpoints, firewall
+jumpgate logs box-a -n 200
+jumpgate service box-a beacon restart   # exec|beacon, start|stop|restart
+jumpgate serve                          # run the controller server (the other commands start it for you)
+jumpgate stop                           # stop it, via its local API
+```
+
+`jumpgate hosts add` installs a small agent (`jumpgate-agent.service`) on the
+box, a restricted `jumpgate` tunnel user, and an sshd drop-in that confines that
+user to the agent's unix socket. Every command is a signed intent that the agent
+checks against its policy and answers with a signed receipt. Host keys are
+confirmed by you, by fingerprint, and remembered in `~/.jumpgate/confirmed_hosts`.
+Once pairing succeeds, **disable root SSH login** on the box
+(`PermitRootLogin no`); you will not need it again unless you have to repair the
+agent.
+
+Exit codes: 0 success; 1 the operation failed or was refused; 2 bad usage, or a
+missing prerequisite (no controller key yet, box not paired); 3 box unreachable;
+4 security failure (an unknown or changed host key, or a reply not signed by the
+paired agent).
+
 ## Requirements
 
 - The **target** being set up (the box that will run the execution + beacon

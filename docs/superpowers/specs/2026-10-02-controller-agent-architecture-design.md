@@ -230,7 +230,7 @@ once built, the rules in `docs/design/validator-capability.md`:
 |---|---|---|---|
 | 0 | Review fixes (own branch) | Relay/billing: WebSocket and beacon metering, idempotent settle, no caching of the fallback price. Quick wins: Origin check, `ReadHeaderTimeout`, Gemini key in errors, `.gitignore` sidecars | — |
 | 1 | Foundations | EIP-712, signers (key file, keychain, 1Password), intents and replay rules, policy, agent on unix socket (SSH tunnel and `SO_PEERCRED` paths), bootstrap and pairing, detached server and discovery, config lock; executor fixes (secrets via stdin under `umask 077`, real cancel, handshake deadline, ssh-agent, host-key decider); `DataDir` validation; first intents (status, disk, endpoints, firewall, logs tail, start/stop/restart) | 0 (Origin check) |
-| 2 | Durable jobs | systemd-run units, manifest, signed log, leases, decision points, adoption, completion markers | 1 |
+| 2 | Durable jobs | systemd-run units, manifest, signed log, leases, decision points, adoption, completion markers, on-box rename migration (`node.migrate-names`) | 1 |
 | 3 | TUI core + browser approvals | Fleet, host detail, jobs inbox, hosts, signers, toggles, `/api/fleet`, browser signing page | 1, 2 |
 | 4 | Native hardware signers | Ledger, Trezor, Keystone, Lattice | 1 (3 for UI) |
 | 5 | Setup wizard over intents | `Setup` as a durable job | 2, 3 |
@@ -253,10 +253,12 @@ the new import path:
   `jumpgate serve`; the tray build keeps its tag).
 - Controller config directory `~/.valve-node-app` → `~/.jumpgate`, migrated
   once on first start (move, leave a pointer file, never copy secrets twice).
-- On-box service user and group `valve-node-app` → `jumpgate-node`, migrated by
-  the agent when a box is paired: stop units, `usermod`/`groupmod` rename,
+- On-box service user and group `valve-node-app` → `jumpgate-node`, along with
+  the units, `/var/lib/valve-node-app`, container names and `VALVE_*` names, is
+  migrated by a sub-project 2 durable-job intent (`node.migrate-names`), not by
+  pairing; pairing in sub-project 1 leaves them untouched. The migration will: stop units, `usermod`/`groupmod` rename,
   re-render units, `chown` only if ownership is by name rather than uid, start
-  units, verify. Boxes not yet paired keep the old user until then; the catalog
+  units, verify. Boxes keep the old names until that intent runs; the catalog
   accepts both names during the transition.
 - `jumpgate` (the SSH-only tunnel user) and `jumpgate-node` (runs the clients)
   are deliberately different accounts.

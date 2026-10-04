@@ -32,9 +32,13 @@ this sub-project happen only through bootstrap (root SSH).
 
 Done first, as its own commit, per "Naming" in the parent spec: module path,
 `cmd/jumpgate`, `~/.jumpgate` with one-time migration, and the catalog accepting
-both `valve-node-app` and `jumpgate-node` service users. On-box user migration
-is part of pairing (bootstrap step 6a: stop units, rename user and group,
-re-render units, start, verify). Paths below use the new names.
+both `valve-node-app` and `jumpgate-node` service users. **On-box names are not
+migrated by pairing.** Units (`valve-node-app-exec.service` and friends),
+`/var/lib/valve-node-app`, container names, the `valve-node-app` service user
+and the `VALVE_*` environment placeholders are untouched by this sub-project;
+pairing only adds the `jumpgate` tunnel user and the agent. Their migration is a
+durable-job intent in sub-project 2 (`node.migrate-names`: stop units, rename
+user and group, re-render units, start, verify). Paths below use the new names.
 
 ## Components
 
@@ -45,10 +49,11 @@ New packages, each usable and testable alone:
 | `internal/eip712` | Encode and hash EIP-712 typed data for a fixed type set | `x/crypto/sha3` |
 | `internal/signer` | `Signer` interface; key-file, OS-keychain and 1Password implementations; address recovery and verification | `eip712`, `decred/secp256k1` |
 | `internal/intent` | Intent and receipt types, their EIP-712 schemas, envelope encoding, replay rules | `eip712`, `signer` |
-| `internal/agent` | The agent: socket listener, peer identification, policy, replay state, intent dispatch to `ops` | `intent`, `ops`, `executor` (local) |
+| `internal/agent` | The agent: socket listener, peer-credential gating at `Accept`, policy, replay state, intent dispatch to `ops` | `intent`, `ops`, `executor` (local) |
 | `internal/agentclient` | Controller side: dial (SSH tunnel or local socket), sign, send, verify receipt | `intent`, `signer`, `executor` |
 | `internal/bootstrap` | Install and pair an agent over a privileged executor | `executor`, `agentclient`, `catalog` |
-| `internal/daemon` | Single-instance lock, discovery file, detached start of the controller server | `config` |
+| `internal/daemon` | Single-instance lock, discovery file, detached start of the controller server | `config`, `filelock` |
+| `internal/filelock` | Cross-platform advisory file locks (`flock` on unix, `LockFileEx` on Windows), shared by `config` and `daemon` | stdlib |
 | `cmd/jumpgate` | Subcommands: `serve`, `stop`, `agent`, `hosts`, and the intent commands above | all of the above |
 
 ### `internal/eip712`
@@ -116,7 +121,7 @@ Receipt(
 
   | Kind | Payload | Agent calls |
   |---|---|---|
-  | `status.read` | `{}` | `monitor`'s probes run once (factored out of its polling loop if they are not already callable): local heads, peers, syncing, disk %. Head lag against a reference is computed by the controller, which holds `RefRPCBase` |
+  | `status.read` | `{}` | `monitor`'s probes run once (factored out of its polling loop if they are not already callable): local heads, peers, syncing, disk %. Head lag against a reference is computed by the controller, which holds `RefRPCBase`: the server's reply to `status` carries an extra `refHead` field (omitted when unavailable) next to the agent's result |
   | `disk.read` | `{}` | `ops.DiskUsage`, `ops.FreeBytesAt` |
   | `endpoints.read` | `{"sshLogin": "…"}` | `ops.Endpoints` |
   | `firewall.read` | `{}` | `ops.FirewallChecklist` |
@@ -156,16 +161,20 @@ controller) if it is rejected for staleness.
 - Listens on `/run/jumpgate/agent.sock`, chowned `root:jumpgate`, mode `0660`.
   HTTP/1.1 over the unix listener: `POST /v1/intent` (envelope in, receipt out).
   No other routes.
-- Peer identification with `SO_PEERCRED`: accept uid 0 or members of group
-  `jumpgate`; reject everything else before reading the body. A remote
-  controller arrives as the `jumpgate` user through sshd, so the same check
-  covers both paths.
+- Peer identification with `SO_PEERCRED` (`LOCAL_PEERCRED` on macOS, for tests):
+  the listener is wrapped so the check runs inside `Accept`, and a refused peer
+  is closed before net/http reads a byte of it. Accepted: uid 0 (or the agent's
+  own uid), uids listed in `policy.json` `localUids`, and members of group
+  `jumpgate`. A remote controller arrives as the `jumpgate` user through sshd,
+  so the same check covers both paths. A refusal is not an error: `Accept` moves
+  on to the next connection.
 - Request body capped at 1 MiB; one intent at a time per controller (a second
   concurrent request from the same controller is rejected, which also keeps seq
   ordering simple).
 - On-box files:
   - `/etc/jumpgate/policy.json` (root 0600): enrolled signers
-    `{address, tier, label}` and the kind → requirement table.
+    `{address, tier, label}`, the kind → requirement table, and `localUids`
+    (uids allowed on the socket without group membership).
   - `/etc/jumpgate/node.json` (root 0600): this box's `catalog.WireConfig`,
     written at pairing.
   - `/var/lib/jumpgate/agent.key` (root 0600) and
@@ -202,21 +211,24 @@ a verify check like `setup.Step`:
 2. **Upload agent binary** — pick `jumpgate-linux-<arch>` from
    `uname -m`. If the controller itself is that platform, use
    `os.Executable()`; otherwise use `~/.jumpgate/agents/` (populated by
-   `make agents`, with a `SHA256SUMS` file). Upload to
+   `scripts/build-agents.sh`, with a `SHA256SUMS` file). Upload to
    `/usr/local/lib/jumpgate/jumpgate.new`, verify the SHA-256 on the box, then
    rename into place.
 3. **User and group** — system user `jumpgate`, shell `/usr/sbin/nologin`, no
    password; group `jumpgate`.
 4. **sshd** — write `/etc/ssh/sshd_config.d/50-jumpgate.conf` (the `Match User
    jumpgate` block), run `sshd -t`; on failure remove the file and stop; on
-   success reload sshd. Install `~jumpgate/.ssh/authorized_keys` (0600, owned by
-   `jumpgate`) with the restricted controller transport key.
-5. **Agent identity** — `jumpgate agent init` generates the agent key if absent
-   and prints its address. The controller records the address. Trust in this
+   success reload sshd. Install `authorized_keys` (0600, owned by
+   `jumpgate`) with the restricted controller transport key. The tunnel user's
+   home is `/var/lib/jumpgate/home`, so the file is
+   `/var/lib/jumpgate/home/.ssh/authorized_keys`.
+5. **Agent identity** — `jumpgate agent init`, run on the box, generates the
+   agent key if absent and prints its address. The controller records the address. Trust in this
    value comes from the host-key confirmation of the privileged session.
-6. **Policy and node config** — write `policy.json` enrolling the controller's
-   signing address as routine tier, and `node.json` from the target's `Wire`
-   (if setup has run).
+6. **Policy and node config** — `jumpgate agent enroll --address … --tier
+   routine --label …` on the box enrolls the controller's signing address in
+   `policy.json` (adding to an existing file, never replacing it), and `node.json` is written
+   from the target's `Wire` (if setup has run).
 7. **Service** — install and start `jumpgate-agent.service`.
 8. **Verify** — dial as `jumpgate` through the tunnel, send `agent.info`, check
    the signed receipt. Only then mark the target paired in `config.json`
@@ -228,7 +240,9 @@ already-paired box is the same flow; step 6 appends a signer instead of
 replacing the file.
 
 `--local` runs the same steps through `executor.NewLocal()` with `sudo`, skips
-step 4, and adds the invoking user to group `jumpgate`.
+step 4, and enrolls the invoking user's uid in `policy.json` `localUids`
+(`jumpgate agent enroll --local-uid N`) instead of adding the user to group
+`jumpgate`, so no re-login is needed for the new group to take effect.
 
 ### `internal/daemon` and `jumpgate serve`
 
@@ -237,15 +251,21 @@ step 4, and adds the invoking user to group `jumpgate`.
   `serve` fails with "already running, pid N".
 - `server.json` (0600): `{pid, socket, httpAddr, token, version, startedAt}`,
   written after the listeners are up, removed on clean exit.
-- `server.sock` (0600): the existing `/api` mux, also served on the unix
+- `server.sock` (0600; the server is its own authentication boundary, so the
+  session token is still required): the existing `/api` mux, also served on the unix
   socket. The HTTP listener (`--bind`, default `127.0.0.1:8799`) remains for the
   web UI.
 - `jumpgate` subcommands that need the server find it with `server.json`, check
   that the lock is held and `GET /api/health` answers, and otherwise start
-  `jumpgate serve --detach` (re-exec with `setsid`, output to
-  `run/server.log`) and wait up to 10 s for it.
-- `jumpgate stop` sends SIGTERM to the recorded pid after confirming the lock is
-  held by it.
+  `jumpgate serve --no-open` as a child in its own session (`Setsid` on unix;
+  there is no `--detach` flag), output to `run/server.log` (0600) and wait up to 10 s for it.
+- `jumpgate stop` calls `POST /api/shutdown` on the running server (found through
+  `server.json`, authenticated with its token) and returns once the server
+  answers 202; it never signals a pid, because a pid read from a file may by now
+  belong to another process. The server stops accepting requests and waits for destructive operations in
+  flight: `criticalOp` runs clear and wipe on a context their client cannot
+  cancel, so a closed browser tab, a dropped connection or a shutdown does not
+  leave a half-cleared data directory.
 - The tray/web entry point takes the same lock and writes the same file, so the two
   binaries never run two servers for one user.
 - To let `jumpgate serve` serve the web UI, the `//go:embed all:web/dist`
@@ -282,13 +302,27 @@ sub-project 0; this sub-project does not ship before that check lands.
 5. **ssh-agent auth.** If `SSH_AUTH_SOCK` is set, its keys are offered before
    `KeyPath`. Passphrase-protected key files are supported only through the
    agent (documented).
-6. **Host-key decider.** `SSHConfig.HostKey HostKeyDecider`, called for an
-   unknown host with the key and its SHA256 fingerprint. Implementations:
-   `TOFU` (today's behaviour; the web UI keeps it until sub-project 6),
-   `KnownHosts` (accept if `~/.ssh/known_hosts` matches, using
-   `x/crypto/ssh/knownhosts`), and `Confirm` (the CLI prints the fingerprint and
-   asks). `hosts add` uses `KnownHosts`, then `Confirm`. A mismatch is always a
-   hard error.
+6. **Host-key decider.** `SSHConfig.HostKey` is an `ssh.HostKeyCallback`.
+   Implementations in `internal/executor`:
+   - `TOFUHostKeyCallback` (today's behaviour, writing the target's
+     `HostKeyFile`; the web UI keeps it as its default until sub-project 6).
+   - `Strict(confirmedFile, opensshFiles...)`: accepts a host only if its key
+     is in the confirmed-only store `~/.jumpgate/confirmed_hosts`
+     (`config.ConfirmedHostsFile()`) or in the operator's OpenSSH
+     `~/.ssh/known_hosts`. It never records anything: an unknown host is an
+     `*UnknownHostError` the caller must put in front of a person. The OpenSSH
+     files are always consulted, so a `@revoked` entry or a different key there
+     is fatal even when the confirmed store matches. TOFU never writes the
+     confirmed store and Strict never reads the TOFU file, so a key
+     auto-accepted by the web UI cannot count as confirmed by the CLI.
+   - `CaptureHostKey` + `RecordHostKey` (the CLI's confirm flow): capture
+     connects far enough to read the key and hangs up before authenticating;
+     the CLI prints the SHA256 fingerprint, a person confirms, and
+     `RecordHostKey` appends the key to the confirmed store. `CaptureHostKey`
+     needs `Jump.HostKey` when a jump is configured and refuses otherwise, and a
+     strict dial applies its `HostKey` to the jump host too (never TOFU).
+   `hosts add` dials with `Strict`, and on `UnknownHostError` captures,
+   confirms and records, then retries. A mismatch is always a hard error.
 7. **`DataDir` validation.** `catalog.ValidateDataDir`: absolute, already clean,
    at least two path components, no whitespace or control characters, and not
    one of `/bin /boot /dev /etc /home /lib /lib64 /opt /proc /root /run /sbin
@@ -304,6 +338,11 @@ sub-project 0; this sub-project does not ship before that check lands.
   `replayed_nonce`, `busy`, `invalid_payload`, `validation`) inside a signed
   receipt, and the CLI prints the code plus a one-line remedy (for example
   `clock_skew` reports both clocks).
+- CLI exit codes: 0 ok; 1 failed, including a rejection, an `agent_http`
+  refusal and any server error code the CLI does not know; 2 usage, which also
+  covers `no_controller_key` and `not_paired` (the operator has to run a
+  different command first); 3 `unreachable`; 4 security (`bad_receipt`,
+  `host_key`, `unknown_host`). Scripts can depend on these.
 - Transport failures are distinct from rejections: "could not reach agent on
   box-a (ssh: …)" never looks like "box-a refused".
 - A receipt that fails verification is reported as a security error naming the
@@ -329,7 +368,7 @@ sub-project 0; this sub-project does not ship before that check lands.
   mismatched seq).
 - `bootstrap`: each step against a fake executor (commands and verify checks),
   plus an end-to-end test in a systemd-enabled container (Debian 12 and Ubuntu
-  24.04) run with `make e2e-agent`, not in the default `go test ./...`.
+  24.04) run with `scripts/e2e-agent.sh` (needs Docker; `BASE=ubuntu:24.04` for the second distro), not in the default `go test ./...`.
 - Executor fixes: `WriteFile` never puts content in the command string; cancel
   kills the remote process group (verified against the container); handshake
   deadline against a TCP listener that never speaks SSH; host-key deciders.
@@ -341,7 +380,7 @@ sub-project 0; this sub-project does not ship before that check lands.
 ## Done when
 
 - The three goal flows above work against a fresh Debian 12 box and the local
-  machine, and `go test ./...` plus `make e2e-agent` pass.
+  machine, and `go test ./...` plus `scripts/e2e-agent.sh` pass.
 - A captured intent replayed to the same agent is rejected with `stale_seq`;
   the same intent sent to another agent is rejected with `wrong_agent`.
 - The web UI behaves as before, apart from the shared-code fixes.
