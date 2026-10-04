@@ -1,18 +1,24 @@
 package agentclient
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	gliderssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
@@ -23,6 +29,28 @@ import (
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/signer"
 )
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustDial(t *testing.T, tg Target, s signer.Signer, seqs SeqStore) *Client {
+	t.Helper()
+	c, err := Dial(context.Background(), tg, s, seqs)
+	must(t, err)
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
+func mustKey(t *testing.T) *signer.Key {
+	t.Helper()
+	k, err := signer.GenerateKey()
+	must(t, err)
+	return k
+}
 
 type stubExec struct{}
 
@@ -37,13 +65,16 @@ func (stubExec) Close() error                                                 { 
 // agent's address and the enrolled controller key.
 func startAgent(t *testing.T) (sock string, agentAddr eip712.Address, controller *signer.Key, a *agent.Agent) {
 	t.Helper()
-	dir, _ := os.MkdirTemp("/tmp", "jgc")
+	dir, err := os.MkdirTemp("/tmp", "jgc")
+	must(t, err)
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	agentKey, _ := signer.GenerateKey()
-	controller, _ = signer.GenerateKey()
+	agentKey, err := signer.GenerateKey()
+	must(t, err)
+	controller, err = signer.GenerateKey()
+	must(t, err)
 	p := agent.Policy{Signers: []agent.SignerEntry{{Address: controller.Address().Hex(), Tier: agent.TierRoutine}}}
-	_ = p.Save(filepath.Join(dir, "policy.json"))
-	_ = agent.InitReplay(filepath.Join(dir, "replay.json"))
+	must(t, p.Save(filepath.Join(dir, "policy.json")))
+	must(t, agent.InitReplay(filepath.Join(dir, "replay.json")))
 	a = agent.New(agent.Config{Key: agentKey, Exec: stubExec{}, PolicyPath: filepath.Join(dir, "policy.json"),
 		ReplayPath: filepath.Join(dir, "replay.json"), NodePath: filepath.Join(dir, "node.json")})
 	sock = filepath.Join(dir, "a.sock")
@@ -69,7 +100,7 @@ func TestDoLocalAgentInfo(t *testing.T) {
 		t.Fatalf("Do = %+v, %v", res, err)
 	}
 	var info intent.AgentInfo
-	_ = json.Unmarshal(res.Result, &info)
+	must(t, json.Unmarshal(res.Result, &info))
 	if info.Address != agentAddr.Hex() {
 		t.Fatalf("info = %+v", info)
 	}
@@ -79,9 +110,8 @@ func TestDoLocalAgentInfo(t *testing.T) {
 // never a result.
 func TestDoRejectsAReceiptFromTheWrongAgent(t *testing.T) {
 	sock, _, controller, _ := startAgent(t)
-	other, _ := signer.GenerateKey()
-	c, _ := Dial(context.Background(), Target{Local: true, Socket: sock, Agent: other.Address()}, controller, NewMemorySeqStore())
-	defer c.Close()
+	other := mustKey(t)
+	c := mustDial(t, Target{Local: true, Socket: sock, Agent: other.Address()}, controller, NewMemorySeqStore())
 	_, err := c.Do(context.Background(), intent.KindAgentInfo, struct{}{})
 	if !errors.Is(err, ErrBadReceipt) {
 		t.Fatalf("err = %v, want ErrBadReceipt", err)
@@ -93,14 +123,13 @@ func TestDoRejectsAReceiptFromTheWrongAgent(t *testing.T) {
 func TestDoResyncsAStaleSequence(t *testing.T) {
 	sock, agentAddr, controller, _ := startAgent(t)
 	seqs := NewMemorySeqStore()
-	c, _ := Dial(context.Background(), Target{Local: true, Socket: sock, Agent: agentAddr}, controller, seqs)
-	defer c.Close()
+	c := mustDial(t, Target{Local: true, Socket: sock, Agent: agentAddr}, controller, seqs)
 	for i := 0; i < 3; i++ {
 		if _, err := c.Do(context.Background(), intent.KindAgentInfo, struct{}{}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	_ = seqs.Set(agentAddr, 1) // forget
+	must(t, seqs.Set(agentAddr, 1)) // forget
 	res, err := c.Do(context.Background(), intent.KindAgentInfo, struct{}{})
 	if err != nil || res.Status != intent.StatusOK {
 		t.Fatalf("after resync: %+v, %v", res, err)
@@ -108,7 +137,7 @@ func TestDoResyncsAStaleSequence(t *testing.T) {
 }
 
 func TestDoSeparatesUnreachableFromRefused(t *testing.T) {
-	k, _ := signer.GenerateKey()
+	k := mustKey(t)
 	c, err := Dial(context.Background(), Target{Local: true, Socket: "/tmp/does-not-exist.sock", Agent: k.Address()}, k, NewMemorySeqStore())
 	if err == nil {
 		_, err = c.Do(context.Background(), intent.KindAgentInfo, struct{}{})
@@ -224,34 +253,120 @@ func TestDoRejectsReceiptsThatDoNotAnswerThisRequest(t *testing.T) {
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			agentKey, _ := signer.GenerateKey()
-			controller, _ := signer.GenerateKey()
-			dir, _ := os.MkdirTemp("/tmp", "jgf")
-			t.Cleanup(func() { os.RemoveAll(dir) })
-			sock := filepath.Join(dir, "a.sock")
-			ln, err := net.Listen("unix", sock)
-			if err != nil {
-				t.Fatal(err)
-			}
-			srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			agentKey, controller := mustKey(t), mustKey(t)
+			sock := fakeAgent(t, func(w http.ResponseWriter, r *http.Request) {
 				var env intent.Envelope
-				_ = json.NewDecoder(r.Body).Decode(&env)
-				in, _ := env.Intent.Parse()
-				digest, _ := in.Digest()
+				if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+					t.Error(err)
+					return
+				}
+				in, err := env.Intent.Parse()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				digest, err := in.Digest()
+				if err != nil {
+					t.Error(err)
+					return
+				}
 				result := []byte(`{"ok":true}`)
 				rc := intent.Receipt{Agent: agentKey.Address(), RequestHash: digest, Seq: in.Seq, Status: intent.StatusOK, ResultHash: intent.Hash(result)}
 				mutate(&rc, in, &result)
-				sig, _ := agentKey.SignTypedData(r.Context(), rc.TypedData())
-				_ = json.NewEncoder(w).Encode(intent.ReceiptEnvelope{Receipt: rc.JSON(), Result: result, Sig: sig.Hex()})
-			})}
-			go srv.Serve(ln)
-			t.Cleanup(func() { srv.Close() })
-			c, _ := Dial(context.Background(), Target{Local: true, Socket: sock, Agent: agentKey.Address()}, controller, NewMemorySeqStore())
-			defer c.Close()
+				sig, err := agentKey.SignTypedData(r.Context(), rc.TypedData())
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				json.NewEncoder(w).Encode(intent.ReceiptEnvelope{Receipt: rc.JSON(), Result: result, Sig: sig.Hex()})
+			})
+			c := mustDial(t, Target{Local: true, Socket: sock, Agent: agentKey.Address()}, controller, NewMemorySeqStore())
 			res, err := c.Do(context.Background(), intent.KindAgentInfo, struct{}{})
 			if !errors.Is(err, ErrBadReceipt) || res.Result != nil {
 				t.Fatalf("Do = %+v, %v; want ErrBadReceipt and no result", res, err)
 			}
 		})
+	}
+}
+
+// fakeAgent serves handler on a fresh unix socket and returns its path.
+func fakeAgent(t *testing.T, handler http.HandlerFunc) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "jgf")
+	must(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "a.sock")
+	ln, err := net.Listen("unix", sock)
+	must(t, err)
+	srv := &http.Server{Handler: handler}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	return sock
+}
+
+// An endless reply is cut off and refused, not buffered without bound.
+func TestDoRefusesAnOversizedReply(t *testing.T) {
+	k, controller := mustKey(t), mustKey(t)
+	sock := fakeAgent(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"receipt":{},"result":"`))
+		chunk := bytes.Repeat([]byte("A"), 1<<20)
+		for i := 0; i < 64; i++ { // 64 MiB offered, limit is 16
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	})
+	c := mustDial(t, Target{Local: true, Socket: sock, Agent: k.Address()}, controller, NewMemorySeqStore())
+	start := time.Now()
+	res, err := c.Do(context.Background(), intent.KindAgentInfo, struct{}{})
+	if !errors.Is(err, ErrBadReceipt) || res.Result != nil {
+		t.Fatalf("Do = %+v, %v; want ErrBadReceipt", res, err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("took %v", d)
+	}
+}
+
+// Non-200 answers are unsigned; they are an HTTP error, not unreachable and
+// not a Rejection.
+func TestDoReportsHTTPErrorsFromTheAgent(t *testing.T) {
+	for _, code := range []int{http.StatusForbidden, http.StatusRequestEntityTooLarge, http.StatusBadRequest} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			k, controller := mustKey(t), mustKey(t)
+			sock := fakeAgent(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "nope here", code) })
+			c := mustDial(t, Target{Local: true, Socket: sock, Agent: k.Address()}, controller, NewMemorySeqStore())
+			res, err := c.Do(context.Background(), intent.KindAgentInfo, struct{}{})
+			if !errors.Is(err, ErrAgentHTTP) || errors.Is(err, ErrUnreachable) || res.Rejection != nil {
+				t.Fatalf("Do = %+v, %v; want ErrAgentHTTP", res, err)
+			}
+			if !strings.Contains(err.Error(), strconv.Itoa(code)) || !strings.Contains(err.Error(), "nope here") {
+				t.Fatalf("message lacks status or body: %v", err)
+			}
+		})
+	}
+}
+
+// Concurrent Do calls on one client never sign the same sequence.
+func TestDoIsSafeForConcurrentUse(t *testing.T) {
+	sock, agentAddr, controller, _ := startAgent(t)
+	c := mustDial(t, Target{Local: true, Socket: sock, Agent: agentAddr}, controller, NewMemorySeqStore())
+	const n = 16
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := c.Do(context.Background(), intent.KindAgentInfo, struct{}{})
+			if err == nil && res.Status != intent.StatusOK {
+				err = fmt.Errorf("status %d: %+v", res.Status, res.Rejection)
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		must(t, err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -25,7 +26,15 @@ var (
 	ErrBadReceipt = errors.New("agentclient: receipt failed verification")
 	// ErrUnreachable is a transport failure, never a refusal.
 	ErrUnreachable = errors.New("agentclient: could not reach the agent")
+	// ErrAgentHTTP means the agent socket answered with a non-200 HTTP status
+	// (peer refused, request too large, unreadable body). Such replies are
+	// unsigned and are never a Rejection.
+	ErrAgentHTTP = errors.New("agentclient: agent socket answered with an HTTP error")
 )
+
+// maxReply bounds how much of an agent reply is read before verification; it
+// leaves room for logs.read at n=2000.
+const maxReply = 16 << 20
 
 // Target says how to reach one agent and whom to expect there.
 type Target struct {
@@ -80,6 +89,7 @@ type Client struct {
 	seqs   SeqStore
 	hc     *http.Client
 	closer func() error
+	mu     sync.Mutex // serialises Do so a sequence is never signed twice
 	now    func() time.Time
 }
 
@@ -98,6 +108,8 @@ func (c *Client) Close() error { return c.closer() }
 // Do sends one intent and returns the verified answer. A stale_seq rejection
 // resynchronises the counter from the agent's signed LastSeq and retries once.
 func (c *Client) Do(ctx context.Context, kind string, payload any) (Response, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return Response{}, err
@@ -147,10 +159,19 @@ func (c *Client) once(ctx context.Context, kind string, body []byte) (Response, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return Response{}, fmt.Errorf("%w: agent socket answered HTTP %d", ErrUnreachable, resp.StatusCode)
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		return Response{}, fmt.Errorf("%w: HTTP %d: %s", ErrAgentHTTP, resp.StatusCode, bytes.TrimSpace(snippet))
+	}
+	// Read one byte past the limit so truncation can never pass for a reply.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxReply+1))
+	if err != nil {
+		return Response{}, fmt.Errorf("%w: reading answer: %v", ErrUnreachable, err)
+	}
+	if len(raw) > maxReply {
+		return Response{}, fmt.Errorf("%w: answer exceeds %d bytes", ErrBadReceipt, maxReply)
 	}
 	var out intent.ReceiptEnvelope
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return Response{}, fmt.Errorf("%w: undecodable answer: %v", ErrBadReceipt, err)
 	}
 
