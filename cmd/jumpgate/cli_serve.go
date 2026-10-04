@@ -28,9 +28,6 @@ func cmdServe(args []string) int {
 	if err := fset.Parse(args); err != nil {
 		return exitCode("usage")
 	}
-	if _, err := config.MigrateLegacyDir(); err != nil {
-		return failed("%v", err)
-	}
 	holder, err := daemon.Acquire()
 	if err != nil {
 		return failed("%v", err)

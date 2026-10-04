@@ -39,7 +39,7 @@ func TestMigrateLegacyDirMovesOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	moved, err := MigrateLegacyDir()
+	moved, _, err := MigrateLegacyDir()
 	if err != nil || !moved {
 		t.Fatalf("MigrateLegacyDir() = %v, %v; want true, nil", moved, err)
 	}
@@ -51,7 +51,7 @@ func TestMigrateLegacyDirMovesOnce(t *testing.T) {
 		t.Fatalf("no pointer file left behind: %v", err)
 	}
 
-	moved, err = MigrateLegacyDir()
+	moved, _, err = MigrateLegacyDir()
 	if err != nil || moved {
 		t.Fatalf("second MigrateLegacyDir() = %v, %v; want false, nil", moved, err)
 	}
@@ -71,7 +71,7 @@ func TestMigrateLegacyDirRefusesWhenBothExist(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := MigrateLegacyDir(); err == nil {
+	if _, _, err := MigrateLegacyDir(); err == nil {
 		t.Fatal("want an error when both directories hold a config")
 	}
 }
@@ -99,7 +99,7 @@ func TestLoadRepointsPathsInsideTheLegacyDir(t *testing.T) {
 		`{"id":"other","mode":"ssh","ssh":{"Host":"o","User":"root","KeyPath":"/keys/elsewhere","HostKeyFile":"/var/lib/valve-node-app/known_hosts"}}]}`
 	writeConfigJSON(t, legacy, body)
 
-	if _, err := MigrateLegacyDir(); err != nil {
+	if _, _, err := MigrateLegacyDir(); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Load()
@@ -149,7 +149,7 @@ func TestPinnedHostKeySurvivesMigration(t *testing.T) {
 	if err := executor.TOFUHostKeyCallback(filepath.Join(legacy, "known_hosts"))("h:22", addr, pinned); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := MigrateLegacyDir(); err != nil {
+	if _, _, err := MigrateLegacyDir(); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Load()
@@ -177,5 +177,157 @@ func TestConfirmedHostsFileLivesInTheConfigDirAndIsNotTheTOFUFile(t *testing.T) 
 	}
 	if filepath.Base(got) == "known_hosts" {
 		t.Fatal("must not share the trust-on-first-use file")
+	}
+}
+
+// legacyInstall writes a pre-rename install: a config, a pinned known_hosts
+// and a key under keys/.
+func legacyInstall(t *testing.T, home string) string {
+	t.Helper()
+	legacy := filepath.Join(home, ".valve-node-app")
+	writeConfigJSON(t, legacy, `{"targets":[]}`)
+	if err := os.WriteFile(filepath.Join(legacy, "known_hosts"), []byte("pinned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(legacy, "keys"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "keys", "id"), []byte("legacy key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return legacy
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(b)
+}
+
+// I1: any CLI command creates ~/.jumpgate/config.json.lock before the
+// migration runs. That jumpgate-made artefact must not block the move.
+func TestMigrateLegacyDirMergesIntoADirHoldingOnlyTheLock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacy := legacyInstall(t, home)
+	cur := filepath.Join(home, ".jumpgate")
+	if err := os.MkdirAll(cur, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cur, "config.json.lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	moved, kept, err := MigrateLegacyDir()
+	if err != nil || !moved || len(kept) != 0 {
+		t.Fatalf("MigrateLegacyDir() = %v, %v, %v; want true, none kept, nil", moved, kept, err)
+	}
+	if got := mustRead(t, filepath.Join(cur, "config.json")); got != `{"targets":[]}` {
+		t.Errorf("config.json = %q", got)
+	}
+	if got := mustRead(t, filepath.Join(cur, "known_hosts")); got != "pinned\n" {
+		t.Errorf("known_hosts = %q", got)
+	}
+	if got := mustRead(t, filepath.Join(cur, "keys", "id")); got != "legacy key" {
+		t.Errorf("keys/id = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(cur, "config.json.lock")); err != nil {
+		t.Errorf("the lock file was lost: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(legacy, "MOVED")); err != nil {
+		t.Errorf("no pointer file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(legacy, "config.json")); !os.IsNotExist(err) {
+		t.Errorf("legacy config.json still present: %v", err)
+	}
+	if moved, _, err := MigrateLegacyDir(); err != nil || moved {
+		t.Fatalf("second run = %v, %v; want false, nil", moved, err)
+	}
+}
+
+// I1: `jumpgate status` creates ~/.jumpgate/run/ (and may leave server files
+// in it) before spawning serve.
+func TestMigrateLegacyDirMergesIntoADirHoldingOnlyRun(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacyInstall(t, home)
+	cur := filepath.Join(home, ".jumpgate")
+	if err := os.MkdirAll(filepath.Join(cur, "run"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cur, "run", "server.lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	moved, kept, err := MigrateLegacyDir()
+	if err != nil || !moved || len(kept) != 0 {
+		t.Fatalf("MigrateLegacyDir() = %v, %v, %v; want true, none kept, nil", moved, kept, err)
+	}
+	if _, err := os.Stat(filepath.Join(cur, "config.json")); err != nil {
+		t.Errorf("config.json not moved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cur, "run", "server.lock")); err != nil {
+		t.Errorf("run/server.lock lost: %v", err)
+	}
+}
+
+// R24: a merge never overwrites a jumpgate-created file. Both directories
+// hold keys/; the files inside merge, and a clash leaves both copies, reports
+// the legacy one and keeps the stored path pointing at it, so a pinned host
+// key is never swapped for another file.
+func TestMigrateLegacyDirMergeKeepsBothCopiesOnACollision(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacy := filepath.Join(home, ".valve-node-app")
+	writeConfigJSON(t, legacy, `{"targets":[{"id":"box","mode":"ssh","ssh":{"Host":"h","User":"root","KeyPath":"/k","HostKeyFile":"`+
+		filepath.Join(legacy, "known_hosts")+`"}}]}`)
+	if err := os.WriteFile(filepath.Join(legacy, "known_hosts"), []byte("pinned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(legacy, "keys"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "keys", "id"), []byte("legacy key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cur := filepath.Join(home, ".jumpgate")
+	if err := os.MkdirAll(filepath.Join(cur, "keys"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cur, "keys", "controller.key"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cur, "known_hosts"), []byte("other\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	moved, kept, err := MigrateLegacyDir()
+	if err != nil || !moved {
+		t.Fatalf("MigrateLegacyDir() = %v, %v; want true, nil", moved, err)
+	}
+	if len(kept) != 1 || kept[0] != filepath.Join(legacy, "known_hosts") {
+		t.Fatalf("kept = %v, want the legacy known_hosts only", kept)
+	}
+	if got := mustRead(t, filepath.Join(cur, "known_hosts")); got != "other\n" {
+		t.Errorf("current known_hosts overwritten: %q", got)
+	}
+	if got := mustRead(t, filepath.Join(legacy, "known_hosts")); got != "pinned\n" {
+		t.Errorf("legacy known_hosts lost: %q", got)
+	}
+	if got := mustRead(t, filepath.Join(cur, "keys", "id")); got != "legacy key" {
+		t.Errorf("keys/id = %q", got)
+	}
+	if got := mustRead(t, filepath.Join(cur, "keys", "controller.key")); got != "new" {
+		t.Errorf("keys/controller.key = %q", got)
+	}
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := c.Targets[0].SSH.HostKeyFile, filepath.Join(legacy, "known_hosts"); got != want {
+		t.Errorf("HostKeyFile = %q, want the kept legacy file %q", got, want)
 	}
 }

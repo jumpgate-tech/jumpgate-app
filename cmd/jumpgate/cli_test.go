@@ -612,3 +612,48 @@ func TestConfirmHostKeysBoundsTheAnswer(t *testing.T) {
 		}
 	}
 }
+
+// ---- legacy directory migration ----
+
+// I1/R24: every controller subcommand migrates ~/.valve-node-app before it
+// runs, because most of them create ~/.jumpgate first (the config lock, the
+// run directory). The on-box agent subcommands never touch controller state
+// and must not fail on it.
+func TestMigrateOnStartup(t *testing.T) {
+	setup := func(t *testing.T) string {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		legacy := filepath.Join(home, ".valve-node-app")
+		if err := os.MkdirAll(legacy, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(legacy, "config.json"), []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// What `jumpgate status` leaves behind before serve starts.
+		if err := os.MkdirAll(filepath.Join(home, ".jumpgate", "run"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return home
+	}
+	for _, args := range [][]string{{"jumpgate"}, {"jumpgate", "--bind", "x"}, {"jumpgate", "status", "box"}, {"jumpgate", "keys", "init"}, {"jumpgate", "serve"}} {
+		home := setup(t)
+		var errOut strings.Builder
+		if err := migrateOnStartup(args, &errOut); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if _, err := os.Stat(filepath.Join(home, ".jumpgate", "config.json")); err != nil {
+			t.Errorf("%v: config not migrated: %v", args, err)
+		}
+		if !strings.Contains(errOut.String(), "moved ~/.valve-node-app") {
+			t.Errorf("%v: no notice, got %q", args, errOut.String())
+		}
+	}
+	home := setup(t)
+	if err := migrateOnStartup([]string{"jumpgate", "agent", "run"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".jumpgate", "config.json")); !os.IsNotExist(err) {
+		t.Errorf("agent run migrated controller state: %v", err)
+	}
+}

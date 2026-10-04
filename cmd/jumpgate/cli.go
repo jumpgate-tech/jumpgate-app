@@ -29,10 +29,34 @@ var subcommands = map[string]func(args []string) int{
 }
 
 func main() {
+	if err := migrateOnStartup(os.Args, os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, "jumpgate:", err)
+		os.Exit(1)
+	}
 	if code, handled := dispatch(os.Args, os.Stderr); handled {
 		os.Exit(code)
 	}
 	runApp()
+}
+
+// migrateOnStartup moves ~/.valve-node-app to ~/.jumpgate before any
+// subcommand runs (R24): most of them create ~/.jumpgate first (the config
+// lock, the run directory, a key), so a migration left to the web app or
+// serve would find it in the way. `agent` runs on the box as root and never
+// reads controller state, so a stray legacy directory there must not stop
+// the agent.
+func migrateOnStartup(args []string, stderr io.Writer) error {
+	if len(args) >= 2 && args[1] == "agent" {
+		return nil
+	}
+	moved, kept, err := config.MigrateLegacyDir()
+	if moved {
+		fmt.Fprintln(stderr, "jumpgate: moved ~/.valve-node-app to ~/.jumpgate")
+	}
+	for _, k := range kept {
+		fmt.Fprintf(stderr, "jumpgate: left %s in place: ~/.jumpgate already has a file of that name; compare the two and remove one\n", k)
+	}
+	return err
 }
 
 // dispatch runs a subcommand. A first argument starting with "-" (or none) is

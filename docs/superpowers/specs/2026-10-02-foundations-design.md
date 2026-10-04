@@ -40,6 +40,14 @@ pairing only adds the `jumpgate` tunnel user and the agent. Their migration is a
 durable-job intent in sub-project 2 (`node.migrate-names`: stop units, rename
 user and group, re-render units, start, verify). Paths below use the new names.
 
+The `~/.jumpgate` migration runs at the top of `main()`, before any subcommand
+(except the on-box `agent` ones), because most commands create `~/.jumpgate`
+first (R24). If `~/.jumpgate` exists without a `config.json`, the legacy
+entries are moved in one by one, `config.json` last; a jumpgate-created file is
+never overwritten, and on a clash both copies are kept, the legacy one is named
+on stderr and in the `MOVED` note, and stored paths keep pointing at it. Both
+directories holding a `config.json` is still an error to resolve by hand.
+
 ## Components
 
 New packages, each usable and testable alone:

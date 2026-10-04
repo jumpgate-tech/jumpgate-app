@@ -668,36 +668,97 @@ func ConfirmedHostsFile() (string, error) {
 // (provider keys, VPN private keys) never exist twice on disk. It reports
 // whether it moved anything. Both directories holding a config is an error:
 // merging two configs silently would lose one of them.
-func MigrateLegacyDir() (bool, error) {
+//
+// ~/.jumpgate may already exist without a config: any command that takes the
+// config lock, the server's run directory, a confirmed host key or a new
+// controller key creates it first. Then the legacy entries are moved in one
+// by one (R24), descending into directories both sides hold. A jumpgate-made
+// file is never overwritten: on a clash the legacy copy stays where it is and
+// its path is returned in kept, and repointLegacyPaths leaves a stored path to
+// it alone. config.json moves last, so an interrupted merge resumes on the
+// next run.
+func MigrateLegacyDir() (moved bool, kept []string, err error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return false, fmt.Errorf("config: resolve home directory: %w", err)
+		return false, nil, fmt.Errorf("config: resolve home directory: %w", err)
 	}
 	legacy := filepath.Join(home, legacyDirName)
 	current := filepath.Join(home, dirName)
 
 	if _, err := os.Stat(filepath.Join(legacy, configFileName)); errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return false, nil, nil
 	} else if err != nil {
-		return false, fmt.Errorf("config: inspect %s: %w", legacy, err)
+		return false, nil, fmt.Errorf("config: inspect %s: %w", legacy, err)
 	}
 	if _, err := os.Stat(filepath.Join(current, configFileName)); err == nil {
-		return false, fmt.Errorf("config: both %s and %s hold a config.json; keep one and remove the other", legacy, current)
+		return false, nil, fmt.Errorf("config: both %s and %s hold a config.json; keep one and remove the other", legacy, current)
 	}
-	// An empty ~/.jumpgate (created by something that never wrote a config)
-	// would make the rename fail; remove it only if it is empty.
+	// An empty ~/.jumpgate would make the rename fail; remove it only if it
+	// is empty.
 	_ = os.Remove(current)
-	if err := os.Rename(legacy, current); err != nil {
-		return false, fmt.Errorf("config: move %s to %s: %w", legacy, current, err)
+	if _, err := os.Lstat(current); errors.Is(err, os.ErrNotExist) {
+		if err := os.Rename(legacy, current); err != nil {
+			return false, nil, fmt.Errorf("config: move %s to %s: %w", legacy, current, err)
+		}
+	} else {
+		if kept, err = mergeDir(legacy, current, configFileName); err != nil {
+			return false, kept, err
+		}
+		if err := os.Rename(filepath.Join(legacy, configFileName), filepath.Join(current, configFileName)); err != nil {
+			return false, kept, fmt.Errorf("config: move %s: %w", configFileName, err)
+		}
 	}
 	if err := os.MkdirAll(legacy, 0o700); err != nil {
-		return true, fmt.Errorf("config: recreate %s for the pointer file: %w", legacy, err)
+		return true, kept, fmt.Errorf("config: recreate %s for the pointer file: %w", legacy, err)
 	}
-	note := []byte("jumpgate moved this directory to " + current + "\n")
-	if err := os.WriteFile(filepath.Join(legacy, "MOVED"), note, 0o600); err != nil {
-		return true, fmt.Errorf("config: write pointer file: %w", err)
+	note := "jumpgate moved this directory to " + current + "\n"
+	for _, k := range kept {
+		note += "left here because " + current + " already had one: " + k + "\n"
 	}
-	return true, nil
+	if err := os.WriteFile(filepath.Join(legacy, "MOVED"), []byte(note), 0o600); err != nil {
+		return true, kept, fmt.Errorf("config: write pointer file: %w", err)
+	}
+	return true, kept, nil
+}
+
+// mergeDir moves every entry of src into dst that dst does not already have,
+// recursing into directories both hold, and returns the src paths it left in
+// place because dst had an entry of that name. skip names a top-level entry
+// the caller moves itself. Emptied source directories are removed.
+func mergeDir(src, dst, skip string) ([]string, error) {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return nil, fmt.Errorf("config: read %s: %w", src, err)
+	}
+	var kept []string
+	for _, e := range entries {
+		if e.Name() == skip {
+			continue
+		}
+		from, to := filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())
+		toInfo, err := os.Lstat(to)
+		if errors.Is(err, os.ErrNotExist) {
+			if err := os.Rename(from, to); err != nil {
+				return kept, fmt.Errorf("config: move %s to %s: %w", from, to, err)
+			}
+			continue
+		}
+		if err != nil {
+			return kept, fmt.Errorf("config: inspect %s: %w", to, err)
+		}
+		// Lstat-based: a symlink on either side is a clash, never followed.
+		if e.Type().IsDir() && toInfo.IsDir() {
+			more, err := mergeDir(from, to, "")
+			kept = append(kept, more...)
+			if err != nil {
+				return kept, err
+			}
+			_ = os.Remove(from) // only succeeds once it is empty
+			continue
+		}
+		kept = append(kept, from)
+	}
+	return kept, nil
 }
 
 func filePath() (string, error) {
@@ -863,7 +924,9 @@ func (c Config) Save() error {
 // nothing else in Config holds a controller-side path (gateway, devnet, wire
 // and VPN configs name on-box paths or carry inline text). On-box paths such
 // as /var/lib/valve-node-app are outside the legacy directory and untouched.
-// Idempotent: a repointed path no longer lies inside the legacy directory.
+// Idempotent: a repointed path no longer lies inside the legacy directory. A
+// path whose file still exists in the legacy directory (left there by a merge
+// clash, or not yet migrated) is kept as is.
 func (c *Config) repointLegacyPaths() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -876,6 +939,12 @@ func (c *Config) repointLegacyPaths() {
 			return current
 		}
 		if rest, ok := strings.CutPrefix(p, legacy+string(filepath.Separator)); ok {
+			// A file MigrateLegacyDir left in place on a clash is still
+			// where the stored path says; pointing it at the other copy
+			// would swap a pinned host key for a different file.
+			if _, err := os.Lstat(p); err == nil {
+				return p
+			}
 			return filepath.Join(current, rest)
 		}
 		return p

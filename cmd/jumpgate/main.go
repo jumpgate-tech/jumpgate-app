@@ -60,11 +60,7 @@ func runApp() {
 		fmt.Fprintln(os.Stderr, warning)
 	}
 
-	if moved, err := config.MigrateLegacyDir(); err != nil {
-		log.Fatalf("jumpgate: %v", err)
-	} else if moved {
-		fmt.Fprintln(os.Stderr, "jumpgate: moved ~/.valve-node-app to ~/.jumpgate")
-	}
+	// main has already moved ~/.valve-node-app to ~/.jumpgate.
 
 	// Load (or lazily create on first Save) jumpgate's local state —
 	// known targets, AI provider settings — from ~/.jumpgate/config.json.
