@@ -73,7 +73,7 @@ user: if one is already running, launching the app opens it instead of
 starting a second.
 
 ```bash
-jumpgate keys init                      # create the controller signing key (keychain, or a 0600 file)
+jumpgate keys init                      # create the controller signing key: --store keychain (default where macOS `security` or Linux `secret-tool` exists), file (a 0600 file) or 1password (--ref op://vault/item/field)
 jumpgate hosts add box-a --ssh root@203.0.113.7   # pair a box (or: --local for this machine)
 jumpgate status box-a                   # also: disk, endpoints, firewall
 jumpgate logs box-a -n 200
@@ -87,7 +87,10 @@ box, a restricted `jumpgate` tunnel user, and an sshd drop-in that confines that
 user to the agent's unix socket. Every command is a signed intent that the agent
 checks against its policy and answers with a signed receipt. Host keys are
 confirmed by you, by fingerprint, and remembered in `~/.jumpgate/confirmed_hosts`.
-Once pairing succeeds, **disable root SSH login** on the box
+Running `hosts add` again on an existing name re-pairs the address on record
+(to finish an interrupted pairing or upgrade the agent); it refuses a different
+`--ssh` address, so remove the host first to re-point it. Once pairing
+succeeds, **disable root SSH login** on the box
 (`PermitRootLogin no`); you will not need it again unless you have to repair the
 agent.
 

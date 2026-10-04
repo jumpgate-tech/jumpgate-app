@@ -398,7 +398,8 @@ sub-project 0; this sub-project does not ship before that check lands.
   keychain test gated behind a build tag for manual runs.
 - `intent` / `agent`: table tests for each replay rule (wrong agent, expired,
   skew, bad signature, unknown signer, stale seq, replayed nonce, oversized
-  body, concurrent request); crash-safety test that the last-seq is persisted
+  body, concurrent request; bad signature and busy are exercised at the
+  `Handle` level); crash-safety test that the last-seq is persisted
   before execution (inject a failure between persist and execute); `ops`
   dispatch through the existing fake executor.
 - `agentclient`: an in-process SSH server (`gliderlabs/ssh`, already a test
@@ -414,8 +415,15 @@ sub-project 0; this sub-project does not ship before that check lands.
   deadline against a TCP listener that never speaks SSH; host-key deciders.
 - `DataDir`: table of accepted and rejected paths, including the review's
   examples (`/`, `/var`, `data`, a path with a newline).
-- `daemon`: second `serve` refused; stale `server.json` with no lock holder is
-  replaced; `stop` refuses a pid that does not hold the lock.
+- `daemon`: second `serve` refused, naming the running pid; stale
+  `server.json` with no lock holder is replaced; `stop` sends an authenticated
+  `POST /api/shutdown` to the server found through `server.json` and returns on
+  202 (it never signals a pid); the tray/web entry point takes the same lock
+  and, when a server already holds it, finds that server instead of starting a
+  second.
+- Test isolation: every package whose tests reach `~/.jumpgate` points `HOME`
+  at a throwaway directory in `TestMain`, so no test reads or writes the
+  developer's real controller state.
 
 ## Done when
 
