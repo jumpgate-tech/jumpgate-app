@@ -91,7 +91,7 @@ func hostsAdd(args []string) int {
 		if err != nil {
 			return failed("%v", err)
 		}
-		if code := confirmHostKeys(ctx, cfg, bufio.NewReader(os.Stdin), os.Stdout, os.Stderr); code != 0 {
+		if code := confirmHostKeys(ctx, cfg, newConsentReader(os.Stdin), os.Stdout, os.Stderr); code != 0 {
 			return code
 		}
 		target = map[string]any{"id": name, "mode": "ssh", "ssh": cfg}
@@ -111,6 +111,16 @@ func hostsAdd(args []string) int {
 		fmt.Printf("target %s already exists; pairing it again\n", name)
 	}
 	return streamPair(info, name, *sudo)
+}
+
+// maxConsentLine bounds what the confirmation prompt will read while waiting
+// for a newline, so an endless stdin (/dev/zero) cannot grow memory.
+const maxConsentLine = 4 << 10
+
+// newConsentReader reads at most maxConsentLine bytes in all. Past that the
+// reader hits EOF without a newline, which confirmHostKeys counts as "no".
+func newConsentReader(r io.Reader) *bufio.Reader {
+	return bufio.NewReader(io.LimitReader(r, maxConsentLine))
 }
 
 // stdinIsTerminal reports whether stdin is a character device. A variable so

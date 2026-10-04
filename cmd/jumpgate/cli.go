@@ -189,8 +189,9 @@ func readAPIError(res *http.Response) apiError {
 
 // reportServerError prints a server error with its hint (or the CLI's remedy)
 // and returns the exit status for its code: unreachable 3; bad_receipt and
-// unknown_host 4; agent_http 1; no_controller_key, not_paired and any other
-// code 2; no code 1.
+// unknown_host 4; agent_http 1; no_controller_key and not_paired 2 (the
+// operator must run a command first); any other code, or none, 1. Status 2 is
+// otherwise usage only.
 func reportServerError(w io.Writer, what string, e apiError) int {
 	hint := e.Hint
 	if hint == "" {
@@ -216,5 +217,5 @@ func reportServerError(w io.Writer, what string, e apiError) int {
 	case "unreachable", "bad_receipt", "agent_http", "unknown_host", "no_controller_key", "not_paired":
 		return exitCode(e.Code)
 	}
-	return exitCode("usage")
+	return exitCode("failed")
 }

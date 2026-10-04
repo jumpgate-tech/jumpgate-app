@@ -81,15 +81,15 @@ func TestExitCodes(t *testing.T) {
 	}
 }
 
-// A server code this CLI has never heard of is a usage-class failure (exit 2),
-// while a missing code is a plain failure.
+// A server code this CLI has never heard of is a plain failure (exit 1):
+// status 2 is usage only.
 func TestServerErrorExit(t *testing.T) {
 	cases := []struct {
 		code string
 		want int
 	}{
 		{"unreachable", 3}, {"bad_receipt", 4}, {"agent_http", 1}, {"unknown_host", 4},
-		{"no_controller_key", 2}, {"not_paired", 2}, {"something_new", 2}, {"", 1},
+		{"no_controller_key", 2}, {"not_paired", 2}, {"something_new", 1}, {"", 1},
 	}
 	for _, c := range cases {
 		var stderr strings.Builder
@@ -538,5 +538,47 @@ func TestDispatch(t *testing.T) {
 	// A real subcommand is routed (usage error from the handler, not unknown-command).
 	if code, handled := dispatch([]string{"jumpgate", "keys"}, io.Discard); !handled || code != 2 {
 		t.Errorf("keys: %d %v", code, handled)
+	}
+}
+
+type endless byte
+
+func (e endless) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = byte(e)
+	}
+	return len(p), nil
+}
+
+// An endless stdin, or one long line ending in "yes", is "no", and the read
+// stops at the bound instead of growing.
+func TestConfirmHostKeysBoundsTheAnswer(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	host, port, _ := startHostKeySSHD(t)
+	cfg := executor.SSHConfig{Host: host, Port: port, User: "root"}
+	confirmed, _ := config.ConfirmedHostsFile()
+	inputs := map[string]io.Reader{
+		"endless y":      endless('y'),
+		"endless NUL":    endless(0),
+		"long line, yes": strings.NewReader(strings.Repeat("a", 2*maxConsentLine) + "yes\n"),
+	}
+	for name, r := range inputs {
+		done := make(chan int, 1)
+		go func() {
+			done <- confirmHostKeys(context.Background(), cfg, newConsentReader(r), io.Discard, io.Discard)
+		}()
+		select {
+		case code := <-done:
+			if code == 0 {
+				t.Errorf("%s: trusted the key", name)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: the prompt never gave up", name)
+		}
+		if _, err := os.Stat(confirmed); err == nil {
+			t.Fatalf("%s: confirmed_hosts was written", name)
+		}
 	}
 }
