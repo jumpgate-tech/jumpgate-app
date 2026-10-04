@@ -8,12 +8,14 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,6 +94,11 @@ type Config struct {
 	// Injectable for tests (a fake that never touches the network); nil
 	// selects a real updatecheck.Client against buildinfo.ReleaseRepo().
 	Updater updateSource
+
+	// Shutdown, if set, is called by POST /api/shutdown. jumpgate serve wires
+	// it to cancel its own context, so `jumpgate stop` never has to signal a
+	// pid it cannot be sure of.
+	Shutdown func()
 
 	// NewLocalExecutor builds an executor for the local machine — the box the
 	// Docker readiness gate probes. Injectable for tests (a fake that scripts
@@ -227,6 +234,15 @@ func (s *Server) Handler() http.Handler {
 		}{Version: buildinfo.Version()})
 	})
 
+	mux.HandleFunc("POST /api/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.Shutdown == nil {
+			writeError(w, http.StatusNotImplemented, "this server cannot be stopped over the API")
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		go s.cfg.Shutdown()
+	})
+
 	s.registerAPIRoutes(mux)
 	s.registerKeyRoutes(mux)
 
@@ -301,6 +317,36 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	return err
 }
 
+// ServeUnix serves the same authenticated handler on a unix socket (0600), for
+// the CLI and TUI on this machine. The token is still required: the socket's
+// permissions keep other users out, the token keeps other programs of this
+// user honest about which server they talk to. Shutdown is the same as
+// ListenAndServe's, including the wait for destructive operations.
+//
+// A stale socket from a dead server is removed; any other file at path is not.
+func (s *Server) ServeUnix(ctx context.Context, path string) error {
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&os.ModeSocket == 0 {
+			return fmt.Errorf("server: %s exists and is not a socket", path)
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		ln.Close()
+		return err
+	}
+	srv := newHTTPServer("", s.Handler())
+	err = serveWith(ctx, srv, shutdownGrace, func() error { return srv.Serve(ln) })
+	s.waitCritical()
+	return err
+}
+
 // criticalTimeout bounds one destructive operation. It is generous: a clear
 // deletes hundreds of gigabytes, and stopping halfway is the outcome this
 // exists to prevent.
@@ -351,13 +397,19 @@ const shutdownGrace = 5 * time.Second
 // bounded by grace and followed by Close. That case is still a clean stop
 // from the caller's side: the process was asked to exit, and it has.
 func serveUntil(ctx context.Context, srv *http.Server, grace time.Duration) error {
+	return serveWith(ctx, srv, grace, srv.ListenAndServe)
+}
+
+// serveWith is serveUntil for any way of serving: serve blocks until srv stops,
+// and is srv.ListenAndServe or srv.Serve on a listener the caller prepared.
+func serveWith(ctx context.Context, srv *http.Server, grace time.Duration, serve func() error) error {
 	base, cancelBase := context.WithCancel(context.Background())
 	defer cancelBase()
 	srv.BaseContext = func(net.Listener) context.Context { return base }
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.ListenAndServe()
+		errCh <- serve()
 	}()
 
 	select {

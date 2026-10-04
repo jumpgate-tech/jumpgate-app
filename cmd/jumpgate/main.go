@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"embed"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -19,14 +18,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/valve-tech/jumpgate/cmd/jumpgate/web"
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/relay"
 	"github.com/valve-tech/jumpgate/internal/server"
 )
-
-//go:embed all:web/dist
-var embeddedUI embed.FS
 
 // bindFlagUsage is --bind's help text. Called out here (rather than inline
 // in flag.String) so it's independently testable.
@@ -78,7 +75,7 @@ func main() {
 		log.Fatalf("jumpgate: load config: %v", err)
 	}
 
-	uiFS, err := fs.Sub(embeddedUI, "web/dist")
+	uiFS, err := fs.Sub(web.FS, "dist")
 	if err != nil {
 		log.Fatalf("jumpgate: embedded UI: %v", err)
 	}
