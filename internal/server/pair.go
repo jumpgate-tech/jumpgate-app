@@ -96,6 +96,10 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		if errors.Is(err, executor.ErrHostKeyMismatch) {
+			writeErrorDetail(w, http.StatusBadGateway, err.Error(), hintHostKey, "host_key")
+			return
+		}
 		if err != nil {
 			writeErrorDetail(w, http.StatusGatewayTimeout, err.Error(), "check the address, user and key", "unreachable")
 			return
@@ -183,7 +187,12 @@ func (s *Server) verifyPairing(ctx context.Context, t config.Target) (uint64, *p
 	}
 	seqs := agentclient.NewMemorySeqStore()
 	client, err := agentclient.Dial(ctx, at, s.cfg.Signer, seqs)
-	if err != nil {
+	switch {
+	case errors.Is(err, executor.ErrUnknownHost):
+		return fail(err, "unknown_host", hintUnknownHost)
+	case errors.Is(err, executor.ErrHostKeyMismatch):
+		return fail(err, "host_key", hintHostKey)
+	case err != nil:
 		return fail(err, "unreachable", hintUnreachable)
 	}
 	defer client.Close()

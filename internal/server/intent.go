@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/agentclient"
+	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/monitor"
 )
@@ -31,13 +32,24 @@ type intentReply struct {
 const (
 	hintUnreachable = "check that the box is up and reachable over SSH"
 	hintBadReceipt  = "the answer was not signed by this box's paired agent; do not trust this box until you re-pair it"
+	hintUnknownHost = "nobody has confirmed this box's SSH host key; run `jumpgate hosts add` to compare its fingerprint with the box's console and confirm it"
+	hintHostKey     = "the box's SSH host key does not match the one on record: possibly a man-in-the-middle, or the box was rebuilt. Check the key on the box's console; only if it legitimately changed, remove the old line from ~/.jumpgate/confirmed_hosts (and ~/.ssh/known_hosts) and confirm the new one with `jumpgate hosts add`"
 	hintAgentHTTP   = "the agent socket refused the request before reading it: this connection is not allowed on the socket (the tunnel user is not in the jumpgate group, or a local uid is not enrolled), or the request was too large"
 )
 
 // writeAgentError maps an agentclient error onto the API's status and code,
-// and reports whether err was one of them.
+// and reports whether err was one of them. Host-key failures are checked
+// first: they are security errors, never "unreachable".
 func writeAgentError(w http.ResponseWriter, err error) bool {
+	var unknown *executor.UnknownHostError
 	switch {
+	case errors.As(err, &unknown):
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": err.Error(), "hint": hintUnknownHost, "code": "unknown_host",
+			"host": unknown.Host, "fingerprint": unknown.Fingerprint,
+		})
+	case errors.Is(err, executor.ErrHostKeyMismatch):
+		writeErrorDetail(w, http.StatusBadGateway, err.Error(), hintHostKey, "host_key")
 	case errors.Is(err, agentclient.ErrBadReceipt):
 		writeErrorDetail(w, http.StatusBadGateway, err.Error(), hintBadReceipt, "bad_receipt")
 	case errors.Is(err, agentclient.ErrAgentHTTP):
@@ -115,7 +127,9 @@ func (s *Server) handleIntent(w http.ResponseWriter, r *http.Request) {
 
 	client, err := agentclient.Dial(r.Context(), at, s.cfg.Signer, configSeqs{targetID: t.ID})
 	if err != nil {
-		writeErrorDetail(w, http.StatusGatewayTimeout, err.Error(), hintUnreachable, "unreachable")
+		if !writeAgentError(w, err) {
+			writeErrorDetail(w, http.StatusGatewayTimeout, err.Error(), hintUnreachable, "unreachable")
+		}
 		return
 	}
 	defer client.Close()

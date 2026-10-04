@@ -2,6 +2,7 @@ package agentclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -33,7 +34,12 @@ func transport(ctx context.Context, t Target) (*http.Client, func() error, error
 	} else {
 		client, err := executor.DialSSH(ctx, t.SSH)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w: ssh %s: %v", ErrUnreachable, t.SSH.Host, err)
+			// A host-key failure is a security event, not an outage: keep
+			// its type and leave ErrUnreachable out of it.
+			if errors.Is(err, executor.ErrUnknownHost) || errors.Is(err, executor.ErrHostKeyMismatch) {
+				return nil, nil, fmt.Errorf("agentclient: ssh %s: %w", t.SSH.Host, err)
+			}
+			return nil, nil, fmt.Errorf("%w: ssh %s: %w", ErrUnreachable, t.SSH.Host, err)
 		}
 		closer = client.Close
 		dial = func(context.Context) (net.Conn, error) { return dialUnix(client, sock) }

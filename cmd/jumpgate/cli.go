@@ -99,6 +99,7 @@ var remedies = map[string]string{
 	"bad_receipt":       "the answer was not signed by this box's paired agent; do not trust this box until you re-pair it",
 	"agent_http":        "the agent socket refused the connection: the tunnel user must be in the jumpgate group, or a local uid must be enrolled (`jumpgate agent enroll --local-uid`)",
 	"unknown_host":      "confirm the box's host key with `jumpgate hosts add`, then pair again",
+	"host_key":          "the box's SSH host key does not match the one on record; check it on the box's console before trusting the box again",
 	"no_controller_key": "run `jumpgate keys init`, then `jumpgate stop` so the server restarts with the key",
 	"not_paired":        "pair this box first with `jumpgate hosts add`",
 }
@@ -225,7 +226,7 @@ func reportServerError(w io.Writer, what string, e apiError) int {
 	case "":
 		fmt.Fprintf(w, "jumpgate: %s: %s\n", what, e.Error)
 		return exitCode("failed")
-	case "bad_receipt":
+	case "bad_receipt", "host_key", "unknown_host":
 		fmt.Fprintf(w, "jumpgate: SECURITY: %s: %s\n", what, e.Error)
 	case "unreachable":
 		fmt.Fprintf(w, "jumpgate: %s: could not reach the box: %s\n", what, e.Error)
@@ -238,7 +239,7 @@ func reportServerError(w io.Writer, what string, e apiError) int {
 		fmt.Fprintf(w, "  -> %s\n", hint)
 	}
 	switch e.Code {
-	case "unreachable", "bad_receipt", "agent_http", "unknown_host", "no_controller_key", "not_paired":
+	case "unreachable", "bad_receipt", "agent_http", "unknown_host", "host_key", "no_controller_key", "not_paired":
 		return exitCode(e.Code)
 	}
 	return exitCode("failed")

@@ -93,8 +93,9 @@ agent.
 
 Exit codes: 0 success; 1 the operation failed or was refused; 2 bad usage, or a
 missing prerequisite (no controller key yet, box not paired); 3 box unreachable;
-4 security failure (an unknown or changed host key, or a reply not signed by the
-paired agent).
+4 security failure (a host key nobody confirmed, a host key that changed since it
+was confirmed, or a reply not signed by the paired agent), whether it is found
+while pairing or by any later box command.
 
 ## Requirements
 

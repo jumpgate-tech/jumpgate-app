@@ -88,7 +88,7 @@ func TestServerErrorExit(t *testing.T) {
 		code string
 		want int
 	}{
-		{"unreachable", 3}, {"bad_receipt", 4}, {"agent_http", 1}, {"unknown_host", 4},
+		{"unreachable", 3}, {"bad_receipt", 4}, {"agent_http", 1}, {"unknown_host", 4}, {"host_key", 4},
 		{"no_controller_key", 2}, {"not_paired", 2}, {"something_new", 1}, {"", 1},
 	}
 	for _, c := range cases {
@@ -102,6 +102,9 @@ func TestServerErrorExit(t *testing.T) {
 		}
 		if c.code != "" && !strings.Contains(stderr.String(), "do this") {
 			t.Errorf("code %q: hint missing from %q", c.code, stderr.String())
+		}
+		if security := c.want == 4; security != strings.Contains(stderr.String(), "SECURITY") {
+			t.Errorf("code %q: SECURITY prefix = %v, want %v: %q", c.code, !security, security, stderr.String())
 		}
 	}
 }

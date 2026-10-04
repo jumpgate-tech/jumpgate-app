@@ -365,10 +365,23 @@ sub-project 0; this sub-project does not ship before that check lands.
 - CLI exit codes: 0 ok; 1 failed, including a rejection, an `agent_http`
   refusal and any server error code the CLI does not know; 2 usage, which also
   covers `no_controller_key` and `not_paired` (the operator has to run a
-  different command first); 3 `unreachable`; 4 security (`bad_receipt`,
-  `host_key`, `unknown_host`). Scripts can depend on these.
+  different command first); 3 `unreachable`; 4 security: `bad_receipt` (a
+  reply not signed by the paired agent), `unknown_host` (nobody confirmed the
+  box's SSH host key) and `host_key` (the presented key contradicts the
+  confirmed store or the operator's OpenSSH known_hosts, is revoked there, or
+  the box offers none of the key types on record). The two host-key codes come
+  from `hosts add`'s own confirmation, the pairing login, the pairing verify
+  step and every box command alike (`executor.UnknownHostError` and
+  `executor.ErrHostKeyMismatch` survive the agent dial), and the CLI prefixes
+  all three with `SECURITY`. Scripts can depend on these.
 - Transport failures are distinct from rejections: "could not reach agent on
-  box-a (ssh: …)" never looks like "box-a refused".
+  box-a (ssh: …)" never looks like "box-a refused". Host-key failures are not
+  transport failures: they never report as `unreachable`.
+- Strict dials ask each host for the key types on record (the confirmed store
+  plus the OpenSSH files; RSA as `rsa-sha2-512`/`rsa-sha2-256`) through
+  `HostKeyAlgorithms`, and keep x/crypto's defaults for a host known nowhere,
+  so a box known by its ed25519 key is not mistaken for a changed one because
+  x/crypto prefers ECDSA.
 - A receipt that fails verification is reported as a security error naming the
   expected and recovered addresses, and the result is discarded.
 - Bootstrap failures name the step, the command's exit code and stderr tail,
