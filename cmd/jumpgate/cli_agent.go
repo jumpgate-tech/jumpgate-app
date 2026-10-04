@@ -45,7 +45,7 @@ func cmdAgent(args []string) int {
 	case "init":
 		err = agentInit(os.Stdout, *state, *conf)
 	case "enroll":
-		err = agentEnroll(*conf, *address, *tier, *label, *localUID)
+		err = agentEnroll(*conf, agentclient.DefaultSocket, *address, *tier, *label, *localUID)
 	case "run":
 		err = agentRun(*state, *conf)
 	case "reset-replay":
@@ -91,8 +91,10 @@ func agentInit(out io.Writer, stateDir, configDir string) error {
 
 // agentEnroll adds a controller (and optionally a local uid) to the policy. It
 // appends and is idempotent: enrolling an address already present changes
-// nothing, including its tier.
-func agentEnroll(configDir, address, tier, label string, localUID int) error {
+// nothing, including its tier. A running agent's socket is re-chmodded to the
+// new policy's mode (R23) so an enrolled local uid can connect at once; an
+// empty socketPath skips that.
+func agentEnroll(configDir, socketPath, address, tier, label string, localUID int) error {
 	a, err := eip712.ParseAddress(address)
 	if err != nil {
 		return err
@@ -109,7 +111,13 @@ func agentEnroll(configDir, address, tier, label string, localUID int) error {
 	if localUID >= 0 {
 		p.AddLocalUID(localUID)
 	}
-	return p.Save(path)
+	if err := p.Save(path); err != nil {
+		return err
+	}
+	if socketPath == "" {
+		return nil
+	}
+	return agent.ApplySocketMode(socketPath, p)
 }
 
 // agentResetReplay moves a broken replay record aside and starts an empty one.
@@ -138,7 +146,13 @@ func agentRun(stateDir, configDir string) error {
 		ReplayPath: filepath.Join(stateDir, "replay.json"),
 		NodePath:   filepath.Join(configDir, "node.json"),
 	})
-	ln, err := agent.Listen(agentclient.DefaultSocket, agent.JumpgateGID())
+	// The policy only sets the socket mode here; Handle re-reads it for every
+	// intent. An unreadable policy keeps the stricter 0660.
+	p, err := agent.LoadPolicy(filepath.Join(configDir, "policy.json"))
+	if err != nil {
+		p = agent.Policy{}
+	}
+	ln, err := agent.Listen(agentclient.DefaultSocket, agent.JumpgateGID(), agent.SocketMode(p))
 	if err != nil {
 		return err
 	}

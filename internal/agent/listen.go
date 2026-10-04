@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -18,9 +19,8 @@ import (
 
 // Listen opens the agent socket. A stale socket from a previous run is
 // removed; any other file at the path is an error, never deleted. The socket
-// is 0660 and, when gid >= 0, owned root:gid, so only root and the jumpgate
-// group (the SSH tunnel user) can connect.
-func Listen(path string, gid int) (net.Listener, error) {
+// gets mode (see SocketMode) and, when gid >= 0, is owned root:gid.
+func Listen(path string, gid int, mode os.FileMode) (net.Listener, error) {
 	if fi, err := os.Lstat(path); err == nil {
 		if fi.Mode()&os.ModeSocket == 0 {
 			return nil, fmt.Errorf("agent: %s exists and is not a socket; refusing to remove it", path)
@@ -33,7 +33,7 @@ func Listen(path string, gid int) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o660); err != nil {
+	if err := os.Chmod(path, mode); err != nil {
 		ln.Close()
 		return nil, err
 	}
@@ -44,6 +44,38 @@ func Listen(path string, gid int) (net.Listener, error) {
 		}
 	}
 	return ln, nil
+}
+
+// SocketMode is 0660 (root and group jumpgate, the SSH tunnel user) unless
+// the policy enrolls a local uid, and then 0666. connect(2) needs write
+// permission on the socket file, so at 0660 the kernel would refuse an
+// enrolled uid outside the group before the Accept-time peer gate ever ran.
+// That gate is the authority either way, and every intent still needs an
+// enrolled controller's signature; remote-only boxes keep the group check
+// as defence in depth.
+func SocketMode(p Policy) os.FileMode {
+	if len(p.LocalUIDs) > 0 {
+		return 0o666
+	}
+	return 0o660
+}
+
+// ApplySocketMode re-chmods a live agent socket to match the policy, so an
+// enroll takes effect without waiting for a restart. A missing socket (the
+// agent is not running) is not an error; anything at path that is not a
+// socket is refused and left alone.
+func ApplySocketMode(path string, p Policy) error {
+	fi, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("agent: %s is not a socket; leaving its mode alone", path)
+	}
+	return os.Chmod(path, SocketMode(p))
 }
 
 // JumpgateGID is the jumpgate group's id, or -1 when the group is absent.

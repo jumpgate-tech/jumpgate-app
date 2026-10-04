@@ -78,7 +78,7 @@ func startAgent(t *testing.T) (sock string, agentAddr eip712.Address, controller
 	a = agent.New(agent.Config{Key: agentKey, Exec: stubExec{}, PolicyPath: filepath.Join(dir, "policy.json"),
 		ReplayPath: filepath.Join(dir, "replay.json"), NodePath: filepath.Join(dir, "node.json")})
 	sock = filepath.Join(dir, "a.sock")
-	ln, err := agent.Listen(sock, -1)
+	ln, err := agent.Listen(sock, -1, 0o660)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -169,13 +169,43 @@ func TestAgentInitNeverReplacesAnUnreadableKey(t *testing.T) {
 func TestAgentEnrollIsIdempotent(t *testing.T) {
 	conf := t.TempDir()
 	for i := 0; i < 2; i++ {
-		if err := agentEnroll(conf, "0x00000000000000000000000000000000000000cc", "routine", "laptop", 501); err != nil {
+		if err := agentEnroll(conf, "", "0x00000000000000000000000000000000000000cc", "routine", "laptop", 501); err != nil {
 			t.Fatal(err)
 		}
 	}
 	p, err := agent.LoadPolicy(filepath.Join(conf, "policy.json"))
 	if err != nil || len(p.Signers) != 1 || len(p.LocalUIDs) != 1 {
 		t.Fatalf("policy = %+v, %v", p, err)
+	}
+}
+
+// R23: enrolling a local uid opens the live socket to it at once. Bootstrap
+// also restarts the agent, but a hand-run enroll must not leave the uid
+// enrolled yet refused by the kernel at 0660.
+func TestAgentEnrollLocalUIDOpensTheSocket(t *testing.T) {
+	conf := t.TempDir()
+	d, err := os.MkdirTemp("/tmp", "jgs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(d) })
+	sock := filepath.Join(d, "agent.sock")
+	ln, err := agent.Listen(sock, -1, 0o660)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if err := agentEnroll(conf, sock, "0x00000000000000000000000000000000000000cc", "routine", "x", -1); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(sock); fi.Mode().Perm() != 0o660 {
+		t.Fatalf("controller-only enroll: socket mode %o, want 660", fi.Mode().Perm())
+	}
+	if err := agentEnroll(conf, sock, "0x00000000000000000000000000000000000000cc", "routine", "x", 1000); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(sock); fi.Mode().Perm() != 0o666 {
+		t.Fatalf("local-uid enroll: socket mode %o, want 666", fi.Mode().Perm())
 	}
 }
 
@@ -189,7 +219,7 @@ func TestAgentEnrollAppends(t *testing.T) {
 		"0x00000000000000000000000000000000000000CC",
 	}
 	for _, a := range steps {
-		if err := agentEnroll(conf, a, "routine", "x", -1); err != nil {
+		if err := agentEnroll(conf, "", a, "routine", "x", -1); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -197,10 +227,10 @@ func TestAgentEnrollAppends(t *testing.T) {
 	if err != nil || len(p.Signers) != 2 || len(p.LocalUIDs) != 0 {
 		t.Fatalf("policy = %+v, %v", p, err)
 	}
-	if err := agentEnroll(conf, "0xnope", "routine", "x", -1); err == nil {
+	if err := agentEnroll(conf, "", "0xnope", "routine", "x", -1); err == nil {
 		t.Error("accepted a bad address")
 	}
-	if err := agentEnroll(conf, steps[0], "admin", "x", -1); err == nil {
+	if err := agentEnroll(conf, "", steps[0], "admin", "x", -1); err == nil {
 		t.Error("accepted an unknown tier")
 	}
 }

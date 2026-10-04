@@ -48,7 +48,7 @@ func pairedLocal(t *testing.T) (*httptest.Server, string) {
 	a := agent.New(agent.Config{Key: agentKey, Exec: nopExec{}, PolicyPath: filepath.Join(home, "policy.json"),
 		ReplayPath: filepath.Join(home, "replay.json"), NodePath: filepath.Join(home, "node.json")})
 	sock := filepath.Join(home, "a.sock")
-	ln, _ := agent.Listen(sock, -1)
+	ln, _ := agent.Listen(sock, -1, 0o660)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go agent.Serve(ctx, a, ln)

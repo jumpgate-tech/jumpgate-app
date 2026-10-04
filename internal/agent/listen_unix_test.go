@@ -53,7 +53,7 @@ func peek(c net.Conn, n int) ([]byte, error) {
 func TestRefusedPeerIsClosedUnreadAndServeContinues(t *testing.T) {
 	r := newRig(t, true)
 	sock := filepath.Join(shortDir(t), "agent.sock")
-	ln, err := Listen(sock, -1)
+	ln, err := Listen(sock, -1, 0o660)
 	if err != nil {
 		t.Fatal(err)
 	}

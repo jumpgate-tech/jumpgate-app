@@ -109,6 +109,21 @@ func TestLocal_Run_CapturesStdout(t *testing.T) {
 	}
 }
 
+// The --local bootstrap uploads the agent binary through RunOpts.Stdin, so
+// the local executor must feed it to the command.
+func TestLocal_Run_FeedsStdin(t *testing.T) {
+	e := NewLocal()
+	t.Cleanup(func() { _ = e.Close() })
+
+	res, err := e.Run(context.Background(), "cat", &RunOpts{Stdin: strings.NewReader("payload\n")})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if res.Stdout != "payload\n" {
+		t.Errorf("Stdout = %q, want %q", res.Stdout, "payload\n")
+	}
+}
+
 func TestLocal_Run_CapturesStderrSeparately(t *testing.T) {
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })

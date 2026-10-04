@@ -32,7 +32,7 @@ func unixClient(sock string) *http.Client {
 func TestServeAnswersOverTheSocket(t *testing.T) {
 	r := newRig(t, true)
 	sock := filepath.Join(shortDir(t), "agent.sock")
-	ln, err := Listen(sock, -1)
+	ln, err := Listen(sock, -1, 0o660)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestListenRefusesToDeleteANonSocket(t *testing.T) {
 	if err := os.WriteFile(path, []byte("precious"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Listen(path, -1); err == nil {
+	if _, err := Listen(path, -1, 0o660); err == nil {
 		t.Fatal("Listen removed a regular file")
 	}
 }
@@ -88,7 +88,7 @@ func TestListenReplacesAStaleSocket(t *testing.T) {
 	// Keep the file: a closed listener would unlink it.
 	old.(*net.UnixListener).SetUnlinkOnClose(false)
 	old.Close()
-	ln, err := Listen(path, -1)
+	ln, err := Listen(path, -1, 0o660)
 	if err != nil {
 		t.Fatalf("stale socket not replaced: %v", err)
 	}
@@ -111,5 +111,62 @@ func TestPeerGateAllowsOwnUIDAndEnrolledUIDsOnly(t *testing.T) {
 	}
 	if !peerAllowed(p, 777, []int{55}, 55) {
 		t.Error("a member of the jumpgate group was refused")
+	}
+}
+
+// R23: the socket is world-connectable only when a local uid is enrolled.
+// connect(2) needs write permission on the socket file, so an enrolled uid
+// outside group jumpgate could never reach the Accept-time peer gate at 0660.
+// Without local uids the kernel's group check stays as defence in depth.
+func TestSocketModeFollowsLocalUIDs(t *testing.T) {
+	if m := SocketMode(Policy{}); m != 0o660 {
+		t.Errorf("no local uids: mode %o, want 660", m)
+	}
+	if m := SocketMode(Policy{LocalUIDs: []int{1000}}); m != 0o666 {
+		t.Errorf("local uid enrolled: mode %o, want 666", m)
+	}
+}
+
+func TestListenAppliesTheGivenMode(t *testing.T) {
+	sock := filepath.Join(shortDir(t), "agent.sock")
+	ln, err := Listen(sock, -1, 0o666)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	fi, err := os.Stat(sock)
+	if err != nil || fi.Mode().Perm() != 0o666 {
+		t.Fatalf("socket mode %v, %v; want 666", fi.Mode().Perm(), err)
+	}
+}
+
+// ApplySocketMode re-chmods a live socket after enroll; it leaves a missing
+// socket alone and never touches a file that is not a socket.
+func TestApplySocketMode(t *testing.T) {
+	dir := shortDir(t)
+	sock := filepath.Join(dir, "agent.sock")
+	ln, err := Listen(sock, -1, 0o660)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if err := ApplySocketMode(sock, Policy{LocalUIDs: []int{1000}}); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(sock); fi.Mode().Perm() != 0o666 {
+		t.Errorf("socket mode %o after enroll, want 666", fi.Mode().Perm())
+	}
+	if err := ApplySocketMode(filepath.Join(dir, "absent.sock"), Policy{LocalUIDs: []int{1}}); err != nil {
+		t.Errorf("missing socket: %v, want nil", err)
+	}
+	plain := filepath.Join(dir, "plain")
+	if err := os.WriteFile(plain, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplySocketMode(plain, Policy{LocalUIDs: []int{1}}); err == nil {
+		t.Error("chmodded a regular file")
+	}
+	if fi, _ := os.Stat(plain); fi.Mode().Perm() != 0o600 {
+		t.Errorf("regular file mode changed to %o", fi.Mode().Perm())
 	}
 }

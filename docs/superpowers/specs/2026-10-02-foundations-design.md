@@ -158,7 +158,15 @@ controller) if it is rejected for staleness.
     `PrivateTmp=yes`, `ProtectHome=read-only`, `ProtectKernelTunables=yes`,
     `ProtectControlGroups=yes`, `RestrictSUIDSGID=yes`. It is not given
     `ProtectSystem=strict`, because it must manage units and data directories.
-- Listens on `/run/jumpgate/agent.sock`, chowned `root:jumpgate`, mode `0660`.
+- Listens on `/run/jumpgate/agent.sock`, chowned `root:jumpgate`. The mode is
+  `0660` unless `policy.json` `localUids` is non-empty, and then `0666` (R23):
+  `connect(2)` needs write permission on the socket file, so at `0660` the
+  kernel would refuse an enrolled local uid outside group `jumpgate` before the
+  peer check below ever ran. That check is the authority either way, and every
+  intent still needs an enrolled controller's signature; a remote-only box
+  keeps the kernel's group check as defence in depth. `agent enroll
+  --local-uid` re-applies the mode to a live socket, and bootstrap restarts the
+  agent after enrolling.
   HTTP/1.1 over the unix listener: `POST /v1/intent` (envelope in, receipt out).
   No other routes.
 - Peer identification with `SO_PEERCRED` (`LOCAL_PEERCRED` on macOS, for tests):
@@ -242,7 +250,8 @@ replacing the file.
 `--local` runs the same steps through `executor.NewLocal()` with `sudo`, skips
 step 4, and enrolls the invoking user's uid in `policy.json` `localUids`
 (`jumpgate agent enroll --local-uid N`) instead of adding the user to group
-`jumpgate`, so no re-login is needed for the new group to take effect.
+`jumpgate`, so no re-login is needed for the new group to take effect. That
+enrollment is what opens the socket to mode `0666` (see the agent section).
 
 ### `internal/daemon` and `jumpgate serve`
 
