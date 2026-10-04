@@ -37,13 +37,14 @@ func cmdAgent(args []string) int {
 	label := fset.String("label", "", "signer label")
 	localUID := fset.Int("local-uid", -1, "also allow this local uid on the socket")
 	yes := fset.Bool("yes", false, "confirm reset-replay")
+	resetReplay := fset.Bool("reset-replay", false, "init: start an empty replay record when the key exists but the record is gone")
 	if err := fset.Parse(args[1:]); err != nil {
 		return exitCode("usage")
 	}
 	var err error
 	switch args[0] {
 	case "init":
-		err = agentInit(os.Stdout, *state, *conf)
+		err = agentInit(os.Stdout, *state, *conf, *resetReplay)
 	case "enroll":
 		err = agentEnroll(*conf, agentclient.DefaultSocket, *address, *tier, *label, *localUID)
 	case "run":
@@ -67,7 +68,12 @@ func cmdAgent(args []string) int {
 // agent's address. It never replaces a key: the box keeps its identity across
 // re-pairing, so only a key file that does not exist is generated. Any other
 // failure to read it (damaged, wrong mode, a symlink) stops here.
-func agentInit(out io.Writer, stateDir, configDir string) error {
+//
+// An existing key with no replay record is refused unless resetReplay is
+// set: a fresh, empty record would reopen the replay window the running agent
+// deliberately fails closed on (replay_state), and re-pairing must not do that
+// silently.
+func agentInit(out io.Writer, stateDir, configDir string, resetReplay bool) error {
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		return err
 	}
@@ -75,14 +81,19 @@ func agentInit(out io.Writer, stateDir, configDir string) error {
 		return err
 	}
 	keyPath := filepath.Join(stateDir, "agent.key")
+	replayPath := filepath.Join(stateDir, "replay.json")
 	k, err := signer.LoadKeyFile(keyPath)
 	if errors.Is(err, fs.ErrNotExist) {
 		k, err = signer.GenerateKeyFile(keyPath)
+	} else if err == nil && !resetReplay {
+		if _, serr := os.Lstat(replayPath); errors.Is(serr, fs.ErrNotExist) {
+			return fmt.Errorf("%s exists but %s does not; starting an empty replay record reopens a replay window for intents captured before now. Find out why it went missing, then re-run with --reset-replay", keyPath, replayPath)
+		}
 	}
 	if err != nil {
 		return err
 	}
-	if err := agent.InitReplay(filepath.Join(stateDir, "replay.json")); err != nil {
+	if err := agent.InitReplay(replayPath); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, k.Address().Hex())

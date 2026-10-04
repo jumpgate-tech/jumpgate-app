@@ -240,7 +240,10 @@ a verify check like `setup.Step`:
    `/var/lib/jumpgate/home/.ssh/authorized_keys`.
 5. **Agent identity** — `jumpgate agent init`, run on the box, generates the
    agent key if absent and prints its address. The controller records the address. Trust in this
-   value comes from the host-key confirmation of the privileged session.
+   value comes from the host-key confirmation of the privileged session. If the
+   key exists but `replay.json` does not, `init` refuses (and so pairing stops
+   at this step) unless `--reset-replay` is given on the box: an empty record
+   would silently reopen the replay window the running agent fails closed on.
 6. **Policy and node config** — `jumpgate agent enroll --address … --tier
    routine --label …` on the box enrolls the controller's signing address in
    `policy.json` (adding to an existing file, never replacing it), and `node.json` is written

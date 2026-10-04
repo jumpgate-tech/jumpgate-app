@@ -113,10 +113,10 @@ func TestServerErrorExit(t *testing.T) {
 func TestAgentInitKeepsItsIdentity(t *testing.T) {
 	state, conf := t.TempDir(), t.TempDir()
 	var out1, out2 strings.Builder
-	if err := agentInit(&out1, state, conf); err != nil {
+	if err := agentInit(&out1, state, conf, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := agentInit(&out2, state, conf); err != nil {
+	if err := agentInit(&out2, state, conf, false); err != nil {
 		t.Fatal(err)
 	}
 	if strings.TrimSpace(out1.String()) != strings.TrimSpace(out2.String()) {
@@ -130,6 +130,39 @@ func TestAgentInitKeepsItsIdentity(t *testing.T) {
 	}
 }
 
+// M6: a box that has its key but lost its replay record must not get a
+// fresh, empty one silently on re-pair: that reopens a replay window the
+// running agent deliberately fails closed on (replay_state). Only an explicit
+// --reset-replay starts one.
+func TestAgentInitRefusesToRecreateALostReplayRecord(t *testing.T) {
+	state, conf := t.TempDir(), t.TempDir()
+	var first strings.Builder
+	if err := agentInit(&first, state, conf, false); err != nil {
+		t.Fatal(err)
+	}
+	replay := filepath.Join(state, "replay.json")
+	if err := os.Remove(replay); err != nil {
+		t.Fatal(err)
+	}
+	err := agentInit(io.Discard, state, conf, false)
+	if err == nil || !strings.Contains(err.Error(), "--reset-replay") {
+		t.Fatalf("err = %v, want a refusal naming --reset-replay", err)
+	}
+	if _, err := os.Stat(replay); !os.IsNotExist(err) {
+		t.Fatalf("replay.json was recreated: %v", err)
+	}
+	var again strings.Builder
+	if err := agentInit(&again, state, conf, true); err != nil {
+		t.Fatalf("with --reset-replay: %v", err)
+	}
+	if _, err := os.Stat(replay); err != nil {
+		t.Fatalf("replay.json not created: %v", err)
+	}
+	if again.String() != first.String() {
+		t.Fatalf("identity changed: %q vs %q", again.String(), first.String())
+	}
+}
+
 // A key file that exists but cannot be used is an error, never a reason to
 // make a new identity: only "does not exist" generates.
 func TestAgentInitNeverReplacesAnUnreadableKey(t *testing.T) {
@@ -138,7 +171,7 @@ func TestAgentInitNeverReplacesAnUnreadableKey(t *testing.T) {
 	if err := os.WriteFile(keyPath, []byte("not hex\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := agentInit(io.Discard, state, conf); err == nil {
+	if err := agentInit(io.Discard, state, conf, false); err == nil {
 		t.Fatal("agent init accepted a damaged key file")
 	}
 	if b, _ := os.ReadFile(keyPath); string(b) != "not hex\n" {
@@ -152,7 +185,7 @@ func TestAgentInitNeverReplacesAnUnreadableKey(t *testing.T) {
 	if err := os.Chmod(keyPath, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := agentInit(io.Discard, state, conf); err == nil {
+	if err := agentInit(io.Discard, state, conf, false); err == nil {
 		t.Fatal("agent init accepted a group-readable key")
 	}
 
@@ -161,7 +194,7 @@ func TestAgentInitNeverReplacesAnUnreadableKey(t *testing.T) {
 	if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), link); err != nil {
 		t.Fatal(err)
 	}
-	if err := agentInit(io.Discard, filepath.Dir(link), conf); err == nil {
+	if err := agentInit(io.Discard, filepath.Dir(link), conf, false); err == nil {
 		t.Fatal("agent init replaced a dangling symlink")
 	}
 	if _, err := os.Lstat(link); err != nil {
