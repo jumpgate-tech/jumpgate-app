@@ -36,6 +36,22 @@ type Info struct {
 	Token     string    `json:"token"`
 	Version   string    `json:"version"`
 	StartedAt time.Time `json:"startedAt"`
+	// Shape is what the server was built with, so a launch that attaches to it
+	// can tell the operator which of its own options are not in effect. Nil
+	// from a server older than the field.
+	Shape *Shape `json:"shape,omitempty"`
+}
+
+// Shape records the options that shape a running server. It carries no
+// credential: server.json is 0600, but the tokens never need to leave the
+// process that holds them.
+type Shape struct {
+	RelayBind     string `json:"relayBind,omitempty"`
+	BillingSocket string `json:"billingSocket,omitempty"`
+	ERPCURL       string `json:"erpcUrl,omitempty"`
+	ERPCProject   string `json:"erpcProject,omitempty"`
+	Meter         bool   `json:"meter,omitempty"`
+	KeyAdmin      bool   `json:"keyAdmin,omitempty"`
 }
 
 // RunDir is ~/.jumpgate/run, created 0700.

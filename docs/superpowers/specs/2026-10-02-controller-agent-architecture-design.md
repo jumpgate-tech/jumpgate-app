@@ -176,6 +176,15 @@ All signers implement one `Signer` interface (`Address()`,
   same file, so the TUI attaches to it too.
 - `config.json` gets a file lock as a safety net; the single-server rule is the
   real guarantee of one writer.
+- One composition root (`buildServer` in `cmd/jumpgate`) builds the server for
+  both entry points. `serve` takes the app's relay, meter and key-admin flags,
+  and each flag also reads a `JUMPGATE_*` environment variable, so an
+  auto-started `serve` inherits the operator's relay through the environment.
+  The discovery file also records the server's shape: the relay bind, the
+  billing socket, metering and key admin. An app launch that attaches to a
+  server with a different shape warns and names each difference. A recorded
+  controller key that will not open is tolerated by both entry points: the box
+  routes answer 503 `no_controller_key` with the reason.
 
 ## The TUI
 

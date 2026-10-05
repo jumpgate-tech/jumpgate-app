@@ -62,7 +62,15 @@ func writeAgentError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-func writeNoControllerKey(w http.ResponseWriter) {
+// writeNoControllerKey answers a box route on a server with no signer. When a
+// key is recorded but would not open, the reason is in the message and the
+// hint is to fix the key store, not to create a second key.
+func (s *Server) writeNoControllerKey(w http.ResponseWriter) {
+	if err := s.cfg.SignerErr; err != nil {
+		writeErrorDetail(w, http.StatusServiceUnavailable, "this server could not open the controller key: "+err.Error(),
+			"fix the key store (unlock the keychain, sign in to 1Password, restore the key file), then restart the server with `jumpgate stop`", "no_controller_key")
+		return
+	}
 	writeErrorDetail(w, http.StatusServiceUnavailable, "this server has no controller key", "run `jumpgate keys init`, then restart the server", "no_controller_key")
 }
 
@@ -72,7 +80,7 @@ func writeNoControllerKey(w http.ResponseWriter) {
 // check, since it makes the server sign.
 func (s *Server) handleIntent(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Signer == nil {
-		writeNoControllerKey(w)
+		s.writeNoControllerKey(w)
 		return
 	}
 	cfg, err := s.loadConfig()

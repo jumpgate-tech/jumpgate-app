@@ -82,6 +82,24 @@ jumpgate serve                          # run the controller server (the other c
 jumpgate stop                           # stop it, via its local API
 ```
 
+The web app and `jumpgate serve` build the server the same way and take the
+same server flags: `--bind`, `--relay-bind`, `--billing-socket`, `--erpc-url`,
+`--erpc-project` and `--meter`. Each of these flags also reads an environment
+variable (`JUMPGATE_RELAY_BIND`, `JUMPGATE_BILLING_SOCKET`, `JUMPGATE_ERPC_URL`,
+`JUMPGATE_ERPC_PROJECT`, `JUMPGATE_METER`), and a flag on the command line wins
+over its variable. The two credentials come only from the environment:
+`JUMPGATE_RELAY_TOKEN` and `JUMPGATE_ADMIN_TOKEN`. A server that a CLI command
+starts for you inherits that command's environment. So set the variables once,
+in your shell profile or service unit, and every entry point builds the same
+relay and key admin. If the app finds a server already running with different
+options, it prints which options are not in effect. Run `jumpgate stop` and
+launch again to apply them.
+
+If the controller key will not open, the server still starts. This can happen
+when the keychain is locked or the key file is missing. The web UI keeps
+working, and box commands fail with `no_controller_key` and the reason. Fix the
+key store, then run `jumpgate stop` so the server restarts with the key.
+
 `jumpgate hosts add` installs a small agent (`jumpgate-agent.service`) on the
 box, a restricted `jumpgate` tunnel user, and an sshd drop-in that confines that
 user to the agent's unix socket. Every command is a signed intent that the agent

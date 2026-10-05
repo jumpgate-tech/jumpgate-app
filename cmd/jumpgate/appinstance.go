@@ -58,7 +58,7 @@ func appURL(info daemon.Info) string {
 // serveAndPublish runs s on bind and on ~/.jumpgate/run/server.sock until ctx
 // ends, and publishes server.json once both answer, so every jumpgate command
 // finds this server whichever entry point started it.
-func serveAndPublish(ctx context.Context, stop context.CancelFunc, s *server.Server, holder *daemon.Holder, bind, token string) error {
+func serveAndPublish(ctx context.Context, stop context.CancelFunc, s *server.Server, holder *daemon.Holder, bind, token string, shape *daemon.Shape) error {
 	dir, err := daemon.RunDir()
 	if err != nil {
 		return err
@@ -67,7 +67,7 @@ func serveAndPublish(ctx context.Context, stop context.CancelFunc, s *server.Ser
 	return serveBoth(ctx, stop, s.ListenAndServe, func(ctx context.Context) error { return s.ServeUnix(ctx, sock) },
 		func() error { return waitForSocket(ctx, sock, 2*time.Second) },
 		func() error {
-			if err := holder.Publish(daemon.Info{PID: os.Getpid(), Socket: sock, HTTPAddr: bind, Token: token, Version: buildinfo.Version(), StartedAt: time.Now().UTC()}); err != nil {
+			if err := holder.Publish(daemon.Info{PID: os.Getpid(), Socket: sock, HTTPAddr: bind, Token: token, Version: buildinfo.Version(), StartedAt: time.Now().UTC(), Shape: shape}); err != nil {
 				return fmt.Errorf("publish: %w", err)
 			}
 			fmt.Fprintf(os.Stderr, "jumpgate server on %s and %s\n", bind, sock)

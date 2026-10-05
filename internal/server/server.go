@@ -110,6 +110,10 @@ type Config struct {
 	// this server process ever holds it. Nil means those routes answer 503
 	// with code "no_controller_key".
 	Signer signer.Signer
+	// SignerErr is why Signer is nil when a controller key is recorded but
+	// would not open (a locked keychain, a missing file). The box routes
+	// report it instead of telling the operator to create a key that exists.
+	SignerErr error
 }
 
 // Server is the jumpgate local HTTP server.

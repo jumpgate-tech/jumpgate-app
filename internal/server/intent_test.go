@@ -142,6 +142,22 @@ func TestIntentEndpointRefusesUnpairedAndKeylessServers(t *testing.T) {
 	}
 }
 
+// A key that would not open is reported with its reason, so an operator with a
+// locked keychain is not told to run `keys init` over a key that exists.
+func TestIntentEndpointReportsWhyTheKeyIsMissing(t *testing.T) {
+	ts, token := pairedLocal(t)
+	ts.Close()
+	broken := httptest.NewServer(New(Config{Token: token, UI: fstest.MapFS{}, SignerErr: errors.New("keychain is locked")}).Handler())
+	defer broken.Close()
+	res, out := postIntent(t, broken, token, "/api/targets/box/intent/agent.info", `{}`)
+	if res.StatusCode != http.StatusServiceUnavailable || out["code"] != "no_controller_key" {
+		t.Fatalf("got %d %v", res.StatusCode, out)
+	}
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "keychain is locked") {
+		t.Fatalf("error %q does not say why the key is missing", out["error"])
+	}
+}
+
 // Concurrent intents to one target are serialised, so no two of them sign the
 // same sequence and every one is admitted.
 func TestIntentEndpointSerialisesConcurrentIntentsToOneTarget(t *testing.T) {

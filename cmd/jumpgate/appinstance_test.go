@@ -63,7 +63,7 @@ func TestClaimAppInstanceFindsTheRunningServer(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	s := server.New(server.Config{Bind: bind, Token: token, Shutdown: stop})
 	done := make(chan error, 1)
-	go func() { done <- serveAndPublish(ctx, stop, s, h, bind, token) }()
+	go func() { done <- serveAndPublish(ctx, stop, s, h, bind, token, nil) }()
 	defer func() { stop(); <-done }()
 
 	_, running, err := claimAppInstance(context.Background(), 5*time.Second)
