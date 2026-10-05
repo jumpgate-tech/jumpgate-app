@@ -167,7 +167,7 @@ export function Settings() {
               </button>
             )}
             <p className="muted small">
-              Keys stay on this machine — they&apos;re written to ~/.valve-node-app/config.json (mode 0600)
+              Keys stay on this machine — they&apos;re written to ~/.jumpgate/config.json (mode 0600)
               and only sent to the provider you pick, never anywhere else.
             </p>
 

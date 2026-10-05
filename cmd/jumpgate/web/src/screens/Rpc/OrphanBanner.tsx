@@ -24,7 +24,7 @@ export function OrphanBanner({
           tone: "warn",
           text:
             `${orphan.containerName} is still running on ${orphan.targetId}. Its chains were folded into ` +
-            `${orphan.mergedInto}, but valve-node-app does not stop containers it did not start.`,
+            `${orphan.mergedInto}, but jumpgate does not stop containers it did not start.`,
           cmd,
         }}
       />

@@ -20,7 +20,7 @@ export function useCatalog(): UseQueryResult<api.Catalog> {
   });
 }
 
-// useHost reports the OS/arch valve-node-app itself runs on — the Targets
+// useHost reports the OS/arch jumpgate itself runs on — the Targets
 // screen's third leg of its Promise.all(listTargets, getCatalog, getHost),
 // used to decide whether local node setup is viable on THIS server.
 export function useHost(): UseQueryResult<api.Host> {

@@ -379,7 +379,7 @@ export function GatewayCard({
         return (
           <ConfirmDialog
             title={`Forget ${gw.label}`}
-            body={`valve-node-app will forget this gateway's configuration. Its container "${gw.containerName}" on ${gw.placement.targetId} is NOT touched — if it is running it keeps running and keeps serving. Stop or wipe it first if you wanted it gone.`}
+            body={`jumpgate will forget this gateway's configuration. Its container "${gw.containerName}" on ${gw.placement.targetId} is NOT touched — if it is running it keeps running and keeps serving. Stop or wipe it first if you wanted it gone.`}
             confirmLabel="Forget it"
             danger
             onConfirm={() => void forget()}

@@ -106,7 +106,7 @@ export function ManageSection(props: ManageProps) {
             </button>
             <button
               className="btn btn-ghost"
-              title="Remove this gateway from valve-node-app. Its container is left alone."
+              title="Remove this gateway from jumpgate. Its container is left alone."
               onClick={props.onForget}
             >
               Forget…

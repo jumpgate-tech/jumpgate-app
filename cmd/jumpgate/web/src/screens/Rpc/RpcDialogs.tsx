@@ -361,7 +361,7 @@ export function DiscoverDialog({
       <h2>Public endpoints for chain {chainId}</h2>
       {result.source === "vendored" ? (
         <div className="banner banner-warn">
-          chainid.network was unreachable, so this is the list valve-node-app ships with.
+          chainid.network was unreachable, so this is the list jumpgate ships with.
           {result.fetchError ? <div className="small">{result.fetchError}</div> : null}
         </div>
       ) : null}

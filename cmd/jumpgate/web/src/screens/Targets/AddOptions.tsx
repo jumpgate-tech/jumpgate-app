@@ -47,7 +47,7 @@ export function AddOptions({
       <h3>
         This machine <Badge text="Available" kind="ok" />
       </h3>
-      <p className="muted small">Run a node here, on the Linux host valve-node-app is running on.</p>
+      <p className="muted small">Run a node here, on the Linux host jumpgate is running on.</p>
       <div className="card-actions">
         <button className="btn" type="button" onClick={onAddLocal}>
           Add this machine
@@ -61,7 +61,7 @@ export function AddOptions({
       </h3>
       <p className="muted small">
         Setup installs systemd units, uses apt, and needs root, so it only completes on a Linux
-        host. valve-node-app runs here as your <strong>controller</strong>, driving nodes on other
+        host. jumpgate runs here as your <strong>controller</strong>, driving nodes on other
         machines.
       </p>
       <div className="card-actions">

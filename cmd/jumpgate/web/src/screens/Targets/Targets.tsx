@@ -51,7 +51,7 @@ export function Targets() {
   const hostOS = hostQuery.data?.os ?? "";
 
   // Local node setup needs a Linux host — gated on the SERVER's OS (what
-  // valve-node-app runs on), not the browser's. On a non-Linux host local
+  // jumpgate runs on), not the browser's. On a non-Linux host local
   // setup can't complete, but the option is still offered (secondary, with a
   // caveat) rather than hidden, so it's never a dead end.
   const localViable = hostOS === "linux";
@@ -173,7 +173,7 @@ export function Targets() {
       {pendingRemoveId && (
         <ConfirmDialog
           title="Remove machine"
-          body={`Remove "${pendingRemoveId}"? This only removes it from valve-node-app — anything already running on the machine keeps running, and its data is left alone.`}
+          body={`Remove "${pendingRemoveId}"? This only removes it from jumpgate — anything already running on the machine keeps running, and its data is left alone.`}
           confirmLabel="Remove"
           danger
           onConfirm={() => void confirmRemove()}

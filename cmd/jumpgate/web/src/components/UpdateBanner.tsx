@@ -5,7 +5,7 @@
 // prompt me" never sees it; they check from the Settings page instead.
 //
 // The copy says "Version X" rather than a brand name: this same tree ships as
-// both valve-node-app and Jumpgate, so a hardcoded name would be wrong in one
+// both the old and new names, so a hardcoded name would be wrong in one
 // of them.
 import { useState } from "react";
 import { useUpdate } from "../hooks/update";
