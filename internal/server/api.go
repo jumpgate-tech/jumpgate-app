@@ -1346,6 +1346,13 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 			// Setup was re-run; see handleTargetMonitorStream.
 			return
 		case <-conn.Pings():
+			// A reader that lost lines and then went quiet still gets its
+			// reset: check on every ping, not only when a line arrives.
+			if resets {
+				if hits, dropped := watch.Resync(ch, backlog); dropped {
+					conn.SendNamed("reset", hits)
+				}
+			}
 			conn.Ping()
 		case hit, ok := <-ch:
 			if !ok {

@@ -418,3 +418,51 @@ func TestStreamFailsOnA401TheTokenDoesNotFix(t *testing.T) {
 		t.Fatalf("without rediscover: %v", m.Err)
 	}
 }
+
+// Two streams on one client both get a 401 with the old token: one swaps
+// the token in, and the other must see that and retry with it rather than
+// fail because a fresh server.json shows nothing new. The server holds the
+// first two stale-token answers until both have arrived, so both 401s
+// really carry the old token.
+func TestConcurrentStreamsBothSurviveATokenRotation(t *testing.T) {
+	fastStreams(t)
+	var token atomic.Value
+	token.Store("old")
+	var stale atomic.Int32
+	both := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token.Load().(string) {
+			if stale.Add(1) == 2 {
+				close(both)
+			}
+			select {
+			case <-both:
+			case <-time.After(2 * time.Second):
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":"unauthorized","code":"unauthorized"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\n", token.Load()) // which token let it in
+		w.(http.Flusher).Flush()
+	}))
+	t.Cleanup(ts.Close)
+	c := newHTTP(ts.URL, "old", buildinfo.Version())
+	c.rediscover = func(context.Context) (*Client, error) {
+		return newHTTP(ts.URL, token.Load().(string), buildinfo.Version()), nil
+	}
+	// Each connection ends after one event, so both streams keep
+	// reconnecting and both meet the rotation.
+	a, b := openStream(t, c, "/s?a"), openStream(t, c, "/s?b")
+	next(t, a, func(m StreamMsg) bool { return m.Event != nil })
+	next(t, b, func(m StreamMsg) bool { return m.Event != nil })
+	token.Store("new")
+	for name, ch := range map[string]<-chan StreamMsg{"a": a, "b": b} {
+		m := next(t, ch, func(m StreamMsg) bool { return (m.Event != nil && string(m.Event.Data) == "new") || m.State == Failed })
+		if m.State == Failed {
+			t.Fatalf("stream %s failed after the rotation: %v", name, m.Err)
+		}
+	}
+}

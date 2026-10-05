@@ -107,25 +107,41 @@ func findServer(ctx context.Context) (*Client, error) {
 	return New(info), nil
 }
 
-// refresh re-reads server.json and, when the server there has another
-// token (it restarted: every start mints a new one), switches this client to
-// it. It reports whether anything changed, so a caller retries a 401 once and
-// not in a loop.
-func (c *Client) refresh(ctx context.Context) bool {
-	if c.rediscover == nil {
-		return false
+// refresh is called after a request made with token used got a 401. It
+// reports whether a retry can do better: true when the client already holds
+// another token (a concurrent stream refreshed first), or when server.json
+// now names a server with another token (it restarted: every start mints a
+// new one), which the client then switches to. False means the 401 stands,
+// so a caller retries once and not in a loop.
+func (c *Client) refresh(ctx context.Context, used string) bool {
+	c.mu.Lock()
+	moved := c.token != used
+	c.mu.Unlock()
+	if moved || c.rediscover == nil {
+		return moved
 	}
 	n, err := c.rediscover(ctx)
-	if err != nil {
-		return false
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if n.token == c.token {
+	switch {
+	case c.token != used:
+		return true // another stream swapped while we looked
+	case err != nil || n.token == used:
 		return false
 	}
 	c.base, c.token, c.info, c.hc, c.sc = n.base, n.token, n.info, n.hc, n.sc
 	return true
+}
+
+// conn is the connection a request uses now: the base URL, the token and the
+// HTTP client (the streaming one when stream is set).
+func (c *Client) conn(stream bool) (base, token string, hc *http.Client) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if stream {
+		return c.base, c.token, c.sc
+	}
+	return c.base, c.token, c.hc
 }
 
 // newHTTP is a client for a server at a TCP base URL that reports version:
@@ -173,12 +189,12 @@ func WarnSkew(w io.Writer, c *Client) {
 }
 
 func (c *Client) send(ctx context.Context, stream bool, method, path string, in any, header http.Header) (*http.Response, error) {
-	c.mu.Lock()
-	base, token, hc := c.base, c.token, c.hc
-	if stream {
-		hc = c.sc
-	}
-	c.mu.Unlock()
+	base, token, hc := c.conn(stream)
+	return sendVia(ctx, base, token, hc, method, path, in, header)
+}
+
+// sendVia sends one request over an explicit connection (see conn).
+func sendVia(ctx context.Context, base, token string, hc *http.Client, method, path string, in any, header http.Header) (*http.Response, error) {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)

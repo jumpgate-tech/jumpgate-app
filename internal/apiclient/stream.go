@@ -153,7 +153,8 @@ func (c *Client) Stream(ctx context.Context, path string) <-chan StreamMsg {
 				return
 			}
 			started := time.Now()
-			err := c.streamOnce(ctx, path, func() bool {
+			var used string // the token this connection presented
+			err := c.streamOnce(ctx, path, &used, func() bool {
 				refreshed = false
 				return send(StreamMsg{State: Live})
 			}, func(ev Event) bool {
@@ -162,9 +163,10 @@ func (c *Client) Stream(ctx context.Context, path string) <-chan StreamMsg {
 			switch {
 			case ctx.Err() != nil:
 				return
-			case unauthorized(err) && !refreshed && c.refresh(ctx):
-				// The server restarted with a new token; reconnect with it
-				// now, once. A second 401 in a row is final.
+			case unauthorized(err) && !refreshed && c.refresh(ctx, used):
+				// The server restarted with a new token (found now, or by
+				// another stream already); reconnect with it now, once. A
+				// second 401 in a row is final.
 				refreshed = true
 				attempt--
 				continue
@@ -197,7 +199,7 @@ func (c *Client) Stream(ctx context.Context, path string) <-chan StreamMsg {
 // emits events, and gives up when the connection ends or stays silent for
 // idleTimeout. The silence clock starts before the request, so a server that
 // accepts the connection and never answers is noticed too.
-func (c *Client) streamOnce(ctx context.Context, path string, live func() bool, emit func(Event) bool) error {
+func (c *Client) streamOnce(ctx context.Context, path string, used *string, live func() bool, emit func(Event) bool) error {
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	idle := time.AfterFunc(idleTimeout, cancel)
@@ -208,7 +210,9 @@ func (c *Client) streamOnce(ctx context.Context, path string, live func() bool, 
 		}
 		return err
 	}
-	res, err := c.Open(sctx, http.MethodGet, path, nil, http.Header{"Accept": {"text/event-stream"}})
+	base, token, hc := c.conn(true)
+	*used = token
+	res, err := sendVia(sctx, base, token, hc, http.MethodGet, path, nil, http.Header{"Accept": {"text/event-stream"}})
 	if err != nil {
 		return silent(err)
 	}
