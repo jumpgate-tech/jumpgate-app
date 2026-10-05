@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
@@ -141,7 +142,7 @@ func TestLoadKeyFileRefusesASymlink(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Skipf("cannot create a symlink here: %v", err)
 	}
-	if _, err := LoadKeyFile(link); err == nil {
-		t.Fatal("LoadKeyFile followed a symlink")
+	if _, err := LoadKeyFile(link); err == nil || !strings.Contains(err.Error(), "is a link") {
+		t.Fatalf("LoadKeyFile(symlink) = %v, want a refusal of the link", err)
 	}
 }

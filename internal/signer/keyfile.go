@@ -24,14 +24,11 @@ const maxKeyFileSize = 1024
 // once, refuses symlinks and Windows reparse points, and checks the open
 // handle, so the file it checks is the file it reads.
 func LoadKeyFile(path string) (*Key, error) {
-	// O_NOFOLLOW covers unix; Windows has no such open flag here, so the link
-	// is refused before opening (M-4).
-	if fi, err := os.Lstat(path); err == nil && fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
-		return nil, fmt.Errorf("signer: %s is a link, not a key file", path)
-	}
-	f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow, 0)
+	// openKeyFile refuses a link or reparse point as it opens (M-4), so
+	// nothing can be swapped in between a check and the open.
+	f, err := openKeyFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("signer: %w", err)
+		return nil, err
 	}
 	defer f.Close()
 	fi, err := f.Stat()
