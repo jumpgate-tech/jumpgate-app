@@ -1,14 +1,9 @@
 package server
 
 import (
-	"context"
-	"errors"
-	"net"
 	"net/http"
-	"os"
 
 	"github.com/valve-tech/jumpgate/internal/api"
-	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // writeAPIError is the one writer of error responses. Every error the API
@@ -48,20 +43,7 @@ func writeTargetNotSetUp(w http.ResponseWriter) {
 // writeDialError reports a failure to open a target's legacy executor. A
 // host-key failure is a security error and never "unreachable"; a refused or
 // timed-out connection is "unreachable", the same code the agent routes use
-// for the same outage.
+// for the same outage (apiErrorFor is the one mapping).
 func writeDialError(w http.ResponseWriter, err error) {
-	var unknown *executor.UnknownHostError
-	var op *net.OpError
-	switch {
-	case errors.As(err, &unknown):
-		writeAPIError(w, http.StatusConflict, api.Error{Message: err.Error(), Code: api.CodeUnknownHost, Host: unknown.Host, Fingerprint: unknown.Fingerprint})
-	case errors.Is(err, executor.ErrHostKeyMismatch):
-		writeErrorDetail(w, http.StatusBadGateway, err.Error(), "", api.CodeHostKey)
-	case errors.Is(err, executor.ErrNoPOSIXShell):
-		writeErrorDetail(w, http.StatusConflict, err.Error(), "", api.CodeLocalUnsupported)
-	case errors.As(err, &op), errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
-		writeErrorDetail(w, http.StatusGatewayTimeout, err.Error(), "", api.CodeUnreachable)
-	default:
-		writeError(w, http.StatusBadGateway, err.Error())
-	}
+	writeNodeError(w, &dialError{err})
 }

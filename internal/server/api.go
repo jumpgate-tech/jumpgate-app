@@ -1182,22 +1182,19 @@ func (s *Server) handleSetupStream(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------
 
 func (s *Server) handleTargetMonitorStream(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	cfg, target, ok := s.nodeTarget(w, r.PathValue("id"))
+	if !ok {
 		return
 	}
-	target, ok := findTarget(cfg, id)
-	if !ok {
-		writeTargetNotFound(w)
+	if target.Agent != nil {
+		s.streamAgentStatus(w, r, cfg, target)
 		return
 	}
 	if target.Wire == nil {
 		writeTargetNotSetUp(w)
 		return
 	}
+	setVia(w, viaSSH)
 
 	mon, retired, err := s.getMonitor(target, cfg.RefRPCBase)
 	if err != nil {
@@ -1241,37 +1238,22 @@ func (s *Server) handleTargetMonitorStream(w http.ResponseWriter, r *http.Reques
 // ---------------------------------------------------------------------
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	target, ok := findTarget(cfg, id)
+	cfg, t, ok := s.nodeTarget(w, r.PathValue("id"))
 	if !ok {
-		writeTargetNotFound(w)
 		return
 	}
-	if target.Wire == nil {
-		writeTargetNotSetUp(w)
-		return
-	}
-
-	watch, _, err := s.getWatcher(target)
-	if err != nil {
-		writeDialError(w, err)
-		return
-	}
-
 	n := defaultRecentLogs
 	if raw := r.URL.Query().Get("n"); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
 			n = parsed
 		}
 	}
-
-	hits := watch.Recent(n)
+	hits, v, err := s.nodeLogs(r.Context(), cfg, t, n)
+	setVia(w, v)
+	if err != nil {
+		writeNodeError(w, err)
+		return
+	}
 	if hits == nil {
 		hits = []logwatch.Hit{}
 	}
@@ -1289,22 +1271,19 @@ func backlogParam(raw string) int {
 }
 
 func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	cfg, target, ok := s.nodeTarget(w, r.PathValue("id"))
+	if !ok {
 		return
 	}
-	target, ok := findTarget(cfg, id)
-	if !ok {
-		writeTargetNotFound(w)
+	if target.Agent != nil {
+		s.streamAgentLogSnapshots(w, r, cfg, target, backlogParam(r.URL.Query().Get("backlog")))
 		return
 	}
 	if target.Wire == nil {
 		writeTargetNotSetUp(w)
 		return
 	}
+	setVia(w, viaSSH)
 
 	watch, retired, err := s.getWatcher(target)
 	if err != nil {
@@ -1491,39 +1470,22 @@ func (s *Server) targetWithWire(w http.ResponseWriter, r *http.Request, id strin
 	return target, true
 }
 
-// serviceActionResponse deliberately carries no json tag (like the ops
-// structs it sits alongside) so it encodes as PascalCase {"Active":...},
-// matching the spec's `{Active bool}`.
-type serviceActionResponse struct {
-	Active bool
-}
-
 func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	svc := r.PathValue("svc")
-	action := r.PathValue("action")
-
-	target, ok := s.targetWithWire(w, r, id)
+	cfg, t, ok := s.nodeTarget(w, r.PathValue("id"))
 	if !ok {
 		return
 	}
-
-	ex, err := s.getExecutor(target)
+	active, v, err := s.nodeService(r.Context(), cfg, t, r.PathValue("svc"), r.PathValue("action"))
+	setVia(w, v)
 	if err != nil {
-		writeDialError(w, err)
+		writeNodeError(w, err)
 		return
 	}
-
-	active, err := ops.ServiceAction(r.Context(), ex, svc, action)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, serviceActionResponse{Active: active})
+	writeJSON(w, http.StatusOK, api.ServiceResult{Active: active})
 }
 
-// clearRequest mirrors serviceActionResponse's untagged-field convention.
+// clearRequest carries no json tag, like the ops structs it sits alongside,
+// so its JSON name is PascalCase {"Confirm": ...}.
 type clearRequest struct {
 	Confirm string
 }
@@ -1570,92 +1532,47 @@ func (s *Server) handleServiceClear(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDiskUsage(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	target, ok := s.targetWithWire(w, r, id)
+	cfg, t, ok := s.nodeTarget(w, r.PathValue("id"))
 	if !ok {
 		return
 	}
-
-	ex, err := s.getExecutor(target)
+	du, v, err := s.nodeDisk(r.Context(), cfg, t)
+	setVia(w, v)
 	if err != nil {
-		writeDialError(w, err)
+		writeNodeError(w, err)
 		return
 	}
-
-	du, err := ops.DiskUsage(r.Context(), ex, *target.Wire)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-
 	writeJSON(w, http.StatusOK, du)
 }
 
 func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	target, ok := s.targetWithWire(w, r, id)
+	cfg, t, ok := s.nodeTarget(w, r.PathValue("id"))
 	if !ok {
 		return
 	}
-
-	ex, err := s.getExecutor(target)
+	ep, v, err := s.nodeEndpoints(r.Context(), cfg, t)
+	setVia(w, v)
 	if err != nil {
-		writeDialError(w, err)
+		writeNodeError(w, err)
 		return
 	}
-
-	sshMode := target.Mode == "ssh"
-	sshHostHint := ""
-	if sshMode && target.SSH != nil {
-		sshHostHint = fmt.Sprintf("%s@%s", target.SSH.User, target.SSH.Host)
-	}
-
-	ep, err := ops.Endpoints(r.Context(), ex, *target.Wire, sshMode, sshHostHint)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-
 	writeJSON(w, http.StatusOK, ep)
 }
 
 func (s *Server) handleFirewall(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	target, ok := s.targetWithWire(w, r, id)
+	cfg, t, ok := s.nodeTarget(w, r.PathValue("id"))
 	if !ok {
 		return
 	}
-
-	ex, err := s.getExecutor(target)
+	items, v, err := s.nodeFirewall(r.Context(), cfg, t)
+	setVia(w, v)
 	if err != nil {
-		writeDialError(w, err)
-		return
-	}
-
-	// Grade binds to private overlays (WireGuard, Tailscale, etc.) as overlay
-	// rather than LAN. This includes both the operator's declared overlays AND
-	// the subnet of any WireGuard server this app provisioned — so a gateway
-	// bound on a Jumpgate-set-up overlay is recognized as private ingress, not
-	// warned about. A config load error here is non-fatal: fall back to no
-	// declared overlays (still conservative).
-	var overlayCIDRs []string
-	if cfg, cerr := s.loadConfig(); cerr == nil {
-		overlayCIDRs = cfg.TrustedOverlayCIDRs()
-	}
-	overlays := ops.ParseOverlayCIDRs(overlayCIDRs)
-
-	items, err := ops.FirewallChecklist(r.Context(), ex, *target.Wire, overlays...)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeNodeError(w, err)
 		return
 	}
 	if items == nil {
 		items = []ops.CheckItem{}
 	}
-
 	writeJSON(w, http.StatusOK, items)
 }
 

@@ -150,3 +150,37 @@ func TestTargets(t *testing.T) {
 		t.Fatalf("Targets = %+v, %v", ts, err)
 	}
 }
+
+func TestNodeMethodsUseTheNodeRoutes(t *testing.T) {
+	var paths []string
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/firewall"):
+			fmt.Fprint(w, `[{"ID":"p2p","Status":"pass"}]`)
+		case strings.HasSuffix(r.URL.Path, "/endpoints"):
+			fmt.Fprint(w, `{"ExecHTTP":"http://127.0.0.1:8545","ExecReachable":true}`)
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			fmt.Fprint(w, `{"Active":true}`)
+		}
+	})
+	ctx := context.Background()
+	if r, err := c.ServiceAction(ctx, "box", "beacon", "restart"); err != nil || !r.Active {
+		t.Fatalf("ServiceAction %+v %v", r, err)
+	}
+	if e, err := c.Endpoints(ctx, "box"); err != nil || !e.ExecReachable {
+		t.Fatalf("Endpoints %+v %v", e, err)
+	}
+	if f, err := c.Firewall(ctx, "box"); err != nil || f[0].Status != "pass" {
+		t.Fatalf("Firewall %+v %v", f, err)
+	}
+	if err := c.RemoveTarget(ctx, "box"); err != nil {
+		t.Fatal(err)
+	}
+	want := "POST /api/targets/box/services/beacon/restart GET /api/targets/box/endpoints GET /api/targets/box/firewall DELETE /api/targets/box"
+	if strings.Join(paths, " ") != want {
+		t.Fatalf("paths %v", paths)
+	}
+}

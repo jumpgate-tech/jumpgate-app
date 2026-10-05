@@ -71,3 +71,29 @@ func (c *Client) Targets(ctx context.Context) ([]api.TargetView, error) {
 	err := c.Do(ctx, http.MethodGet, "/api/targets", nil, &ts)
 	return ts, err
 }
+
+// ServiceAction starts, stops or restarts a node service.
+func (c *Client) ServiceAction(ctx context.Context, target, service, action string) (api.ServiceResult, error) {
+	var r api.ServiceResult
+	err := c.Do(ctx, http.MethodPost, targetPath(target, "/services/"+url.PathEscape(service)+"/"+url.PathEscape(action)), nil, &r)
+	return r, err
+}
+
+// Endpoints reads the node's RPC endpoints.
+func (c *Client) Endpoints(ctx context.Context, target string) (api.Endpoints, error) {
+	var e api.Endpoints
+	err := c.Do(ctx, http.MethodGet, targetPath(target, "/endpoints"), nil, &e)
+	return e, err
+}
+
+// Firewall reads the firewall checklist.
+func (c *Client) Firewall(ctx context.Context, target string) ([]api.CheckItem, error) {
+	var items []api.CheckItem
+	err := c.Do(ctx, http.MethodGet, targetPath(target, "/firewall"), nil, &items)
+	return items, err
+}
+
+// RemoveTarget forgets a target on this controller (spec D19).
+func (c *Client) RemoveTarget(ctx context.Context, target string) error {
+	return c.Do(ctx, http.MethodDelete, targetPath(target, ""), nil, nil)
+}

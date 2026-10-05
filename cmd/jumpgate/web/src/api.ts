@@ -303,8 +303,8 @@ export function explain(id: string, lines?: string[]): Promise<ExplainResponse> 
 export type ServiceID = "exec" | "beacon";
 export type ServiceActionKind = "start" | "stop" | "restart";
 
-// serviceAction's response mirrors serviceActionResponse in api.go, which
-// deliberately carries no json tag and so encodes as PascalCase {"Active":...}.
+// serviceAction's response mirrors api.ServiceResult (internal/api/node.go),
+// whose JSON name is PascalCase {"Active":...}.
 export interface ServiceActionResult {
   Active: boolean;
 }

@@ -2,17 +2,13 @@ package server
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"time"
 
-	"github.com/valve-tech/jumpgate/internal/agentclient"
 	"github.com/valve-tech/jumpgate/internal/api"
-	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/monitor"
-	"github.com/valve-tech/jumpgate/internal/signer"
 )
 
 // maxIntentBody bounds an intent payload, matching the agent's own limit.
@@ -22,45 +18,10 @@ const maxIntentBody = 1 << 20
 // bounded so a slow public endpoint cannot hold an intent's answer hostage.
 var refHeadClient = &http.Client{Timeout: 5 * time.Second}
 
-// writeAgentError maps an agentclient error onto the API's status and code,
-// and reports whether err was one of them. Host-key failures are checked
-// first: they are security errors, never "unreachable". The hints come from
-// the api registry, the one place a code's remedy is written.
-func writeAgentError(w http.ResponseWriter, err error) bool {
-	var unknown *executor.UnknownHostError
-	switch {
-	case errors.As(err, &unknown):
-		writeAPIError(w, http.StatusConflict, api.Error{Message: err.Error(), Code: api.CodeUnknownHost, Host: unknown.Host, Fingerprint: unknown.Fingerprint})
-	case errors.Is(err, executor.ErrHostKeyMismatch):
-		writeErrorDetail(w, http.StatusBadGateway, err.Error(), "", api.CodeHostKey)
-	case errors.Is(err, agentclient.ErrBadReceipt):
-		writeErrorDetail(w, http.StatusBadGateway, err.Error(), "", api.CodeBadReceipt)
-	case errors.Is(err, agentclient.ErrAgentHTTP):
-		writeErrorDetail(w, http.StatusBadGateway, err.Error(), "", api.CodeAgentHTTP)
-	case errors.Is(err, agentclient.ErrUnreachable):
-		writeErrorDetail(w, http.StatusGatewayTimeout, err.Error(), "", api.CodeUnreachable)
-	default:
-		return false
-	}
-	return true
-}
-
-// writeNoControllerKey answers a box route on a server with no signer. When a
-// key is recorded but would not open, the reason is in the message and the
-// hint is to fix the key store, not to create a second key. Only the plain
-// "no key" case takes the registry's hint.
+// writeNoControllerKey answers a box route on a server with no signer, with
+// the reason the recorded key did not open (noControllerKeyError).
 func (s *Server) writeNoControllerKey(w http.ResponseWriter) {
-	if err := s.cfg.SignerErr; errors.Is(err, signer.ErrAddressMismatch) {
-		writeErrorDetail(w, http.StatusServiceUnavailable, "the controller key is not the recorded controller identity: "+err.Error(),
-			"restore the original key in its key store, then restart the server with `jumpgate stop`; `jumpgate keys show` prints both addresses", api.CodeControllerKeyMismatch)
-		return
-	}
-	if err := s.cfg.SignerErr; err != nil {
-		writeErrorDetail(w, http.StatusServiceUnavailable, "this server could not open the controller key: "+err.Error(),
-			"fix the key store (unlock the keychain, sign in to 1Password, restore the key file), then restart the server with `jumpgate stop`", api.CodeNoControllerKey)
-		return
-	}
-	writeErrorDetail(w, http.StatusServiceUnavailable, "this server has no controller key", "", api.CodeNoControllerKey)
+	writeAPIError(w, http.StatusServiceUnavailable, noControllerKeyError(s.cfg.SignerErr))
 }
 
 // handleIntent signs one intent with the controller key, sends it to the
@@ -86,8 +47,7 @@ func (s *Server) handleIntent(w http.ResponseWriter, r *http.Request) {
 		writeErrorDetail(w, http.StatusConflict, "this target has no paired agent", "", api.CodeNotPaired)
 		return
 	}
-	at, err := agentTarget(t)
-	if err != nil {
+	if _, err := agentTarget(t); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -107,34 +67,14 @@ func (s *Server) handleIntent(w http.ResponseWriter, r *http.Request) {
 	var payload any = json.RawMessage(body)
 	switch kind {
 	case intent.KindFirewallRead:
-		payload = map[string]any{"overlayCidrs": cfg.TrustedOverlayCIDRs()}
+		payload = firewallPayload(cfg)
 	case intent.KindEndpointsRead:
-		login := ""
-		if t.SSH != nil {
-			login = t.SSH.User + "@" + t.SSH.Host
-		}
-		payload = intent.EndpointsReadPayload{SSHLogin: login}
+		payload = intent.EndpointsReadPayload{SSHLogin: sshLogin(t)}
 	}
 
-	// One intent per target at a time: the sequence lives in config and each
-	// request has its own client, so two in flight could sign the same seq.
-	entry := s.reg.get(t.ID)
-	entry.intentMu.Lock()
-	defer entry.intentMu.Unlock()
-
-	client, err := agentclient.Dial(r.Context(), at, s.cfg.Signer, configSeqs{targetID: t.ID})
+	res, err := s.sendIntent(r.Context(), cfg, t, kind, payload)
 	if err != nil {
-		if !writeAgentError(w, err) {
-			writeErrorDetail(w, http.StatusGatewayTimeout, err.Error(), "", api.CodeUnreachable)
-		}
-		return
-	}
-	defer client.Close()
-	res, err := client.Do(r.Context(), kind, payload)
-	if err != nil {
-		if !writeAgentError(w, err) {
-			writeError(w, http.StatusInternalServerError, err.Error())
-		}
+		writeNodeError(w, err)
 		return
 	}
 	reply := api.IntentReply{Status: res.Status, Result: res.Result, Rejection: res.Rejection, Failure: res.Failure}
