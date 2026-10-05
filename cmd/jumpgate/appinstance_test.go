@@ -158,3 +158,34 @@ func TestServerStartupRefusesAKeyItCannotRestrict(t *testing.T) {
 		t.Fatalf("loadServerConfig with a symlinked key = %v, want an error naming %s", err, link)
 	}
 }
+
+// buildServer, the one composition root, tightens secrets before it opens
+// the controller key: a key file left readable by others is restricted first
+// and then opened and checked against the recorded address. Opening first
+// would refuse the loose key and bring the server up without a signer.
+func TestBuildServerTightensBeforeOpeningTheKey(t *testing.T) {
+	home := testutil.Home(t)
+	keyFile := filepath.Join(home, ".jumpgate", "keys", "controller.key")
+	k, err := signer.GenerateKeyFile(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := config.Config{Controller: &config.Controller{KeyStore: string(signer.StoreFile), KeyRef: keyFile, Address: k.Address().Hex()}}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Loosen(t, keyFile)
+
+	var log strings.Builder
+	b, err := buildServer(serverOptions{Bind: freeAddr(t), ERPCURL: "http://127.0.0.1:4000"}, func() {}, &log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.signerErr != nil {
+		t.Fatalf("controller key not opened after tightening: %v\n%s", b.signerErr, log.String())
+	}
+	testutil.AssertPrivate(t, keyFile)
+	if !strings.Contains(log.String(), keyFile) {
+		t.Errorf("startup did not report tightening %s:\n%s", keyFile, log.String())
+	}
+}
