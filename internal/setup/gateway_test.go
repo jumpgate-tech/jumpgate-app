@@ -840,3 +840,35 @@ func TestGatewayPreflight_BuildxPresentPasses(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGatewayCheck_ReportsCrashLoopInsteadOfCurlExit(t *testing.T) {
+	e := dockerReady().
+		script("eth_chainId", executor.Result{ExitCode: 7, Stderr: "curl: (7) Failed to connect"}).
+		script("docker 'inspect'", executor.Result{Stdout: "restarting|5\n"}).
+		script("docker 'logs'", executor.Result{Stdout: "read /erpc.yaml: is a directory\n"})
+	p := &gatewayPlan{id: testGatewayID, gw: testGateway(), backend: BackendDocker}
+
+	err := p.gatewayCheck(context.Background(), e)
+	if err == nil {
+		t.Fatal("want error")
+	}
+	for _, want := range []string{"restarting", "(5 restarts)", "read /erpc.yaml: is a directory"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("want %q in error, got: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "curl exit") {
+		t.Errorf("crash loop must replace the bare curl exit: %v", err)
+	}
+}
+
+func TestGatewayCheck_RunningContainerKeepsCurlExitError(t *testing.T) {
+	e := dockerReady().
+		script("eth_chainId", executor.Result{ExitCode: 7}).
+		script("docker 'inspect'", executor.Result{Stdout: "running|0\n"})
+	p := &gatewayPlan{id: testGatewayID, gw: testGateway(), backend: BackendDocker}
+	err := p.gatewayCheck(context.Background(), e)
+	if err == nil || !strings.Contains(err.Error(), "curl exit 7") {
+		t.Fatalf("want the plain curl error while the container is running, got %v", err)
+	}
+}

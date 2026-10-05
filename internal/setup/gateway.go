@@ -1118,6 +1118,9 @@ func (p *gatewayPlan) gatewayCheck(ctx context.Context, e executor.Executor) err
 		return fmt.Errorf("gateway: eth_chainId probe: %w", err)
 	}
 	if res.ExitCode != 0 {
+		if derr := p.diagnoseContainer(ctx, e); derr != nil {
+			return derr
+		}
 		return fmt.Errorf("gateway: eth_chainId at %s failed (curl exit %d): %s", url, res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 
@@ -1253,4 +1256,37 @@ func parseHexChainID(hex string) (int, error) {
 		return 0, err
 	}
 	return int(n), nil
+}
+
+// diagnoseContainer explains a failed readiness probe when the docker
+// gateway's container is crash-looping or has exited — the commonest cause of
+// "curl exit 7" (e.g. a bind mount outside the VM's shared paths). It returns
+// nil when the container looks healthy or cannot be inspected, so the caller
+// falls back to the plain probe error.
+func (p *gatewayPlan) diagnoseContainer(ctx context.Context, e executor.Executor) error {
+	if p.backend != BackendDocker {
+		return nil
+	}
+	name := p.containerName()
+	res, err := ops.DockerRun(ctx, e, "inspect", "-f", "{{.State.Status}}|{{.RestartCount}}", name)
+	if err != nil || res.ExitCode != 0 {
+		return nil
+	}
+	status, restarts, _ := strings.Cut(strings.TrimSpace(res.Stdout), "|")
+	var state string
+	switch status {
+	case "restarting":
+		state = "restarting"
+	case "exited", "dead":
+		state = status
+	default:
+		return nil
+	}
+	logs := ""
+	if lr, lerr := ops.DockerRun(ctx, e, "logs", "--tail", "20", name); lerr == nil {
+		// docker logs replays the container's stderr on its own stderr, so
+		// a crash message is usually there rather than on stdout.
+		logs = strings.TrimSpace(strings.TrimSpace(lr.Stdout) + "\n" + strings.TrimSpace(lr.Stderr))
+	}
+	return fmt.Errorf("gateway container %s is %s (%s restarts); last log lines:\n%s", name, state, strings.TrimSpace(restarts), logs)
 }
