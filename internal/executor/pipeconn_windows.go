@@ -163,6 +163,10 @@ func (p *pipeConn) do(start func(ov *windows.Overlapped, n *uint32) error) (int,
 	}
 	ev2, err := windows.WaitForSingleObject(ev, wait)
 	if err != nil {
+		// The wait itself failed: cancel and wait for the cancellation, so the
+		// I/O never outlives ov and the buffer.
+		_ = windows.CancelIoEx(p.h, ov)
+		_ = windows.GetOverlappedResult(p.h, ov, &n, true)
 		return 0, err
 	}
 	if ev2 == uint32(windows.WAIT_TIMEOUT) {

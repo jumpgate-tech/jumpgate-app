@@ -7,14 +7,18 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // ErrUnknownHost marks a host whose key nobody has confirmed yet.
@@ -76,18 +80,12 @@ func Strict(confirmedFile string, opensshFiles ...string) ssh.HostKeyCallback {
 		if _, ok := remote.(*net.TCPAddr); !ok || remote == nil {
 			remote = remoteFromHostname(hostname)
 		}
-		var present []string
-		for _, f := range opensshFiles {
-			if _, err := os.Stat(f); err == nil {
-				present = append(present, f)
-			}
-		}
 		opensshOK := false
-		if len(present) > 0 {
-			cb, err := knownhosts.New(present...)
-			if err != nil {
-				return fmt.Errorf("read known_hosts: %w", err)
-			}
+		cb, lines, err := loadKnownHosts(opensshFiles)
+		if err != nil {
+			return fmt.Errorf("read known_hosts: %w", err)
+		}
+		if cb != nil {
 			err = cb(hostname, remote, key)
 			var keyErr *knownhosts.KeyError
 			var revoked *knownhosts.RevokedError
@@ -96,7 +94,7 @@ func Strict(confirmedFile string, opensshFiles ...string) ssh.HostKeyCallback {
 				opensshOK = true
 			case errors.As(err, &revoked):
 				return mismatchf(err, "host key for %s is revoked in your OpenSSH known_hosts: %v", hostname, err)
-			case errors.As(err, &keyErr) && len(keyErr.Want) > 0 && !onlyCertAuthorities(keyErr.Want):
+			case errors.As(err, &keyErr) && len(keyErr.Want) > 0 && !onlyCertAuthorities(keyErr.Want, lines):
 				return mismatchf(err, "host key mismatch for %s against your OpenSSH known_hosts: %v", hostname, err)
 			case errors.As(err, &keyErr):
 				// Unknown there (or only a CA covers it): not confirmed.
@@ -160,17 +158,8 @@ func KnownHostKeyAlgorithms(confirmedFile string, opensshFiles ...string) func(h
 // hostport. knownhosts has no lookup, so it is asked to check a throwaway key:
 // the resulting KeyError lists every key on record for the host.
 func opensshHostKeys(hostport string, files []string) []ssh.PublicKey {
-	var present []string
-	for _, f := range files {
-		if _, err := os.Stat(f); err == nil {
-			present = append(present, f)
-		}
-	}
-	if len(present) == 0 {
-		return nil
-	}
-	cb, err := knownhosts.New(present...)
-	if err != nil {
+	cb, lines, err := loadKnownHosts(files)
+	if err != nil || cb == nil {
 		return nil
 	}
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
@@ -187,7 +176,7 @@ func opensshHostKeys(hostport string, files []string) []ssh.PublicKey {
 	}
 	var keys []ssh.PublicKey
 	for _, w := range keyErr.Want {
-		if !onlyCertAuthorities([]knownhosts.KnownKey{w}) {
+		if !onlyCertAuthorities([]knownhosts.KnownKey{w}, lines) {
 			keys = append(keys, w.Key)
 		}
 	}
@@ -229,21 +218,80 @@ func remoteFromHostname(hostname string) net.Addr {
 	return a
 }
 
+// knownHostsLines holds the source lines of the files a checker was built
+// from, by the filename knownhosts reports in its errors.
+type knownHostsLines map[string][]string
+
+// loadKnownHosts builds a knownhosts checker over files, which are paths or
+// in-memory tokens (OpenSSHKnownHosts). Missing paths are skipped; with
+// nothing present it returns a nil checker. knownhosts parses at construction
+// and the checker needs no file afterwards, so in-memory sources are written
+// to a fresh private temp directory only for the length of this call, and
+// removed before it returns: no temp path outlives the call, and nothing
+// re-reads one by name. The source lines are captured here too, for
+// onlyCertAuthorities, instead of re-reading a file later.
+func loadKnownHosts(files []string) (ssh.HostKeyCallback, knownHostsLines, error) {
+	var present []string
+	lines := knownHostsLines{}
+	var tmp string
+	defer func() {
+		if tmp != "" {
+			os.RemoveAll(tmp)
+		}
+	}()
+	for i, f := range files {
+		var data []byte
+		if b, ok := memKnownHostsBytes(f); ok {
+			if tmp == "" {
+				dir, err := os.MkdirTemp("", "jumpgate-known-hosts-")
+				if err != nil {
+					return nil, nil, err
+				}
+				tmp = dir
+				if err := fsperm.MakePrivate(tmp); err != nil {
+					return nil, nil, err
+				}
+			}
+			path := filepath.Join(tmp, fmt.Sprintf("%d.known_hosts", i))
+			if err := fsperm.WriteFilePrivate(path, b); err != nil {
+				return nil, nil, err
+			}
+			f, data = path, b
+		} else {
+			b, err := os.ReadFile(f)
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return nil, nil, err // present but unreadable: never silently ignored
+			}
+			data = b
+		}
+		present = append(present, f)
+		lines[f] = strings.Split(string(data), "\n")
+	}
+	if len(present) == 0 {
+		return nil, nil, nil
+	}
+	cb, err := knownhosts.New(present...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cb, lines, nil
+}
+
 // onlyCertAuthorities reports whether every entry that "wants" a different key
 // is a @cert-authority line. knownhosts does not expose the marker, so the
-// source line is re-read; if it cannot be read the entry counts as a pinned
-// key, the safe direction (a mismatch refuses).
-func onlyCertAuthorities(want []knownhosts.KnownKey) bool {
+// source line, captured when the checker was built, is consulted; if it is
+// not there the entry counts as a pinned key, the safe direction (a mismatch
+// refuses).
+func onlyCertAuthorities(want []knownhosts.KnownKey, lines knownHostsLines) bool {
 	for _, k := range want {
-		data, err := os.ReadFile(k.Filename)
-		if err != nil {
+		ls, ok := lines[k.Filename]
+		if !ok || k.Line < 1 || k.Line > len(ls) {
 			return false
 		}
-		lines := strings.Split(string(data), "\n")
-		if k.Line < 1 || k.Line > len(lines) {
-			return false
-		}
-		f := strings.Fields(lines[k.Line-1])
+		f := strings.Fields(ls[k.Line-1])
 		if len(f) == 0 || f[0] != "@cert-authority" {
 			return false
 		}

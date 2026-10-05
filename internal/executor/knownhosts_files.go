@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/valve-tech/jumpgate/internal/fsperm"
@@ -33,63 +34,64 @@ func defaultSystemKnownHosts() string {
 	return "/etc/ssh/ssh_known_hosts"
 }
 
-// OpenSSHKnownHosts lists the OpenSSH known_hosts files strict checking
-// consults besides jumpgate's confirmed store: the user's, and the
+// OpenSSHKnownHosts lists the OpenSSH known_hosts sources strict checking
+// consults besides jumpgate's confirmed store: the user's file, and the
 // system-wide one when it exists and only trusted accounts can write it or
 // its directory (M-10). Anyone who could write the system file could vouch
 // for a host key, so an untrusted one is skipped with a warning rather than
 // failing the dial: the confirmed store still applies.
 //
-// The host-key code reads files by name, and a name checked now can be
-// swapped before it is read. So the trusted file is read once, from the very
-// file that was checked, and what it held is returned as a private snapshot
-// that only this user can change.
+// A path checked now can be swapped before it is read, so the system file is
+// read once, from the very file that was checked, and its bytes are kept in
+// memory. The entry returned for it is not a path but a token for those bytes
+// (see memKnownHosts); the host-key code writes them to a private temp file
+// only while it builds a checker, and removes that file before returning.
 func OpenSSHKnownHosts(home string) []string {
 	files := []string{filepath.Join(home, ".ssh", "known_hosts")}
 	if _, err := os.Stat(systemKnownHosts); err != nil {
 		return files
 	}
-	snap, err := trustedSnapshot(systemKnownHosts)
+	f, err := openTrustedKnownHosts(systemKnownHosts)
 	if err != nil {
 		log.Printf("jumpgate: ignoring %s: %v", systemKnownHosts, err)
 		return files
 	}
-	return append(files, snap)
-}
-
-var (
-	snapshotOnce sync.Once
-	snapshotDir  string
-	snapshotErr  error
-)
-
-// trustedSnapshot returns a private copy of path's content, taken from the
-// file the trust check passed. Equal content shares one snapshot file.
-func trustedSnapshot(path string) (string, error) {
-	f, err := openTrustedKnownHosts(path)
-	if err != nil {
-		return "", err
-	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, 16<<20))
 	if err != nil {
-		return "", err
+		log.Printf("jumpgate: ignoring %s: %v", systemKnownHosts, err)
+		return files
 	}
-	snapshotOnce.Do(func() {
-		snapshotDir, snapshotErr = os.MkdirTemp("", "jumpgate-known-hosts-")
-		if snapshotErr == nil {
-			snapshotErr = fsperm.MakePrivate(snapshotDir)
-		}
-	})
-	if snapshotErr != nil {
-		return "", snapshotErr
-	}
+	return append(files, registerKnownHostsBytes(data))
+}
+
+// memTokenPrefix starts a known_hosts entry that stands for in-memory bytes.
+// It begins with a NUL, which no file path can.
+const memTokenPrefix = "\x00jumpgate-known-hosts:"
+
+var (
+	memMu         sync.Mutex
+	memKnownHosts = map[string][]byte{} // token -> trusted bytes
+)
+
+// registerKnownHostsBytes keeps data and returns its token. Equal content
+// shares a token, so the registry only grows with distinct file contents.
+func registerKnownHostsBytes(data []byte) string {
 	sum := sha256.Sum256(data)
-	snap := filepath.Join(snapshotDir, hex.EncodeToString(sum[:8])+".known_hosts")
-	if _, err := os.Stat(snap); err != nil {
-		if err := fsperm.WriteFilePrivate(snap, data); err != nil {
-			return "", err
-		}
+	tok := memTokenPrefix + hex.EncodeToString(sum[:])
+	memMu.Lock()
+	memKnownHosts[tok] = data
+	memMu.Unlock()
+	return tok
+}
+
+// memKnownHostsBytes returns the bytes behind a token.
+func memKnownHostsBytes(entry string) ([]byte, bool) {
+	if !strings.HasPrefix(entry, memTokenPrefix) {
+		return nil, false
 	}
-	return snap, nil
+	memMu.Lock()
+	defer memMu.Unlock()
+	b, ok := memKnownHosts[entry]
+	return b, ok
 }
