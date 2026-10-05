@@ -297,17 +297,15 @@ func defaultNewExecutor(t config.Target) (executor.Executor, error) {
 }
 
 // legacySSHConfig is t's SSH config for the legacy web-UI executor, with an
-// explicit host-key policy on every hop. A hop a person confirmed (its key is
-// in confirmed_hosts), and the box itself once it is paired with an agent, is
-// checked Strictly: the protection the operator paid for at `hosts add` is
+// explicit host-key policy on every hop. A hop on record under Strict's own
+// rules (its key is in confirmed_hosts or the operator's OpenSSH known_hosts;
+// see config.HostOnRecord), and the box itself once it is paired with an
+// agent, is checked Strictly: the protection the operator paid for at `hosts add` is
 // never given up to a fresh root session. Any other hop keeps trust-on-first-
 // use against its known_hosts file until sub-project 6 retires this path.
 // t.SSH itself is not modified.
 func legacySSHConfig(t config.Target) (executor.SSHConfig, error) {
-	confirmed, err := config.ConfirmedHostsFile()
-	if err != nil {
-		return executor.SSHConfig{}, err
-	}
+	var err error
 	var strict ssh.HostKeyCallback
 	var strictAlgos func(string) []string
 	policy := func(hop *executor.SSHConfig, paired bool) error {
@@ -315,7 +313,13 @@ func legacySSHConfig(t config.Target) (executor.SSHConfig, error) {
 		if port == 0 {
 			port = 22
 		}
-		if paired || executor.IsConfirmed(confirmed, net.JoinHostPort(hop.Host, strconv.Itoa(port))) {
+		onRecord := paired
+		if !onRecord {
+			if onRecord, err = config.HostOnRecord(net.JoinHostPort(hop.Host, strconv.Itoa(port))); err != nil {
+				return err
+			}
+		}
+		if onRecord {
 			if strict == nil {
 				if strict, strictAlgos, err = config.StrictHostKey(); err != nil {
 					return err

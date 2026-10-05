@@ -39,21 +39,3 @@ func TestDialSSHRefusesANilHostKeyPolicy(t *testing.T) {
 	default:
 	}
 }
-
-// IsConfirmed answers whether a person confirmed hostport's key, which is what
-// moves a legacy target from TOFU to Strict.
-func TestIsConfirmed(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "confirmed_hosts")
-	if IsConfirmed(file, "10.0.0.5:22") {
-		t.Fatal("a missing file confirms a host")
-	}
-	if err := RecordHostKey(file, "10.0.0.5:22", testHostKey(t)); err != nil {
-		t.Fatal(err)
-	}
-	if !IsConfirmed(file, "10.0.0.5:22") {
-		t.Fatal("a recorded host is not confirmed")
-	}
-	if IsConfirmed(file, "10.0.0.6:22") {
-		t.Fatal("an unrelated host is confirmed")
-	}
-}

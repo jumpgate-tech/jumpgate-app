@@ -341,8 +341,10 @@ sub-project 0; this sub-project does not ship before that check lands.
    never a silent default. Implementations in `internal/executor`:
    - `TOFUHostKeyCallback` writes the target's `HostKeyFile`. Only the legacy
      web-UI executor passes it, and that executor (`server.legacySSHConfig`)
-     chooses a policy for each hop explicitly. A hop whose key is in
-     `confirmed_hosts` uses `Strict`, and so does the box itself once it is
+     chooses a policy for each hop explicitly. A hop that `Strict` already
+     has on record uses `Strict`. That means its key is in `confirmed_hosts`,
+     or a plain, non-`@cert-authority` line for it is in `~/.ssh/known_hosts`
+     (`config.HostOnRecord`). The box itself also uses `Strict` once it is
      paired with an agent. Every other hop uses TOFU until sub-project 6.
    - `Strict(confirmedFile, opensshFiles...)`: accepts a host only if its key
      is in the confirmed-only store `~/.jumpgate/confirmed_hosts`

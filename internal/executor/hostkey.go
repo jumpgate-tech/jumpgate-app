@@ -103,11 +103,3 @@ func RecordHostKey(hostKeyFile, hostname string, key ssh.PublicKey) error {
 func TOFUHostKeyCallback(hostKeyFile string) ssh.HostKeyCallback {
 	return tofuHostKeyCallback(hostKeyFile)
 }
-
-// IsConfirmed reports whether confirmedFile holds a key for hostport (the
-// host:port string DialSSH hands its callback), that is, whether a person
-// confirmed this host. A file that cannot be read confirms nothing.
-func IsConfirmed(confirmedFile, hostport string) bool {
-	k, err := lookupHostKey(confirmedFile, hostport)
-	return err == nil && k != nil
-}

@@ -130,3 +130,51 @@ func TestLegacySSHConfigDecidesEachHop(t *testing.T) {
 		t.Fatal("legacySSHConfig mutated the stored target")
 	}
 }
+
+// writeKnownHosts writes line to the test HOME's ~/.ssh/known_hosts.
+func writeKnownHosts(t *testing.T, home, line string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".ssh", "known_hosts"), []byte(line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Fix round 1: a box whose key is in the operator's OpenSSH known_hosts is on
+// record under the Strict builder's own rules, so the legacy path is Strict
+// for it too. Otherwise a box paired while known only there would fall back to
+// TOFU after being removed and re-added from the web UI.
+func TestLegacySSHConfigIsStrictForABoxInOpenSSHKnownHosts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	known := string(ssh.MarshalAuthorizedKey(freshHostKey(t)))
+	writeKnownHosts(t, home, "10.0.0.5 "+known[:len(known)-1])
+	cfg, err := legacySSHConfig(legacyTarget(home, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.HostKey("10.0.0.5:22", someAddr, freshHostKey(t)); !errors.Is(err, executor.ErrHostKeyMismatch) {
+		t.Fatalf("a changed key on a box in known_hosts: err = %v, want a mismatch", err)
+	}
+	if _, err := os.Stat(cfg.HostKeyFile); err == nil {
+		t.Fatal("the legacy path wrote the TOFU file for a box in known_hosts")
+	}
+}
+
+// A @cert-authority line alone does not put a host on record (Strict's own
+// rule), so such a box stays on TOFU.
+func TestLegacySSHConfigIgnoresACertAuthorityLine(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ca := string(ssh.MarshalAuthorizedKey(freshHostKey(t)))
+	writeKnownHosts(t, home, "@cert-authority 10.0.0.5 "+ca[:len(ca)-1])
+	cfg, err := legacySSHConfig(legacyTarget(home, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.HostKey("10.0.0.5:22", someAddr, freshHostKey(t)); err != nil {
+		t.Fatalf("a CA-only host was not left on TOFU: %v", err)
+	}
+}
