@@ -74,7 +74,7 @@ func TestLoginLinkFileIsRemovedOnRedemption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res, _ := login(t, ts, link.Code); res.StatusCode != http.StatusFound {
+	if res, _ := login(t, ts, link.Code); res.StatusCode != http.StatusOK {
 		t.Fatalf("redeem: %d", res.StatusCode)
 	}
 	if _, err := os.Lstat(link.File); !os.IsNotExist(err) {
@@ -228,13 +228,13 @@ func TestLoginRefusesAPeerOfAnotherUser(t *testing.T) {
 	for _, uid := range []int{1000, 0} {
 		s.peerUID = func(*http.Request) (int, bool) { return uid, true }
 		c := s.NewLoginCode()
-		if res, _ := login(t, ts, c); res.StatusCode != http.StatusFound {
-			t.Fatalf("peer uid %d: %d, want 302", uid, res.StatusCode)
+		if res, _ := login(t, ts, c); res.StatusCode != http.StatusOK {
+			t.Fatalf("peer uid %d: %d, want 200", uid, res.StatusCode)
 		}
 	}
 	s.peerUID = func(*http.Request) (int, bool) { return 0, false }
-	if res, _ := login(t, ts, code); res.StatusCode != http.StatusFound {
-		t.Fatalf("unknown peer uid (best effort) with the unburned code: %d, want 302", res.StatusCode)
+	if res, _ := login(t, ts, code); res.StatusCode != http.StatusOK {
+		t.Fatalf("unknown peer uid (best effort) with the unburned code: %d, want 200", res.StatusCode)
 	}
 }
 

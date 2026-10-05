@@ -133,8 +133,8 @@ func LoginURL(addr, code string) string {
 }
 
 // redirectPage sends a browser that opens it on to url at once. The meta
-// refresh covers a browser with scripts off; no-referrer keeps the file's
-// path out of the request.
+// refresh covers a browser with scripts off; no-referrer keeps the page's
+// own URL (a file path, or /login with its code) out of the next request.
 func redirectPage(url string) string {
 	js, _ := json.Marshal(url) // escapes <, > and & as \u00XX
 	h := html.EscapeString(url)
@@ -272,8 +272,8 @@ func matchCode(list []loginCode, code string) int {
 	return found
 }
 
-// handleLogin exchanges a login code for the session cookie, then redirects
-// to the app root so the code leaves the address bar. The code is never
+// handleLogin exchanges a login code for the session cookie, then sends the
+// browser on to the app root so the code leaves the address bar. The code is never
 // logged: it is a credential for its lifetime.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// The URL is a credential until redeemed: keep it out of caches and out
@@ -310,7 +310,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, sessionCookie(s.cfg.Token))
-	http.Redirect(w, r, "/", http.StatusFound)
+	// A page that moves on to / itself, not a 302. The sign-in started on
+	// the file:// redirect page, and Chromium treats a redirect chain from
+	// there as a cross-site navigation, withholding the SameSite=Strict
+	// cookie on / (the user lands on 401). A navigation this page starts
+	// comes from this origin, so the cookie goes with it. Either way the
+	// code leaves the address bar.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, redirectPage("/"))
 }
 
 // loopbackPeer reports whether a request's remote address is a loopback IP.

@@ -125,7 +125,7 @@ tar xzf jumpgate_<os>_<arch>.tar.gz   # the Windows archive is a .zip
 ./jumpgate
 ```
 
-In a terminal, bare `jumpgate` opens the terminal home: status and a menu, where `o` opens the web app in your browser. `jumpgate serve` runs the server in the foreground; `jumpgate open` starts it if needed and signs your browser in with a one-time login link, which works once, within 60 seconds, from this computer only. The link reaches the browser through a private file under `~/.jumpgate/run/login`, never on a command line. When no browser can be opened, or with `jumpgate open --print` (for a sandboxed snap or flatpak browser that cannot read `~/.jumpgate`), it prints the link instead:
+In a terminal, bare `jumpgate` opens the terminal home: status and a menu, where `o` opens the web app in your browser. `jumpgate serve` runs the server in the foreground; `jumpgate open` starts it if needed and signs your browser in with a one-time login link, which works once, within 60 seconds, from this computer only. The link reaches the browser through a private file under `~/.jumpgate/run/login`, never on a command line. When no browser can be opened, or with `jumpgate open --print` (for a sandboxed snap or flatpak browser that cannot read `~/.jumpgate`, or a system where `.html` files open in an editor rather than a browser), it prints the link instead:
 
 ```
 http://127.0.0.1:8799/login?code=<one-time code>

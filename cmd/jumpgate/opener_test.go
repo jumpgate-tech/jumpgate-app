@@ -120,8 +120,8 @@ func checkOpenedFile(t *testing.T, info daemon.Info, argv []string) {
 		t.Fatal(err)
 	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusFound {
-		t.Fatalf("redeeming the file's link: %d, want 302", res.StatusCode)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("redeeming the file's link: %d, want 200", res.StatusCode)
 	}
 	if _, err := os.Lstat(file); !os.IsNotExist(err) {
 		t.Fatalf("redirect file still there after redemption: %v", err)

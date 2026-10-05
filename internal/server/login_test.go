@@ -49,9 +49,21 @@ func TestLoginCodeIsSingleUse(t *testing.T) {
 	if code == token || len(code) != 32 {
 		t.Fatalf("code %q: want 32 hex chars distinct from the token", code)
 	}
-	res, _ := login(t, ts, code)
-	if res.StatusCode != http.StatusFound || res.Header.Get("Location") != "/" {
-		t.Fatalf("first use: %d %q, want 302 to /", res.StatusCode, res.Header.Get("Location"))
+	// A 200 page that navigates to / on its own, not a 302: the sign-in
+	// starts from the file:// redirect page, so Chromium treats a redirect
+	// chain from it as cross-site and withholds the SameSite=Strict cookie
+	// on /. A navigation the /login page itself starts is same-origin.
+	res, page := login(t, ts, code)
+	if res.StatusCode != http.StatusOK || res.Header.Get("Location") != "" {
+		t.Fatalf("first use: %d Location %q, want 200 and no Location", res.StatusCode, res.Header.Get("Location"))
+	}
+	for _, want := range []string{`http-equiv="refresh" content="0;url=/"`, `location.replace("/")`, `<meta name="referrer" content="no-referrer">`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("success page %q: missing %s", page, want)
+		}
+	}
+	if strings.Contains(page, code) || strings.Contains(page, token) {
+		t.Fatalf("success page %q carries a credential", page)
 	}
 	var cookie *http.Cookie
 	for _, c := range res.Cookies() {
@@ -104,7 +116,7 @@ func TestLoginCodeRedeemsOnceUnderConcurrency(t *testing.T) {
 				return
 			}
 			res.Body.Close()
-			if res.StatusCode == http.StatusFound {
+			if res.StatusCode == http.StatusOK {
 				wins.Add(1)
 			}
 		}()
@@ -164,8 +176,8 @@ func TestLoginCodeIsLoopbackOnly(t *testing.T) {
 		req.RemoteAddr = peer
 		rec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusFound {
-			t.Fatalf("loopback peer %q: %d, want 302", peer, rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("loopback peer %q: %d, want 200", peer, rec.Code)
 		}
 	}
 	if !s.redeemLoginCode(code) {
@@ -237,7 +249,7 @@ func TestLoginCodeMintNeedsTheToken(t *testing.T) {
 	if res.StatusCode != http.StatusOK || len(body.Code) != 32 {
 		t.Fatalf("mint: %d %+v", res.StatusCode, body)
 	}
-	if res, _ := login(t, ts, body.Code); res.StatusCode != http.StatusFound {
-		t.Fatalf("minted code: %d, want 302", res.StatusCode)
+	if res, _ := login(t, ts, body.Code); res.StatusCode != http.StatusOK {
+		t.Fatalf("minted code: %d, want 200", res.StatusCode)
 	}
 }
