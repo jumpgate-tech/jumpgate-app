@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -93,5 +94,39 @@ func TestDockerStart(t *testing.T) {
 			t.Errorf("POST /api/docker/start = %d, want 400 off darwin", res.StatusCode)
 		}
 		res.Body.Close()
+	}
+}
+
+func TestMacStartCommand_PrefersTheRuntimeTheContextPointsAt(t *testing.T) {
+	cases := []struct {
+		ctx   string
+		first string
+	}{
+		{"colima", "colima start"},
+		{"colima-dev", "colima start"},
+		{"orbstack", "open -a OrbStack"},
+		{"desktop-linux", "open -a Docker"},
+		{"", "open -a Docker"},
+	}
+	for _, c := range cases {
+		cmd := macStartCommand(c.ctx)
+		fi := strings.Index(cmd, c.first)
+		for _, other := range []string{"open -a Docker", "open -a OrbStack", "colima start"} {
+			if other == c.first {
+				continue
+			}
+			if oi := strings.Index(cmd, other); fi < 0 || oi < fi {
+				t.Errorf("context %q: want %q before %q in %q", c.ctx, c.first, other, cmd)
+			}
+		}
+		// Every runtime stays reachable as a fallback.
+		for _, want := range []string{"open -a Docker", "open -a OrbStack", "colima start"} {
+			if !strings.Contains(cmd, want) {
+				t.Errorf("context %q: command %q lacks fallback %q", c.ctx, cmd, want)
+			}
+		}
+	}
+	if !strings.Contains(macStartCommand(""), "command -v colima") {
+		t.Error("colima must only be tried when it is on PATH")
 	}
 }
