@@ -47,7 +47,7 @@ func runWindow(ctx context.Context, url string) {
 	// Tell the SPA it's the tiny app so it drops the multi-screen topbar nav and
 	// lets the panel fill the window. Init runs before page scripts on every
 	// load, so it survives the token→cookie redirect the first navigation makes.
-	w.Init("window.__VALVE_TRAY__ = true;")
+	w.Init("window.__JUMPGATE_TRAY__ = true;")
 	// Snug to the 360px panel — a tiny app, not a browser window.
 	w.SetSize(380, 640, webview.HintNone)
 	// Add the menubar status item (macOS) into webview's own NSApp/NSWindow, so

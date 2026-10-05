@@ -57,7 +57,7 @@ export function App() {
   // The tray/tiny-app build sets this flag before the app loads (webview.Init).
   // There the panel IS the whole window, so the multi-screen topbar nav — which
   // only makes sense for browser-based fleet management — is dropped.
-  const tray = typeof window !== "undefined" && Boolean((window as { __VALVE_TRAY__?: boolean }).__VALVE_TRAY__);
+  const tray = typeof window !== "undefined" && Boolean((window as { __JUMPGATE_TRAY__?: boolean }).__JUMPGATE_TRAY__);
   // The panel fills the tray window (padding: 0); the other screens are normal
   // pages that need a gutter, so they get one back.
   const trayPage = tray && screen !== "home" && screen !== "panel";
