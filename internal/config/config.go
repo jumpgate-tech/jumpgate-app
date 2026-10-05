@@ -672,17 +672,22 @@ func ConfirmedHostsFile() (string, error) {
 // another user can append to. The server runs this once at startup. keyFile
 // is the controller key's path when it is kept in a file, else "".
 //
-// Missing files are skipped. Nothing here fails startup: it returns the
-// files it had to tighten, so the caller can say so (other users may already
-// have read them), and the errors for files it could not fix.
-func TightenState(keyFile string) (tightened []string, errs []error) {
+// Missing files are skipped. It returns the files it had to tighten, so the
+// caller can say so (other users may already have read them), and warnings
+// for files it could not fix, which do not stop the server. The two signing
+// keys are different: if the configured key file or the transport key cannot
+// be made private, err names it and the server must not start, since a key
+// is never to be left open to other users and used anyway.
+func TightenState(keyFile string) (tightened []string, warnings []error, err error) {
 	dir, err := Dir()
 	if err != nil {
-		return nil, []error{err}
+		return nil, nil, err
 	}
 	if err := fsperm.MkdirPrivate(dir); err != nil {
-		return nil, []error{fmt.Errorf("config: restrict %s: %w", dir, err)}
+		warnings = append(warnings, fmt.Errorf("config: restrict %s: %w", dir, err))
 	}
+	// The transport key's name is internal/server's (transportKeyPath).
+	transportKey := filepath.Join(dir, "ssh", "jumpgate_ed25519")
 	paths := []string{
 		filepath.Join(dir, configFileName),
 		filepath.Join(dir, "run", "server.json"),
@@ -696,19 +701,20 @@ func TightenState(keyFile string) (tightened []string, errs []error) {
 			continue
 		}
 		if err := fsperm.MkdirPrivate(d); err != nil {
-			errs = append(errs, fmt.Errorf("config: restrict %s: %w", d, err))
-			continue
+			warnings = append(warnings, fmt.Errorf("config: restrict %s: %w", d, err))
 		}
 		if sub == "run" {
 			continue // only server.json in it is a secret; the socket is restricted when it is made
 		}
 		entries, err := os.ReadDir(d)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("config: read %s: %w", d, err))
+			warnings = append(warnings, fmt.Errorf("config: read %s: %w", d, err))
 			continue
 		}
 		for _, e := range entries {
-			paths = append(paths, filepath.Join(d, e.Name()))
+			if p := filepath.Join(d, e.Name()); !slices.Contains(paths, p) {
+				paths = append(paths, p)
+			}
 		}
 	}
 	if keyFile != "" && !slices.Contains(paths, keyFile) {
@@ -718,19 +724,26 @@ func TightenState(keyFile string) (tightened []string, errs []error) {
 		if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
 			continue
 		} else if err != nil {
-			errs = append(errs, fmt.Errorf("config: inspect %s: %w", p, err))
+			warnings = append(warnings, fmt.Errorf("config: inspect %s: %w", p, err))
 			continue
 		}
 		if fsperm.CheckPrivate(p) == nil {
 			continue
 		}
-		if err := fsperm.MakePrivate(p); err != nil {
-			errs = append(errs, fmt.Errorf("config: restrict %s: %w", p, err))
+		perr := fsperm.MakePrivate(p)
+		if perr == nil {
+			perr = fsperm.CheckPrivate(p) // made private, or still not?
+		}
+		if perr != nil {
+			if p == keyFile || p == transportKey {
+				return tightened, warnings, fmt.Errorf("config: %s holds a signing key and other users can read or change it, and jumpgate could not restrict it to you (%v); make it a regular file only you can read (chmod 600 on macOS and Linux; Properties > Security on Windows), then start jumpgate again", p, perr)
+			}
+			warnings = append(warnings, fmt.Errorf("config: restrict %s: %w", p, perr))
 			continue
 		}
 		tightened = append(tightened, p)
 	}
-	return tightened, errs
+	return tightened, warnings, nil
 }
 
 // MigrateLegacyDir moves ~/.valve-node-app to ~/.jumpgate once, and leaves a

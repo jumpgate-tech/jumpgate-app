@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -133,5 +134,27 @@ func TestServerStartupTightensExistingSecrets(t *testing.T) {
 	// The key opens again once it is private.
 	if _, err := openControllerKey(cfg); err != nil {
 		t.Fatalf("openControllerKey after startup: %v", err)
+	}
+}
+
+// A controller key file that cannot be made private stops the server
+// instead of being used. (A symlink is the stand-in, as in config's test.)
+func TestServerStartupRefusesAKeyItCannotRestrict(t *testing.T) {
+	testutil.RequireUnix(t)
+	home := testutil.Home(t)
+	real := filepath.Join(home, "real.key")
+	if _, err := signer.GenerateKeyFile(real); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "controller.key")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	c := config.Config{Controller: &config.Controller{KeyStore: string(signer.StoreFile), KeyRef: link}}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadServerConfig(io.Discard); err == nil || !strings.Contains(err.Error(), link) {
+		t.Fatalf("loadServerConfig with a symlinked key = %v, want an error naming %s", err, link)
 	}
 }

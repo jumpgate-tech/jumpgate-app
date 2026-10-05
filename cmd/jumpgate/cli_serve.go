@@ -32,7 +32,7 @@ func cmdServe(args []string) int {
 
 	cfg, err := loadServerConfig(os.Stderr)
 	if err != nil {
-		return failed("load config: %v", err)
+		return failed("%v", err)
 	}
 	sgn, err := openControllerKey(cfg)
 	if err != nil {

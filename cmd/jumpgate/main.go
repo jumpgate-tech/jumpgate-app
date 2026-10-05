@@ -89,7 +89,7 @@ func runApp() {
 	// server starts serving.
 	cfg, err := loadServerConfig(os.Stderr)
 	if err != nil {
-		log.Fatalf("jumpgate: load config: %v", err)
+		log.Fatalf("jumpgate: %v", err)
 	}
 	// The CLI finds this server through server.json and sends it box
 	// commands, so it holds the controller key as serve does. A key that
