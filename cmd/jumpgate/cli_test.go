@@ -6,8 +6,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -25,6 +27,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/apiclient"
 	"github.com/valve-tech/jumpgate/internal/apiclient/apiclienttest"
 	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/server"
@@ -340,6 +343,7 @@ func TestConfirmHostKeys(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	hk := cliServer(t)
 	host, port, key := startHostKeySSHD(t)
 	cfg := executor.SSHConfig{Host: host, Port: port, User: "root"}
 	confirmed, err := config.ConfirmedHostsFile()
@@ -352,7 +356,7 @@ func TestConfirmHostKeys(t *testing.T) {
 	// A bare "yes" with no newline (EOF) is not consent either.
 	for _, answer := range []string{"no\n", "y\n", "\n", "", "yes"} {
 		var out strings.Builder
-		if code := confirmHostKeys(ctx, cfg, bufio.NewReader(strings.NewReader(answer)), &out, io.Discard); code == 0 {
+		if code := confirmHostKeys(ctx, hk, sshViewOf(cfg), bufio.NewReader(strings.NewReader(answer)), &out, io.Discard); code == 0 {
 			t.Fatalf("answer %q trusted the key", answer)
 		}
 		if _, err := os.Stat(confirmed); err == nil {
@@ -368,7 +372,7 @@ func TestConfirmHostKeys(t *testing.T) {
 	}
 
 	// "yes" records it in the confirmed store, under the host:port DialSSH uses.
-	if code := confirmHostKeys(ctx, cfg, bufio.NewReader(strings.NewReader("yes\n")), io.Discard, io.Discard); code != 0 {
+	if code := confirmHostKeys(ctx, hk, sshViewOf(cfg), bufio.NewReader(strings.NewReader("yes\n")), io.Discard, io.Discard); code != 0 {
 		t.Fatalf("exit %d after yes", code)
 	}
 	b, err := os.ReadFile(confirmed)
@@ -377,7 +381,7 @@ func TestConfirmHostKeys(t *testing.T) {
 	}
 
 	// Now known: no prompt (empty input would fail if one were needed).
-	if code := confirmHostKeys(ctx, cfg, bufio.NewReader(strings.NewReader("")), io.Discard, io.Discard); code != 0 {
+	if code := confirmHostKeys(ctx, hk, sshViewOf(cfg), bufio.NewReader(strings.NewReader("")), io.Discard, io.Discard); code != 0 {
 		t.Fatalf("a confirmed host prompted again: exit %d", code)
 	}
 }
@@ -386,6 +390,7 @@ func TestConfirmHostKeysMismatchIsFatal(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	hk := cliServer(t)
 	host, port, _ := startHostKeySSHD(t)
 	cfg := executor.SSHConfig{Host: host, Port: port, User: "root"}
 
@@ -397,7 +402,7 @@ func TestConfirmHostKeysMismatchIsFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	// "yes" on stdin must not matter: a mismatch is never offered for trust.
-	code := confirmHostKeys(context.Background(), cfg, bufio.NewReader(strings.NewReader("yes\n")), io.Discard, io.Discard)
+	code := confirmHostKeys(context.Background(), hk, sshViewOf(cfg), bufio.NewReader(strings.NewReader("yes\n")), io.Discard, io.Discard)
 	if code != 4 {
 		t.Fatalf("exit %d, want 4", code)
 	}
@@ -409,6 +414,8 @@ func TestConfirmHostKeysJumpFirstAndTargetUsesStrict(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("SSH_AUTH_SOCK", "") // the dial through the jump must not reach the real ssh-agent
+	hk := cliServer(t)
 	jh, jp, _ := startHostKeySSHD(t)
 	cfg := executor.SSHConfig{
 		Host: "10.255.255.1", Port: 22, User: "root",
@@ -418,7 +425,7 @@ func TestConfirmHostKeysJumpFirstAndTargetUsesStrict(t *testing.T) {
 	// direct-tcpip), but the jump must have been shown and confirmed first, and
 	// the failure must be "unreachable" rather than a TOFU acceptance.
 	var out strings.Builder
-	code := confirmHostKeys(context.Background(), cfg, bufio.NewReader(strings.NewReader("yes\n")), &out, io.Discard)
+	code := confirmHostKeys(context.Background(), hk, sshViewOf(cfg), bufio.NewReader(strings.NewReader("yes\n")), &out, io.Discard)
 	if code != 3 {
 		t.Fatalf("exit %d, want 3 (target unreachable through the jump)", code)
 	}
@@ -430,21 +437,132 @@ func TestConfirmHostKeysJumpFirstAndTargetUsesStrict(t *testing.T) {
 	if strings.Contains(string(b), "10.255.255.1") {
 		t.Fatalf("the unreachable target was recorded: %q", b)
 	}
-	if cfg.Jump.HostKey != nil {
-		t.Error("confirmHostKeys mutated the caller's config")
+}
+
+// fakeHostKeys scripts the server's probe answers and records every
+// confirmation the CLI sends.
+type fakeHostKeys struct {
+	probes   []api.HostKeyProbe // answered in order; the last one repeats
+	probeErr error
+	info     daemon.Info
+	confirms []string
+}
+
+func (f *fakeHostKeys) ProbeHostKeys(context.Context, api.SSHView) (api.HostKeyProbe, error) {
+	if f.probeErr != nil {
+		return api.HostKeyProbe{}, f.probeErr
+	}
+	p := f.probes[0]
+	if len(f.probes) > 1 {
+		f.probes = f.probes[1:]
+	}
+	return p, nil
+}
+
+func (f *fakeHostKeys) ConfirmHostKey(_ context.Context, probeID, fingerprint string) error {
+	f.confirms = append(f.confirms, probeID+" "+fingerprint)
+	return nil
+}
+
+func (f *fakeHostKeys) Info() daemon.Info { return f.info }
+
+func unknownHop(id, fp string) api.HostKeyProbe {
+	return api.HostKeyProbe{Hops: []api.HostKeyHop{{HostPort: "h:22", KeyType: "ssh-ed25519", Fingerprint: fp, State: api.HostKeyUnknown, ProbeID: id}}}
+}
+
+// The confirmation names the probe and the fingerprint the operator was
+// shown, nothing else.
+func TestConfirmHostKeysConfirmsExactlyTheShownProbe(t *testing.T) {
+	f := &fakeHostKeys{probes: []api.HostKeyProbe{
+		unknownHop("p1", "SHA256:abc"),
+		{Hops: []api.HostKeyHop{{HostPort: "h:22", State: api.HostKeyConfirmed}}, AllConfirmed: true},
+	}}
+	var out strings.Builder
+	if code := confirmHostKeys(context.Background(), f, api.SSHView{Host: "h", User: "u"}, bufio.NewReader(strings.NewReader("yes\n")), &out, io.Discard); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if len(f.confirms) != 1 || f.confirms[0] != "p1 SHA256:abc" || !strings.Contains(out.String(), "SHA256:abc") {
+		t.Fatalf("confirms %q, shown %q", f.confirms, out.String())
 	}
 }
 
-func TestSSHConfigFromAppliesStrictEverywhere(t *testing.T) {
+// A mismatch is never offered for trust, whatever stdin says, and a server
+// that never settles (or one that has not probed every hop) trusts nothing.
+func TestConfirmHostKeysRefusals(t *testing.T) {
+	for name, c := range map[string]struct {
+		probes []api.HostKeyProbe
+		input  string
+		want   int
+	}{
+		"mismatch":         {[]api.HostKeyProbe{{Hops: []api.HostKeyHop{{HostPort: "h:22", State: api.HostKeyMismatch, Error: "host key mismatch"}}}}, "yes\n", 4},
+		"unreachable":      {[]api.HostKeyProbe{{Hops: []api.HostKeyHop{{HostPort: "h:22", State: api.HostKeyUnreachable, Error: "refused"}}}}, "yes\n", 3},
+		"never settles":    {[]api.HostKeyProbe{unknownHop("p1", "SHA256:abc")}, strings.Repeat("yes\n", 10), 1},
+		"unknown state":    {[]api.HostKeyProbe{{Hops: []api.HostKeyHop{{HostPort: "h:22", State: "new-state", ProbeID: "p1"}}}}, "yes\n", 1},
+		"incomplete probe": {[]api.HostKeyProbe{{Hops: []api.HostKeyHop{}}}, "", 1},
+	} {
+		f := &fakeHostKeys{probes: c.probes}
+		code := confirmHostKeys(context.Background(), f, api.SSHView{Host: "h", User: "u"}, bufio.NewReader(strings.NewReader(c.input)), io.Discard, io.Discard)
+		if code != c.want {
+			t.Errorf("%s: exit %d, want %d", name, code, c.want)
+		}
+		if name != "never settles" && len(f.confirms) != 0 {
+			t.Errorf("%s: confirmed %q", name, f.confirms)
+		}
+		if name == "never settles" && len(f.confirms) != 2 {
+			t.Errorf("never settles: %d confirmations for one hop, want 2 rounds", len(f.confirms))
+		}
+	}
+}
+
+// An older server has no probe route: its 404 is reported as the version
+// skew it is, not as a missing box.
+func TestConfirmHostKeysOnAnOlderServer(t *testing.T) {
+	f := &fakeHostKeys{probeErr: &api.Error{Status: http.StatusNotFound, Message: "404 page not found", Code: api.CodeNotFound}, info: daemon.Info{Version: "0.0.1-old"}}
+	var errw strings.Builder
+	if code := confirmHostKeys(context.Background(), f, api.SSHView{Host: "h", User: "u"}, bufio.NewReader(strings.NewReader("yes\n")), io.Discard, &errw); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(errw.String(), "does not know this request") {
+		t.Fatalf("stderr %q", errw.String())
+	}
+}
+
+// hosts add starts the server first and confirms through it, before the
+// target is recorded; the target carries the address and no host-key policy.
+func TestHostsAddConfirmsThroughTheServerFirst(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	cfg, err := sshConfigFrom("root@box.example:2200", "", "ops@jump.example")
-	if err != nil {
-		t.Fatal(err)
+	old := stdinIsTerminal
+	t.Cleanup(func() { stdinIsTerminal = old })
+	stdinIsTerminal = func() bool { return true }
+	var paths []string
+	var targetBody string
+	withServer(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/hostkeys/probe":
+			fmt.Fprint(w, `{"hops":[{"hostPort":"127.0.0.1:2200","state":"confirmed"}],"allConfirmed":true}`)
+		case "/api/targets":
+			b, _ := io.ReadAll(r.Body)
+			targetBody = string(b)
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/targets/box/pair":
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"done\":true,\"agent\":\"0xabc\"}\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	_, stderr := captureStdio(t)
+	if code := hostsAdd([]string{"box", "--ssh", "root@127.0.0.1:2200"}); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr())
 	}
-	if cfg.HostKey == nil || cfg.Jump == nil || cfg.Jump.HostKey == nil {
-		t.Fatalf("a dial config lacks the strict host-key callback: %+v", cfg)
+	if strings.Join(paths, ",") != "/api/hostkeys/probe,/api/targets,/api/targets/box/pair" {
+		t.Fatalf("requests %v", paths)
+	}
+	if !strings.Contains(targetBody, `"Host":"127.0.0.1"`) || !strings.Contains(targetBody, `"Port":2200`) || !strings.Contains(targetBody, `"HostKeyFile":""`) {
+		t.Fatalf("target body %s", targetBody)
 	}
 }
 
@@ -649,6 +767,7 @@ func TestConfirmHostKeysBoundsTheAnswer(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	hk := cliServer(t)
 	host, port, _ := startHostKeySSHD(t)
 	cfg := executor.SSHConfig{Host: host, Port: port, User: "root"}
 	confirmed, _ := config.ConfirmedHostsFile()
@@ -660,7 +779,7 @@ func TestConfirmHostKeysBoundsTheAnswer(t *testing.T) {
 	for name, r := range inputs {
 		done := make(chan int, 1)
 		go func() {
-			done <- confirmHostKeys(context.Background(), cfg, newConsentReader(r), io.Discard, io.Discard)
+			done <- confirmHostKeys(context.Background(), hk, sshViewOf(cfg), newConsentReader(r), io.Discard, io.Discard)
 		}()
 		select {
 		case code := <-done:
@@ -782,14 +901,16 @@ func TestHostsAddRefusesToRepointAnExistingTarget(t *testing.T) {
 
 // cliServer points the CLI at an in-process server over the current HOME, so
 // a test never starts a detached `serve` (which would be this test binary).
-func cliServer(t *testing.T) {
+func cliServer(t *testing.T) *apiclient.Client {
 	t.Helper()
 	token := server.NewSessionToken()
 	ts := httptest.NewServer(server.New(server.Config{Token: token, UI: fstest.MapFS{}}).Handler())
 	t.Cleanup(ts.Close)
+	c := apiclienttest.NewHTTP(t, ts.URL, token)
 	old := connect
-	connect = func(context.Context) (*apiclient.Client, error) { return apiclienttest.NewHTTP(t, ts.URL, token), nil }
+	connect = func(context.Context) (*apiclient.Client, error) { return c, nil }
 	t.Cleanup(func() { connect = old })
+	return c
 }
 
 func TestHostsListComesFromTheServer(t *testing.T) {

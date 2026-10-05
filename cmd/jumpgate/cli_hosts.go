@@ -17,6 +17,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/apiclient"
 	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
@@ -82,7 +83,7 @@ func hostsAdd(args []string) int {
 	}
 
 	ctx := context.Background()
-	target := map[string]any{"id": name, "mode": "local"}
+	target := api.AddTarget{ID: name, Mode: "local"}
 	if !*local {
 		keyPath := *key
 		if keyPath != "" {
@@ -110,17 +111,22 @@ func hostsAdd(args []string) int {
 		if err != nil {
 			return failed("%v", err)
 		}
-		if code := confirmHostKeys(ctx, cfg, newConsentReader(os.Stdin), os.Stdout, os.Stderr); code != 0 {
-			return code
-		}
-		target = map[string]any{"id": name, "mode": "ssh", "ssh": cfg}
+		view := sshViewOf(cfg)
+		target = api.AddTarget{ID: name, Mode: "ssh", SSH: &view}
 	}
 
+	// The server captures and records host keys, so it starts before the
+	// prompt; the person at this terminal still decides.
 	c, err := connect(ctx)
 	if err != nil {
 		return failed("%v", err)
 	}
 	apiclient.WarnSkew(os.Stderr, c)
+	if target.SSH != nil {
+		if code := confirmHostKeys(ctx, c, *target.SSH, newConsentReader(os.Stdin), os.Stdout, os.Stderr); code != 0 {
+			return code
+		}
+	}
 	if e := call(c, "/api/targets", target, nil); e != nil {
 		// target_exists is the server's answer for a name already on record.
 		if e.Status != http.StatusConflict || e.Code != api.CodeTargetExists {
@@ -216,103 +222,103 @@ var stdinIsTerminal = func() bool {
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
-// sshConfigFrom builds the dial configuration for hosts add. Every hop carries
-// the strict host-key callback: pairing never trusts a key on first use.
+// sshConfigFrom builds the address hosts add sends the server. It carries no
+// host-key policy and no known_hosts path: the server applies Strict itself
+// whenever it dials, and picks its own files.
 func sshConfigFrom(login, key, jump string) (executor.SSHConfig, error) {
 	user, host, port, err := parseSSHTarget(login)
 	if err != nil {
 		return executor.SSHConfig{}, err
 	}
-	check, algos, err := config.StrictHostKey()
-	if err != nil {
-		return executor.SSHConfig{}, err
-	}
-	cfg := executor.SSHConfig{Host: host, Port: port, User: user, KeyPath: key, HostKeyFile: jgFile("known_hosts"), HostKey: check, HostKeyAlgorithms: algos}
+	cfg := executor.SSHConfig{Host: host, Port: port, User: user, KeyPath: key}
 	if jump != "" {
 		ju, jh, jp, err := parseSSHTarget(jump)
 		if err != nil {
 			return executor.SSHConfig{}, fmt.Errorf("--jump: %w", err)
 		}
-		cfg.Jump = &executor.SSHConfig{Host: jh, Port: jp, User: ju, KeyPath: key, HostKeyFile: jgFile("known_hosts"), HostKey: check, HostKeyAlgorithms: algos}
+		cfg.Jump = &executor.SSHConfig{Host: jh, Port: jp, User: ju, KeyPath: key}
 	}
 	return cfg, nil
 }
 
-// hostPort is the exact address string DialSSH hands the host-key callback,
-// and so the one RecordHostKey must record.
-func hostPort(c executor.SSHConfig) string {
-	port := c.Port
-	if port == 0 {
-		port = 22
+// sshViewOf is the request form of a dial configuration.
+func sshViewOf(c executor.SSHConfig) api.SSHView {
+	v := api.SSHView{Host: c.Host, User: c.User, KeyPath: c.KeyPath, Port: c.Port}
+	if c.Jump != nil {
+		j := sshViewOf(*c.Jump)
+		v.Jump = &j
 	}
-	return net.JoinHostPort(c.Host, strconv.Itoa(port))
+	return v
+}
+
+// hostKeyAPI is the part of the server confirmHostKeys needs. Info lets an
+// error from an older server (one without these routes) be reported as the
+// version skew it is.
+type hostKeyAPI interface {
+	ProbeHostKeys(ctx context.Context, ssh api.SSHView) (api.HostKeyProbe, error)
+	ConfirmHostKey(ctx context.Context, probeID, fingerprint string) error
+	Info() daemon.Info
 }
 
 // confirmHostKeys shows the operator every unconfirmed host key on the path,
-// the jump host first, and records one only on an explicit "yes". A key that
-// contradicts one already on record is a hard stop. The target is reached
-// through the jump host only after the jump host is confirmed, under the
-// strict policy, never trust-on-first-use.
-func confirmHostKeys(ctx context.Context, cfg executor.SSHConfig, in *bufio.Reader, out, errw io.Writer) int {
-	failedTo := func(format string, a ...any) int {
-		fmt.Fprintf(errw, "jumpgate: "+format+"\n", a...)
+// the jump host first, and confirms one only on an explicit "yes". The server
+// captures and records the keys, and records only the key whose fingerprint
+// was shown here; consent stays at a terminal. A key that contradicts one on
+// record is a hard stop, never offered for trust.
+func confirmHostKeys(ctx context.Context, hk hostKeyAPI, addr api.SSHView, in *bufio.Reader, out, errw io.Writer) int {
+	report := func(what string, err error) int {
+		var e *api.Error
+		if errors.As(err, &e) {
+			return reportServerErrorFrom(errw, what, hk.Info(), *e)
+		}
+		fmt.Fprintf(errw, "jumpgate: %s: %v\n", what, err)
 		return exitCode("failed")
 	}
-	check, algos, err := config.StrictHostKey()
-	if err != nil {
-		return failedTo("%v", err)
+	// Each round confirms at most one hop, so a path of n hops settles in
+	// n+1 probes; anything longer means the keys keep changing under us.
+	hops := 1
+	for j := addr.Jump; j != nil; j = j.Jump {
+		hops++
 	}
-	confirmed, err := config.ConfirmedHostsFile()
-	if err != nil {
-		return failedTo("%v", err)
-	}
-
-	type hop struct{ probe executor.SSHConfig }
-	var hops []hop
-	if cfg.Jump != nil {
-		j := *cfg.Jump
-		j.Jump, j.HostKey = nil, nil // confirm the jump host by a direct connection
-		j.HostKeyAlgorithms = algos
-		hops = append(hops, hop{j})
-	}
-	target := cfg
-	if cfg.Jump != nil {
-		j := *cfg.Jump
-		j.HostKey, j.HostKeyAlgorithms = check, algos
-		target.Jump = &j
-	}
-	target.HostKey, target.HostKeyAlgorithms = check, algos
-	hops = append(hops, hop{target})
-
-	for _, h := range hops {
-		key, err := executor.CaptureHostKey(ctx, h.probe)
+	for round := 0; round <= hops; round++ {
+		p, err := hk.ProbeHostKeys(ctx, addr)
 		if err != nil {
-			fmt.Fprintf(errw, "jumpgate: cannot reach %s: %v\n", h.probe.Host, err)
-			return exitCode("unreachable")
+			return report("host keys", err)
 		}
-		hp := hostPort(h.probe)
-		err = check(hp, nil, key)
-		var unknown *executor.UnknownHostError
-		switch {
-		case err == nil:
-			continue
-		case errors.As(err, &unknown):
-			fmt.Fprintf(out, "%s presents host key %s\nCompare it with the box's console (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`).\nType yes to trust it: ", hp, unknown.Fingerprint)
-			// Only a complete line reading exactly "yes" is consent: any read
-			// error (EOF after a bare "yes", a closed stdin) counts as no.
-			answer, rerr := in.ReadString('\n')
-			if rerr != nil || strings.TrimSpace(answer) != "yes" {
-				return failedTo("not trusted; nothing was changed")
+		hop := p.Pending()
+		if hop == nil {
+			if p.AllConfirmed {
+				return 0
 			}
-			if err := executor.RecordHostKey(confirmed, hp, key); err != nil {
-				return failedTo("%v", err)
-			}
-		default:
-			fmt.Fprintf(errw, "jumpgate: %v\n", err)
+			fmt.Fprintln(errw, "jumpgate: the server did not probe every host on the path; nothing was trusted")
+			return exitCode("failed")
+		}
+		switch hop.State {
+		case api.HostKeyUnreachable:
+			fmt.Fprintf(errw, "jumpgate: cannot reach %s: %s\n", hop.HostPort, hop.Error)
+			return exitCode("unreachable")
+		case api.HostKeyMismatch:
+			fmt.Fprintf(errw, "jumpgate: SECURITY: %s\n  -> %s\n", hop.Error, api.HintFor(api.CodeHostKey))
 			return exitCode("host_key")
+		case api.HostKeyUnknown:
+		default:
+			fmt.Fprintf(errw, "jumpgate: %s: the server answered %q, which this jumpgate does not know; nothing was trusted\n", hop.HostPort, hop.State)
+			return exitCode("failed")
+		}
+		fmt.Fprintf(out, "%s presents %s host key %s\nCompare it with the box's console (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`).\nType yes to trust it: ", hop.HostPort, hop.KeyType, hop.Fingerprint)
+		// Only a complete line reading exactly "yes" is consent: any read
+		// error (EOF after a bare "yes", a closed stdin) counts as no.
+		answer, rerr := in.ReadString('\n')
+		if rerr != nil || strings.TrimSpace(answer) != "yes" {
+			fmt.Fprintln(errw, "jumpgate: not trusted; nothing was changed")
+			return exitCode("failed")
+		}
+		if err := hk.ConfirmHostKey(ctx, hop.ProbeID, hop.Fingerprint); err != nil {
+			return report("confirm "+hop.HostPort, err)
 		}
 	}
-	return 0
+	fmt.Fprintln(errw, "jumpgate: the host keys did not settle after confirming every hop; run hosts add again")
+	return exitCode("failed")
 }
 
 // call POSTs body to the local server and decodes a success into out. It

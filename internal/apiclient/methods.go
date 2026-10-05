@@ -97,3 +97,24 @@ func (c *Client) Firewall(ctx context.Context, target string) ([]api.CheckItem, 
 func (c *Client) RemoveTarget(ctx context.Context, target string) error {
 	return c.Do(ctx, http.MethodDelete, targetPath(target, ""), nil, nil)
 }
+
+// ProbeHostKeys asks the server what keys the hosts on ssh's path present,
+// jump host first. It trusts nothing: an unconfirmed hop comes back with a
+// probe id for ConfirmHostKey.
+func (c *Client) ProbeHostKeys(ctx context.Context, ssh api.SSHView) (api.HostKeyProbe, error) {
+	var p api.HostKeyProbe
+	err := c.Do(ctx, http.MethodPost, "/api/hostkeys/probe", api.HostKeyProbeRequest{SSH: ssh}, &p)
+	return p, err
+}
+
+// ConfirmHostKey records a probed key after a person compared its
+// fingerprint. The server records the key it captured for probeID, and only
+// if fingerprint is exactly that key's.
+func (c *Client) ConfirmHostKey(ctx context.Context, probeID, fingerprint string) error {
+	return c.Do(ctx, http.MethodPost, "/api/hostkeys/confirm", api.HostKeyConfirm{ProbeID: probeID, Fingerprint: fingerprint}, nil)
+}
+
+// AddTarget records a new target; it does not pair it.
+func (c *Client) AddTarget(ctx context.Context, req api.AddTarget) error {
+	return c.Do(ctx, http.MethodPost, "/api/targets", req, nil)
+}

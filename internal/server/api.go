@@ -598,6 +598,12 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/targets/{id}/intent/{kind}", s.handleIntent)
 	mux.HandleFunc("POST /api/targets/{id}/pair", s.handlePair)
 
+	// Host-key confirmation: the server captures and records the keys, a
+	// person compares the fingerprint (hostkeys.go). Behind the same Origin
+	// check, since confirming decides which hosts Strict trusts.
+	mux.HandleFunc("POST /api/hostkeys/probe", s.handleHostKeyProbe)
+	mux.HandleFunc("POST /api/hostkeys/confirm", s.handleHostKeyConfirm)
+
 	// The literal "clear" segment is more specific than the {action}
 	// wildcard below it and wins for an exact match — Go 1.22+ ServeMux
 	// prefers the more specific pattern regardless of registration order —

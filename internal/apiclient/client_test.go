@@ -184,3 +184,33 @@ func TestNodeMethodsUseTheNodeRoutes(t *testing.T) {
 		t.Fatalf("paths %v", paths)
 	}
 }
+
+func TestHostKeyMethods(t *testing.T) {
+	var bodies []string
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, r.Method+" "+r.URL.Path+" "+string(b))
+		if r.URL.Path == "/api/hostkeys/probe" {
+			fmt.Fprint(w, `{"hops":[{"hostPort":"h:22","state":"unknown","probeId":"p1","fingerprint":"SHA256:x"}]}`)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	ctx := context.Background()
+	p, err := c.ProbeHostKeys(ctx, api.SSHView{Host: "h", User: "u"})
+	if err != nil || p.Pending() == nil || p.Pending().ProbeID != "p1" {
+		t.Fatalf("probe %+v %v", p, err)
+	}
+	if err := c.ConfirmHostKey(ctx, "p1", "SHA256:x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AddTarget(ctx, api.AddTarget{ID: "b", Mode: "ssh", SSH: &api.SSHView{Host: "h", User: "u"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 3 ||
+		!strings.HasPrefix(bodies[0], "POST /api/hostkeys/probe ") || !strings.Contains(bodies[0], `"ssh":{"Host":"h"`) ||
+		!strings.HasPrefix(bodies[1], "POST /api/hostkeys/confirm ") || !strings.Contains(bodies[1], `"probeId":"p1"`) || !strings.Contains(bodies[1], `"fingerprint":"SHA256:x"`) ||
+		!strings.HasPrefix(bodies[2], "POST /api/targets ") || !strings.Contains(bodies[2], `"Host":"h"`) {
+		t.Fatalf("bodies %q", bodies)
+	}
+}

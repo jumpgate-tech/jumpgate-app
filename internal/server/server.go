@@ -132,6 +132,10 @@ type Server struct {
 
 	reg *registry
 
+	// probes holds host keys captured by POST /api/hostkeys/probe until a
+	// person confirms one (hostkeys.go).
+	probes *hostKeyProbes
+
 	// tlsChecks is the last live HTTPS verification per gateway id, guarded by
 	// tlsMu. It is a cache of an EXPENSIVE read (real connections, a real
 	// subscription), kept so the RPC screen can show the last answer without
@@ -192,7 +196,7 @@ type Server struct {
 
 // New constructs a Server from the given Config.
 func New(cfg Config) *Server {
-	s := &Server{cfg: cfg, reg: newRegistry()}
+	s := &Server{cfg: cfg, reg: newRegistry(), probes: newHostKeyProbes()}
 	s.newExecutor = cfg.NewExecutor
 	if s.newExecutor == nil {
 		s.newExecutor = defaultNewExecutor

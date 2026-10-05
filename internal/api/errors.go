@@ -53,6 +53,10 @@ const (
 	CodeLocalUnsupported      Code = "local_unsupported"
 	CodeLocalNeedsTerminal    Code = "local_needs_terminal"
 
+	// Host-key confirmation (POST /api/hostkeys/confirm).
+	CodeProbeExpired        Code = "probe_expired"
+	CodeFingerprintMismatch Code = "fingerprint_mismatch"
+
 	// The pairing stream's own failures.
 	CodeStepFailed   Code = "step_failed"
 	CodeVerifyFailed Code = "verify_failed"
@@ -114,6 +118,9 @@ var registry = map[Code]codeInfo{
 	CodeAgentFailed:        {"the agent ran the request and it failed on the box; the message is the box's", ExitFailed},
 	CodeLocalUnsupported:   {"this computer cannot run node commands itself; run this on a Linux machine you added with --ssh", ExitFailed},
 	CodeLocalNeedsTerminal: {"run `jumpgate hosts add NAME --local` in a terminal (it asks for your sudo password there), or run jumpgate as root", ExitFailed},
+
+	CodeProbeExpired:        {"probe the host again; a probe is good for 5 minutes and one confirmation", ExitFailed},
+	CodeFingerprintMismatch: {"the fingerprint you confirmed is not the key the box presented; probe again and compare carefully", ExitSecurity},
 
 	CodeStepFailed:   {"", ExitFailed},
 	CodeVerifyFailed: {"", ExitFailed},
