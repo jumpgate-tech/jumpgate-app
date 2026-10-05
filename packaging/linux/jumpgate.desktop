@@ -6,5 +6,5 @@ Comment=Run your node fleet from a terminal
 Exec=env JUMPGATE_LAUNCHER=1 jumpgate
 Icon=jumpgate
 Terminal=true
-Categories=Network;System;
+Categories=System;Monitor;
 Keywords=ethereum;pulsechain;node;validator;

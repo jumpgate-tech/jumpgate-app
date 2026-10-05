@@ -8,6 +8,7 @@ out="${1:-dist}"
 version="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
 arch="$(go env GOARCH)"
 VERSION="$version" GZIP=1 scripts/build-agents.sh internal/agentbin/embedded
+case "$out" in "" | /) echo "package-linux.sh: refusing OUT_DIR '$out'" >&2; exit 1 ;; esac
 stage="$out/jumpgate-linux-$arch"
 rm -rf "$stage"
 mkdir -p "$stage"
@@ -19,5 +20,5 @@ cp packaging/linux/jumpgate.desktop packaging/linux/jumpgate-window.desktop \
    packaging/linux/install.sh packaging/linux/README.txt "$stage/"
 cp cmd/jumpgate/icon.svg "$stage/jumpgate.svg"
 chmod 0755 "$stage/install.sh" "$stage/jumpgate"
-tar -C "$out" -czf "$out/jumpgate-linux-$arch.tar.gz" "jumpgate-linux-$arch"
+tar --owner=0 --group=0 --numeric-owner -C "$out" -czf "$out/jumpgate-linux-$arch.tar.gz" "jumpgate-linux-$arch"
 echo "$out/jumpgate-linux-$arch.tar.gz"

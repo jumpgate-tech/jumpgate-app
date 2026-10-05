@@ -5,5 +5,5 @@ Comment=Open the Jumpgate panel in a desktop window
 Exec=jumpgate --tray
 Icon=jumpgate
 Terminal=false
-Categories=Network;System;
+Categories=System;Monitor;
 StartupWMClass=jumpgate
