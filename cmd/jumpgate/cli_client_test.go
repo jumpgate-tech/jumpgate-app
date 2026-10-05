@@ -10,17 +10,27 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/apiclient"
+	"github.com/valve-tech/jumpgate/internal/apiclient/apiclienttest"
+	"github.com/valve-tech/jumpgate/internal/buildinfo"
 )
 
 // withServer points connect at an in-process stand-in for the server, so a
 // test drives the CLI's server paths without starting a detached one.
 func withServer(t *testing.T, h http.HandlerFunc) {
 	t.Helper()
+	withServerAt(t, buildinfo.Version(), h)
+}
+
+// withServerAt is withServer for a server that reports version.
+func withServerAt(t *testing.T, version string, h http.HandlerFunc) {
+	t.Helper()
 	ts := httptest.NewServer(h)
 	t.Cleanup(ts.Close)
+	c := apiclienttest.NewHTTPVersion(t, ts.URL, "tok", version)
 	old := connect
-	connect = func(context.Context) (*apiclient.Client, error) { return apiclient.NewHTTP(ts.URL, "tok"), nil }
+	connect = func(context.Context) (*apiclient.Client, error) { return c, nil }
 	t.Cleanup(func() { connect = old })
 }
 
@@ -111,5 +121,62 @@ func TestHostsAddGoesThroughConnect(t *testing.T) {
 	}
 	if !strings.Contains(stdout(), "pairing it again") || !strings.Contains(stdout(), "paired: agent 0xabc") {
 		t.Fatalf("stdout %q", stdout())
+	}
+}
+
+// The exit-code table through the whole client path: the server's error JSON
+// (no hint of its own), Client.Do, api.Decode, reportServerErrorFrom. Each
+// code exits with its class and prints the registry's hint.
+func TestRunIntentExitsWithTheServerCodesClass(t *testing.T) {
+	cases := []struct {
+		code   api.Code
+		status int
+		want   int
+	}{
+		{api.CodeBadReceipt, http.StatusBadGateway, 4},
+		{api.CodeHostKey, http.StatusBadGateway, 4},
+		{api.CodeUnknownHost, http.StatusConflict, 4},
+		{api.CodeControllerKeyMismatch, http.StatusServiceUnavailable, 4},
+		{api.CodeUnreachable, http.StatusGatewayTimeout, 3},
+		{api.CodeNotPaired, http.StatusConflict, 2},
+		{api.CodeNoControllerKey, http.StatusServiceUnavailable, 2},
+		{api.CodeAgentHTTP, http.StatusBadGateway, 1},
+	}
+	for _, c := range cases {
+		t.Run(string(c.code), func(t *testing.T) {
+			withServer(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(c.status)
+				fmt.Fprintf(w, `{"error":"boom","code":%q}`, c.code)
+			})
+			_, stderr := captureStdio(t)
+			if got := runIntent("box", "status.read", struct{}{}); got != c.want {
+				t.Fatalf("exit %d, want %d; stderr %q", got, c.want, stderr())
+			}
+			hint := api.HintFor(c.code)
+			if hint == "" || !strings.Contains(stderr(), "boom") || !strings.Contains(stderr(), "-> "+hint) {
+				t.Fatalf("stderr %q lacks the message or the registry hint %q", stderr(), hint)
+			}
+			if security := c.want == 4; security != strings.Contains(stderr(), "SECURITY") {
+				t.Fatalf("SECURITY prefix = %v, want %v: %q", !security, security, stderr())
+			}
+		})
+	}
+}
+
+// An older server sends pairing errors as "err", which this CLI does not
+// read; once the versions differ, the end of its stream says what to do.
+func TestStreamPairFromAnotherVersionSaysStop(t *testing.T) {
+	withServerAt(t, "v0.0.1-old", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"step\":\"verify\",\"err\":\"not signed\",\"code\":\"bad_receipt\"}\n\n")
+	})
+	c, _ := connect(context.Background())
+	_, stderr := captureStdio(t)
+	if code := streamPair(c, "box", false); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(stderr(), "older jumpgate") || !strings.Contains(stderr(), "jumpgate stop") {
+		t.Fatalf("stderr %q", stderr())
 	}
 }

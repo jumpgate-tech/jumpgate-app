@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/api"
+	"github.com/valve-tech/jumpgate/internal/apiclient/internal/testhook"
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/daemon"
 )
@@ -85,15 +86,20 @@ func New(info daemon.Info) *Client {
 	}
 }
 
-// NewHTTP is a client for a server at a TCP base URL: tests, and nothing else.
-// Such a server is in-process, so it is this build: the client records this
-// binary's version for it, and Skew stays quiet.
-func NewHTTP(baseURL, token string) *Client {
+// newHTTP is a client for a server at a TCP base URL that reports version:
+// tests, and nothing else. It is unexported so no production caller can claim
+// a version for a server and silence a real skew; other packages' tests reach
+// it through apiclienttest.
+func newHTTP(baseURL, token, version string) *Client {
 	return &Client{
 		base: strings.TrimRight(baseURL, "/"), token: token,
-		info: daemon.Info{Token: token, Version: buildinfo.Version()},
+		info: daemon.Info{Token: token, Version: version},
 		hc:   &http.Client{Timeout: requestTimeout}, sc: &http.Client{},
 	}
+}
+
+func init() {
+	testhook.NewHTTP = func(baseURL, token, version string) any { return newHTTP(baseURL, token, version) }
 }
 
 // Info is the server.json the client was built from. The CLI hands it to

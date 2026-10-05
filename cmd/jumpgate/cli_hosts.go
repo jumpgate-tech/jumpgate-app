@@ -350,5 +350,11 @@ func streamPair(c *apiclient.Client, name string, sudo bool) int {
 			fmt.Printf("[%s] %s\n", ev.Step, ev.Line)
 		}
 	}
+	// A server of another version (the skew warning has said so) may send
+	// events this CLI cannot read, such as an older server's "err" field: say what to
+	// do rather than leave a bare "closed".
+	if _, _, differs := c.Skew(); differs {
+		return failed("the running server is an older jumpgate; run `jumpgate stop` and retry")
+	}
 	return failed("the server closed the stream before pairing finished")
 }

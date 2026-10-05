@@ -23,7 +23,7 @@ func serve(t *testing.T, h http.HandlerFunc) *Client {
 	t.Helper()
 	ts := httptest.NewServer(h)
 	t.Cleanup(ts.Close)
-	return NewHTTP(ts.URL, "tok")
+	return newHTTP(ts.URL, "tok", buildinfo.Version())
 }
 
 func TestDoSendsTheTokenAndDecodesJSON(t *testing.T) {
@@ -55,7 +55,7 @@ func TestErrorsAreAPIErrors(t *testing.T) {
 
 func TestAServerThatIsGoneIsServerUnreachable(t *testing.T) {
 	ts := httptest.NewServer(http.NotFoundHandler())
-	c := NewHTTP(ts.URL, "tok")
+	c := newHTTP(ts.URL, "tok", buildinfo.Version())
 	ts.Close()
 	err := c.Do(context.Background(), http.MethodGet, "/api/health", nil, nil)
 	if !errors.Is(err, ErrServerUnreachable) {
