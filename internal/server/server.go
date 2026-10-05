@@ -117,9 +117,15 @@ type Config struct {
 	// with code "no_controller_key".
 	Signer signer.Signer
 
-	// LoginDir is the owner-only directory login-link redirect files are
-	// written to (login.go), normally ~/.jumpgate/run/login. Empty means the
-	// mint API returns codes without a file, and callers only print them.
+	// LoginDir is the directory login-link redirect files are written to
+	// (login.go), normally ~/.jumpgate/run/login. Every caller that serves
+	// browsers (the app, `jumpgate serve`) must set it: a browser opener is
+	// handed only the path of an owner-only file there, never a URL with a
+	// login code, which any local user could read off the opener's command
+	// line and redeem first. It is made owner-only (fsperm.MkdirPrivate)
+	// on first use, and New sweeps stale redirect files from it. Empty means
+	// the mint API returns codes without a file, and callers only print the
+	// link (fail-safe: no browser is opened on it).
 	LoginDir string
 }
 

@@ -16,6 +16,8 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 func loginFileServer(t *testing.T) (*Server, *httptest.Server, string) {
@@ -49,6 +51,13 @@ func TestLoginLinkFileIsPrivateAndCarriesTheCode(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("file mode %v, want 0600", fi.Mode().Perm())
+	}
+	// On Windows this is the owner-only DACL, set from creation.
+	if err := fsperm.CheckPrivate(link.File); err != nil {
+		t.Fatalf("redirect file is not private: %v", err)
+	}
+	if err := fsperm.CheckPrivate(dir); err != nil {
+		t.Fatalf("login dir is not private: %v", err)
 	}
 	data, _ := os.ReadFile(link.File)
 	if got := linkInFile.FindString(string(data)); got != link.URL || !strings.Contains(link.URL, link.Code) {
@@ -120,6 +129,51 @@ func TestLoginLinkNeedsABind(t *testing.T) {
 	s := New(Config{Token: NewSessionToken(), LoginDir: t.TempDir()})
 	if _, err := s.NewLoginLink(); err == nil {
 		t.Fatal("NewLoginLink with no Bind: want an error")
+	}
+}
+
+// The sweep removes only regular files: a link named like a redirect file is
+// left alone and its target untouched, and a symlinked login dir is not
+// entered at all.
+func TestSweepLoginFilesRefusesLinks(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "login")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(base, "victim.html")
+	if err := os.WriteFile(victim, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "open-link.html")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	sweepLoginFiles(dir)
+	if _, err := os.Lstat(link); err != nil {
+		t.Fatalf("sweep removed a link: %v", err)
+	}
+	if _, err := os.Lstat(victim); err != nil {
+		t.Fatalf("sweep followed a link: %v", err)
+	}
+
+	// A symlinked login dir: its open-*.html files belong to wherever it
+	// points, so the sweep stays out.
+	other := filepath.Join(base, "elsewhere")
+	if err := os.MkdirAll(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inOther := filepath.Join(other, "open-deadbeef.html")
+	if err := os.WriteFile(inOther, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linkedDir := filepath.Join(base, "linked")
+	if err := os.Symlink(other, linkedDir); err != nil {
+		t.Fatal(err)
+	}
+	sweepLoginFiles(linkedDir)
+	if _, err := os.Lstat(inOther); err != nil {
+		t.Fatalf("sweep entered a symlinked dir: %v", err)
 	}
 }
 

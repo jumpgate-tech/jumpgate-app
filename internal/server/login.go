@@ -7,13 +7,17 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // loginCodeTTL bounds how long a one-time login link works (spec D4).
@@ -146,37 +150,18 @@ func redirectPage(url string) string {
 // Redirect files are named open-<random>.html; the random part is not the code.
 const loginFilePrefix, loginFileSuffix = "open-", ".html"
 
-// createPrivateFile creates path for writing, owner-only from creation, and
-// fails if anything (a link included) is already there. A seam for tests.
-//
-// TODO(T2): this is fsperm.CreatePrivate once Task 2 merges into
-// feat/platform-support; that also gives the file the owner-only DACL on
-// Windows, where today it inherits the ~/.jumpgate directory's.
-var createPrivateFile = func(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-}
-
-// createLoginFile makes dir owner-only and creates a fresh redirect file in
-// it. A symlinked dir is refused: the file must land where its owner-only
-// parent is.
+// createLoginFile makes dir owner-only (fsperm.MkdirPrivate) and creates a
+// fresh redirect file in it with fsperm.CreatePrivate: private from the
+// moment it exists (0600 on unix, the owner-only DACL on Windows) and never
+// created through a link.
 func createLoginFile(dir string) (string, *os.File, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", nil, err
-	}
-	fi, err := os.Lstat(dir)
-	if err != nil {
-		return "", nil, err
-	}
-	if !fi.IsDir() {
-		return "", nil, fmt.Errorf("%s is not a directory", dir)
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := fsperm.MkdirPrivate(dir); err != nil {
 		return "", nil, err
 	}
 	for try := 0; try < 10; try++ {
 		path := filepath.Join(dir, loginFilePrefix+NewSessionToken()[:16]+loginFileSuffix)
-		f, err := createPrivateFile(path)
-		if errors.Is(err, os.ErrExist) {
+		f, err := fsperm.CreatePrivate(path)
+		if errors.Is(err, fs.ErrExist) {
 			continue
 		}
 		return path, f, err
@@ -185,11 +170,24 @@ func createLoginFile(dir string) (string, *os.File, error) {
 }
 
 // sweepLoginFiles removes redirect files a previous server left behind. Only
-// one server runs per user, so none of them belongs to a live code.
+// one server runs per user, so none of them belongs to a live code. It
+// follows no link: a symlinked dir is not entered, and only regular files
+// are removed, so a link named like a redirect file (and its target) is left
+// alone.
 func sweepLoginFiles(dir string) {
-	matches, _ := filepath.Glob(filepath.Join(dir, loginFilePrefix+"*"+loginFileSuffix))
-	for _, m := range matches {
-		_ = os.Remove(m)
+	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.Type().IsRegular() || !strings.HasPrefix(name, loginFilePrefix) || !strings.HasSuffix(name, loginFileSuffix) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, name))
 	}
 }
 
