@@ -268,3 +268,33 @@ func TestAdmissionPersistFailureRefusesAndRunsNothing(t *testing.T) {
 		t.Fatalf("ran commands after a failed admission: %v", r.exec.cmds)
 	}
 }
+
+// A corrupt record refuses, but once an operator repairs it the running agent
+// reloads it without a restart. A still-corrupt file keeps refusing.
+func TestRunningAgentReloadsRepairedReplayState(t *testing.T) {
+	r := newRig(t, true)
+	path := filepath.Join(r.dir, "replay.json")
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.a = New(Config{Key: r.agentKey, Exec: r.exec, Now: func() time.Time { return r.now },
+		PolicyPath: filepath.Join(r.dir, "policy.json"), ReplayPath: path, NodePath: filepath.Join(r.dir, "node.json")})
+	rc, res := r.send(t, intent.KindStatusRead, struct{}{}, nil)
+	if got := rejection(t, rc, res).Code; got != intent.ReasonReplayState {
+		t.Fatalf("code %s, want replay_state", got)
+	}
+	rc, res = r.send(t, intent.KindStatusRead, struct{}{}, nil)
+	if got := rejection(t, rc, res).Code; got != intent.ReasonReplayState {
+		t.Fatalf("still corrupt: code %s, want replay_state", got)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := InitReplay(path); err != nil {
+		t.Fatal(err)
+	}
+	rc, res = r.send(t, intent.KindStatusRead, struct{}{}, nil)
+	if rc.Status == intent.StatusRejected {
+		t.Fatalf("repaired record not reloaded: %s", res)
+	}
+}

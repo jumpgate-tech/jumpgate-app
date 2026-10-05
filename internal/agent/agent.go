@@ -121,10 +121,11 @@ func (a *Agent) Handle(ctx context.Context, env intent.Envelope) intent.ReceiptE
 	}
 	defer a.release(i.Controller)
 
-	if a.replayErr != nil {
-		return a.answerReject(i, reqHash, reject(intent.ReasonReplayState, a.replayErr.Error()))
+	replay, rerr := a.currentReplay()
+	if rerr != nil {
+		return a.answerReject(i, reqHash, reject(intent.ReasonReplayState, rerr.Error()))
 	}
-	if err := a.replay.Admit(i.Controller, i.Seq, i.Nonce, i.Expiry, now); err != nil {
+	if err := replay.Admit(i.Controller, i.Seq, i.Nonce, i.Expiry, now); err != nil {
 		return a.answerReject(i, reqHash, asReject(err))
 	}
 
@@ -133,6 +134,18 @@ func (a *Agent) Handle(ctx context.Context, env intent.Envelope) intent.ReceiptE
 		return a.answerReject(i, reqHash, rej)
 	}
 	return a.answer(i, reqHash, status, result)
+}
+
+// currentReplay returns the replay record. While the record is failed it is
+// reloaded on each request, under the agent lock, so an operator's repair takes
+// effect without a restart. A still-bad file keeps the agent failed closed.
+func (a *Agent) currentReplay() (*Replay, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.replayErr != nil {
+		a.replay, a.replayErr = OpenReplay(a.cfg.ReplayPath)
+	}
+	return a.replay, a.replayErr
 }
 
 func (a *Agent) claim(c eip712.Address) bool {
