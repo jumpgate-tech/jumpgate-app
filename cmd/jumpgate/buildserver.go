@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
@@ -56,7 +55,9 @@ const defaultERPCURL = "http://127.0.0.1:4000"
 // file named by name+"_FILE" (one token, surrounding whitespace ignored). The
 // file form is preferred: it keeps the token out of shell profiles and out of
 // every process that inherits the environment. Setting both is an error, as is
-// a named file that is unreadable or empty.
+// a named file that is unreadable, empty, or not private to this user (see
+// readPrivateFile: a symlink, a non-regular file, group/other permission bits
+// or another owner are all refused).
 func readToken(getenv func(string) string, name string) (string, error) {
 	direct, file := getenv(name), getenv(name+"_FILE")
 	if file == "" {
@@ -65,7 +66,7 @@ func readToken(getenv func(string) string, name string) (string, error) {
 	if direct != "" {
 		return "", fmt.Errorf("both %s and %s_FILE are set; use one", name, name)
 	}
-	b, err := os.ReadFile(file)
+	b, err := readPrivateFile(file)
 	if err != nil {
 		return "", fmt.Errorf("%s_FILE: %w", name, err)
 	}

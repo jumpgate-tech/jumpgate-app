@@ -116,7 +116,12 @@ The two credentials, the relay token and the admin token, never come from a
 flag. Put each one in its own file, readable only by you (`chmod 600`), and
 point to the file with `JUMPGATE_RELAY_TOKEN_FILE` and
 `JUMPGATE_ADMIN_TOKEN_FILE`. The server reads the file once and keeps the token
-in memory. `JUMPGATE_RELAY_TOKEN` and `JUMPGATE_ADMIN_TOKEN` also work, but
+in memory. On Linux and macOS it refuses, with a message naming the file and
+the `chmod 600` that fixes it, a token file that:
+
+- is a symlink, or is not a regular file;
+- grants any permission to group or others;
+- is owned by another user (unless the server runs as root). `JUMPGATE_RELAY_TOKEN` and `JUMPGATE_ADMIN_TOKEN` also work, but
 don't put the token values themselves in a shell profile. Every program you
 start from that shell would see them. Setting a token both ways is an error.
 After reading them, the server removes these variables from its own
