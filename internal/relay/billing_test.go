@@ -234,3 +234,27 @@ func TestBillingClientHasADefaultTimeout(t *testing.T) {
 		t.Errorf("default timeout %v is too long for a request-path call", c.httpClient().Timeout)
 	}
 }
+
+// billing answers 409 when a settle can never succeed. The client names it, so
+// the lease can stop retrying; every other failure stays a plain error.
+func TestBillingClientSettleMapsStatuses(t *testing.T) {
+	cases := []struct {
+		status  int
+		refused bool
+		ok      bool
+	}{
+		{http.StatusOK, false, true},
+		{http.StatusConflict, true, false},
+		{http.StatusInternalServerError, false, false},
+		{http.StatusNotFound, false, false},
+		{http.StatusBadRequest, false, false},
+	}
+	for _, tc := range cases {
+		stub := newBillingStub(t)
+		stub.status = tc.status
+		err := NewBillingClient(stub.socket, "relay-token").Settle(context.Background(), "0xa", 1, 2, "s-1")
+		if (err == nil) != tc.ok || errors.Is(err, ErrSettleRefused) != tc.refused {
+			t.Errorf("status %d: err = %v, want ok=%v refused=%v", tc.status, err, tc.ok, tc.refused)
+		}
+	}
+}

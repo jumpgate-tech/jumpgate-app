@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -395,5 +396,73 @@ func TestLeaseRejectsAGrantOutsideTheAsk(t *testing.T) {
 		if p.available < 0 || p.reserved < 0 {
 			t.Errorf("grant %d left the pool negative: available=%d reserved=%d", bad, p.available, p.reserved)
 		}
+	}
+}
+
+// refusingStore refuses the first settle for good, as billing's 409 does, and
+// then behaves like the real ledger.
+type refusingStore struct {
+	*ledgerStore
+	refuse  int
+	refused []string
+}
+
+func (s *refusingStore) Settle(ctx context.Context, account string, spent, reserved int64, id string) error {
+	if s.refuse > 0 {
+		s.refuse--
+		s.refused = append(s.refused, id)
+		return fmt.Errorf("%w: 409", ErrSettleRefused)
+	}
+	return s.ledgerStore.Settle(ctx, account, spent, reserved, id)
+}
+
+// A settle the ledger refuses with 409 can never succeed, so retrying it forever
+// would block every later settle for the account. It is dropped and later
+// settles go through.
+func TestLeaseDropsASettleTheLedgerRefusesForGood(t *testing.T) {
+	store := &refusingStore{ledgerStore: newLedger(acct, 100), refuse: 1}
+	lease := newLease(store, 10)
+	ctx := context.Background()
+
+	if err := lease.Spend(ctx, acct, 4); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.SettleAll(ctx); err != nil {
+		t.Fatalf("a final refusal must not be retried or reported as retryable: %v", err)
+	}
+	if len(store.refused) != 1 {
+		t.Fatalf("refused = %v, want exactly one attempt", store.refused)
+	}
+
+	if err := lease.Spend(ctx, acct, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.SettleAll(ctx); err != nil {
+		t.Fatalf("later settle: %v", err)
+	}
+	if len(store.refused) != 1 {
+		t.Fatal("the refused report was retried")
+	}
+	if p := lease.poolFor(acct); p.pending != nil {
+		t.Fatal("the refused report is still pending and would block later settles")
+	}
+	if got := store.reserved[acct]; got != 10 {
+		t.Errorf("ledger reserved = %d, want only the dropped block's 10 left", got)
+	}
+}
+
+// Anything but a 409 keeps retrying: the report may be owed.
+func TestLeaseKeepsRetryingAnOrdinaryFailure(t *testing.T) {
+	store := &refusingStore{ledgerStore: newLedger(acct, 100)}
+	store.failWith = nil
+	lease := newLease(store, 10)
+	ctx := context.Background()
+	_ = lease.Spend(ctx, acct, 4)
+	store.loseReplies = 1
+	if err := lease.SettleAll(ctx); err == nil {
+		t.Fatal("want error")
+	}
+	if p := lease.poolFor(acct); p.pending == nil {
+		t.Fatal("a retryable failure must stay pending")
 	}
 }

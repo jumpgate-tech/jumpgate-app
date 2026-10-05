@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -16,6 +17,10 @@ var (
 	ErrInsufficientCredits = errors.New("relay: account is out of credits")
 	// ErrNoAccount is a key bound to an account the store has never seen.
 	ErrNoAccount = errors.New("relay: no such account")
+	// ErrSettleRefused means the ledger refused a settle for good (409): the id
+	// was already used for different numbers, or the settle releases more than
+	// the account holds in reserve. Retrying the same report can never succeed.
+	ErrSettleRefused = errors.New("relay: ledger refused the settle")
 )
 
 // defaultCreditBlock is how many credits the relay leases at a time. It trades
@@ -199,6 +204,16 @@ func (l *CreditLease) settle(ctx context.Context, account string) error {
 			p.available, p.reserved, p.spent = 0, 0, 0
 		}
 		if err := l.store.Settle(ctx, account, p.pending.spent, p.pending.reserved, p.pending.id); err != nil {
+			if errors.Is(err, ErrSettleRefused) {
+				// Final: the ledger will refuse this exact report every time.
+				// Keeping it would block every later settle for the account and
+				// let new reservations pile up. Drop it loudly; an operator
+				// reconciles the account's reserved credits by hand.
+				log.Printf("relay: settle refused for good, dropping it: account=%s settle_id=%s spent=%d reserved=%d: %v",
+					account, p.pending.id, p.pending.spent, p.pending.reserved, err)
+				p.pending = nil
+				continue
+			}
 			return fmt.Errorf("relay: settle credits: %w", err)
 		}
 		p.pending = nil

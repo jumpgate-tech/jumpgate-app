@@ -297,6 +297,11 @@ func (c *BillingClient) Settle(ctx context.Context, account string, spent, reser
 	if err != nil {
 		return err
 	}
+	if status == http.StatusConflict {
+		// billing's 409 is SettleExceedsReservation or SettleIdReused: neither
+		// can ever succeed on a retry. Every other status stays retryable.
+		return fmt.Errorf("%w: ledger returned 409: %s", ErrSettleRefused, raw)
+	}
 	if status != http.StatusOK {
 		return fmt.Errorf("relay: settle: ledger returned %d: %s", status, raw)
 	}
