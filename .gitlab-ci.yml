@@ -52,6 +52,25 @@ windows:
       if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       go test -p 2 ./...
       if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # The real Credential Manager of the runner's user, only here (never on
+      # a developer's machine); fail if the test skipped instead of running.
+      $env:JUMPGATE_TEST_REAL_WINCRED = "1"
+      $out = go test -count=1 -v -run '^TestRealWinCred$' ./internal/signer/ | Out-String
+      $code = $LASTEXITCODE
+      Remove-Item Env:JUMPGATE_TEST_REAL_WINCRED
+      Write-Host $out
+      if ($code -ne 0) { exit $code }
+      if ($out -notmatch '--- PASS: TestRealWinCred ') { Write-Host "TestRealWinCred did not run"; exit 1 }
+
+# The Linux key store against a real secret-tool (scripts/test-secret-service.sh
+# runs in a Docker container on GitHub; here the job's image is that container).
+secret-service:
+  stage: test
+  image: golang:1.25-bookworm
+  <<: *go-cache
+  script:
+    - export HOME="$(mktemp -d)"
+    - scripts/test-secret-service.sh --inside
 
 # GitLab.com macOS runners require a paid tier, so this is opt-in and never
 # blocks the pipeline. Needs a runner tagged saas-macos-medium-m1.
