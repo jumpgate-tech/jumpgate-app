@@ -28,6 +28,8 @@ type fakeBox struct {
 	writes []string
 	// readErr, when set, is what ReadFile returns for an existing file.
 	readErr error
+	// failMove makes the authorized_keys hand-over (chown, chmod, mv) fail.
+	failMove bool
 }
 
 // testKey returns a fresh valid public key line and its base64 blob.
@@ -63,6 +65,9 @@ func (b *fakeBox) Run(_ context.Context, cmd string, o *executor.RunOpts) (execu
 		return executor.Result{ExitCode: 1}, nil
 	}
 	if strings.Contains(cmd, "mv -f "+AuthorizedKeys+".new "+AuthorizedKeys) {
+		if b.failMove {
+			return executor.Result{ExitCode: 1, Stderr: "chown: invalid user"}, nil
+		}
 		b.files[AuthorizedKeys] = b.files[AuthorizedKeys+".new"]
 		delete(b.files, AuthorizedKeys+".new")
 		return executor.Result{}, nil
@@ -247,7 +252,7 @@ func TestAuthorizedKeysIsStagedAndOwnedBeforeRename(t *testing.T) {
 func TestRepairRepairsOwnershipWhenKeyAlreadyPresent(t *testing.T) {
 	box := freshBox()
 	key, _ := testKey(t)
-	box.files = map[string]string{AuthorizedKeys: `restrict,port-forwarding,command="/bin/false" ` + key + "\n"}
+	box.files = map[string]string{AuthorizedKeys: canonicalLine(key) + "\n"}
 	if _, err := Run(context.Background(), optsWithKey(t, box, key)); err != nil {
 		t.Fatal(err)
 	}
@@ -256,6 +261,127 @@ func TestRepairRepairsOwnershipWhenKeyAlreadyPresent(t *testing.T) {
 		if !strings.Contains(all, want) {
 			t.Errorf("never ran %q", want)
 		}
+	}
+}
+
+const oldKeyOptions = `restrict,port-forwarding,command="/bin/false"`
+
+func canonicalLine(key string) string {
+	return `restrict,port-forwarding,permitopen="[/run/jumpgate/agent.sock]:*",command="/bin/false" ` + key
+}
+
+// akWrites counts the writes that staged a new authorized_keys.
+func akWrites(box *fakeBox) int {
+	n := 0
+	for _, w := range box.writes {
+		if strings.HasPrefix(w, AuthorizedKeys) {
+			n++
+		}
+	}
+	return n
+}
+
+// Boxes paired before permitopen carry the old line; a re-pair must replace
+// it with the current one, in place, leaving every other line alone.
+func TestRepairReplacesAnOldOptionsLine(t *testing.T) {
+	box := freshBox()
+	key, blob := testKey(t)
+	other1, _ := testKey(t)
+	other2, _ := testKey(t)
+	before := "# admin note\r\n" + oldKeyOptions + " " + other1 + " other-controller  \n" +
+		oldKeyOptions + " " + key + " laptop\n" +
+		other2 + "\r\n"
+	box.files = map[string]string{AuthorizedKeys: before}
+	if _, err := Run(context.Background(), optsWithKey(t, box, key)); err != nil {
+		t.Fatal(err)
+	}
+	want := "# admin note\r\n" + oldKeyOptions + " " + other1 + " other-controller  \n" +
+		canonicalLine(key) + "\n" +
+		other2 + "\r\n"
+	if got := box.files[AuthorizedKeys]; got != want {
+		t.Fatalf("authorized_keys =\n%q\nwant\n%q", got, want)
+	}
+	if strings.Count(box.files[AuthorizedKeys], blob) != 1 {
+		t.Fatalf("duplicated key: %q", box.files[AuthorizedKeys])
+	}
+}
+
+// A failed hand-over leaves the previous authorized_keys as it was and
+// removes the staged copy.
+func TestAFailedKeyHandOverKeepsTheOldFile(t *testing.T) {
+	box := freshBox()
+	key, _ := testKey(t)
+	before := oldKeyOptions + " " + key + "\n"
+	box.files = map[string]string{AuthorizedKeys: before}
+	box.failMove = true
+	_, err := Run(context.Background(), optsWithKey(t, box, key))
+	var se *StepError
+	if !errors.As(err, &se) || se.Step != "sshd" {
+		t.Fatalf("err = %v", err)
+	}
+	if box.files[AuthorizedKeys] != before {
+		t.Fatalf("authorized_keys changed: %q", box.files[AuthorizedKeys])
+	}
+	if !strings.Contains(strings.Join(box.cmds, "\n"), "rm -f "+AuthorizedKeys+".new") {
+		t.Fatalf("staged copy left behind: %q", box.cmds)
+	}
+}
+
+// A line already in the current form is not rewritten, and the step says so.
+func TestRepairLeavesAnIdenticalLineUntouched(t *testing.T) {
+	box := freshBox()
+	key, _ := testKey(t)
+	other, _ := testKey(t)
+	before := other + " x\n" + canonicalLine(key) + "\n"
+	box.files = map[string]string{AuthorizedKeys: before}
+	var events []string
+	o := optsWithKey(t, box, key)
+	o.Event = func(step, line string) { events = append(events, step+": "+line) }
+	if _, err := Run(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if n := akWrites(box); n != 0 {
+		t.Fatalf("wrote authorized_keys %d times for an identical line", n)
+	}
+	if box.files[AuthorizedKeys] != before {
+		t.Fatalf("authorized_keys changed: %q", box.files[AuthorizedKeys])
+	}
+	if !strings.Contains(strings.Join(events, "\n"), "sshd: transport key unchanged") {
+		t.Fatalf("no unchanged report: %q", events)
+	}
+}
+
+// The match is on the key (type and base64) alone: CRLF, trailing blanks,
+// other options or another comment on our key's line still match.
+func TestRepairMatchesTheKeyDespiteCRLFAndTrailingSpace(t *testing.T) {
+	for name, suffix := range map[string]string{"crlf": "\r\n", "trailing spaces": "   \n", "comment and crlf": " old-comment\r\n", "no newline": ""} {
+		box := freshBox()
+		key, blob := testKey(t)
+		box.files = map[string]string{AuthorizedKeys: oldKeyOptions + " " + key + suffix}
+		if _, err := Run(context.Background(), optsWithKey(t, box, key)); err != nil {
+			t.Fatal(err)
+		}
+		if got := box.files[AuthorizedKeys]; got != canonicalLine(key)+"\n" {
+			t.Errorf("%s: authorized_keys = %q", name, got)
+		}
+		if strings.Count(box.files[AuthorizedKeys], blob) != 1 {
+			t.Errorf("%s: duplicated key", name)
+		}
+	}
+}
+
+// A line that merely mentions the blob (in a comment, or under another key
+// type) is not our key and is left alone.
+func TestRepairMatchesTypeAndBlobTogether(t *testing.T) {
+	box := freshBox()
+	key, blob := testKey(t)
+	decoy := "ssh-rsa " + blob + " not-the-same-type\n"
+	box.files = map[string]string{AuthorizedKeys: decoy}
+	if _, err := Run(context.Background(), optsWithKey(t, box, key)); err != nil {
+		t.Fatal(err)
+	}
+	if got := box.files[AuthorizedKeys]; got != decoy+canonicalLine(key)+"\n" {
+		t.Fatalf("authorized_keys = %q", got)
 	}
 }
 

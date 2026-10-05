@@ -169,13 +169,52 @@ func TestE2EPairAndRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Re-running bootstrap keeps the agent's identity.
+	// A box paired before the fixes: the old drop-in (AllowTcpForwarding no,
+	// which also refuses the socket) and the old key line without permitopen.
+	transportPub := e2eEnv(t, "JUMPGATE_E2E_TRANSPORT_PUB")
+	canon, err := canonicalTransportKey(transportPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDropIn := "Match User jumpgate\n    AllowTcpForwarding no\n    AllowStreamLocalForwarding local\n    PermitTTY no\n    X11Forwarding no\n    AllowAgentForwarding no\n"
+	oldLine := `restrict,port-forwarding,command="/bin/false" ` + transportPub + "\n"
+	if err := ex.WriteFile(ctx, DropInPath, []byte(oldDropIn), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ex.WriteFile(ctx, AuthorizedKeys, []byte(oldLine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := ex.Run(ctx, "chown jumpgate:jumpgate "+AuthorizedKeys+" && "+reload, nil); err != nil || r.ExitCode != 0 {
+		t.Fatalf("seed the old pairing: %+v %v", r, err)
+	}
+	time.Sleep(time.Second)
+	if old, err := executor.DialSSH(ctx, tunnel.SSH); err == nil {
+		if conn, err := old.Dial("unix", agentclient.DefaultSocket); err == nil {
+			conn.Close()
+			t.Fatal("the old pairing reached the agent socket, so the upgrade below proves nothing")
+		}
+		old.Close()
+	}
+
+	// Re-running bootstrap keeps the agent's identity and upgrades both.
 	again, err := Run(ctx, Options{Exec: ex, Controller: controller.Address(), ControllerLabel: "e2e",
-		TransportKey: e2eEnv(t, "JUMPGATE_E2E_TRANSPORT_PUB"),
+		TransportKey: transportPub,
 		AgentBinary:  agents})
 	if err != nil || again != agentAddr {
 		t.Fatalf("re-pair: %s, %v; want the same agent %s", again.Hex(), err, agentAddr.Hex())
 	}
+	ak, err := ex.ReadFile(ctx, AuthorizedKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := transportKeyOptions + " " + canon + "\n"; string(ak) != want {
+		t.Fatalf("re-pair left authorized_keys as\n%q\nwant\n%q", ak, want)
+	}
+	if !strings.Contains(string(ak), `permitopen="[`+agentclient.DefaultSocket+`]:*"`) {
+		t.Fatalf("no permitopen after re-pair: %q", ak)
+	}
+	time.Sleep(time.Second)
+	assertTunnelPinned(ctx, t, tunnel.SSH)
 }
 
 // The spec's acceptance: a captured intent replayed to the same agent is
