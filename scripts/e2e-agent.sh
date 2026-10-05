@@ -6,7 +6,16 @@ set -euo pipefail
 base="${BASE:-debian:12}"
 work="$(mktemp -d)"
 name="jumpgate-e2e-$$"
-trap 'docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+# KEEP=1 leaves the container running for inspection (docker exec -it NAME bash).
+cleanup() {
+  if [ -n "${KEEP:-}" ]; then
+    echo "kept container $name (docker rm -f $name when done)" >&2
+  else
+    docker rm -f "$name" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$work"
+}
+trap cleanup EXIT
 
 scripts/build-agents.sh "$work/agents"
 ssh-keygen -q -t ed25519 -N '' -f "$work/root"
