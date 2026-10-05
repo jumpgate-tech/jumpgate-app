@@ -92,6 +92,14 @@ func stubOpener(t *testing.T, info daemon.Info, err error) *[]string {
 	return &argv
 }
 
+// fakeTerminal makes outIsTerminal report term for one test.
+func fakeTerminal(t *testing.T, term bool) {
+	t.Helper()
+	old := outIsTerminal
+	outIsTerminal = func(io.Writer) bool { return term }
+	t.Cleanup(func() { outIsTerminal = old })
+}
+
 // checkOpenedFile asserts the opener was handed only a private redirect file
 // (no code, no token on argv), that the file leads to a working login link,
 // and that redeeming that link removes the file.
@@ -158,6 +166,7 @@ func TestTerminalHomeOpenHandsTheOpenerOnlyAPrivateFile(t *testing.T) {
 func TestOpenWebAppPrintsTheLinkWhenNoBrowserOpens(t *testing.T) {
 	info := startUnixServer(t)
 	stubOpener(t, info, errors.New("exec: \"xdg-open\": executable file not found in $PATH"))
+	fakeTerminal(t, true)
 	var out strings.Builder
 	if err := openWebApp(context.Background(), &out); err != nil {
 		t.Fatal(err)
@@ -174,8 +183,9 @@ func TestOpenWebAppPrintsTheLinkWhenNoBrowserOpens(t *testing.T) {
 // printed, never put on an opener's command line.
 func TestHandOffWithoutAFilePrintsInsteadOfOpening(t *testing.T) {
 	argv := stubOpener(t, daemon.Info{}, nil)
+	fakeTerminal(t, true)
 	var out strings.Builder
-	handOffLogin(&out, "127.0.0.1:8799", server.LoginLink{Code: "c", URL: loginURL("127.0.0.1:8799", "c")}, true)
+	handOffLogin(&out, "127.0.0.1:8799", server.LoginLink{Code: "c", URL: loginURL("127.0.0.1:8799", "c")}, handOffOpen)
 	if len(*argv) != 0 || !strings.Contains(out.String(), "/login?code=c") {
 		t.Fatalf("argv %q, output %q: want no opener and the link printed", *argv, out.String())
 	}
@@ -193,6 +203,7 @@ func TestOpenRunningServerHandsOffALoginLink(t *testing.T) {
 
 	*argv = nil
 	out.Reset()
+	fakeTerminal(t, true)
 	openRunningServer(context.Background(), info, false, true, &out)
 	if len(*argv) != 0 {
 		t.Fatalf("--no-open ran an opener: %q", *argv)
@@ -202,9 +213,12 @@ func TestOpenRunningServerHandsOffALoginLink(t *testing.T) {
 	}
 }
 
+// An explicit `jumpgate open --print` prints even when stdout is not a
+// terminal: the user asked for the link.
 func TestCmdOpenPrintPrintsWithoutOpening(t *testing.T) {
 	info := startUnixServer(t)
 	argv := stubOpener(t, info, nil)
+	fakeTerminal(t, false)
 	var out strings.Builder
 	if err := openWebAppWith(context.Background(), &out, false); err != nil {
 		t.Fatal(err)
@@ -217,5 +231,48 @@ func TestCmdOpenPrintPrintsWithoutOpening(t *testing.T) {
 func TestCmdOpenRefusesArguments(t *testing.T) {
 	if code := cmdOpen([]string{"extra"}); code != exitCode("usage") {
 		t.Fatalf("cmdOpen with an argument: %d, want the usage code", code)
+	}
+}
+
+// A fallback link (no redirect file, no browser, --no-open) goes to stdout
+// only when that is a terminal: a service manager may capture stdout into a
+// log other users can read. Otherwise the user is told how to get one.
+func TestHandOffFallbackPrintsTheLinkOnlyToATerminal(t *testing.T) {
+	link := server.LoginLink{Code: "c0de", URL: loginURL("127.0.0.1:8799", "c0de")}
+	for _, c := range []struct {
+		name string
+		mode handOff
+		link server.LoginLink
+		err  error
+	}{
+		{"no redirect file", handOffOpen, link, nil},
+		{"no browser opens", handOffOpen, server.LoginLink{Code: link.Code, URL: link.URL, File: "/x/open-1.html"}, errors.New("no xdg-open")},
+		{"--no-open", handOffNoOpen, server.LoginLink{Code: link.Code, URL: link.URL, File: "/x/open-1.html"}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stubOpener(t, daemon.Info{}, c.err)
+			fakeTerminal(t, false)
+			var out strings.Builder
+			handOffLogin(&out, "127.0.0.1:8799", c.link, c.mode)
+			if strings.Contains(out.String(), "c0de") || !strings.Contains(out.String(), "jumpgate open --print") {
+				t.Fatalf("not a terminal: output %q, want no link and a pointer to `jumpgate open --print`", out.String())
+			}
+			fakeTerminal(t, true)
+			out.Reset()
+			handOffLogin(&out, "127.0.0.1:8799", c.link, c.mode)
+			if !strings.Contains(out.String(), "/login?code=c0de") {
+				t.Fatalf("terminal: output %q, want the link", out.String())
+			}
+		})
+	}
+}
+
+func TestHandOffPrintModePrintsToANonTerminal(t *testing.T) {
+	argv := stubOpener(t, daemon.Info{}, nil)
+	fakeTerminal(t, false)
+	var out strings.Builder
+	handOffLogin(&out, "127.0.0.1:8799", server.LoginLink{Code: "c0de", URL: loginURL("127.0.0.1:8799", "c0de"), File: "/x/open-1.html"}, handOffPrint)
+	if len(*argv) != 0 || !strings.Contains(out.String(), "/login?code=c0de") {
+		t.Fatalf("--print: argv %q, output %q, want the link and no opener", *argv, out.String())
 	}
 }

@@ -291,11 +291,31 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Every local user is a loopback peer. Where the peer's owner can be
 	// read (Linux), a different user's connection is refused before the
 	// code is touched, so it cannot burn the code either. root is let in: it
-	// can read the session token anyway.
+	// can read the session token anyway. Readable socket tables that do not
+	// list the client are refused too (fail closed: another user can provoke
+	// a torn read); only tables that cannot be read at all, or that list no
+	// connections whatsoever (WSL1, gVisor), let the login through, with a
+	// warning.
 	if s.peerUID != nil {
-		if uid, ok := s.peerUID(r); ok && uid != s.selfUID && uid != 0 {
-			log.Printf("jumpgate: WARNING: refused a login link from another local user (uid %d)", uid)
-			http.Error(w, "this jumpgate login link belongs to another user", http.StatusForbidden)
+		switch uid, v := s.peerUID(r); v {
+		case peerFound:
+			if uid != s.selfUID && uid != 0 {
+				log.Printf("jumpgate: WARNING: refused a login link from another local user (uid %d)", uid)
+				http.Error(w, "this jumpgate login link belongs to another user", http.StatusForbidden)
+				return
+			}
+		case peerMissing:
+			log.Printf("jumpgate: WARNING: refused a login link whose client socket /proc/net/tcp does not list (from %s); run `jumpgate open` again", r.RemoteAddr)
+			http.Error(w, "jumpgate could not confirm this login link comes from you; run `jumpgate open` again", http.StatusForbidden)
+			return
+		case peerNotReported:
+			log.Printf("jumpgate: WARNING: /proc/net/tcp and tcp6 list no connections at all (as under WSL1 or gVisor), so the owner of a login link's connection is unknown; allowing it, and on this system the login link relies on its owner-only file alone")
+		case peerUnknown:
+			log.Printf("jumpgate: WARNING: /proc/net/tcp cannot be read, so the owner of a login link's connection is unknown; allowing it, and on this system the login link relies on its owner-only file alone")
+		default:
+			// peerNotTCP, or a verdict added later and not handled here:
+			// fail closed.
+			http.Error(w, "jumpgate could not confirm this login link comes from you; run `jumpgate open` again", http.StatusForbidden)
 			return
 		}
 	}

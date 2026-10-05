@@ -220,21 +220,21 @@ func TestReusedLoginCodeLogsARaceWarning(t *testing.T) {
 func TestLoginRefusesAPeerOfAnotherUser(t *testing.T) {
 	s, ts, _ := loginServer(t)
 	s.selfUID = 1000
-	s.peerUID = func(*http.Request) (int, bool) { return 1001, true }
+	s.peerUID = func(*http.Request) (int, peerVerdict) { return 1001, peerFound }
 	code := s.NewLoginCode()
 	if res, _ := login(t, ts, code); res.StatusCode != http.StatusForbidden {
 		t.Fatalf("other user's peer: %d, want 403", res.StatusCode)
 	}
 	for _, uid := range []int{1000, 0} {
-		s.peerUID = func(*http.Request) (int, bool) { return uid, true }
+		s.peerUID = func(*http.Request) (int, peerVerdict) { return uid, peerFound }
 		c := s.NewLoginCode()
 		if res, _ := login(t, ts, c); res.StatusCode != http.StatusOK {
 			t.Fatalf("peer uid %d: %d, want 200", uid, res.StatusCode)
 		}
 	}
-	s.peerUID = func(*http.Request) (int, bool) { return 0, false }
+	s.peerUID = func(*http.Request) (int, peerVerdict) { return 1000, peerFound }
 	if res, _ := login(t, ts, code); res.StatusCode != http.StatusOK {
-		t.Fatalf("unknown peer uid (best effort) with the unburned code: %d, want 200", res.StatusCode)
+		t.Fatalf("own peer with the unburned code: %d, want 200", res.StatusCode)
 	}
 }
 

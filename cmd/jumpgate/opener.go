@@ -78,18 +78,58 @@ func requestLoginLink(ctx context.Context, info daemon.Info) (server.LoginLink, 
 	return link, nil
 }
 
-// handOffLogin opens link's redirect file in the browser, or, when open is
-// false, there is no file, or no browser opens, prints the link with its
-// lifetime. A link the browser received is not printed: it stays a
-// credential until redeemed.
-func handOffLogin(out io.Writer, addr string, link server.LoginLink, open bool) {
-	if open && link.File != "" {
+// handOff is how handOffLogin delivers a login link.
+type handOff int
+
+const (
+	// handOffOpen opens the browser on the link's redirect file, falling
+	// back to printing the link (to a terminal only) when it cannot.
+	handOffOpen handOff = iota
+	// handOffNoOpen (--no-open) prints the link, to a terminal only.
+	handOffNoOpen
+	// handOffPrint (`jumpgate open --print`) prints the link wherever
+	// stdout goes: the user asked for it.
+	handOffPrint
+)
+
+// serveHandOff is the hand-off for an app launch with or without --no-open.
+func serveHandOff(noOpen bool) handOff {
+	if noOpen {
+		return handOffNoOpen
+	}
+	return handOffOpen
+}
+
+// outIsTerminal reports whether w is a terminal. A variable so tests can
+// stand in for one.
+var outIsTerminal = func(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// handOffLogin opens link's redirect file in the browser, or prints the
+// link with its lifetime: always for handOffPrint, otherwise (no file, no
+// browser opens, --no-open) only when out is a terminal. A service manager
+// may capture a non-terminal stdout into a log other local users can read,
+// and the link is a credential until redeemed, so there the user is told
+// to run `jumpgate open --print` instead. A link the browser received is
+// never printed.
+func handOffLogin(out io.Writer, addr string, link server.LoginLink, mode handOff) {
+	if mode == handOffOpen && link.File != "" {
 		err := openBrowser(link.File)
 		if err == nil {
 			fmt.Fprintf(out, "opened the jumpgate web app (http://%s/) in your browser\n", addr)
 			return
 		}
 		fmt.Fprintf(out, "could not open a browser (%v)\n", err)
+	}
+	if mode != handOffPrint && !outIsTerminal(out) {
+		fmt.Fprintf(out, "to sign in to the jumpgate web app (http://%s/), run `jumpgate open --print` from a terminal for a one-time link\n", addr)
+		return
 	}
 	// 60 seconds is the server's loginCodeTTL.
 	fmt.Fprintf(out, "open this one-time link within 60 seconds (`jumpgate open` makes a new one):\n  %s\n", link.URL)
@@ -116,6 +156,10 @@ func openWebAppWith(ctx context.Context, out io.Writer, open bool) error {
 	if err != nil {
 		return err
 	}
-	handOffLogin(out, info.HTTPAddr, link, open)
+	mode := handOffOpen
+	if !open {
+		mode = handOffPrint
+	}
+	handOffLogin(out, info.HTTPAddr, link, mode)
 	return nil
 }
