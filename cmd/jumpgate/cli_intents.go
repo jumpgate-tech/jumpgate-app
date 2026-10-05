@@ -54,7 +54,7 @@ type reply struct {
 func runIntent(host, kind string, payload any) int {
 	ctx := context.Background()
 	exe, _ := os.Executable()
-	info, err := daemon.EnsureRunning(ctx, exe)
+	info, err := daemon.EnsureRunning(ctx, exe, os.Stderr)
 	if err != nil {
 		return failed("%v", err)
 	}
@@ -65,7 +65,7 @@ func runIntent(host, kind string, payload any) int {
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 300 {
-		return reportServerError(os.Stderr, host, readAPIError(res))
+		return reportServerErrorFrom(os.Stderr, host, info, readAPIError(res))
 	}
 	var r reply
 	if err := json.NewDecoder(io.LimitReader(res.Body, 32<<20)).Decode(&r); err != nil {

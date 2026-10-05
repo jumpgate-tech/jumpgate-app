@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/valve-tech/jumpgate/internal/ai"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
@@ -284,10 +286,63 @@ func defaultNewExecutor(t config.Target) (executor.Executor, error) {
 		if t.SSH == nil {
 			return nil, fmt.Errorf("target %q: mode \"ssh\" requires an ssh config", t.ID)
 		}
-		return executor.NewSSH(*t.SSH)
+		cfg, err := legacySSHConfig(t)
+		if err != nil {
+			return nil, err
+		}
+		return executor.NewSSH(cfg)
 	default:
 		return nil, fmt.Errorf("target %q: unknown mode %q", t.ID, t.Mode)
 	}
+}
+
+// legacySSHConfig is t's SSH config for the legacy web-UI executor, with an
+// explicit host-key policy on every hop. A hop on record under Strict's own
+// rules (its key is in confirmed_hosts or the operator's OpenSSH known_hosts;
+// see config.HostOnRecord), and the box itself once it is paired with an
+// agent, is checked Strictly: the protection the operator paid for at `hosts add` is
+// never given up to a fresh root session. Any other hop keeps trust-on-first-
+// use against its known_hosts file until sub-project 6 retires this path.
+// t.SSH itself is not modified.
+func legacySSHConfig(t config.Target) (executor.SSHConfig, error) {
+	var err error
+	var strict ssh.HostKeyCallback
+	var strictAlgos func(string) []string
+	policy := func(hop *executor.SSHConfig, paired bool) error {
+		port := hop.Port
+		if port == 0 {
+			port = 22
+		}
+		onRecord := paired
+		if !onRecord {
+			if onRecord, err = config.HostOnRecord(net.JoinHostPort(hop.Host, strconv.Itoa(port))); err != nil {
+				return err
+			}
+		}
+		if onRecord {
+			if strict == nil {
+				if strict, strictAlgos, err = config.StrictHostKey(); err != nil {
+					return err
+				}
+			}
+			hop.HostKey, hop.HostKeyAlgorithms = strict, strictAlgos
+			return nil
+		}
+		hop.HostKey = executor.TOFUHostKeyCallback(hop.HostKeyFile)
+		return nil
+	}
+	cfg := *t.SSH
+	if err := policy(&cfg, t.Agent != nil); err != nil {
+		return executor.SSHConfig{}, err
+	}
+	for hop := &cfg; hop.Jump != nil; hop = hop.Jump {
+		next := *hop.Jump
+		if err := policy(&next, false); err != nil {
+			return executor.SSHConfig{}, err
+		}
+		hop.Jump = &next
+	}
+	return cfg, nil
 }
 
 // getExecutor returns t's cached executor, dialing and caching a new one on

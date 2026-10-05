@@ -19,8 +19,18 @@ import (
 // tests can shorten it.
 var handshakeTimeout = 10 * time.Second
 
-// DialSSH connects to cfg, through cfg.Jump if set.
+// ErrNoHostKeyPolicy means a dial named no host-key policy. There is no
+// default: a caller picks Strict (keys a person confirmed) or, on the legacy
+// web-UI path only, TOFUHostKeyCallback, so a forgotten policy fails loudly
+// instead of silently trusting whatever key the network presents.
+var ErrNoHostKeyPolicy = errors.New("ssh: no host-key policy; pass Strict or TOFUHostKeyCallback explicitly")
+
+// DialSSH connects to cfg, through cfg.Jump if set. cfg.HostKey is required. A
+// jump host with no policy of its own is checked with cfg's.
 func DialSSH(ctx context.Context, cfg SSHConfig) (*ssh.Client, error) {
+	if cfg.HostKey == nil {
+		return nil, fmt.Errorf("dial %s: %w", cfg.Host, ErrNoHostKeyPolicy)
+	}
 	port := cfg.Port
 	if port == 0 {
 		port = 22
@@ -42,9 +52,6 @@ func DialSSH(ctx context.Context, cfg SSHConfig) (*ssh.Client, error) {
 	}
 	defer release() // auth is used only during the handshake below
 	hostKey := cfg.HostKey
-	if hostKey == nil {
-		hostKey = tofuHostKeyCallback(cfg.HostKeyFile)
-	}
 	// No ClientConfig.Timeout: the connect is bounded by dialCtx and the
 	// handshake by the watchdog below.
 	algos := hostKeyAlgorithms(cfg, addr)
@@ -53,9 +60,9 @@ func DialSSH(ctx context.Context, cfg SSHConfig) (*ssh.Client, error) {
 	var conn net.Conn
 	if cfg.Jump != nil {
 		jumpCfg := *cfg.Jump
-		if cfg.HostKey != nil && jumpCfg.HostKey == nil {
-			// A strict dial must never trust-on-first-use its jump host;
-			// the callback is keyed by hostname, so it serves both hops.
+		if jumpCfg.HostKey == nil {
+			// A jump host with no policy of its own gets this dial's, never a
+			// default: the callback is keyed by hostname, so it serves both hops.
 			jumpCfg.HostKey = cfg.HostKey
 			if jumpCfg.HostKeyAlgorithms == nil {
 				jumpCfg.HostKeyAlgorithms = cfg.HostKeyAlgorithms

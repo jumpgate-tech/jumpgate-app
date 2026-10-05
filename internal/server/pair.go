@@ -37,7 +37,7 @@ type pairEvent struct {
 // operator); an unconfirmed host is refused before anything runs on it.
 func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Signer == nil {
-		writeNoControllerKey(w)
+		s.writeNoControllerKey(w)
 		return
 	}
 	var req pairRequest
@@ -77,7 +77,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	if local {
 		priv = executor.Sudo(s.newLocalExecutor())
 	} else {
-		hostKey, algos, err := strictHostKey()
+		hostKey, algos, err := config.StrictHostKey()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

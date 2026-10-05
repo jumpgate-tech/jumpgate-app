@@ -97,8 +97,15 @@ Implementations in this sub-project:
   in memory. Requires the `op` CLI to be signed in.
 
 `jumpgate keys init [--store keychain|file|1password]` creates the controller
-key; `jumpgate keys show` prints the address. Default store: keychain where
-available, otherwise file.
+key. `jumpgate keys show` opens the key and prints its real address, and
+`keys show --recorded` prints the recorded address without opening the key. Default
+store: keychain where available, otherwise file. The server checks the key's
+identity whenever it opens the key: the key's `Address()` must equal
+`controller.address` in `config.json`. A key with a different address, such as
+a replaced keychain or 1Password item, is `signer.ErrAddressMismatch`, and
+it is never used to sign. The box routes answer 503 with
+`controller_key_mismatch` and a hint. `keys show` flags the mismatch and names
+both addresses. The CLI treats the mismatch as a security failure (exit 4).
 
 Signatures are low-s normalized on signing and rejected on verify if high-s.
 
@@ -329,10 +336,17 @@ sub-project 0; this sub-project does not ship before that check lands.
 5. **ssh-agent auth.** If `SSH_AUTH_SOCK` is set, its keys are offered before
    `KeyPath`. Passphrase-protected key files are supported only through the
    agent (documented).
-6. **Host-key decider.** `SSHConfig.HostKey` is an `ssh.HostKeyCallback`.
-   Implementations in `internal/executor`:
-   - `TOFUHostKeyCallback` (today's behaviour, writing the target's
-     `HostKeyFile`; the web UI keeps it as its default until sub-project 6).
+6. **Host-key decider.** `SSHConfig.HostKey` is an `ssh.HostKeyCallback`, and it
+   is required. `NewSSH` and `DialSSH` refuse a nil one with
+   `executor.ErrNoHostKeyPolicy` before they connect, so trust-on-first-use is
+   never a silent default. Implementations in `internal/executor`:
+   - `TOFUHostKeyCallback` writes the target's `HostKeyFile`. Only the legacy
+     web-UI executor passes it, and that executor (`server.legacySSHConfig`)
+     chooses a policy for each hop explicitly. A hop that `Strict` already
+     has on record uses `Strict`. That means its key is in `confirmed_hosts`,
+     or a plain, non-`@cert-authority` line for it is in `~/.ssh/known_hosts`
+     (`config.HostOnRecord`). The box itself also uses `Strict` once it is
+     paired with an agent. Every other hop uses TOFU until sub-project 6.
    - `Strict(confirmedFile, opensshFiles...)`: accepts a host only if its key
      is in the confirmed-only store `~/.jumpgate/confirmed_hosts`
      (`config.ConfirmedHostsFile()`) or in the operator's OpenSSH
@@ -346,7 +360,10 @@ sub-project 0; this sub-project does not ship before that check lands.
      jump hop's) to `~/.jumpgate/known_hosts` and ignores a client-supplied
      path. Every mismatch or revocation wraps `executor.ErrHostKeyMismatch`;
      strict dials also set `SSHConfig.HostKeyAlgorithms` to
-     `KnownHostKeyAlgorithms(confirmedFile, opensshFiles...)`.
+     `KnownHostKeyAlgorithms(confirmedFile, opensshFiles...)`. One builder,
+     `config.StrictHostKey()`, assembles `Strict` with
+     `~/.jumpgate/confirmed_hosts` and `~/.ssh/known_hosts`. The CLI, the
+     server's agent dials and the legacy path all use it.
    - `CaptureHostKey` + `RecordHostKey` (the CLI's confirm flow): capture
      connects far enough to read the key and hangs up before authenticating;
      the CLI prints the SHA256 fingerprint, a person confirms, and
@@ -375,7 +392,9 @@ sub-project 0; this sub-project does not ship before that check lands.
   covers `no_controller_key` and `not_paired` (the operator has to run a
   different command first); 3 `unreachable`; 4 security: `bad_receipt` (a
   reply not signed by the paired agent), `unknown_host` (nobody confirmed the
-  box's SSH host key) and `host_key` (the presented key contradicts the
+  box's SSH host key), `controller_key_mismatch` (the controller key in the
+  key store is not the recorded controller identity) and `host_key` (the
+  presented key contradicts the
   confirmed store or the operator's OpenSSH known_hosts, is revoked there, or
   the box offers none of the key types on record). The two host-key codes come
   from `hosts add`'s own confirmation, the pairing login, the pairing verify

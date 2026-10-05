@@ -22,7 +22,7 @@ import (
 // subcommands maps a first argument to its handler. Anything else falls
 // through to runApp, so `jumpgate` and `jumpgate --bind …` behave as before.
 var subcommands = map[string]func(args []string) int{
-	"serve": cmdServe, "stop": cmdStop, "keys": cmdKeys, "agent": cmdAgent, "hosts": cmdHosts,
+	"serve": cmdServe, "relay": cmdRelay, "stop": cmdStop, "keys": cmdKeys, "agent": cmdAgent, "hosts": cmdHosts,
 	"status": cmdIntent("status", intent.KindStatusRead), "disk": cmdIntent("disk", intent.KindDiskRead),
 	"endpoints": cmdIntent("endpoints", intent.KindEndpointsRead), "firewall": cmdIntent("firewall", intent.KindFirewallRead),
 	"logs": cmdLogs, "service": cmdService,
@@ -44,9 +44,10 @@ func main() {
 // lock, the run directory, a key), so a migration left to the web app or
 // serve would find it in the way. `agent` runs on the box as root and never
 // reads controller state, so a stray legacy directory there must not stop
-// the agent.
+// the agent. `relay` never touches controller state at all, migration
+// included.
 func migrateOnStartup(args []string, stderr io.Writer) error {
-	if len(args) >= 2 && args[1] == "agent" {
+	if len(args) >= 2 && (args[1] == "agent" || args[1] == "relay") {
 		return nil
 	}
 	moved, kept, err := config.MigrateLegacyDir()
@@ -102,6 +103,8 @@ var remedies = map[string]string{
 	"host_key":          "the box's SSH host key does not match the one on record; check it on the box's console before trusting the box again",
 	"no_controller_key": "run `jumpgate keys init`, then `jumpgate stop` so the server restarts with the key",
 	"not_paired":        "pair this box first with `jumpgate hosts add`",
+	"controller_key_mismatch": "the key store holds a different key than the controller identity your boxes trust. " +
+		"Restore the original key (keychain item, 1Password item or key file), then run `jumpgate stop`; do not re-pair boxes to the new key unless you meant to replace the controller",
 }
 
 // exitCode maps an outcome to the process exit status: 0 ok, 1 refused or
@@ -117,7 +120,7 @@ func exitCode(outcome string) int {
 		return 2
 	case "unreachable":
 		return 3
-	case "bad_receipt", "host_key", "unknown_host":
+	case "bad_receipt", "host_key", "unknown_host", "controller_key_mismatch":
 		return 4
 	}
 	return 1
@@ -212,6 +215,19 @@ func readAPIError(res *http.Response) apiError {
 	return e
 }
 
+// reportServerErrorFrom is reportServerError for an answer from the server
+// info describes. A 404 from a server of another version is the wire contract
+// changing under the CLI, so it says to restart that server instead.
+func reportServerErrorFrom(w io.Writer, what string, info daemon.Info, e apiError) int {
+	if e.Status == http.StatusNotFound && e.Code == "" {
+		if skew := daemon.SkewWarning(info); skew != "" {
+			fmt.Fprintf(w, "jumpgate: %s: the running server does not know this request (%s)\n  -> %s\n", what, e.Error, strings.TrimPrefix(skew, "jumpgate: "))
+			return exitCode("failed")
+		}
+	}
+	return reportServerError(w, what, e)
+}
+
 // reportServerError prints a server error with its hint (or the CLI's remedy)
 // and returns the exit status for its code: unreachable 3; bad_receipt and
 // unknown_host 4; agent_http 1; no_controller_key and not_paired 2 (the
@@ -226,7 +242,7 @@ func reportServerError(w io.Writer, what string, e apiError) int {
 	case "":
 		fmt.Fprintf(w, "jumpgate: %s: %s\n", what, e.Error)
 		return exitCode("failed")
-	case "bad_receipt", "host_key", "unknown_host":
+	case "bad_receipt", "host_key", "unknown_host", "controller_key_mismatch":
 		fmt.Fprintf(w, "jumpgate: SECURITY: %s: %s\n", what, e.Error)
 	case "unreachable":
 		fmt.Fprintf(w, "jumpgate: %s: could not reach the box: %s\n", what, e.Error)
@@ -239,7 +255,7 @@ func reportServerError(w io.Writer, what string, e apiError) int {
 		fmt.Fprintf(w, "  -> %s\n", hint)
 	}
 	switch e.Code {
-	case "unreachable", "bad_receipt", "agent_http", "unknown_host", "host_key", "no_controller_key", "not_paired":
+	case "unreachable", "bad_receipt", "agent_http", "unknown_host", "host_key", "no_controller_key", "not_paired", "controller_key_mismatch":
 		return exitCode(e.Code)
 	}
 	return exitCode("failed")

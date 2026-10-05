@@ -11,6 +11,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/monitor"
+	"github.com/valve-tech/jumpgate/internal/signer"
 )
 
 // maxIntentBody bounds an intent payload, matching the agent's own limit.
@@ -62,7 +63,20 @@ func writeAgentError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-func writeNoControllerKey(w http.ResponseWriter) {
+// writeNoControllerKey answers a box route on a server with no signer. When a
+// key is recorded but would not open, the reason is in the message and the
+// hint is to fix the key store, not to create a second key.
+func (s *Server) writeNoControllerKey(w http.ResponseWriter) {
+	if err := s.cfg.SignerErr; errors.Is(err, signer.ErrAddressMismatch) {
+		writeErrorDetail(w, http.StatusServiceUnavailable, "the controller key is not the recorded controller identity: "+err.Error(),
+			"restore the original key in its key store, then restart the server with `jumpgate stop`; `jumpgate keys show` prints both addresses", "controller_key_mismatch")
+		return
+	}
+	if err := s.cfg.SignerErr; err != nil {
+		writeErrorDetail(w, http.StatusServiceUnavailable, "this server could not open the controller key: "+err.Error(),
+			"fix the key store (unlock the keychain, sign in to 1Password, restore the key file), then restart the server with `jumpgate stop`", "no_controller_key")
+		return
+	}
 	writeErrorDetail(w, http.StatusServiceUnavailable, "this server has no controller key", "run `jumpgate keys init`, then restart the server", "no_controller_key")
 }
 
@@ -72,7 +86,7 @@ func writeNoControllerKey(w http.ResponseWriter) {
 // check, since it makes the server sign.
 func (s *Server) handleIntent(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Signer == nil {
-		writeNoControllerKey(w)
+		s.writeNoControllerKey(w)
 		return
 	}
 	cfg, err := s.loadConfig()

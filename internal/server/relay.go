@@ -45,5 +45,13 @@ func (s *Server) ListenAndServeRelay(ctx context.Context) error {
 	// No authMiddleware. The data plane authenticates by key, inside the relay
 	// handler. Wrapping it here would let a session token buy customer traffic,
 	// and worse, would suggest the session token belongs on this plane at all.
-	return serveUntil(ctx, newHTTPServer(s.cfg.RelayBind, handler), shutdownGrace)
+	return ServeRelay(ctx, s.cfg.RelayBind, handler)
+}
+
+// ServeRelay runs a relay handler on its own listener until ctx is canceled,
+// with the same header and idle timeouts and graceful shutdown as the control
+// plane. It needs no Server: `jumpgate relay` serves the data plane with it
+// and never builds a controller, so it holds no config, key or executor.
+func ServeRelay(ctx context.Context, bind string, handler http.Handler) error {
+	return serveUntil(ctx, newHTTPServer(bind, handler), shutdownGrace)
 }

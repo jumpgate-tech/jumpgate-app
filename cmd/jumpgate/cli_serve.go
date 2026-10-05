@@ -5,25 +5,27 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"net"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
-	"github.com/valve-tech/jumpgate/cmd/jumpgate/web"
-	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
-	"github.com/valve-tech/jumpgate/internal/server"
 )
 
+// cmdServe runs the controller server without opening a browser. It takes the
+// same server flags and environment as the web app and builds the server
+// through the same buildServer, so a server a CLI command auto-starts here is
+// the server the app would have been.
 func cmdServe(args []string) int {
-	fset := flag.NewFlagSet("serve", flag.ContinueOnError)
-	bind := fset.String("bind", "127.0.0.1:8799", bindFlagUsage)
-	_ = fset.Bool("no-open", true, "accepted for symmetry; serve never opens a browser")
-	if err := fset.Parse(args); err != nil {
-		return exitCode("usage")
+	opts, err := parseServeArgs(args, os.Getenv)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return exitCode("usage")
+		}
+		return usage("serve: %v", err)
+	}
+	if warning := bindWarningLine(opts.Bind); warning != "" {
+		fmt.Fprintln(os.Stderr, warning)
 	}
 	holder, err := daemon.Acquire()
 	if err != nil {
@@ -31,26 +33,14 @@ func cmdServe(args []string) int {
 	}
 	defer holder.Release()
 
-	cfg, err := config.Load()
-	if err != nil {
-		return failed("load config: %v", err)
-	}
-	sgn, err := openControllerKey(cfg)
-	if err != nil {
-		return failed("load controller key: %v", err)
-	}
-	ui, err := fs.Sub(web.FS, "dist")
-	if err != nil {
-		return failed("embedded UI: %v", err)
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := shutdownContext(context.Background())
 	defer stop()
-	token := server.NewSessionToken()
-	s := server.New(server.Config{Bind: *bind, Token: token, UI: ui, Signer: sgn, Shutdown: stop})
-
-	err = serveAndPublish(ctx, stop, s, holder, *bind, token)
+	b, err := buildServer(opts, stop, os.Stderr)
 	if err != nil {
+		return failed("%v", err)
+	}
+	b.start(ctx, os.Stderr)
+	if err := serveAndPublish(ctx, stop, b.srv, holder, opts.Bind, b.token, &b.shape); err != nil {
 		return failed("%v", err)
 	}
 	return 0
