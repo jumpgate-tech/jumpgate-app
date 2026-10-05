@@ -105,7 +105,7 @@ func freshBox() *fakeBox {
 		{"Include", executor.Result{}},                                  // drop-in include present
 		{"sha256sum " + BinaryPath + " ", executor.Result{ExitCode: 1}}, // not installed yet
 		{"agent init", executor.Result{Stdout: agentAddrHex + "\n"}},
-		{"is-active", executor.Result{Stdout: "active\n"}},
+		{"is-active", executor.Result{Stdout: "listening\n"}},
 	}}
 }
 
@@ -349,6 +349,36 @@ func TestAnInactiveServiceGetsTheJournalHint(t *testing.T) {
 	var se *StepError
 	if !errors.As(err, &se) || se.Step != "service" || !strings.Contains(err.Error(), "journalctl -u jumpgate-agent") || !strings.Contains(err.Error(), "inactive") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// systemd says "active" the moment it forks the agent, before the agent has
+// read its key. A unit that is active but never listens is a failed pairing,
+// and the error carries the journal so the operator sees why.
+func TestAServiceThatNeverListensFailsWithTheJournal(t *testing.T) {
+	box := freshBox()
+	box.rules = append([]rule{
+		{"is-active", executor.Result{Stdout: "activating\n"}},
+		{"journalctl", executor.Result{Stdout: "jumpgate agent: signer: open agent.key: no such file or directory\n"}},
+	}, box.rules...)
+	_, err := Run(context.Background(), opts(t, box))
+	var se *StepError
+	if !errors.As(err, &se) || se.Step != "service" {
+		t.Fatalf("err = %v", err)
+	}
+	for _, want := range []string{"activating", "/run/jumpgate/agent.sock", "open agent.key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q: %v", want, err)
+		}
+	}
+	waited := false
+	for _, c := range box.cmds {
+		if strings.Contains(c, "is-active") && strings.Contains(c, "-S /run/jumpgate/agent.sock") {
+			waited = true
+		}
+	}
+	if !waited {
+		t.Errorf("service step never waited for the socket: %q", box.cmds)
 	}
 }
 

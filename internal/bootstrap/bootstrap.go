@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/valve-tech/jumpgate/internal/agentclient"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -389,17 +390,29 @@ func (r runner) service() error {
 	if _, err := r.sh("service", "systemctl daemon-reload && systemctl enable --now jumpgate-agent.service && systemctl restart jumpgate-agent.service"); err != nil {
 		return err
 	}
-	// is-active exits 3 and prints the state when the unit is not active, so
-	// the state is read whatever the exit code.
-	res, err := r.o.Exec.Run(r.ctx, "systemctl is-active jumpgate-agent.service", nil)
+	// systemd reports "active" as soon as it forks the agent, before the agent
+	// has read its key, so a crash-looping agent would pass a one-shot
+	// is-active. Wait (about 10s) for the unit to be active AND its socket to
+	// exist; the restart removed the old socket with the runtime directory.
+	// is-active exits 3 when not active, so its output is read regardless.
+	res, err := r.o.Exec.Run(r.ctx, waitListening, nil)
 	if err != nil {
 		return &StepError{Step: "service", Err: err}
 	}
-	if state := strings.TrimSpace(res.Stdout); state != "active" {
-		return &StepError{Step: "service", Err: fmt.Errorf("jumpgate-agent.service is %q; see journalctl -u jumpgate-agent", state)}
+	if state := strings.TrimSpace(res.Stdout); state != "listening" {
+		msg := fmt.Sprintf("jumpgate-agent.service is %q and not listening on %s", state, agentclient.DefaultSocket)
+		if j, err := r.o.Exec.Run(r.ctx, "journalctl -u jumpgate-agent.service -n 5 --no-pager -o cat", nil); err == nil && strings.TrimSpace(j.Stdout) != "" {
+			msg += "; journal: " + tail(j.Stdout)
+		}
+		return &StepError{Step: "service", Err: fmt.Errorf("%s; see journalctl -u jumpgate-agent", msg)}
 	}
 	return nil
 }
+
+// waitListening prints "listening" once the agent is up, else the unit's last
+// state.
+const waitListening = `for i in $(seq 1 20); do s=$(systemctl is-active jumpgate-agent.service); ` +
+	`if [ "$s" = active ] && [ -S ` + agentclient.DefaultSocket + ` ]; then echo listening; exit 0; fi; sleep 0.5; done; echo "$s"`
 
 func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'" }
 
