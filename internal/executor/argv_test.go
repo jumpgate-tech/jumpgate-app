@@ -33,8 +33,8 @@ func (s *shellOnly) Run(_ context.Context, cmd string, _ *RunOpts) (Result, erro
 	return Result{}, nil
 }
 func (*shellOnly) WriteFile(context.Context, string, []byte, fs.FileMode) error { return nil }
-func (*shellOnly) ReadFile(context.Context, string) ([]byte, error)           { return nil, nil }
-func (*shellOnly) Close() error                                               { return nil }
+func (*shellOnly) ReadFile(context.Context, string) ([]byte, error)             { return nil, nil }
+func (*shellOnly) Close() error                                                 { return nil }
 
 type argvToo struct {
 	shellOnly

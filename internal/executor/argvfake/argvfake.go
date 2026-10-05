@@ -124,10 +124,10 @@ func (f *Fake) ReadFile(_ context.Context, path string) ([]byte, error) {
 	return b, nil
 }
 
-func (f *Fake) Close() error                              { return nil }
-func (f *Fake) HostGOOS() string                          { return f.GOOS }
-func (f *Fake) HomeDir() (string, error)                  { return f.Home, nil }
-func (f *Fake) NativeArch(context.Context) string         { return f.Arch }
+func (f *Fake) Close() error                      { return nil }
+func (f *Fake) HostGOOS() string                  { return f.GOOS }
+func (f *Fake) HomeDir() (string, error)          { return f.Home, nil }
+func (f *Fake) NativeArch(context.Context) string { return f.Arch }
 
 func (f *Fake) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	f.mu.Lock()
