@@ -28,6 +28,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/chainlist"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 	"github.com/valve-tech/jumpgate/internal/setup"
 	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/updatecheck"
@@ -356,7 +357,9 @@ func (s *Server) ServeUnix(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	// Owner-only on every OS: on Windows a mode does nothing, so the socket
+	// gets the same protected DACL as the run dir (spec D2).
+	if err := fsperm.MakePrivate(path); err != nil {
 		ln.Close()
 		return err
 	}
