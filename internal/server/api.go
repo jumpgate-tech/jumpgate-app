@@ -482,6 +482,31 @@ func writeSSEEvent(w http.ResponseWriter, v any) {
 	fmt.Fprintf(w, "data: %s\n\n", b)
 }
 
+// ssePingInterval is how often an open stream writes a comment, so a client
+// can tell a quiet stream from a dead one (apiclient gives up after 45 s of
+// silence), and so a proxy in between does not close an idle connection. A
+// variable so tests can shorten it; a handler reads it once, when it starts.
+var ssePingInterval = 15 * time.Second
+
+// maxLogBacklog bounds ?backlog= on the logs stream.
+const maxLogBacklog = 2000
+
+// writeSSEComment writes one comment line; EventSource and apiclient both
+// ignore it as an event.
+func writeSSEComment(w http.ResponseWriter, text string) {
+	fmt.Fprintf(w, ": %s\n\n", text)
+}
+
+// writeSSENamed writes one named event. Browsers' onmessage never sees a named
+// event, so adding one leaves the web UI's handlers unchanged.
+func writeSSENamed(w http.ResponseWriter, name string, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, b)
+}
+
 // sseHeaders opens an event stream and FLUSHES, so the client learns it is
 // connected now rather than when the first event happens.
 //
@@ -1142,6 +1167,8 @@ func (s *Server) handleTargetMonitorStream(w http.ResponseWriter, r *http.Reques
 	}
 
 	sseHeaders(w)
+	ping := time.NewTicker(ssePingInterval)
+	defer ping.Stop()
 
 	ch, unsub := mon.Subscribe()
 	defer unsub()
@@ -1158,6 +1185,9 @@ func (s *Server) handleTargetMonitorStream(w http.ResponseWriter, r *http.Reques
 			// Setup was re-run. Ending the stream makes the EventSource
 			// reconnect, and the reconnect gets the rebuilt monitor.
 			return
+		case <-ping.C:
+			writeSSEComment(w, "ping")
+			flusher.Flush()
 		case snap, ok := <-ch:
 			if !ok {
 				return
@@ -1210,6 +1240,22 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, hits)
 }
 
+// logBacklog is the reset frame's lines for ?backlog=raw: the newest n, n
+// capped at maxLogBacklog. A zero, negative or unreadable n is an empty
+// backlog: logwatch.Recent reads n <= 0 as the whole ring, which is not what
+// a client asking for none means.
+func logBacklog(watch *logwatch.Watcher, raw string) []logwatch.Hit {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return []logwatch.Hit{}
+	}
+	hits := watch.Recent(min(n, maxLogBacklog))
+	if hits == nil {
+		hits = []logwatch.Hit{}
+	}
+	return hits
+}
+
 func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -1241,9 +1287,18 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sseHeaders(w)
+	ping := time.NewTicker(ssePingInterval)
+	defer ping.Stop()
 
+	// Subscribe before reading the backlog, so a line that arrives between
+	// the two is delivered (at worst twice), never lost.
 	ch, unsub := watch.Subscribe()
 	defer unsub()
+
+	if raw := r.URL.Query().Get("backlog"); raw != "" {
+		writeSSENamed(w, "reset", logBacklog(watch, raw))
+		flusher.Flush()
+	}
 
 	ctx := r.Context()
 	for {
@@ -1253,6 +1308,9 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		case <-retired:
 			// Setup was re-run; see handleTargetMonitorStream.
 			return
+		case <-ping.C:
+			writeSSEComment(w, "ping")
+			flusher.Flush()
 		case hit, ok := <-ch:
 			if !ok {
 				return

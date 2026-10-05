@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/valve-tech/jumpgate/internal/api"
 )
@@ -44,4 +45,22 @@ func (c *Client) Pair(ctx context.Context, target string, req api.PairRequest) (
 		})
 	}()
 	return ch, nil
+}
+
+// WatchLogs follows target's logs. The first value after every (re)connect is
+// a Reset carrying the last backlog lines; later values are single new lines.
+func (c *Client) WatchLogs(ctx context.Context, target string, backlog int) <-chan Update[[]api.LogHit] {
+	path := targetPath(target, "/logs/stream") + "?backlog=" + strconv.Itoa(backlog)
+	return watch(ctx, c, path, func(ev Event) ([]api.LogHit, bool, error) {
+		if ev.Name == "reset" {
+			var hs []api.LogHit
+			err := json.Unmarshal(ev.Data, &hs) // before the return: operands are evaluated left to right
+			return hs, true, err
+		}
+		var h api.LogHit
+		if err := json.Unmarshal(ev.Data, &h); err != nil {
+			return nil, false, err
+		}
+		return []api.LogHit{h}, false, nil
+	})
 }
