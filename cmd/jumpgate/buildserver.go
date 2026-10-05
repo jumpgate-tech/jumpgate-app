@@ -262,6 +262,9 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 		Signer:    sgn,
 		SignerErr: keyErr,
 		Shutdown:  shutdown,
+		// Without it the mint API returns bare codes and `jumpgate open` can
+		// only print the link.
+		LoginDir: loginDir(),
 	})
 
 	b := &builtServer{

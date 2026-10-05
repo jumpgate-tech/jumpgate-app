@@ -50,8 +50,10 @@ func claimAppInstance(ctx context.Context, wait time.Duration) (*daemon.Holder, 
 	}
 }
 
-// appURL is the login URL the browser or tray window opens: the token in the
-// query is exchanged for a session cookie on first load.
+// appURL is the URL the in-process tray window opens: the token in the query
+// is exchanged for a session cookie on first load. It is for runWindow only
+// (D26); a browser gets a one-time loginURL, because an opener's command
+// line is readable by every local user (D4).
 func appURL(info daemon.Info) string {
 	return fmt.Sprintf("http://%s/?token=%s", info.HTTPAddr, info.Token)
 }

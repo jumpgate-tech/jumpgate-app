@@ -120,6 +120,17 @@ type Config struct {
 	// would not open (a locked keychain, a missing file). The box routes
 	// report it instead of telling the operator to create a key that exists.
 	SignerErr error
+
+	// LoginDir is the directory login-link redirect files are written to
+	// (login.go), normally ~/.jumpgate/run/login. Every caller that serves
+	// browsers (the app, `jumpgate serve`) must set it: a browser opener is
+	// handed only the path of an owner-only file there, never a URL with a
+	// login code, which any local user could read off the opener's command
+	// line and redeem first. It is made owner-only (fsperm.MkdirPrivate)
+	// on first use, and New sweeps stale redirect files from it. Empty means
+	// the mint API returns codes without a file, and callers only print the
+	// link (fail-safe: no browser is opened on it).
+	LoginDir string
 }
 
 // Server is the jumpgate local HTTP server.
@@ -196,6 +207,13 @@ type Server struct {
 	// now is the server's clock, defaulting to time.Now. A test sets it to
 	// drive the update-check cache window without waiting real hours.
 	now func() time.Time
+
+	// codes are the outstanding one-time browser login codes (login.go).
+	codes loginCodes
+	// peerUID reports the uid owning a request's client socket, where the
+	// OS lets us read it (Linux); nil elsewhere. selfUID is this process's.
+	peerUID func(*http.Request) (int, bool)
+	selfUID int
 }
 
 // New constructs a Server from the given Config.
@@ -226,6 +244,11 @@ func New(cfg Config) *Server {
 		s.newLocalExecutor = executor.NewLocal
 	}
 	s.goos = runtime.GOOS
+	s.peerUID = defaultPeerUID
+	s.selfUID = os.Getuid()
+	if cfg.LoginDir != "" {
+		sweepLoginFiles(cfg.LoginDir)
+	}
 	s.geteuid = cfg.Geteuid
 	if s.geteuid == nil {
 		s.geteuid = os.Geteuid
@@ -267,6 +290,18 @@ func (s *Server) Handler() http.Handler {
 		go s.cfg.Shutdown()
 	})
 
+	// A second app launch or `jumpgate open` asks for a login link over the
+	// authenticated socket; the code, not the token, goes to the browser.
+	mux.HandleFunc("POST /api/login-code", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		link, err := s.NewLoginLink()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, link)
+	})
+
 	s.registerAPIRoutes(mux)
 	s.registerKeyRoutes(mux)
 
@@ -279,21 +314,24 @@ func (s *Server) Handler() http.Handler {
 // authMiddleware enforces the session token on every request. The token may
 // arrive as an Authorization: Bearer header, a jumpgate_token cookie, or a
 // ?token= query parameter. A valid ?token= query parameter sets the cookie
-// and redirects to the same path without the query parameter.
+// and redirects to the same path without the query parameter; only the
+// in-process tray window uses it (D26). Browsers sign in through GET
+// /login?code=…, a one-time code (login.go).
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A login link carries a one-time code, not the token; it is its own
+		// authentication, so it is checked before the token is required.
+		if r.URL.Path == "/login" && r.Method == http.MethodGet {
+			s.handleLogin(w, r)
+			return
+		}
+
 		if q := r.URL.Query().Get("token"); q != "" {
 			if !tokensEqual(q, s.cfg.Token) {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			http.SetCookie(w, &http.Cookie{
-				Name:     cookieName,
-				Value:    q,
-				Path:     "/",
-				HttpOnly: true,
-				SameSite: http.SameSiteStrictMode,
-			})
+			http.SetCookie(w, sessionCookie(q))
 			http.Redirect(w, r, r.URL.Path, http.StatusFound)
 			return
 		}
