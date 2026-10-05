@@ -238,6 +238,14 @@ describe("DashboardSection", () => {
       expect(storageHeading.closest(".card")).toHaveClass("card-warn");
     });
 
+    it("says disk usage is unknown, and does not warn, when the server reports diskKnown false", async () => {
+      await renderWired({ diskUsedPct: 0, diskKnown: false });
+
+      expect(screen.getByText("Disk usage unknown")).toBeInTheDocument();
+      expect(screen.queryByText(/% used/)).not.toBeInTheDocument();
+      expect(screen.getByText("Storage").closest(".card")).not.toHaveClass("card-warn");
+    });
+
     it("shows a disk-usage error with a working Retry button", async () => {
       vi.mocked(api.listTargets).mockResolvedValue([WIRED_TARGET]);
       vi.mocked(api.getCatalog).mockResolvedValue(CATALOG);

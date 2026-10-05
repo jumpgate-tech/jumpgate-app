@@ -86,7 +86,14 @@ export function beaconSyncStatus(snap: Snapshot): StatusBadge {
   return { text: "syncing", kind: "warn" };
 }
 
+// diskKnown is false only when the server says the disk probe failed; an
+// absent field (older server) counts as a reading.
+export function diskKnown(snap: Snapshot): boolean {
+  return snap.diskKnown !== false;
+}
+
 export function diskWarn(snap: Snapshot): boolean {
+  if (!diskKnown(snap)) return false;
   return snap.diskUsedPct >= highDiskUsagePct;
 }
 

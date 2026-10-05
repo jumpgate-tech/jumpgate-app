@@ -135,6 +135,7 @@ describe("diskWarn", () => {
     expect(diskWarn(snap({ diskUsedPct: highDiskUsagePct - 1 }))).toBe(false);
     expect(diskWarn(snap({ diskUsedPct: highDiskUsagePct }))).toBe(true);
     expect(diskWarn(snap({ diskUsedPct: 99 }))).toBe(true);
+    expect(diskWarn(snap({ diskUsedPct: 99, diskKnown: false }))).toBe(false);
   });
 });
 

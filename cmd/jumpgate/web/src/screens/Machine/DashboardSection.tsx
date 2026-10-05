@@ -36,6 +36,7 @@ import { Modal } from "../Panel/Modal";
 import {
   beaconSyncStatus,
   clearConfirmValid,
+  diskKnown,
   diskWarn as computeDiskWarn,
   execSyncStatus,
   SERVICE_LABEL,
@@ -246,16 +247,17 @@ function StorageCard({
   diskUsageQuery: UseQueryResult<api.DiskUsage>;
 }) {
   const warn = computeDiskWarn(snapshot);
+  const known = diskKnown(snapshot);
   const cardClass = warn ? "card card-warn" : "card";
   const diskSection = (
     <>
       <div className="meter">
         <div
           className={warn ? "meter-fill meter-warn" : "meter-fill"}
-          style={{ width: `${Math.min(snapshot.diskUsedPct, 100)}%` }}
+          style={{ width: known ? `${Math.min(snapshot.diskUsedPct, 100)}%` : "0%" }}
         />
       </div>
-      <p>{fmtPct(snapshot.diskUsedPct)} used</p>
+      <p>{known ? `${fmtPct(snapshot.diskUsedPct)} used` : "Disk usage unknown"}</p>
     </>
   );
 

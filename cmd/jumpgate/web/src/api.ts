@@ -1,4 +1,4 @@
-// Thin typed wrapper around valve-node-app's JSON/SSE API (internal/server/api.go).
+// Thin typed wrapper around jumpgate's JSON/SSE API (internal/server/api.go).
 // Every type here mirrors the *actual wire shape* of the corresponding Go
 // struct, not a guessed camelCase version of it: several response structs
 // (catalog.Network, executor.SSHConfig, catalog.WireConfig) carry no `json`
@@ -66,7 +66,7 @@ export interface Host {
   arch: string;
 }
 
-// getHost reports the OS/arch valve-node-app itself runs on — used to decide
+// getHost reports the OS/arch jumpgate itself runs on — used to decide
 // whether local node setup is viable (needs a Linux host).
 export function getHost(): Promise<Host> {
   return request<Host>("/api/host");
@@ -223,6 +223,10 @@ export interface Snapshot {
   execPeers: number;
   beaconPeers: number;
   diskUsedPct: number;
+  // diskKnown is false when the disk probe failed, so diskUsedPct (0) is not
+  // a reading. Optional: a server that predates the field omits it, and that
+  // is treated as known.
+  diskKnown?: boolean;
   execActive: boolean;
   beaconActive: boolean;
 }
