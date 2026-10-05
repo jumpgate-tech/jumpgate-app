@@ -22,6 +22,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func TestParseSSHTarget(t *testing.T) {
@@ -111,6 +112,7 @@ func TestServerErrorExit(t *testing.T) {
 
 // agent init is idempotent: the box keeps its identity across re-pairing.
 func TestAgentInitKeepsItsIdentity(t *testing.T) {
+	testutil.RequireUnix(t)
 	state, conf := t.TempDir(), t.TempDir()
 	var out1, out2 strings.Builder
 	if err := agentInit(&out1, state, conf, false); err != nil {
@@ -135,6 +137,7 @@ func TestAgentInitKeepsItsIdentity(t *testing.T) {
 // running agent deliberately fails closed on (replay_state). Only an explicit
 // --reset-replay starts one.
 func TestAgentInitRefusesToRecreateALostReplayRecord(t *testing.T) {
+	testutil.RequireUnix(t)
 	state, conf := t.TempDir(), t.TempDir()
 	var first strings.Builder
 	if err := agentInit(&first, state, conf, false); err != nil {
@@ -166,6 +169,7 @@ func TestAgentInitRefusesToRecreateALostReplayRecord(t *testing.T) {
 // A key file that exists but cannot be used is an error, never a reason to
 // make a new identity: only "does not exist" generates.
 func TestAgentInitNeverReplacesAnUnreadableKey(t *testing.T) {
+	testutil.RequireUnix(t)
 	state, conf := t.TempDir(), t.TempDir()
 	keyPath := filepath.Join(state, "agent.key")
 	if err := os.WriteFile(keyPath, []byte("not hex\n"), 0o600); err != nil {
@@ -219,12 +223,9 @@ func TestAgentEnrollIsIdempotent(t *testing.T) {
 // also restarts the agent, but a hand-run enroll must not leave the uid
 // enrolled yet refused by the kernel at 0660.
 func TestAgentEnrollLocalUIDOpensTheSocket(t *testing.T) {
+	testutil.RequireUnix(t)
 	conf := t.TempDir()
-	d, err := os.MkdirTemp("/tmp", "jgs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(d) })
+	d := testutil.ShortTempDir(t)
 	sock := filepath.Join(d, "agent.sock")
 	ln, err := agent.Listen(sock, -1, 0o660)
 	if err != nil {

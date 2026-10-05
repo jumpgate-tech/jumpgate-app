@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package agent
 
 import (
@@ -11,16 +13,12 @@ import (
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func shortDir(t *testing.T) string {
 	t.Helper()
-	d, err := os.MkdirTemp("/tmp", "jga")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(d) })
-	return d
+	return testutil.ShortTempDir(t)
 }
 
 func unixClient(sock string) *http.Client {

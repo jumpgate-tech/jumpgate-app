@@ -8,8 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // fakeRunner records commands. The property under test is that a key's hex
@@ -398,7 +401,7 @@ func TestOnePasswordTemplateIs0600AndRemovedWhenOpFails(t *testing.T) {
 		t.Fatalf("template files seen: %v", f.modes)
 	}
 	for path, mode := range f.modes {
-		if mode != 0o600 {
+		if runtime.GOOS != "windows" && mode != 0o600 { // a mode means nothing on Windows
 			t.Errorf("template mode = %o, want 600", mode)
 		}
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -535,6 +538,7 @@ var realRunCmd = runCmd
 // subprocesses so the production runner is what produces the error type the
 // not-found checks depend on.
 func TestRealRunnerReportsExitCodeAndStderr(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // runs sh and cat
 	cases := []struct {
 		script     string
 		code       int

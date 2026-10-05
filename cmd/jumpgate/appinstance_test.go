@@ -11,19 +11,14 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/server"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // shortHome isolates HOME under /tmp: the server socket lives in
 // ~/.jumpgate/run and unix socket paths must stay short.
 func shortHome(t *testing.T) {
 	t.Helper()
-	home, err := os.MkdirTemp("/tmp", "jgh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(home) })
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	testutil.Home(t)
 }
 
 func freeAddr(t *testing.T) string {

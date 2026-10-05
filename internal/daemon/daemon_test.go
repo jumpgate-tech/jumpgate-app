@@ -12,17 +12,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func isolate(t *testing.T) {
 	t.Helper()
-	// unix socket paths must stay short, so HOME itself is short here.
-	home, err := os.MkdirTemp("/tmp", "jgh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(home) })
-	t.Setenv("HOME", home)
+	// unix socket paths must stay short; testutil.Home keeps HOME itself short.
+	testutil.Home(t)
 }
 
 func TestAcquireIsSingleInstance(t *testing.T) {
@@ -91,10 +88,7 @@ func TestFindSeesALiveServer(t *testing.T) {
 	if err != nil || !running || info.Token != "tok" {
 		t.Fatalf("Find = %+v, %v, %v", info, running, err)
 	}
-	fi, _ := os.Stat(filepath.Join(dir, "server.json"))
-	if fi.Mode().Perm() != 0o600 {
-		t.Errorf("server.json mode %o, want 600 (it holds the token)", fi.Mode().Perm())
-	}
+	testutil.AssertPrivate(t, filepath.Join(dir, "server.json")) // it holds the token
 }
 
 // M7: the spec's message is "already running, pid N". The pid comes from

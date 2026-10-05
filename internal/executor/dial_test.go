@@ -5,13 +5,14 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"net"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // A host that accepts TCP and never speaks SSH must not hang the caller.
@@ -103,13 +104,7 @@ func TestDialSSHThroughAJumpHost(t *testing.T) {
 
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	// unix socket paths are capped near 104 bytes on macOS; t.TempDir() is too long.
-	d, err := os.MkdirTemp("/tmp", "jg")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(d) })
-	return d
+	return testutil.ShortTempDir(t)
 }
 
 func shortHandshakeTimeout(t *testing.T) {

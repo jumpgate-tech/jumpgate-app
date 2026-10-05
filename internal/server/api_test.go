@@ -24,6 +24,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/logwatch"
 	"github.com/valve-tech/jumpgate/internal/monitor"
 	"github.com/valve-tech/jumpgate/internal/ops"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // ---------------------------------------------------------------------
@@ -205,8 +206,7 @@ func newAPITestServerWithExecutor(t *testing.T, newExec func(config.Target) (exe
 // the public internet (the chains.json feed, the live TLS check).
 func newAPITestServerCfg(t *testing.T, newExec func(config.Target) (executor.Executor, error), mutate func(*Config)) *apiTestServer {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 
 	token := NewSessionToken()
 	fake := &fakeAIProvider{text: "canned explanation"}
@@ -437,8 +437,7 @@ func TestTargetCRUDRoundTripsAndPersists(t *testing.T) {
 // reliably reports a DATA RACE; after routing through the locked setter,
 // it's clean.
 func TestHandleAddTargetExecWriteIsRaceFree(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testutil.Home(t)
 
 	s := New(Config{
 		Token: NewSessionToken(),
@@ -645,8 +644,7 @@ func TestSetupKickoffRejectsOutOfRangePorts(t *testing.T) {
 // observed context.Canceled, and DELETE must still return promptly (bounded
 // by setupCancelWait, not hung forever).
 func TestDeleteTargetCancelsInFlightSetupBeforeClosingExecutor(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testutil.Home(t)
 
 	fake := &blockingExecutor{}
 	token := NewSessionToken()

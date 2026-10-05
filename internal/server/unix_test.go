@@ -10,11 +10,12 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func TestServeUnixAndShutdown(t *testing.T) {
-	dir, _ := os.MkdirTemp("/tmp", "jgs")
-	defer os.RemoveAll(dir)
+	dir := testutil.ShortTempDir(t)
 	sock := filepath.Join(dir, "s.sock")
 	token := NewSessionToken()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -39,10 +40,7 @@ func TestServeUnixAndShutdown(t *testing.T) {
 	if err != nil || res.StatusCode != http.StatusOK {
 		t.Fatalf("health over unix socket: %v", err)
 	}
-	fi, _ := os.Stat(sock)
-	if fi.Mode().Perm() != 0o600 {
-		t.Errorf("socket mode %o, want 600", fi.Mode().Perm())
-	}
+	testutil.AssertPrivate(t, sock)
 
 	req, _ := http.NewRequest(http.MethodPost, "http://x/api/shutdown", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -58,8 +56,7 @@ func TestServeUnixAndShutdown(t *testing.T) {
 }
 
 func TestServeUnixRefusesToReplaceANonSocket(t *testing.T) {
-	dir, _ := os.MkdirTemp("/tmp", "jgs")
-	defer os.RemoveAll(dir)
+	dir := testutil.ShortTempDir(t)
 	path := filepath.Join(dir, "s.sock")
 	if err := os.WriteFile(path, []byte("precious"), 0o600); err != nil {
 		t.Fatal(err)
@@ -74,8 +71,7 @@ func TestServeUnixRefusesToReplaceANonSocket(t *testing.T) {
 }
 
 func TestServeUnixReplacesAStaleSocket(t *testing.T) {
-	dir, _ := os.MkdirTemp("/tmp", "jgs")
-	defer os.RemoveAll(dir)
+	dir := testutil.ShortTempDir(t)
 	path := filepath.Join(dir, "s.sock")
 	ln, err := net.Listen("unix", path)
 	if err != nil {

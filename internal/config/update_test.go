@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // Two processes editing config.json must not lose each other's edits. Each
 // goroutine here takes the lock through its own file descriptor, which is how
 // a second process would, so this is the cross-process case in miniature.
 func TestUpdateSerialisesConcurrentEdits(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testutil.Home(t)
 	const n = 20
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
@@ -37,7 +39,7 @@ func TestUpdateSerialisesConcurrentEdits(t *testing.T) {
 }
 
 func TestUpdateDoesNotSaveWhenFnFails(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testutil.Home(t)
 	_, err := Update(func(c *Config) error {
 		c.Targets = append(c.Targets, Target{ID: "x", Mode: "local"})
 		return fmt.Errorf("nope")

@@ -26,6 +26,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/signer"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 type pairTestSSHD struct {
@@ -82,22 +83,11 @@ func startPairTestSSHD(t *testing.T, handler gliderssh.Handler) pairTestSSHD {
 	return pairTestSSHD{host: "127.0.0.1", port: ln.Addr().(*net.TCPAddr).Port, hostKey: hostSigner.PublicKey(), keyPath: keyPath}
 }
 
-// shortHome is a temporary HOME short enough for unix socket paths.
-func shortHome(t *testing.T) string {
-	t.Helper()
-	home, err := os.MkdirTemp("/tmp", "jgp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(home) })
-	return home
-}
-
 // pairServer saves an ssh target for d and starts a server with a controller
 // key.
 func pairServer(t *testing.T, d pairTestSSHD) (*httptest.Server, string) {
 	t.Helper()
-	t.Setenv("HOME", shortHome(t))
+	testutil.Home(t)
 	_, err := config.Update(func(c *config.Config) error {
 		c.Targets = append(c.Targets, config.Target{ID: "box", Mode: "ssh",
 			SSH: &executor.SSHConfig{Host: d.host, Port: d.port, User: "root", KeyPath: d.keyPath}})
@@ -201,9 +191,7 @@ func TestPairStreamsStepsAndReportsTheFailingStep(t *testing.T) {
 		t.Fatal("a failed pairing was recorded")
 	}
 	// The tunnel key exists now, 0600, for the next attempt.
-	if fi, err := os.Stat(transportKeyPath()); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("transport key: %v %v", fi, err)
-	}
+	testutil.AssertPrivate(t, transportKeyPath())
 }
 
 func TestPairRefusesAKeylessServer(t *testing.T) {
@@ -226,7 +214,7 @@ func TestPairRefusesAKeylessServer(t *testing.T) {
 // Pairing takes the same per-target slot a wipe, reset or clear does.
 func TestPairTakesTheTargetSlot(t *testing.T) {
 	d := startPairTestSSHD(t, nil)
-	t.Setenv("HOME", shortHome(t))
+	testutil.Home(t)
 	_, _ = config.Update(func(c *config.Config) error {
 		c.Targets = append(c.Targets, config.Target{ID: "box", Mode: "ssh",
 			SSH: &executor.SSHConfig{Host: d.host, Port: d.port, User: "root", KeyPath: d.keyPath}})
@@ -249,7 +237,7 @@ func TestPairTakesTheTargetSlot(t *testing.T) {
 }
 
 func TestEnsureTransportKeyIsStable(t *testing.T) {
-	t.Setenv("HOME", shortHome(t))
+	testutil.Home(t)
 	a, err := ensureTransportKey()
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +257,8 @@ func TestEnsureTransportKeyIsStable(t *testing.T) {
 // A dangling symlink at the key path is an error, never a reason to generate
 // a key (and never a loop).
 func TestEnsureTransportKeyRefusesADanglingSymlink(t *testing.T) {
-	t.Setenv("HOME", shortHome(t))
+	testutil.RequireUnix(t) // creating a symlink needs a privilege on Windows
+	testutil.Home(t)
 	path := transportKeyPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -298,7 +287,7 @@ func TestEnsureTransportKeyRefusesADanglingSymlink(t *testing.T) {
 // Concurrent first pairings all get the same key, and none reads a
 // half-written file.
 func TestEnsureTransportKeyConcurrentFirstUseAgrees(t *testing.T) {
-	t.Setenv("HOME", shortHome(t))
+	testutil.Home(t)
 	const n = 16
 	lines := make([]string, n)
 	errs := make([]error, n)
@@ -322,9 +311,7 @@ func TestEnsureTransportKeyConcurrentFirstUseAgrees(t *testing.T) {
 			t.Fatalf("call %d returned a different key:\n%s\n%s", i, lines[i], lines[0])
 		}
 	}
-	if fi, err := os.Stat(filepath.Dir(transportKeyPath())); err != nil || fi.Mode().Perm() != 0o700 {
-		t.Fatalf("ssh dir: %v %v", fi, err)
-	}
+	testutil.AssertPrivate(t, filepath.Dir(transportKeyPath()))
 	entries, _ := os.ReadDir(filepath.Dir(transportKeyPath()))
 	if len(entries) != 1 {
 		t.Fatalf("temp files left behind: %v", entries)
@@ -333,7 +320,7 @@ func TestEnsureTransportKeyConcurrentFirstUseAgrees(t *testing.T) {
 
 // An existing key is returned as is, never replaced.
 func TestEnsureTransportKeyKeepsAnExistingKey(t *testing.T) {
-	t.Setenv("HOME", shortHome(t))
+	testutil.Home(t)
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	block, _ := ssh.MarshalPrivateKey(priv, "")
 	path := transportKeyPath()

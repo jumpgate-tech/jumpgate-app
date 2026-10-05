@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 const testServerPub = "kxUUFA0cGVlclB1YmxpY0tleXNlcnZlclB1YmtleT0="
@@ -60,6 +61,7 @@ AllowedIPs = 10.9.0.3/32
 
 func newConfShellHost(t *testing.T, existingConf string) (confShellExecutor, string) {
 	t.Helper()
+	testutil.RequirePOSIXShell(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "jumpgate0.privatekey"), []byte("SERVERPRIVATEKEY\n"), 0o600); err != nil {
 		t.Fatal(err)

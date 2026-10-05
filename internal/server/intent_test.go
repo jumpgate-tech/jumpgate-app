@@ -21,6 +21,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/signer"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 type nopExec struct{}
@@ -36,9 +37,8 @@ func (nopExec) Close() error                                                 { r
 // already paired with it, so the endpoint can be exercised without bootstrap.
 func pairedLocal(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
-	home, _ := os.MkdirTemp("/tmp", "jgi")
-	t.Cleanup(func() { os.RemoveAll(home) })
-	t.Setenv("HOME", home)
+	testutil.RequireUnix(t) // starts a real agent, which needs peer credentials
+	home := testutil.Home(t)
 
 	agentKey, _ := signer.GenerateKey()
 	controller, _ := signer.GenerateKey()
@@ -243,7 +243,7 @@ func TestIntentEndpointRefusesACrossOriginCookiePost(t *testing.T) {
 // host only trust-on-first-use has seen is refused.
 func TestAgentTargetIsStrictAndUsesTheTunnelUser(t *testing.T) {
 	d := startPairTestSSHD(t, nil)
-	t.Setenv("HOME", shortHome(t))
+	testutil.Home(t)
 	agentKey, _ := signer.GenerateKey()
 	jump := &executor.SSHConfig{Host: "bastion.example", User: "ops"}
 	tg := config.Target{ID: "box", Mode: "ssh",

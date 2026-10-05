@@ -15,7 +15,9 @@ drop='exec setpriv --reuid=1000 --regid=1000 --clear-groups "$@"'
 [ "${AS_ROOT:-0}" = 1 ] && drop='exec "$@"'
 envs=()
 [ -n "${CGO_ENABLED:-}" ] && envs+=(-e "CGO_ENABLED=$CGO_ENABLED")
-docker run --rm \
+# --init: tini reaps orphans; without it a killed process group stays a zombie and
+# the process-group tests (which poll kill -0) report it as having survived.
+docker run --rm --init \
   -v "$PWD":/src -w /src \
   -v jumpgate-gocache:/cache \
   -e HOME=/tmp/home -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod -e GOFLAGS=-buildvcs=false \

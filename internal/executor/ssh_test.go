@@ -18,6 +18,8 @@ import (
 
 	gliderssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // testSSHD is an in-process sshd used to exercise the SSH Executor without
@@ -161,6 +163,7 @@ func newSSHConfig(t *testing.T, d testSSHD, keyPath string) SSHConfig {
 }
 
 func TestSSH_Run_CapturesStdout(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // the test sshd runs commands through sh
 	d, keyPath := startTestSSHD(t)
 	e, err := NewSSH(newSSHConfig(t, d, keyPath))
 	if err != nil {
@@ -181,6 +184,7 @@ func TestSSH_Run_CapturesStdout(t *testing.T) {
 }
 
 func TestSSH_Run_CapturesStderrSeparately(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // the test sshd runs commands through sh
 	d, keyPath := startTestSSHD(t)
 	e, err := NewSSH(newSSHConfig(t, d, keyPath))
 	if err != nil {
@@ -201,6 +205,7 @@ func TestSSH_Run_CapturesStderrSeparately(t *testing.T) {
 }
 
 func TestSSH_Run_NonZeroExitIsNotAnError(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // the test sshd runs commands through sh
 	d, keyPath := startTestSSHD(t)
 	e, err := NewSSH(newSSHConfig(t, d, keyPath))
 	if err != nil {
@@ -218,6 +223,7 @@ func TestSSH_Run_NonZeroExitIsNotAnError(t *testing.T) {
 }
 
 func TestSSH_Run_StreamReceivesLinesInOrder(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // the test sshd runs commands through sh
 	d, keyPath := startTestSSHD(t)
 	e, err := NewSSH(newSSHConfig(t, d, keyPath))
 	if err != nil {
@@ -243,6 +249,7 @@ func TestSSH_Run_StreamReceivesLinesInOrder(t *testing.T) {
 }
 
 func TestSSH_WriteFile_ReadFile_RoundTrips(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // the test sshd runs commands through sh
 	d, keyPath := startTestSSHD(t)
 	e, err := NewSSH(newSSHConfig(t, d, keyPath))
 	if err != nil {
@@ -281,6 +288,7 @@ func TestSSH_WriteFile_ReadFile_RoundTrips(t *testing.T) {
 const sshLargeLineCmd = "head -c 2097152 /dev/zero | tr '\\0' 'x'"
 
 func TestSSH_Run_LargeSingleLineStdout_NoStream(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // the test sshd runs commands through sh
 	d, keyPath := startTestSSHD(t)
 	e, err := NewSSH(newSSHConfig(t, d, keyPath))
 	if err != nil {
@@ -306,6 +314,7 @@ func TestSSH_Run_LargeSingleLineStdout_NoStream(t *testing.T) {
 }
 
 func TestSSH_Run_LargeSingleLineStdout_WithStream(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // the test sshd runs commands through sh
 	d, keyPath := startTestSSHD(t)
 	e, err := NewSSH(newSSHConfig(t, d, keyPath))
 	if err != nil {
@@ -342,13 +351,10 @@ func TestSSH_TOFU_UnknownHostAppendsKey(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = e.Close() })
 
-	info, err := os.Stat(cfg.HostKeyFile)
-	if err != nil {
+	if _, err := os.Stat(cfg.HostKeyFile); err != nil {
 		t.Fatalf("HostKeyFile not created: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("HostKeyFile mode = %v, want 0600", info.Mode().Perm())
-	}
+	testutil.AssertPrivate(t, cfg.HostKeyFile)
 
 	data, err := os.ReadFile(cfg.HostKeyFile)
 	if err != nil {
@@ -450,6 +456,7 @@ func TestWriteFileDoesNotTightenNewParentDirs(t *testing.T) {
 }
 
 func TestSSH_WriteFile_LargeContentAndMode(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // the test sshd runs commands through sh
 	d, keyPath := startTestSSHD(t)
 	ex, err := NewSSH(newSSHConfig(t, d, keyPath))
 	if err != nil {

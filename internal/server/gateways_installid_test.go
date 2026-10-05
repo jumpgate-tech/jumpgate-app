@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // TestInstallIDStableAndPersisted is the guard for the gateway-URL churn bug:
@@ -14,8 +15,7 @@ import (
 // itself on macOS), or a shared gateway URL rotates. installID persists a
 // random id on first use and returns the same value every run thereafter.
 func TestInstallIDStableAndPersisted(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 
 	first := installID()
 	if first == "" {
@@ -41,8 +41,7 @@ func TestInstallIDStableAndPersisted(t *testing.T) {
 // does not change when os.Hostname() would — because it is seeded from the
 // persisted id, not the machine name.
 func TestSuggestedHostnameStableAcrossHostnameChange(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testutil.Home(t)
 
 	// Two derivations from the same persisted id must be identical. (DefaultTLSHostname
 	// is pure; the only moving part is the seed, which installID pins.)
