@@ -22,16 +22,6 @@ type pairRequest struct {
 	Sudo bool `json:"sudo"`
 }
 
-// pairEvent is one SSE frame of a pairing: a step's progress line, or the
-// error that ended it (with a code and, when there is one, a hint).
-type pairEvent struct {
-	Step string   `json:"step"`
-	Line string   `json:"line,omitempty"`
-	Err  string   `json:"err,omitempty"`
-	Code api.Code `json:"code,omitempty"`
-	Hint string   `json:"hint,omitempty"`
-}
-
 // handlePair installs and pairs the target's agent, streaming each step, then
 // proves the pairing with a signed agent.info round trip before recording it.
 // The host key must already be confirmed (the CLI does that with the
@@ -108,7 +98,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 
 	sseHeaders(w)
 	flusher, _ := w.(http.Flusher)
-	send := func(ev pairEvent) {
+	send := func(ev api.PairEvent) {
 		writeSSEEvent(w, ev)
 		if flusher != nil {
 			flusher.Flush()
@@ -118,14 +108,14 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	transportKey := ""
 	if !local {
 		if transportKey, err = ensureTransportKey(); err != nil {
-			send(pairEvent{Step: "transport-key", Err: err.Error(), Code: api.CodeTransportKey})
+			send(api.PairEvent{Step: "transport-key", Error: err.Error(), Code: api.CodeTransportKey})
 			return
 		}
 	}
 	addr, err := bootstrap.Run(ctx, bootstrap.Options{
 		Exec: priv, Local: local, LocalUID: os.Getuid(), AgentBinary: agentBinary,
 		Controller: s.cfg.Signer.Address(), ControllerLabel: controllerLabel(), TransportKey: transportKey, Wire: t.Wire,
-		Event: func(step, line string) { send(pairEvent{Step: step, Line: line}) },
+		Event: func(step, line string) { send(api.PairEvent{Step: step, Line: line}) },
 	})
 	if err != nil {
 		var se *bootstrap.StepError
@@ -133,7 +123,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &se) {
 			step = se.Step
 		}
-		send(pairEvent{Step: step, Err: err.Error(), Code: api.CodeStepFailed})
+		send(api.PairEvent{Step: step, Error: err.Error(), Code: api.CodeStepFailed})
 		return
 	}
 
@@ -141,7 +131,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	if local {
 		transport = "local"
 	}
-	send(pairEvent{Step: "verify", Line: "start"})
+	send(api.PairEvent{Step: "verify", Line: "start"})
 	t.Agent = &config.AgentPairing{Address: addr.Hex(), Transport: transport}
 	next, ev := s.verifyPairing(ctx, t)
 	if ev != nil {
@@ -158,10 +148,10 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		}
 		return errors.New("target disappeared during pairing")
 	}); err != nil {
-		send(pairEvent{Step: "record", Err: err.Error(), Code: api.CodeRecordFailed})
+		send(api.PairEvent{Step: "record", Error: err.Error(), Code: api.CodeRecordFailed})
 		return
 	}
-	writeSSEEvent(w, map[string]any{"done": true, "agent": addr.Hex()})
+	writeSSEEvent(w, api.PairEvent{Done: true, Agent: addr.Hex()})
 	if flusher != nil {
 		flusher.Flush()
 	}
@@ -172,9 +162,9 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 // re-pair the agent may already hold a higher sequence for this controller;
 // the client resynchronises from its signed answer, and the returned value
 // follows it.
-func (s *Server) verifyPairing(ctx context.Context, t config.Target) (uint64, *pairEvent) {
-	fail := func(err error, code api.Code, hint string) (uint64, *pairEvent) {
-		return 0, &pairEvent{Step: "verify", Err: err.Error(), Code: code, Hint: hint}
+func (s *Server) verifyPairing(ctx context.Context, t config.Target) (uint64, *api.PairEvent) {
+	fail := func(err error, code api.Code, hint string) (uint64, *api.PairEvent) {
+		return 0, &api.PairEvent{Step: "verify", Error: err.Error(), Code: code, Hint: hint}
 	}
 	at, err := agentTarget(t)
 	if err != nil {

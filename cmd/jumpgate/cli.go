@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/valve-tech/jumpgate/internal/api"
+	"github.com/valve-tech/jumpgate/internal/apiclient"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/intent"
@@ -79,51 +80,27 @@ func dispatch(args []string, stderr io.Writer) (code int, handled bool) {
 	return exitCode("usage"), true
 }
 
-// remedies turns each rejection code, and each error code the server adds, into
-// one line an operator can act on. A server hint, when it sent one, wins.
-var remedies = map[string]string{
-	intent.ReasonWrongAgent:       "this box's agent identity changed since pairing; re-pair with `jumpgate hosts add`",
-	intent.ReasonExpired:          "the intent expired before the box checked it; check both clocks (enable NTP)",
-	intent.ReasonClockSkew:        "the clocks disagree by more than 60s; enable NTP on this machine and the box",
-	intent.ReasonBadSignature:     "the box could not verify this controller's signature; re-pair with `jumpgate hosts add`",
-	intent.ReasonUnauthorizedKind: "this controller is not enrolled on the box for that; pair it with `jumpgate hosts add`",
-	intent.ReasonUnknownKind:      "the box runs an older agent; re-run `jumpgate hosts add` to upgrade it",
-	intent.ReasonStaleSeq:         "another process is using this controller key against this box",
-	intent.ReasonReplayedNonce:    "the same intent was sent twice; retry the command",
-	intent.ReasonBusy:             "another command from this controller is still running on the box",
-	intent.ReasonInvalidPayload:   "the request was malformed; this is a jumpgate bug, please report it",
-	intent.ReasonValidation:       "the box's node configuration is invalid; check /etc/jumpgate/node.json",
-	intent.ReasonNotSetUp:         "no node is set up on this box yet; run setup first",
-	intent.ReasonReplayState:      "the box's replay record is damaged; on the box, inspect /var/lib/jumpgate/replay.json then run `sudo jumpgate agent reset-replay --yes`",
-
-	"unreachable":       "check that the box is up and reachable over SSH",
-	"bad_receipt":       "the answer was not signed by this box's paired agent; do not trust this box until you re-pair it",
-	"agent_http":        "the agent socket refused the connection: the tunnel user must be in the jumpgate group, or a local uid must be enrolled (`jumpgate agent enroll --local-uid`)",
-	"unknown_host":      "confirm the box's host key with `jumpgate hosts add`, then pair again",
-	"host_key":          "the box's SSH host key does not match the one on record; check it on the box's console before trusting the box again",
-	"no_controller_key": "run `jumpgate keys init`, then `jumpgate stop` so the server restarts with the key",
-	"not_paired":        "pair this box first with `jumpgate hosts add`",
-	"controller_key_mismatch": "the key store holds a different key than the controller identity your boxes trust. " +
-		"Restore the original key (keychain item, 1Password item or key file), then run `jumpgate stop`; do not re-pair boxes to the new key unless you meant to replace the controller",
-}
-
 // exitCode maps an outcome to the process exit status: 0 ok, 1 refused or
-// failed, 2 usage, 3 unreachable, 4 security. The server's error codes are
-// outcomes too, so the table covers every one the CLI maps.
+// failed, 2 usage, 3 unreachable, 4 security. Any other outcome is a server
+// error code, whose class the api registry holds.
 func exitCode(outcome string) int {
 	switch outcome {
 	case "ok":
-		return 0
-	case "refused", "failed", "agent_http":
-		return 1
-	case "usage", "no_controller_key", "not_paired":
-		return 2
-	case "unreachable":
-		return 3
-	case "bad_receipt", "host_key", "unknown_host", "controller_key_mismatch":
-		return 4
+		return api.ExitOK
+	case "refused", "failed":
+		return api.ExitFailed
+	case "usage":
+		return api.ExitUsage
 	}
-	return 1
+	return api.Code(outcome).Exit()
+}
+
+// connect returns a client of the running server, starting one if needed.
+// A variable so tests can point the CLI at an in-process server: the real one
+// would start this binary as a detached `serve`.
+var connect = func(ctx context.Context) (*apiclient.Client, error) {
+	exe, _ := os.Executable()
+	return apiclient.Connect(ctx, apiclient.Options{Start: true, Exe: exe})
 }
 
 // parseSSHTarget reads user@host[:port], with IPv6 hosts in brackets.
@@ -193,70 +170,58 @@ func mustRequest(ctx context.Context, info daemon.Info, path string, body []byte
 	return req
 }
 
-// apiError is the server's error JSON, plus the HTTP status it came with.
-// Host and Fingerprint are only set by pair's unknown_host answer.
-type apiError struct {
-	Status      int    `json:"-"`
-	Error       string `json:"error"`
-	Hint        string `json:"hint"`
-	Code        string `json:"code"`
-	Host        string `json:"host"`
-	Fingerprint string `json:"fingerprint"`
-}
+// apiError is the server's error JSON, plus the HTTP status it came with: the
+// shared type every Go client decodes.
+type apiError = api.Error
 
-// readAPIError decodes an error response. A body that is not the error JSON
-// still yields the status, so the operator is never shown nothing.
+// readAPIError decodes an error response into the shared error type. A body
+// that is not the error JSON still yields the status and its code, so the
+// operator is never shown nothing.
 func readAPIError(res *http.Response) apiError {
-	e := apiError{Status: res.StatusCode}
-	_ = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&e)
-	if e.Error == "" {
-		e.Error = res.Status
-	}
-	return e
+	b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	return *api.Decode(res.StatusCode, b)
 }
 
 // reportServerErrorFrom is reportServerError for an answer from the server
 // info describes. A 404 from a server of another version is the wire contract
-// changing under the CLI, so it says to restart that server instead.
+// changing under the CLI, so it says to restart that server instead. Since the
+// error contract a bare 404 decodes to not_found; any more specific code came
+// from a server that knew the route.
 func reportServerErrorFrom(w io.Writer, what string, info daemon.Info, e apiError) int {
-	if e.Status == http.StatusNotFound && e.Code == "" {
+	if e.Status == http.StatusNotFound && (e.Code == "" || e.Code == api.CodeNotFound) {
 		if skew := daemon.SkewWarning(info); skew != "" {
-			fmt.Fprintf(w, "jumpgate: %s: the running server does not know this request (%s)\n  -> %s\n", what, e.Error, strings.TrimPrefix(skew, "jumpgate: "))
+			fmt.Fprintf(w, "jumpgate: %s: the running server does not know this request (%s)\n  -> %s\n", what, e.Message, strings.TrimPrefix(skew, "jumpgate: "))
 			return exitCode("failed")
 		}
 	}
 	return reportServerError(w, what, e)
 }
 
-// reportServerError prints a server error with its hint (or the CLI's remedy)
-// and returns the exit status for its code: unreachable 3; bad_receipt and
-// unknown_host 4; agent_http 1; no_controller_key and not_paired 2 (the
-// operator must run a command first); any other code, or none, 1. Status 2 is
-// otherwise usage only.
+// reportServerError prints a server error with its hint (or the registry's)
+// and returns the exit status for its code, from the api registry: security
+// codes 4, unreachable 3, no_controller_key and not_paired 2 (the operator
+// must run a command first), any other code 1. An error without a code is a
+// plain failure; status 2 is otherwise usage only.
 func reportServerError(w io.Writer, what string, e apiError) int {
 	hint := e.Hint
 	if hint == "" {
-		hint = remedies[e.Code]
+		hint = api.HintFor(e.Code)
 	}
-	switch e.Code {
-	case "":
-		fmt.Fprintf(w, "jumpgate: %s: %s\n", what, e.Error)
+	switch {
+	case e.Code == "":
+		fmt.Fprintf(w, "jumpgate: %s: %s\n", what, e.Message)
 		return exitCode("failed")
-	case "bad_receipt", "host_key", "unknown_host", "controller_key_mismatch":
-		fmt.Fprintf(w, "jumpgate: SECURITY: %s: %s\n", what, e.Error)
-	case "unreachable":
-		fmt.Fprintf(w, "jumpgate: %s: could not reach the box: %s\n", what, e.Error)
-	case "agent_http":
-		fmt.Fprintf(w, "jumpgate: %s: refused: %s\n", what, e.Error)
+	case e.Code.Exit() == api.ExitSecurity:
+		fmt.Fprintf(w, "jumpgate: SECURITY: %s: %s\n", what, e.Message)
+	case e.Code == api.CodeUnreachable:
+		fmt.Fprintf(w, "jumpgate: %s: could not reach the box: %s\n", what, e.Message)
+	case e.Code == api.CodeAgentHTTP:
+		fmt.Fprintf(w, "jumpgate: %s: refused: %s\n", what, e.Message)
 	default:
-		fmt.Fprintf(w, "jumpgate: %s: %s\n", what, e.Error)
+		fmt.Fprintf(w, "jumpgate: %s: %s\n", what, e.Message)
 	}
 	if hint != "" {
 		fmt.Fprintf(w, "  -> %s\n", hint)
 	}
-	switch e.Code {
-	case "unreachable", "bad_receipt", "agent_http", "unknown_host", "host_key", "no_controller_key", "not_paired", "controller_key_mismatch":
-		return exitCode(e.Code)
-	}
-	return exitCode("failed")
+	return e.Code.Exit()
 }

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/signer"
 )
@@ -61,7 +62,7 @@ func keysShow(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "%s (%s: %s)\n", k.Address().Hex(), rec.KeyStore, rec.KeyRef)
 	if err := signer.CheckAddress(k, rec.Address); err != nil {
 		fmt.Fprintf(stderr, "jumpgate: SECURITY: the controller key in %s at %q is %s, but config.json records %s\n  -> %s\n",
-			rec.KeyStore, rec.KeyRef, k.Address().Hex(), rec.Address, remedies["controller_key_mismatch"])
+			rec.KeyStore, rec.KeyRef, k.Address().Hex(), rec.Address, api.HintFor(api.CodeControllerKeyMismatch))
 		return exitCode("controller_key_mismatch")
 	}
 	return 0

@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,8 +14,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/valve-tech/jumpgate/internal/api"
+	"github.com/valve-tech/jumpgate/internal/apiclient"
 	"github.com/valve-tech/jumpgate/internal/config"
-	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
@@ -102,22 +102,21 @@ func hostsAdd(args []string) int {
 		target = map[string]any{"id": name, "mode": "ssh", "ssh": cfg}
 	}
 
-	exe, _ := os.Executable()
-	info, err := daemon.EnsureRunning(ctx, exe, os.Stderr)
+	c, err := connect(ctx)
 	if err != nil {
 		return failed("%v", err)
 	}
-	if e := call(info, "/api/targets", target, nil); e != nil {
-		// target_exists is the server's answer for a name already on record;
-		// an older server sent the same 409 with no code.
-		if e.Status != http.StatusConflict || (e.Code != "" && e.Code != "target_exists") {
-			return reportServerErrorFrom(os.Stderr, "add "+name, info, *e)
+	apiclient.WarnSkew(os.Stderr, c)
+	if e := call(c, "/api/targets", target, nil); e != nil {
+		// target_exists is the server's answer for a name already on record.
+		if e.Status != http.StatusConflict || e.Code != api.CodeTargetExists {
+			return reportServerErrorFrom(os.Stderr, "add "+name, c.Info(), *e)
 		}
 		// The name is already a target: pairing it again is how a box is
 		// re-paired or an interrupted pairing finished.
 		fmt.Printf("target %s already exists; pairing it again\n", name)
 	}
-	return streamPair(info, name, *sudo)
+	return streamPair(c, name, *sudo)
 }
 
 // errBadAddress marks an --ssh or --jump value that does not parse.
@@ -304,68 +303,45 @@ func confirmHostKeys(ctx context.Context, cfg executor.SSHConfig, in *bufio.Read
 
 // call POSTs body to the local server and decodes a success into out. It
 // returns nil on success, otherwise the server's error.
-func call(info daemon.Info, path string, body, out any) *apiError {
-	b, _ := json.Marshal(body)
-	res, err := info.Client().Do(mustRequest(context.Background(), info, path, b))
-	if err != nil {
-		return &apiError{Error: "server: " + err.Error()}
+func call(c *apiclient.Client, path string, body, out any) *apiError {
+	err := c.Do(context.Background(), http.MethodPost, path, body, out)
+	var e *api.Error
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &e):
+		return e
+	default:
+		return &apiError{Message: "server: " + err.Error()}
 	}
-	defer res.Body.Close()
-	if res.StatusCode >= 300 {
-		e := readAPIError(res)
-		return &e
-	}
-	if out != nil {
-		_ = json.NewDecoder(res.Body).Decode(out)
-	}
-	return nil
 }
 
 // pairFailureCodes are the pairing stream's own failure codes: plain failures
 // (exit 1), unlike the server codes reportServerError maps.
-var pairFailureCodes = map[string]bool{
-	"": true, "step_failed": true, "verify_failed": true, "record_failed": true, "transport_key": true,
+var pairFailureCodes = map[api.Code]bool{
+	"": true, api.CodeStepFailed: true, api.CodeVerifyFailed: true, api.CodeRecordFailed: true, api.CodeTransportKey: true,
 }
 
 // streamPair prints each pairing event as it arrives.
-func streamPair(info daemon.Info, name string, sudo bool) int {
-	b, _ := json.Marshal(map[string]bool{"sudo": sudo})
-	res, err := info.Client().Do(mustRequest(context.Background(), info, "/api/targets/"+name+"/pair", b))
+func streamPair(c *apiclient.Client, name string, sudo bool) int {
+	ch, err := c.Pair(context.Background(), name, api.PairRequest{Sudo: sudo})
+	var e *api.Error
+	if errors.As(err, &e) {
+		if e.Code == api.CodeUnknownHost {
+			fmt.Fprintf(os.Stderr, "jumpgate: %s presents an unconfirmed key %s\n", e.Host, e.Fingerprint)
+		}
+		return reportServerErrorFrom(os.Stderr, "pair", c.Info(), *e)
+	}
 	if err != nil {
 		return failed("server: %v", err)
 	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		e := readAPIError(res)
-		if e.Code == "unknown_host" {
-			fmt.Fprintf(os.Stderr, "jumpgate: %s presents an unconfirmed key %s\n", e.Host, e.Fingerprint)
-		}
-		return reportServerErrorFrom(os.Stderr, "pair", info, e)
-	}
-	sc := bufio.NewScanner(res.Body)
-	for sc.Scan() {
-		line, ok := strings.CutPrefix(sc.Text(), "data: ")
-		if !ok {
-			continue
-		}
-		var ev struct {
-			Step  string `json:"step"`
-			Line  string `json:"line"`
-			Err   string `json:"err"`
-			Code  string `json:"code"`
-			Hint  string `json:"hint"`
-			Done  bool   `json:"done"`
-			Agent string `json:"agent"`
-		}
-		if json.Unmarshal([]byte(line), &ev) != nil {
-			continue
-		}
+	for ev := range ch {
 		switch {
 		case ev.Done:
 			fmt.Printf("paired: agent %s\nRecommended now: disable root SSH login on the box (PermitRootLogin no). Keep console access as the way back in.\n", ev.Agent)
 			return 0
-		case ev.Err != "":
-			code := reportServerError(os.Stderr, "pairing failed at "+ev.Step, apiError{Error: ev.Err, Code: ev.Code, Hint: ev.Hint})
+		case ev.Error != "":
+			code := reportServerError(os.Stderr, "pairing failed at "+ev.Step, apiError{Message: ev.Error, Code: ev.Code, Hint: ev.Hint})
 			if pairFailureCodes[ev.Code] {
 				return exitCode("failed")
 			}

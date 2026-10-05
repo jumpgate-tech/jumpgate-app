@@ -193,7 +193,7 @@ func TestPairStreamsStepsAndReportsTheFailingStep(t *testing.T) {
 		t.Errorf("first event %v, want the preflight step starting", events[0])
 	}
 	last := events[len(events)-1]
-	if last["step"] != "preflight" || last["code"] != "step_failed" || !strings.Contains(last["err"].(string), "FreeBSD") {
+	if last["step"] != "preflight" || last["code"] != "step_failed" || !strings.Contains(last["error"].(string), "FreeBSD") {
 		t.Errorf("last event %v, want preflight's failure", last)
 	}
 	c, _ := config.Load()

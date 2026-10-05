@@ -19,6 +19,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/valve-tech/jumpgate/internal/agent"
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
@@ -52,18 +53,38 @@ func TestParseSSHTarget(t *testing.T) {
 	}
 }
 
-// Every rejection code the agent can send has a one-line remedy; a new code
-// without one fails here instead of reaching an operator as a bare string.
-// The server's own error codes carry a remedy too, for when its hint is empty.
-func TestEveryReasonHasARemedy(t *testing.T) {
-	for _, code := range []string{
-		intent.ReasonWrongAgent, intent.ReasonExpired, intent.ReasonClockSkew, intent.ReasonBadSignature,
-		intent.ReasonUnauthorizedKind, intent.ReasonUnknownKind, intent.ReasonStaleSeq, intent.ReasonReplayedNonce,
-		intent.ReasonBusy, intent.ReasonInvalidPayload, intent.ReasonValidation, intent.ReasonNotSetUp, intent.ReasonReplayState,
-		"unreachable", "bad_receipt", "agent_http", "unknown_host", "no_controller_key", "not_paired",
+// Rejection remedies are the server's now; the CLI's fallback is the same
+// package, so an older server's bare rejection still gets one.
+func TestPrintReplyFallsBackToTheSharedHint(t *testing.T) {
+	var out, errw strings.Builder
+	code := printReply(&out, &errw, "box", api.IntentReply{Status: intent.StatusRejected, Rejection: &intent.Rejection{Code: intent.ReasonClockSkew, Message: "skew"}})
+	if code != 1 || !strings.Contains(errw.String(), api.RejectionHint(intent.ReasonClockSkew)) {
+		t.Fatalf("exit %d, stderr %q", code, errw.String())
+	}
+	errw.Reset()
+	printReply(&out, &errw, "box", api.IntentReply{Status: intent.StatusRejected, Hint: "server says", Rejection: &intent.Rejection{Code: intent.ReasonBusy}})
+	if !strings.Contains(errw.String(), "server says") {
+		t.Fatalf("server hint not shown: %q", errw.String())
+	}
+}
+
+// Every server code the CLI used to carry its own remedy for still gets one
+// when the server sent no hint: the registry's. controller_key_mismatch is
+// among them (Ruling T2c).
+func TestServerErrorFallsBackToTheRegistryHint(t *testing.T) {
+	for _, code := range []api.Code{
+		api.CodeUnreachable, api.CodeBadReceipt, api.CodeAgentHTTP, api.CodeUnknownHost, api.CodeHostKey,
+		api.CodeNoControllerKey, api.CodeNotPaired, api.CodeControllerKeyMismatch,
 	} {
-		if remedies[code] == "" {
-			t.Errorf("no remedy for %s", code)
+		hint := api.HintFor(code)
+		if hint == "" {
+			t.Errorf("no registry hint for %s", code)
+			continue
+		}
+		var w strings.Builder
+		reportServerError(&w, "box", apiError{Status: 502, Code: code, Message: "boom"})
+		if !strings.Contains(w.String(), "-> "+hint) {
+			t.Errorf("%s: output %q lacks the registry hint", code, w.String())
 		}
 	}
 }
@@ -85,7 +106,7 @@ func TestExitCodes(t *testing.T) {
 // status 2 is usage only.
 func TestServerErrorExit(t *testing.T) {
 	cases := []struct {
-		code string
+		code api.Code
 		want int
 	}{
 		{"unreachable", 3}, {"bad_receipt", 4}, {"agent_http", 1}, {"unknown_host", 4}, {"host_key", 4},
@@ -93,7 +114,7 @@ func TestServerErrorExit(t *testing.T) {
 	}
 	for _, c := range cases {
 		var stderr strings.Builder
-		got := reportServerError(&stderr, "pair", apiError{Status: 502, Code: c.code, Error: "boom", Hint: "do this"})
+		got := reportServerError(&stderr, "pair", apiError{Status: 502, Code: c.code, Message: "boom", Hint: "do this"})
 		if got != c.want {
 			t.Errorf("code %q: exit %d, want %d", c.code, got, c.want)
 		}

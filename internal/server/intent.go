@@ -22,14 +22,6 @@ const maxIntentBody = 1 << 20
 // bounded so a slow public endpoint cannot hold an intent's answer hostage.
 var refHeadClient = &http.Client{Timeout: 5 * time.Second}
 
-type intentReply struct {
-	Status    uint8             `json:"status"`
-	Result    json.RawMessage   `json:"result,omitempty"`
-	Rejection *intent.Rejection `json:"rejection,omitempty"`
-	Failure   *intent.Failure   `json:"failure,omitempty"`
-	RefHead   uint64            `json:"refHead,omitempty"` // status.read only
-}
-
 // writeAgentError maps an agentclient error onto the API's status and code,
 // and reports whether err was one of them. Host-key failures are checked
 // first: they are security errors, never "unreachable". The hints come from
@@ -145,7 +137,11 @@ func (s *Server) handleIntent(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	reply := intentReply{Status: res.Status, Result: res.Result, Rejection: res.Rejection, Failure: res.Failure}
+	reply := api.IntentReply{Status: res.Status, Result: res.Result, Rejection: res.Rejection, Failure: res.Failure}
+	if res.Rejection != nil {
+		// The remedy travels with the rejection, so no client keeps its own table.
+		reply.Hint = api.RejectionHint(res.Rejection.Code)
+	}
 	if kind == intent.KindStatusRead && res.Status == intent.StatusOK && cfg.RefRPCBase != "" && t.Wire != nil {
 		reply.RefHead = monitor.FetchRefHead(r.Context(), refHeadClient, refRPCURL(cfg.RefRPCBase, t.Wire.ChainID))
 	}

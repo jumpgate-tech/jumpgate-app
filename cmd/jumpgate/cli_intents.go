@@ -3,13 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"time"
 
-	"github.com/valve-tech/jumpgate/internal/daemon"
+	"github.com/valve-tech/jumpgate/internal/api"
+	"github.com/valve-tech/jumpgate/internal/apiclient"
 	"github.com/valve-tech/jumpgate/internal/intent"
 )
 
@@ -41,45 +43,34 @@ func cmdService(args []string) int {
 	return runIntent(args[0], intent.KindServiceAction, intent.ServiceActionPayload{Service: args[1], Action: args[2]})
 }
 
-// reply is the server's answer to an intent: the verified receipt on success,
-// otherwise the error JSON.
-type reply struct {
-	Status    uint8             `json:"status"`
-	Result    json.RawMessage   `json:"result"`
-	Rejection *intent.Rejection `json:"rejection"`
-	Failure   *intent.Failure   `json:"failure"`
-	RefHead   uint64            `json:"refHead"`
-}
-
 func runIntent(host, kind string, payload any) int {
 	ctx := context.Background()
-	exe, _ := os.Executable()
-	info, err := daemon.EnsureRunning(ctx, exe, os.Stderr)
+	c, err := connect(ctx)
 	if err != nil {
 		return failed("%v", err)
 	}
-	b, _ := json.Marshal(payload)
-	res, err := info.Client().Do(mustRequest(ctx, info, "/api/targets/"+host+"/intent/"+kind, b))
+	apiclient.WarnSkew(os.Stderr, c)
+	r, err := c.Intent(ctx, host, kind, payload)
+	var e *api.Error
+	if errors.As(err, &e) {
+		return reportServerErrorFrom(os.Stderr, host, c.Info(), *e)
+	}
 	if err != nil {
-		return failed("server: %v", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode >= 300 {
-		return reportServerErrorFrom(os.Stderr, host, info, readAPIError(res))
-	}
-	var r reply
-	if err := json.NewDecoder(io.LimitReader(res.Body, 32<<20)).Decode(&r); err != nil {
-		return failed("could not read the server's answer: %v", err)
+		return failed("%v", err)
 	}
 	return printReply(os.Stdout, os.Stderr, host, r)
 }
 
-func printReply(stdout, stderr io.Writer, host string, r reply) int {
+func printReply(stdout, stderr io.Writer, host string, r api.IntentReply) int {
 	switch {
 	case r.Rejection != nil:
-		fmt.Fprintf(stderr, "jumpgate: %s refused (%s): %s\n  -> %s\n", host, r.Rejection.Code, r.Rejection.Message, remedies[r.Rejection.Code])
+		hint := r.Hint
+		if hint == "" {
+			hint = api.RejectionHint(r.Rejection.Code) // an older server sends none
+		}
+		fmt.Fprintf(stderr, "jumpgate: %s refused (%s): %s\n  -> %s\n", host, r.Rejection.Code, r.Rejection.Message, hint)
 		if r.Rejection.Code == intent.ReasonClockSkew && r.Rejection.AgentTime != 0 {
-			fmt.Fprintf(stderr, "  this machine: %s, the box: %s\n", time.Now().UTC().Format(time.RFC3339), time.Unix(int64(r.Rejection.AgentTime), 0).UTC().Format(time.RFC3339))
+			fmt.Fprintf(stderr, "  this machine: %s, the box: %s\n", time.Now().UTC().Format(time.RFC3339), time.Unix(r.Rejection.AgentTime, 0).UTC().Format(time.RFC3339))
 		}
 		return exitCode("refused")
 	case r.Failure != nil:

@@ -311,3 +311,16 @@ func TestAgentTargetIsStrictAndUsesTheTunnelUser(t *testing.T) {
 		t.Fatalf("confirmed host refused: %v", err)
 	}
 }
+
+// The server sends the remedy for a rejection, so no client needs its own table.
+func TestIntentRejectionCarriesAHint(t *testing.T) {
+	ts, token := pairedLocal(t) // no node.json: the agent rejects with not_set_up
+	res, out := postIntent(t, ts, token, "/api/targets/box/intent/status.read", `{}`)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+	rej, _ := out["rejection"].(map[string]any)
+	if rej["code"] != intent.ReasonNotSetUp || out["hint"] != api.RejectionHint(intent.ReasonNotSetUp) {
+		t.Fatalf("reply %v", out)
+	}
+}

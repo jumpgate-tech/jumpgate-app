@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/signer"
 )
@@ -102,7 +103,7 @@ func TestKeysShowFlagsAMismatch(t *testing.T) {
 
 func TestServerKeyMismatchExitsAsSecurity(t *testing.T) {
 	var w strings.Builder
-	code := reportServerError(&w, "box", apiError{Status: 503, Error: "mismatch", Code: "controller_key_mismatch"})
+	code := reportServerError(&w, "box", apiError{Status: 503, Message: "mismatch", Code: api.CodeControllerKeyMismatch})
 	if code != 4 || !strings.Contains(w.String(), "SECURITY") || !strings.Contains(w.String(), "->") {
 		t.Fatalf("exit %d, output %q", code, w.String())
 	}
