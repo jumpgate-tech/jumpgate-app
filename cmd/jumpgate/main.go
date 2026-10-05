@@ -60,6 +60,9 @@ func runApp() {
 		log.Fatalf("jumpgate: %v", err)
 	}
 	if running != nil {
+		if skew := daemon.SkewWarning(*running); skew != "" {
+			fmt.Fprintln(os.Stderr, skew)
+		}
 		if warning := attachWarning(*opts, *running); warning != "" {
 			fmt.Fprintln(os.Stderr, warning)
 		}

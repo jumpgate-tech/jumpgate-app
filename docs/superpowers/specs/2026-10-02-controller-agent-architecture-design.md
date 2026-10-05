@@ -173,7 +173,11 @@ All signers implement one `Signer` interface (`Address()`,
 - Discovery file (pid, socket, token, version) under the config directory,
   guarded by a lock held for the server's lifetime, so there is only ever one
   server per user. The existing web-app binary takes the same lock and writes the
-  same file, so the TUI attaches to it too.
+  same file, so the TUI attaches to it too. Discovery compares the recorded
+  version with its own build. A CLI command or app launch that finds a
+  different version running says so: "a different jumpgate version (X) is
+  running; restart it with `jumpgate stop`". A 404 from that server is
+  reported the same way, so an operator never sees a bare "404 Not Found".
 - `config.json` gets a file lock as a safety net; the single-server rule is the
   real guarantee of one writer.
 - One composition root (`buildServer` in `cmd/jumpgate`) builds the server for

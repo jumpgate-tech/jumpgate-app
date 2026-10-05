@@ -93,7 +93,9 @@ starts for you inherits that command's environment. So set the variables once,
 in your shell profile or service unit, and every entry point builds the same
 relay and key admin. If the app finds a server already running with different
 options, it prints which options are not in effect. Run `jumpgate stop` and
-launch again to apply them.
+launch again to apply them. The same applies after an upgrade. If the server
+still running is a different jumpgate version, commands warn you, and you run
+`jumpgate stop` to replace it with the new version.
 
 If the controller key will not open, the server still starts. This can happen
 when the keychain is locked or the key file is missing. The web UI keeps

@@ -103,13 +103,13 @@ func hostsAdd(args []string) int {
 	}
 
 	exe, _ := os.Executable()
-	info, err := daemon.EnsureRunning(ctx, exe)
+	info, err := daemon.EnsureRunning(ctx, exe, os.Stderr)
 	if err != nil {
 		return failed("%v", err)
 	}
 	if e := call(info, "/api/targets", target, nil); e != nil {
 		if e.Status != http.StatusConflict || e.Code != "" {
-			return reportServerError(os.Stderr, "add "+name, *e)
+			return reportServerErrorFrom(os.Stderr, "add "+name, info, *e)
 		}
 		// The name is already a target: pairing it again is how a box is
 		// re-paired or an interrupted pairing finished.
@@ -338,7 +338,7 @@ func streamPair(info daemon.Info, name string, sudo bool) int {
 		if e.Code == "unknown_host" {
 			fmt.Fprintf(os.Stderr, "jumpgate: %s presents an unconfirmed key %s\n", e.Host, e.Fingerprint)
 		}
-		return reportServerError(os.Stderr, "pair", e)
+		return reportServerErrorFrom(os.Stderr, "pair", info, e)
 	}
 	sc := bufio.NewScanner(res.Body)
 	for sc.Scan() {

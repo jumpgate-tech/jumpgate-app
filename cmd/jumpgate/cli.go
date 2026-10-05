@@ -214,6 +214,19 @@ func readAPIError(res *http.Response) apiError {
 	return e
 }
 
+// reportServerErrorFrom is reportServerError for an answer from the server
+// info describes. A 404 from a server of another version is the wire contract
+// changing under the CLI, so it says to restart that server instead.
+func reportServerErrorFrom(w io.Writer, what string, info daemon.Info, e apiError) int {
+	if e.Status == http.StatusNotFound && e.Code == "" {
+		if skew := daemon.SkewWarning(info); skew != "" {
+			fmt.Fprintf(w, "jumpgate: %s: the running server does not know this request (%s)\n  -> %s\n", what, e.Error, strings.TrimPrefix(skew, "jumpgate: "))
+			return exitCode("failed")
+		}
+	}
+	return reportServerError(w, what, e)
+}
+
 // reportServerError prints a server error with its hint (or the CLI's remedy)
 // and returns the exit status for its code: unreachable 3; bad_receipt and
 // unknown_host 4; agent_http 1; no_controller_key and not_paired 2 (the

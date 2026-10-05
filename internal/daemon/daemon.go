@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/filelock"
 )
@@ -172,10 +174,33 @@ func Find(ctx context.Context) (Info, bool, error) {
 	return info, res.StatusCode == http.StatusOK, nil
 }
 
+// SkewWarning is the note for an operator whose running server is a different
+// jumpgate build than this one, or "" when the versions agree. A CLI upgraded
+// under a running server would otherwise meet routes the old server lacks as
+// bare 404s.
+func SkewWarning(info Info) string {
+	cur := buildinfo.Version()
+	if info.Version == cur {
+		return ""
+	}
+	v := info.Version
+	if v == "" {
+		v = "unknown"
+	}
+	return fmt.Sprintf("jumpgate: a different jumpgate version (%s) is running; restart it with `jumpgate stop` (this is %s)", v, cur)
+}
+
 // EnsureRunning returns the running server, starting `exe serve` detached if
-// there is none.
-func EnsureRunning(ctx context.Context, exe string) (Info, error) {
+// there is none. When the running server is another version, it says so on
+// warn (nil for silence) and still returns it: the caller decides whether its
+// command can be trusted to it.
+func EnsureRunning(ctx context.Context, exe string, warn io.Writer) (Info, error) {
 	if info, ok, err := Find(ctx); err != nil || ok {
+		if ok && warn != nil {
+			if s := SkewWarning(info); s != "" {
+				fmt.Fprintln(warn, s)
+			}
+		}
 		return info, err
 	}
 	dir, err := RunDir()
