@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"net"
+	"net/http"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -61,16 +63,16 @@ func procAddr(ap netip.AddrPort, v6 bool) string {
 type peerVerdict int
 
 const (
-	// peerUnknown: the tables could not be read, or they do not list even
-	// the server's own end of the connection (WSL1, gVisor, a restricted
-	// /proc). Nothing can be decided; the login is allowed with a warning.
+	// peerUnknown: the tables cannot be read at all (they do not exist, or
+	// reading them is not permitted: a restricted /proc, some sandboxes).
+	// Nothing can be decided; the login is allowed with a warning.
 	peerUnknown peerVerdict = iota
 	// peerFound: the client's socket was found; its uid decides.
 	peerFound
-	// peerMissing: the server's own end is listed but the client's is not,
-	// even on a second read. A live loopback connection has both ends in
-	// the tables, so this is a torn read an attacker can provoke by churning
-	// connections, and the login is refused.
+	// peerMissing: the tables were readable but did not list the client's
+	// socket, even on a second read. A live loopback connection is always
+	// listed, so this is a torn or incomplete read, which another local user
+	// can provoke by churning connections, and the login is refused.
 	peerMissing
 )
 
@@ -80,31 +82,59 @@ type procTable struct {
 	v6   bool
 }
 
-// peerFromTables looks up a loopback connection in the socket tables that
-// read returns: the client's socket (local end client, remote end local) and
-// the server's accepted one (the two swapped). Either may sit in either
-// table: a dual-stack listener's accepted socket is listed in tcp6,
-// v4-mapped, while an IPv4 client's is in tcp. When only the server's row
-// turns up, the tables are read once more before the client is declared
-// missing; read returning no tables at all means they are unreadable.
+// peerFromTables looks up a loopback connection's client socket (local end
+// client, remote end local) in the tables read returns. Each call to read is
+// one snapshot, both tables read whole, and each attempt decides from its
+// own snapshot alone. The client's row may sit in either table (an IPv4
+// client of a dual-stack listener is in tcp, the listener's accepted socket
+// in tcp6, v4-mapped), so every table is searched.
+//
+// read returns nil only when the tables genuinely cannot be read; that, on
+// the first read, is the one case that is not refused. A readable snapshot
+// that lacks the client's row is read once more, then refused; so is a
+// re-read that finds the tables gone, since the first read proved this
+// system lists its sockets. Nothing is remembered between calls.
 func peerFromTables(read func() []procTable, client, local netip.AddrPort) (int, peerVerdict) {
 	for attempt := 0; attempt < 2; attempt++ {
 		tables := read()
-		serverSeen := false
+		if tables == nil {
+			if attempt == 0 {
+				return 0, peerUnknown
+			}
+			break
+		}
 		for _, t := range tables {
 			if uid, ok := socketUID(t.data, t.v6, client, local); ok {
 				return uid, peerFound
 			}
-			if _, ok := socketUID(t.data, t.v6, local, client); ok {
-				serverSeen = true
-			}
-		}
-		// Only a first read that lacks the server's row is inconclusive. A
-		// second read happens only once the tables proved they list this
-		// connection, so a miss of both rows then is as torn as a miss of one.
-		if !serverSeen && attempt == 0 {
-			return 0, peerUnknown
 		}
 	}
 	return 0, peerMissing
+}
+
+// requestAddrs is a request's client address (RemoteAddr) and the server's
+// end of the connection (its LocalAddr).
+func requestAddrs(r *http.Request) (client, local netip.AddrPort, ok bool) {
+	client, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return client, local, false
+	}
+	la, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if !ok {
+		return client, local, false
+	}
+	local, err = netip.ParseAddrPort(la.String())
+	return client, local, err == nil
+}
+
+// peerUIDFromTables is a peer lookup that consults the socket tables read
+// returns (readProcTables on Linux).
+func peerUIDFromTables(read func() []procTable) func(*http.Request) (int, peerVerdict) {
+	return func(r *http.Request) (int, peerVerdict) {
+		client, local, ok := requestAddrs(r)
+		if !ok {
+			return 0, peerUnknown
+		}
+		return peerFromTables(read, client, local)
+	}
 }

@@ -1,10 +1,9 @@
 package server
 
 import (
+	"errors"
 	"io"
-	"net"
-	"net/http"
-	"net/netip"
+	"io/fs"
 	"os"
 )
 
@@ -12,35 +11,32 @@ import (
 // /proc/net/tcp{,6}. Loopback TCP carries no peer credentials, but both ends
 // of the connection are this machine's sockets, listed there with their uid.
 // It fails closed where it can: see peerFromTables.
-var defaultPeerUID = procPeerUID
+var defaultPeerUID = peerUIDFromTables(readProcTables)
 
-func procPeerUID(r *http.Request) (int, peerVerdict) {
-	peer, err := netip.ParseAddrPort(r.RemoteAddr)
-	if err != nil {
-		return 0, peerUnknown
-	}
-	la, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
-	if !ok {
-		return 0, peerUnknown
-	}
-	local, err := netip.ParseAddrPort(la.String())
-	if err != nil {
-		return 0, peerUnknown
-	}
-	return peerFromTables(readProcTables, peer, local)
-}
-
-// readProcTables reads /proc/net/tcp and tcp6, each whole into memory before
-// any parsing, skipping one that cannot be read. None readable is nil.
+// readProcTables reads /proc/net/tcp and tcp6 as one snapshot, each read
+// whole into memory before any parsing. It is nil, "cannot be read", only
+// when every table is missing or not permitted. Any other error (EMFILE from
+// a flood of connections, say) is not proof that /proc cannot be read: that
+// table is left out of a non-nil snapshot, so a missing row fails closed.
 func readProcTables() []procTable {
-	var tables []procTable
+	tables := []procTable{}
+	readable := false
 	for _, t := range []struct {
 		path string
 		v6   bool
 	}{{"/proc/net/tcp", false}, {"/proc/net/tcp6", true}} {
-		if data, err := readProcFile(t.path); err == nil {
+		data, err := readProcFile(t.path)
+		switch {
+		case err == nil:
 			tables = append(tables, procTable{data: data, v6: t.v6})
+			readable = true
+		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission):
+		default:
+			readable = true
 		}
+	}
+	if !readable {
+		return nil
 	}
 	return tables
 }

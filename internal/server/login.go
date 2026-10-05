@@ -291,10 +291,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Every local user is a loopback peer. Where the peer's owner can be
 	// read (Linux), a different user's connection is refused before the
 	// code is touched, so it cannot burn the code either. root is let in: it
-	// can read the session token anyway. A client socket that cannot be
-	// found while the server's own end of the connection can is refused
-	// too (fail closed: another user could provoke the miss); only tables
-	// that cannot be consulted at all let the login through, with a warning.
+	// can read the session token anyway. Readable socket tables that do not
+	// list the client are refused too (fail closed: another user can provoke
+	// a torn read); only tables that cannot be read at all let the login
+	// through, with a warning.
 	if s.peerUID != nil {
 		switch uid, v := s.peerUID(r); v {
 		case peerFound:
@@ -304,11 +304,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case peerMissing:
-			log.Printf("jumpgate: WARNING: refused a login link whose client socket is not in /proc/net/tcp (from %s); run `jumpgate open` again", r.RemoteAddr)
+			log.Printf("jumpgate: WARNING: refused a login link whose client socket /proc/net/tcp does not list (from %s); run `jumpgate open` again", r.RemoteAddr)
 			http.Error(w, "jumpgate could not confirm this login link comes from you; run `jumpgate open` again", http.StatusForbidden)
 			return
 		default:
-			log.Printf("jumpgate: WARNING: could not read the owner of a login link's connection from /proc/net/tcp; allowing it, so on this system the login link relies on its owner-only file alone")
+			log.Printf("jumpgate: WARNING: /proc/net/tcp cannot be read, so the owner of a login link's connection is unknown; allowing it, and on this system the login link relies on its owner-only file alone")
 		}
 	}
 	ok, reused := s.redeem(r.URL.Query().Get("code"))

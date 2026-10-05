@@ -70,7 +70,21 @@ func TestPeerFromTables(t *testing.T) {
 			{procTableOf(false, serverV4, clientV4), procTableOf(true)},
 		}, v4c, v4s, 1001, peerFound, 2},
 		{"tables unreadable", [][]procTable{nil}, v4c, v4s, 0, peerUnknown, 1},
-		{"server row missing too", [][]procTable{{procTableOf(false, noise), procTableOf(true)}}, v4c, v4s, 0, peerUnknown, 1},
+		// Readable tables that lack both rows are torn too: refused.
+		{"server row missing too: refused", [][]procTable{{procTableOf(false, noise), procTableOf(true)}}, v4c, v4s, 0, peerMissing, 2},
+		{"only tcp readable, neither row: refused", [][]procTable{{procTableOf(false, noise)}}, v4c, v4s, 0, peerMissing, 2},
+		// Each decision uses one whole snapshot: the client row that only
+		// the second read has is found there, with that read's uid.
+		{"second snapshot used whole", [][]procTable{
+			{procTableOf(false, noise), procTableOf(true, serverMapped)},
+			{procTableOf(false, procRow(false, v4c, v4s, 1005)), procTableOf(true)},
+		}, v4c, v4s, 1005, peerFound, 2},
+		// Tables readable on the first read decide the request: becoming
+		// unreadable on the re-read does not turn it into an allow.
+		{"unreadable on the re-read: refused", [][]procTable{{procTableOf(false, serverV4)}, nil}, v4c, v4s, 0, peerMissing, 2},
+		// A read error other than not-exist/permission (EMFILE from a
+		// connection flood) yields an empty, non-nil snapshot: refused.
+		{"transient read error: refused", [][]procTable{{}}, v4c, v4s, 0, peerMissing, 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -114,5 +128,57 @@ func TestLoginAllowsAnUnreadablePeerWithAWarning(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "WARNING") {
 		t.Fatalf("log %q: want a WARNING", buf.String())
+	}
+}
+
+// fakeTables installs the real request-to-tables lookup on s, reading the
+// given snapshots in place of /proc. Each snapshot is built for the request
+// it is asked about, so tests can place (or leave out) its rows.
+func fakeTables(s *Server, snap func(client, local netip.AddrPort) []procTable) {
+	s.peerUID = func(r *http.Request) (int, peerVerdict) {
+		client, local, _ := requestAddrs(r)
+		return peerUIDFromTables(func() []procTable { return snap(client, local) })(r)
+	}
+}
+
+// End to end through the handler: readable tables that list neither end of
+// the connection are refused, and the code is not spent.
+func TestLoginRefusesWhenReadableTablesLackBothRows(t *testing.T) {
+	s, ts, _ := loginServer(t)
+	fakeTables(s, func(client, local netip.AddrPort) []procTable {
+		return []procTable{procTableOf(false), procTableOf(true)}
+	})
+	code := s.NewLoginCode()
+	if res, _ := login(t, ts, code); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("readable tables without our rows: %d, want 403", res.StatusCode)
+	}
+	fakeTables(s, func(client, local netip.AddrPort) []procTable {
+		return []procTable{procTableOf(false, procRow(false, client, local, s.selfUID))}
+	})
+	if res, _ := login(t, ts, code); res.StatusCode != http.StatusOK {
+		t.Fatalf("the refused attempt burned the code: %d, want 200", res.StatusCode)
+	}
+}
+
+// End to end: tables that cannot be read at all let the login through with
+// a warning, and nothing is remembered: the next request with readable
+// tables lacking the rows is refused again.
+func TestLoginAllowsUnreadableTablesWithAWarningAndRemembersNothing(t *testing.T) {
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(old) })
+
+	s, ts, _ := loginServer(t)
+	fakeTables(s, func(netip.AddrPort, netip.AddrPort) []procTable { return nil })
+	if res, _ := login(t, ts, s.NewLoginCode()); res.StatusCode != http.StatusOK {
+		t.Fatalf("unreadable tables: %d, want 200", res.StatusCode)
+	}
+	if !strings.Contains(buf.String(), "WARNING") {
+		t.Fatalf("log %q: want a WARNING", buf.String())
+	}
+	fakeTables(s, func(netip.AddrPort, netip.AddrPort) []procTable { return []procTable{procTableOf(false)} })
+	if res, _ := login(t, ts, s.NewLoginCode()); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("readable tables after an unreadable request: %d, want 403", res.StatusCode)
 	}
 }
