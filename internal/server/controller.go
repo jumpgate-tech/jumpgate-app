@@ -52,6 +52,11 @@ func ensureTransportKey() (string, error) {
 		return "", err
 	}
 	if fi, lerr := os.Lstat(path); lerr == nil {
+		// A concurrent caller may have linked its key in between the read
+		// and this Lstat; that key is whole (it arrives by hard link), so use it.
+		if line, rerr := readTransportKey(path); rerr == nil {
+			return line, nil
+		}
 		what := "it cannot be read"
 		if fi.Mode()&os.ModeSymlink != 0 {
 			what = "it is a symlink to a file that does not exist"
