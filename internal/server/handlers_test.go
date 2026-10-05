@@ -8,13 +8,16 @@ package server
 
 import (
 	"errors"
+	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func setProvider(t *testing.T, a *apiTestServer, provider string) {
@@ -164,7 +167,9 @@ func TestAddTarget_RefusesAWireSuppliedByTheCaller(t *testing.T) {
 }
 
 func TestAddTarget_RejectsWhatCannotBeATarget(t *testing.T) {
-	t.Setenv("SSH_AUTH_SOCK", "") // no agent, so "ssh with no key" has no way in
+	// No agent (a missing socket: on Windows an empty value falls back to the
+	// OpenSSH pipe), so "ssh with no key" has no way in.
+	t.Setenv("SSH_AUTH_SOCK", filepath.Join(testutil.ShortTempDir(t), "none.sock"))
 	f := newFleet()
 	a := newAPITestServerWithExecutor(t, f.factory)
 
@@ -189,7 +194,23 @@ func TestAddTarget_RejectsWhatCannotBeATarget(t *testing.T) {
 
 // A running ssh-agent can stand in for a key path.
 func TestAddTarget_AcceptsAnSSHAgentInPlaceOfAKeyPath(t *testing.T) {
-	t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+	// AgentAvailable dials the socket, so something must be listening.
+	sock := filepath.Join(testutil.ShortTempDir(t), "agent.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	t.Setenv("SSH_AUTH_SOCK", sock)
 	f := newFleet()
 	a := newAPITestServerWithExecutor(t, f.factory)
 

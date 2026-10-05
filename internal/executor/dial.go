@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -127,19 +128,15 @@ func (c *jumpConn) Close() error {
 func authMethods(cfg SSHConfig, deadline time.Time) (methods []ssh.AuthMethod, release func(), err error) {
 	var fileSigner ssh.Signer
 	var agentClient agent.ExtendedAgent
-	var agentConn net.Conn
+	var agentConn io.ReadWriteCloser
 	release = func() {
 		if agentConn != nil {
 			agentConn.Close()
 		}
 	}
-	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
-		d := net.Dialer{Deadline: deadline}
-		if c, err := d.Dial("unix", sock); err == nil {
-			_ = c.SetDeadline(deadline) // a wedged agent cannot outlast the dial
-			agentConn = c
-			agentClient = agent.NewClient(c)
-		}
+	if c := dialAgent(deadline); c != nil {
+		agentConn = c
+		agentClient = agent.NewClient(c)
 	}
 	if cfg.KeyPath != "" {
 		keyBytes, err := os.ReadFile(cfg.KeyPath)

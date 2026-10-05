@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -624,7 +623,7 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if t.Mode == "ssh" {
-		if t.SSH == nil || t.SSH.Host == "" || t.SSH.User == "" || (t.SSH.KeyPath == "" && os.Getenv("SSH_AUTH_SOCK") == "") {
+		if t.SSH == nil || t.SSH.Host == "" || t.SSH.User == "" || (t.SSH.KeyPath == "" && !executor.AgentAvailable()) {
 			writeError(w, http.StatusBadRequest, "ssh targets need host, user, and a key path or a running ssh-agent")
 			return
 		}

@@ -144,3 +144,22 @@ jobs:
 
       - name: cargo test
         run: cargo test --locked
+
+  windows-ssh-agent:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: start the OpenSSH agent service
+        shell: pwsh
+        run: |
+          Set-Service ssh-agent -StartupType Manual
+          Start-Service ssh-agent
+      - name: dial through the named pipe
+        shell: bash
+        env:
+          JUMPGATE_TEST_WIN_AGENT: "1"
+        run: go test -count=1 -run TestOpenSSHAgentPipe -v ./internal/executor/
+```

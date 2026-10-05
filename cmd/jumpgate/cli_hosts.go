@@ -83,6 +83,11 @@ func hostsAdd(args []string) int {
 	if !*local {
 		keyPath := *key
 		if keyPath != "" {
+			expanded, err := expandHome(keyPath)
+			if err != nil {
+				return failed("--key: %v", err)
+			}
+			keyPath = expanded
 			// The server resolves paths from its own working directory.
 			abs, err := filepath.Abs(keyPath)
 			if err != nil {
@@ -263,8 +268,8 @@ func strictCheck() (ssh.HostKeyCallback, func(string) []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	known := filepath.Join(home, ".ssh", "known_hosts")
-	return executor.Strict(confirmed, known), executor.KnownHostKeyAlgorithms(confirmed, known), nil
+	known := executor.OpenSSHKnownHosts(home)
+	return executor.Strict(confirmed, known...), executor.KnownHostKeyAlgorithms(confirmed, known...), nil
 }
 
 // hostPort is the exact address string DialSSH hands the host-key callback,

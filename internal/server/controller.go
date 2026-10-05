@@ -137,8 +137,8 @@ func strictHostKey() (ssh.HostKeyCallback, func(string) []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	known := filepath.Join(home, ".ssh", "known_hosts")
-	return executor.Strict(confirmed, known), executor.KnownHostKeyAlgorithms(confirmed, known), nil
+	known := executor.OpenSSHKnownHosts(home)
+	return executor.Strict(confirmed, known...), executor.KnownHostKeyAlgorithms(confirmed, known...), nil
 }
 
 // agentTarget is how this controller reaches t's agent: directly for a local
