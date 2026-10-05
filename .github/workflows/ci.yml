@@ -131,6 +131,17 @@ jobs:
           BASE: ${{ matrix.base }}
         run: scripts/e2e-local.sh
 
+  windows-daemon:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: server lifecycle smoke
+        shell: pwsh
+        run: scripts/windows-smoke.ps1
+
   # The Rust billing service. It is a standalone crate under services/billing,
   # invisible to the Go tooling above, so it needs its own gate.
   billing:

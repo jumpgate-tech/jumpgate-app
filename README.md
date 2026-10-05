@@ -99,6 +99,10 @@ missing prerequisite (no controller key yet, box not paired); 3 box unreachable;
 was confirmed, or a reply not signed by the paired agent), whether it is found
 while pairing or by any later box command.
 
+**Linux over SSH:** the server jumpgate starts in the background survives closing the terminal. On distributions where systemd-logind kills a user's processes at logout (`KillUserProcesses=yes`), run `loginctl enable-linger $USER` once so it also survives the SSH session ending.
+
+**Windows:** the background server needs Windows 10 version 1803 or Windows Server 2019 or later (for its local socket).
+
 ## Requirements
 
 - The **target** being set up (the box that will run the execution + beacon

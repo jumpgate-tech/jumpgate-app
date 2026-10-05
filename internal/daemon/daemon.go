@@ -154,6 +154,8 @@ func Find(ctx context.Context) (Info, bool, error) {
 	return info, res.StatusCode == http.StatusOK, nil
 }
 
+var startServer = startDetached // a seam for tests
+
 // EnsureRunning returns the running server, starting `exe serve` detached if
 // there is none.
 func EnsureRunning(ctx context.Context, exe string) (Info, error) {
@@ -171,11 +173,13 @@ func EnsureRunning(ctx context.Context, exe string) (Info, error) {
 	defer logf.Close()
 	cmd := exec.Command(exe, "serve", "--no-open")
 	cmd.Stdout, cmd.Stderr = logf, logf
-	detach(cmd)
-	if err := cmd.Start(); err != nil {
+	// The server never pins the directory the CLI happened to start in.
+	cmd.Dir = dir
+	started, err := startServer(cmd)
+	if err != nil {
 		return Info{}, fmt.Errorf("daemon: start server: %w", err)
 	}
-	_ = cmd.Process.Release()
+	_ = started.Process.Release()
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {

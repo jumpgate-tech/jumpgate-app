@@ -355,6 +355,9 @@ func (s *Server) ServeUnix(ctx context.Context, path string) error {
 	}
 	ln, err := net.Listen("unix", path)
 	if err != nil {
+		if runtime.GOOS == "windows" {
+			return fmt.Errorf("server: listen on %s: %w (the local socket needs Windows 10 version 1803 or Windows Server 2019 or later)", path, err)
+		}
 		return err
 	}
 	// Owner-only on every OS: on Windows a mode does nothing, so the socket
