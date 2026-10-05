@@ -67,8 +67,7 @@ a trusted, private network.
 ## Command line
 
 The `jumpgate` binary also has a command line for managing boxes from a
-terminal. Run `jumpgate` with no arguments (or with flags such as `--bind`) for
-the web app as before. The web app and `jumpgate serve` share one server per
+terminal. Run `jumpgate` with no arguments in a terminal for the terminal home: status, a menu, and the command list (`jumpgate help`). `jumpgate open` opens the web app in your browser, starting the background server if needed; `jumpgate serve` runs the server in the foreground. The desktop launchers on each OS open a terminal running `jumpgate`. Flags such as `--bind`, or no terminal (a pipe, the app bundle), start the web app as before. The web app and `jumpgate serve` share one server per
 user: if one is already running, launching the app opens it instead of
 starting a second.
 
@@ -126,12 +125,13 @@ tar xzf jumpgate_<os>_<arch>.tar.gz   # the Windows archive is a .zip
 ./jumpgate
 ```
 
-This prints a local URL with a one-time session token and opens it in your
-browser:
+In a terminal, bare `jumpgate` opens the terminal home: status and a menu, where `o` opens the web app in your browser. `jumpgate serve` runs the server in the foreground and prints a local URL with a one-time session token:
 
 ```
 http://127.0.0.1:8799/?token=<token>
 ```
+
+Without a terminal (a pipe, the app bundle) or with flags such as `--bind`, the app behaves as before: it starts the server and opens it in your browser.
 
 Pass `--bind` to change the listen address, or `--no-open` to skip opening a
 browser automatically.
