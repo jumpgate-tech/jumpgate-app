@@ -120,9 +120,10 @@ func loopbackPeer(remoteAddr string) bool {
 // HttpOnly keeps it from page scripts; SameSite=Strict keeps other sites'
 // pages from riding it (authMiddleware adds an Origin check for the
 // same-site-other-port case). It is not Secure: the server speaks plain HTTP
-// on loopback, and browsers do not send a Secure cookie to http://127.0.0.1
-// (Safari, and others for non-"localhost" hosts), so Secure would lock the
-// user out. Loopback traffic never crosses a network a Secure flag protects.
+// on loopback, and not every browser treats http://127.0.0.1 as a secure
+// origin (Safari does not), so a Secure cookie would be dropped there and
+// lock the user out. Loopback traffic never crosses a network a Secure flag
+// would protect.
 func sessionCookie(token string) *http.Cookie {
 	return &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode}
 }
