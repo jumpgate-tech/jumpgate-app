@@ -310,8 +310,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		case peerNotReported:
 			log.Printf("jumpgate: WARNING: /proc/net/tcp and tcp6 list no connections at all (as under WSL1 or gVisor), so the owner of a login link's connection is unknown; allowing it, and on this system the login link relies on its owner-only file alone")
-		default:
+		case peerUnknown:
 			log.Printf("jumpgate: WARNING: /proc/net/tcp cannot be read, so the owner of a login link's connection is unknown; allowing it, and on this system the login link relies on its owner-only file alone")
+		default:
+			// peerNotTCP, or a verdict added later and not handled here:
+			// fail closed.
+			http.Error(w, "jumpgate could not confirm this login link comes from you; run `jumpgate open` again", http.StatusForbidden)
+			return
 		}
 	}
 	ok, reused := s.redeem(r.URL.Query().Get("code"))

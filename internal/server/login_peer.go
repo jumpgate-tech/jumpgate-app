@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/netip"
@@ -80,6 +82,11 @@ const (
 	// the environment does not report connections (WSL1, gVisor). The login
 	// is allowed with a warning (ruling P37).
 	peerNotReported
+	// peerNotTCP: the request did not come over TCP (the owner-only unix
+	// socket has no peer address), so there is no row to look up and /proc
+	// is not read. handleLogin refuses such requests before asking, as a
+	// login link is for a browser; were one to get here, it is refused.
+	peerNotTCP
 )
 
 // procTable is the contents of /proc/net/tcp (v6 false) or tcp6 (v6 true).
@@ -153,8 +160,36 @@ func peerUIDFromTables(read func() []procTable) func(*http.Request) (int, peerVe
 	return func(r *http.Request) (int, peerVerdict) {
 		client, local, ok := requestAddrs(r)
 		if !ok {
-			return 0, peerUnknown
+			return 0, peerNotTCP
 		}
 		return peerFromTables(read, client, local)
 	}
+}
+
+// procSnapshot reads /proc/net/tcp and tcp6 with readFile as one snapshot,
+// each table whole. It is nil, "cannot be read", only when every table is
+// missing or not permitted. Any other error (EMFILE from a flood of
+// connections, say) is not proof that /proc cannot be read: that table is
+// left out of a non-nil snapshot, so a missing row fails closed.
+func procSnapshot(readFile func(path string) ([]byte, error)) []procTable {
+	tables := []procTable{}
+	readable := false
+	for _, t := range []struct {
+		path string
+		v6   bool
+	}{{"/proc/net/tcp", false}, {"/proc/net/tcp6", true}} {
+		data, err := readFile(t.path)
+		switch {
+		case err == nil:
+			tables = append(tables, procTable{data: data, v6: t.v6})
+			readable = true
+		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission):
+		default:
+			readable = true
+		}
+	}
+	if !readable {
+		return nil
+	}
+	return tables
 }

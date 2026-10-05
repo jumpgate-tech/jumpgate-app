@@ -1,9 +1,7 @@
 package server
 
 import (
-	"errors"
 	"io"
-	"io/fs"
 	"os"
 )
 
@@ -13,33 +11,9 @@ import (
 // It fails closed where it can: see peerFromTables.
 var defaultPeerUID = peerUIDFromTables(readProcTables)
 
-// readProcTables reads /proc/net/tcp and tcp6 as one snapshot, each read
-// whole into memory before any parsing. It is nil, "cannot be read", only
-// when every table is missing or not permitted. Any other error (EMFILE from
-// a flood of connections, say) is not proof that /proc cannot be read: that
-// table is left out of a non-nil snapshot, so a missing row fails closed.
-func readProcTables() []procTable {
-	tables := []procTable{}
-	readable := false
-	for _, t := range []struct {
-		path string
-		v6   bool
-	}{{"/proc/net/tcp", false}, {"/proc/net/tcp6", true}} {
-		data, err := readProcFile(t.path)
-		switch {
-		case err == nil:
-			tables = append(tables, procTable{data: data, v6: t.v6})
-			readable = true
-		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission):
-		default:
-			readable = true
-		}
-	}
-	if !readable {
-		return nil
-	}
-	return tables
-}
+// readProcTables reads /proc/net/tcp and tcp6 as one snapshot (see
+// procSnapshot), each read whole into memory before any parsing.
+func readProcTables() []procTable { return procSnapshot(readProcFile) }
 
 // procReadBuf is the starting buffer for a /proc table: room for thousands
 // of rows (about 150 bytes each), so a busy table is read with large reads

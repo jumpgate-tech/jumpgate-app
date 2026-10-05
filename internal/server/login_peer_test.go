@@ -2,12 +2,22 @@ package server
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
+	"time"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // procRow is one /proc/net/tcp{,6} line for a socket local -> remote owned
@@ -234,5 +244,106 @@ func TestLoginRefusesWhenOneTableHasRowsButNotTheClient(t *testing.T) {
 	})
 	if res, _ := login(t, ts, code); res.StatusCode != http.StatusOK {
 		t.Fatalf("the refused attempt burned the code: %d, want 200", res.StatusCode)
+	}
+}
+
+// A verdict the handler does not know (a value added later and not wired
+// in) fails closed: 403, code not spent.
+func TestLoginRefusesAnUnknownVerdict(t *testing.T) {
+	s, ts, _ := loginServer(t)
+	s.peerUID = func(*http.Request) (int, peerVerdict) { return s.selfUID, peerVerdict(99) }
+	code := s.NewLoginCode()
+	if res, _ := login(t, ts, code); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("out-of-range verdict: %d, want 403", res.StatusCode)
+	}
+	s.peerUID = func(*http.Request) (int, peerVerdict) { return s.selfUID, peerFound }
+	if res, _ := login(t, ts, code); res.StatusCode != http.StatusOK {
+		t.Fatalf("the refused attempt burned the code: %d, want 200", res.StatusCode)
+	}
+}
+
+// A request that is not over TCP (the owner-only unix socket) has no row to
+// look up: the lookup says so without touching /proc, rather than claiming
+// /proc cannot be read.
+func TestPeerLookupOfANonTCPRequest(t *testing.T) {
+	read := func() []procTable { t.Fatal("read /proc for a non-TCP request"); return nil }
+	r := httptest.NewRequest(http.MethodGet, "/login", nil)
+	r.RemoteAddr = "@"
+	if _, v := peerUIDFromTables(read)(r); v != peerNotTCP {
+		t.Fatalf("verdict %v, want peerNotTCP", v)
+	}
+}
+
+// Login over the unix socket stays refused (it has no browser), without the
+// misleading "/proc/net/tcp cannot be read" warning, and without spending
+// the code.
+func TestLoginOverTheUnixSocketIsRefusedQuietly(t *testing.T) {
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(old) })
+
+	sock := filepath.Join(testutil.ShortTempDir(t), "s.sock")
+	s := New(Config{Token: NewSessionToken(), UI: fstest.MapFS{}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = s.ServeUnix(ctx, sock); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	code := s.NewLoginCode()
+	var res *http.Response
+	var err error
+	for i := 0; i < 50; i++ {
+		if res, err = client.Get("http://x/login?code=" + code); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("login over the unix socket: %d, want 403", res.StatusCode)
+	}
+	if strings.Contains(buf.String(), "/proc") {
+		t.Fatalf("log %q: a unix-socket request is not a /proc matter", buf.String())
+	}
+	if ok := s.redeemLoginCode(code); !ok {
+		t.Fatal("the refused unix-socket attempt burned the code")
+	}
+}
+
+// procSnapshot sorts read errors: a table that does not exist or may not be
+// read is "unreadable"; any other error (EMFILE in a connection flood) is
+// not, so the snapshot stays non-nil and a missing row fails closed.
+func TestProcSnapshotSortsReadErrors(t *testing.T) {
+	emfile := errors.New("open /proc/net/tcp: too many open files")
+	for _, c := range []struct {
+		name    string
+		errs    map[string]error
+		wantNil bool
+		tables  int
+	}{
+		{"both readable", nil, false, 2},
+		{"both missing", map[string]error{"/proc/net/tcp": fs.ErrNotExist, "/proc/net/tcp6": fs.ErrNotExist}, true, 0},
+		{"missing and not permitted", map[string]error{"/proc/net/tcp": fs.ErrPermission, "/proc/net/tcp6": fs.ErrNotExist}, true, 0},
+		{"tcp6 missing (IPv6 off)", map[string]error{"/proc/net/tcp6": fs.ErrNotExist}, false, 1},
+		{"EMFILE on both", map[string]error{"/proc/net/tcp": emfile, "/proc/net/tcp6": emfile}, false, 0},
+		{"EMFILE and missing", map[string]error{"/proc/net/tcp": emfile, "/proc/net/tcp6": fs.ErrNotExist}, false, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := procSnapshot(func(path string) ([]byte, error) {
+				if err := c.errs[path]; err != nil {
+					return nil, err
+				}
+				return []byte(procHeader), nil
+			})
+			if (got == nil) != c.wantNil || len(got) != c.tables {
+				t.Fatalf("snapshot %v (nil %v), want nil %v with %d tables", got, got == nil, c.wantNil, c.tables)
+			}
+		})
 	}
 }
