@@ -150,6 +150,46 @@ jobs:
           BASE: ${{ matrix.base }}
         run: scripts/e2e-local.sh
 
+  # The shell-free Docker path (Task 15) against a real engine. Ubuntu's
+  # runner has Docker with Linux containers, so the devnet runs end to end
+  # through RunArgv and the in-process probes.
+  docker-live:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: devnet through the local executor
+        env:
+          JUMPGATE_DOCKER_LIVE: "1"
+        run: go test -v -count=1 -run '^TestLocalDockerLive$' ./internal/setup/
+
+  # GitHub's Windows runners have Docker Engine in Windows-container mode
+  # only. That is exactly the state whose message a Windows user must see,
+  # so this job proves the message reaches them: through the plan, through
+  # the API, and through a real jumpgate.exe.
+  windows-docker:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: the engine is in Windows-container mode
+        run: |
+          $os = docker info --format '{{.OSType}}'
+          if ($os -ne 'windows') { throw "expected a Windows-container engine on this runner, got '$os'; the runner image changed, so revisit this job" }
+      - name: the plan refuses with the hint
+        env:
+          JUMPGATE_DOCKER_LIVE: "1"
+        run: go test -v -count=1 -run '^TestLocalDockerLive$' ./internal/setup/
+      - name: a real jumpgate.exe reports it
+        run: ./scripts/windows-docker-smoke.ps1 -Expect windows-containers
+
   windows-daemon:
     runs-on: windows-latest
     steps:
