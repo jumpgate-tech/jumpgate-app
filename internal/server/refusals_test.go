@@ -24,7 +24,7 @@ import (
 
 func TestAddTarget_RefusesWhatItCannotDrive(t *testing.T) {
 	// With no ssh-agent, a key path is the only way in.
-	t.Setenv("SSH_AUTH_SOCK", "")
+	noAgent(t)
 	tests := []struct {
 		name    string
 		body    any

@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"path/filepath"
 
 	"golang.org/x/crypto/ssh"
 
@@ -10,17 +9,18 @@ import (
 )
 
 // strictFiles are the files Strict trusts: the confirmed-only store and the
-// operator's OpenSSH known_hosts.
-func strictFiles() (confirmed, known string, err error) {
+// operator's OpenSSH known_hosts files (the user's, and the system-wide one when
+// trusted).
+func strictFiles() (confirmed string, known []string, err error) {
 	confirmed, err = ConfirmedHostsFile()
 	if err != nil {
-		return "", "", err
+		return "", nil, err
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", "", err
+		return "", nil, err
 	}
-	return confirmed, filepath.Join(home, ".ssh", "known_hosts"), nil
+	return confirmed, executor.OpenSSHKnownHosts(home), nil
 }
 
 // StrictHostKey is the one Strict host-key policy: keys a person confirmed
@@ -34,7 +34,7 @@ func StrictHostKey() (ssh.HostKeyCallback, func(string) []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return executor.Strict(confirmed, known), executor.KnownHostKeyAlgorithms(confirmed, known), nil
+	return executor.Strict(confirmed, known...), executor.KnownHostKeyAlgorithms(confirmed, known...), nil
 }
 
 // HostOnRecord reports whether StrictHostKey would recognise hostport (the
@@ -47,5 +47,5 @@ func HostOnRecord(hostport string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return len(executor.KnownHostKeyAlgorithms(confirmed, known)(hostport)) > 0, nil
+	return len(executor.KnownHostKeyAlgorithms(confirmed, known...)(hostport)) > 0, nil
 }

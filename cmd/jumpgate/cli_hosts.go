@@ -81,6 +81,11 @@ func hostsAdd(args []string) int {
 	if !*local {
 		keyPath := *key
 		if keyPath != "" {
+			expanded, err := expandHome(keyPath)
+			if err != nil {
+				return failed("--key: %v", err)
+			}
+			keyPath = expanded
 			// The server resolves paths from its own working directory.
 			abs, err := filepath.Abs(keyPath)
 			if err != nil {

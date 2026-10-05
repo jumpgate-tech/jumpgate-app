@@ -399,3 +399,132 @@ func rename(oldpath, newpath string) error {
 	}
 	return err
 }
+
+// writeRights let a SID change the content of a file, add to a directory, or
+// change who may.
+const writeRights = windows.GENERIC_ALL | windows.GENERIC_WRITE |
+	0x2 /* FILE_WRITE_DATA, FILE_ADD_FILE */ | 0x4 /* FILE_APPEND_DATA, FILE_ADD_SUBDIRECTORY */ |
+	0x10 /* FILE_WRITE_EA */ | 0x100 /* FILE_WRITE_ATTRIBUTES */ |
+	0x40 /* FILE_DELETE_CHILD */ | windows.DELETE | windows.WRITE_DAC | windows.WRITE_OWNER
+
+func openTrustedWritable(path string) (*os.File, error) {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	user, err := currentUser()
+	if err != nil {
+		return nil, err
+	}
+	// The file is opened once, not following a reparse point, and judged
+	// through that handle; its directory and ancestors come from the path the
+	// handle really has.
+	h, err := openNoReparse(real, windows.GENERIC_READ|windows.READ_CONTROL, windows.FILE_SHARE_READ, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", real, err)
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			windows.CloseHandle(h)
+		}
+	}()
+	final, err := finalPath(h)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkTrustedHandle(final, h, user, ownerOfSecret); err != nil {
+		return nil, err
+	}
+	dir := filepath.Dir(final)
+	dh, err := openNoReparse(dir, windows.READ_CONTROL, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, windows.FILE_FLAG_BACKUP_SEMANTICS)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", dir, err)
+	}
+	err = checkTrustedHandle(dir, dh, user, ownerOfParent)
+	windows.CloseHandle(dh)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkAncestors(final); err != nil {
+		return nil, err
+	}
+	if trustedCheckHook != nil {
+		trustedCheckHook()
+	}
+	ok = true
+	return os.NewFile(uintptr(h), final), nil
+}
+
+// openNoReparse opens path without following a reparse point and refuses one:
+// a symlink or junction swapped in at the last moment is an error, not a
+// redirect.
+func openNoReparse(path string, access, share, flags uint32) (windows.Handle, error) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	h, err := windows.CreateFile(p, access, share, nil, windows.OPEN_EXISTING, flags|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return 0, err
+	}
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+		windows.CloseHandle(h)
+		return 0, err
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		windows.CloseHandle(h)
+		return 0, fmt.Errorf("%s is a symlink or reparse point; refusing", path)
+	}
+	return h, nil
+}
+
+// finalPath is where h really is, without the \\?\ prefix when it has a drive.
+func finalPath(h windows.Handle) (string, error) {
+	buf := make([]uint16, 1024)
+	for {
+		n, err := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), 0)
+		if err != nil {
+			return "", err
+		}
+		if int(n) < len(buf) {
+			s := windows.UTF16ToString(buf[:n])
+			if len(s) > 6 && s[:4] == `\\?\` && s[5] == ':' {
+				s = s[4:]
+			}
+			return s, nil
+		}
+		buf = make([]uint16, n+1)
+	}
+}
+
+// checkTrustedHandle reads owner and DACL through the handle itself.
+func checkTrustedHandle(name string, h windows.Handle, user *windows.SID, r role) error {
+	owner, dacl, err := readSecurity(name, h)
+	if err != nil {
+		return err
+	}
+	return trustedWritableProblem(name, owner, dacl, user, r)
+}
+
+// trustedWritableProblem is the decision for the file or its directory: an
+// authorised owner, and no allow entry granting write rights to anyone not
+// authorised as a trustee (TrustedInstaller may own a directory, but is not a
+// trustee: it never writes here). Entry types it cannot reason about fail.
+func trustedWritableProblem(p string, owner *windows.SID, dacl *windows.ACL, user *windows.SID, r role) error {
+	if !authorised(owner, user, r) {
+		return fmt.Errorf("%s belongs to %s, not a trusted account", p, accountName(owner))
+	}
+	if dacl == nil {
+		return fmt.Errorf("%s has no DACL, so anyone may write it", p)
+	}
+	return allows(dacl, func(sid *windows.SID, mask uint32) error {
+		if mask&writeRights != 0 && !authorised(sid, user, trustee) {
+			return fmt.Errorf("%s is writable by %s", p, accountName(sid))
+		}
+		return nil
+	}, func(aceType byte) error {
+		return fmt.Errorf("%s has an access entry of type %d that jumpgate cannot verify", p, aceType)
+	})
+}
