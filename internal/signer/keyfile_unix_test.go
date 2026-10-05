@@ -9,20 +9,9 @@ import (
 	"testing"
 )
 
-func TestLoadKeyFileRefusesSymlinksAndNonRegularFiles(t *testing.T) {
+// Symlinks are covered on every OS by TestLoadKeyFileRefusesASymlink.
+func TestLoadKeyFileRefusesNonRegularFiles(t *testing.T) {
 	dir := t.TempDir()
-	real := filepath.Join(dir, "real.key")
-	if _, err := GenerateKeyFile(real); err != nil {
-		t.Fatal(err)
-	}
-
-	link := filepath.Join(dir, "link.key")
-	if err := os.Symlink(real, link); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadKeyFile(link); err == nil {
-		t.Fatal("LoadKeyFile followed a symlink")
-	}
 
 	fifo := filepath.Join(dir, "fifo.key")
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {

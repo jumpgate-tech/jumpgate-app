@@ -8,10 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
@@ -23,7 +23,7 @@ type fakeRunner struct {
 	stdins  []string
 	files   map[string]string // template files read during a call
 	out     string
-	modes   map[string]os.FileMode // template file modes seen during a call
+	private map[string]error // fsperm.CheckPrivate of each template file seen during a call
 	nStores int
 	fn      func(stdin, name string, args []string) (string, error)
 }
@@ -38,12 +38,10 @@ func (f *fakeRunner) run(_ context.Context, stdin string, name string, args ...s
 				f.files = map[string]string{}
 			}
 			f.files[args[i+1]] = string(b)
-			if st, err := os.Stat(args[i+1]); err == nil {
-				if f.modes == nil {
-					f.modes = map[string]os.FileMode{}
-				}
-				f.modes[args[i+1]] = st.Mode().Perm()
+			if f.private == nil {
+				f.private = map[string]error{}
 			}
+			f.private[args[i+1]] = fsperm.CheckPrivate(args[i+1])
 		}
 	}
 	if f.fn != nil {
@@ -384,7 +382,7 @@ func TestLinuxKeychainFailureNamesTheFileStore(t *testing.T) {
 	}
 }
 
-func TestOnePasswordTemplateIs0600AndRemovedWhenOpFails(t *testing.T) {
+func TestOnePasswordTemplateIsOwnerOnlyAndRemovedWhenOpFails(t *testing.T) {
 	f := &fakeRunner{}
 	mem := memStore(f)
 	f.fn = func(stdin, name string, args []string) (string, error) {
@@ -397,12 +395,12 @@ func TestOnePasswordTemplateIs0600AndRemovedWhenOpFails(t *testing.T) {
 	if _, err := Create(context.Background(), StoreOnePassword, "op://Private/jumpgate-controller/credential"); err == nil {
 		t.Fatal("want an error when op fails")
 	}
-	if len(f.modes) != 1 {
-		t.Fatalf("template files seen: %v", f.modes)
+	if len(f.private) != 1 {
+		t.Fatalf("template files seen: %v", f.private)
 	}
-	for path, mode := range f.modes {
-		if runtime.GOOS != "windows" && mode != 0o600 { // a mode means nothing on Windows
-			t.Errorf("template mode = %o, want 600", mode)
+	for path, perr := range f.private {
+		if perr != nil {
+			t.Errorf("template %s was not owner-only while op read it: %v", path, perr)
 		}
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("template %s left on disk after op failed", path)

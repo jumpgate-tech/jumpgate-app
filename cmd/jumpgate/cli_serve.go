@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/valve-tech/jumpgate/cmd/jumpgate/web"
-	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/server"
 )
@@ -31,9 +30,9 @@ func cmdServe(args []string) int {
 	}
 	defer holder.Release()
 
-	cfg, err := config.Load()
+	cfg, err := loadServerConfig(os.Stderr)
 	if err != nil {
-		return failed("load config: %v", err)
+		return failed("%v", err)
 	}
 	sgn, err := openControllerKey(cfg)
 	if err != nil {

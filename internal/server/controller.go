@@ -18,6 +18,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // jgPath is a path under the controller's state directory (~/.jumpgate).
@@ -64,10 +65,7 @@ func ensureTransportKey() (string, error) {
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := fsperm.MkdirPrivate(dir); err != nil {
 		return "", err
 	}
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -78,16 +76,12 @@ func ensureTransportKey() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	tmp, err := os.CreateTemp(dir, ".jumpgate_ed25519.tmp-*")
+	tmp, err := fsperm.CreateTempPrivate(dir, ".jumpgate_ed25519.tmp-*")
 	if err != nil {
 		return "", err
 	}
 	defer os.Remove(tmp.Name())
-	// CreateTemp already makes the file 0600; Chmod states it outright.
-	werr := tmp.Chmod(0o600)
-	if werr == nil {
-		_, werr = tmp.Write(pem.EncodeToMemory(block))
-	}
+	_, werr := tmp.Write(pem.EncodeToMemory(block))
 	if werr == nil {
 		werr = tmp.Sync()
 	}
