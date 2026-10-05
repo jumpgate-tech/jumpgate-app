@@ -48,8 +48,8 @@ func TestWinCredCreateOpenRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := f.m["jumpgate/controller"]; !ok {
-		t.Fatalf("stored under %v, want target jumpgate/controller", f.m)
+	if _, ok := f.m["jumpgate.signer/controller"]; !ok {
+		t.Fatalf("stored under %v, want target jumpgate.signer/controller", f.m)
 	}
 	k2, err := Open(context.Background(), StoreWinCred, "controller")
 	if err != nil || k2.Address() != k.Address() {
@@ -58,12 +58,12 @@ func TestWinCredCreateOpenRoundTrip(t *testing.T) {
 }
 
 func TestWinCredNeverReplacesAKey(t *testing.T) {
-	f := &fakeCreds{m: map[string][]byte{"jumpgate/controller": []byte("00")}}
+	f := &fakeCreds{m: map[string][]byte{"jumpgate.signer/controller": []byte("00")}}
 	withCreds(t, f)
 	if _, err := Create(context.Background(), StoreWinCred, "controller"); !errors.Is(err, ErrKeyExists) {
 		t.Fatalf("Create over an existing credential = %v, want ErrKeyExists", err)
 	}
-	if string(f.m["jumpgate/controller"]) != "00" {
+	if string(f.m["jumpgate.signer/controller"]) != "00" {
 		t.Fatal("the existing credential was changed")
 	}
 }
@@ -105,7 +105,7 @@ func TestWinCredOpenMissingNamesKeysInit(t *testing.T) {
 }
 
 func TestWinCredOpenRejectsGarbage(t *testing.T) {
-	withCreds(t, &fakeCreds{m: map[string][]byte{"jumpgate/controller": []byte("not hex")}})
+	withCreds(t, &fakeCreds{m: map[string][]byte{"jumpgate.signer/controller": []byte("not hex")}})
 	if _, err := Open(context.Background(), StoreWinCred, "controller"); err == nil {
 		t.Fatal("Open of a non-hex credential succeeded")
 	}

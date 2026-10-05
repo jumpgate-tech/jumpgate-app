@@ -41,7 +41,7 @@ var (
 		c.Stdout, c.Stderr = &out, &errb
 		if err := c.Run(); err != nil {
 			if errors.Is(context.Cause(ctx), errToolTimeout) {
-				err = fmt.Errorf("%s did not answer within %s; the keyring may be locked with nothing to prompt you. Unlock it, or use --store file", name, toolTimeout)
+				err = toolTimeoutErr(name)
 			}
 			ce := &cmdError{Name: name, ExitCode: -1, Stdout: out.String(), Stderr: errb.String(), Err: err}
 			var ee *exec.ExitError
@@ -57,6 +57,19 @@ var (
 // errToolTimeout marks a tool run cut off by toolTimeout, as opposed to the
 // caller's own deadline.
 var errToolTimeout = errors.New("key-store tool timed out")
+
+// toolTimeoutErr says which tool gave up and what usually causes it.
+func toolTimeoutErr(name string) error {
+	switch name {
+	case "secret-tool":
+		return fmt.Errorf("secret-tool did not answer within %s; the keyring may be locked with nothing to prompt you. Unlock it, or use --store file", toolTimeout)
+	case "security":
+		return fmt.Errorf("macOS keychain (security) did not answer within %s; a keychain prompt may be waiting for an answer. Answer it and try again, or use --store file", toolTimeout)
+	case "op":
+		return fmt.Errorf("1Password CLI (op) did not answer within %s; it may be waiting for you to unlock 1Password or approve access. Unlock it and try again", toolTimeout)
+	}
+	return fmt.Errorf("%s did not answer within %s", name, toolTimeout)
+}
 
 // cmdError is a failed tool run. Stdout is kept only so callers can tell an
 // empty result from a non-empty one; Error never prints it, because a tool's

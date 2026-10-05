@@ -20,8 +20,10 @@ var errCredNotFound = errors.New("signer: credential not found")
 // everything elsewhere. Tests replace it.
 var winCreds credStore = platformCreds()
 
-// credTarget is the generic credential's target name for a ref.
-func credTarget(ref string) string { return "jumpgate/" + ref }
+// credTarget is the generic credential's target name for a ref. Generic
+// targets share one namespace per user, so the prefix is specific to the
+// signer: another app's "jumpgate/..." credential can never be taken for a key.
+func credTarget(ref string) string { return "jumpgate.signer/" + ref }
 
 func winCredCreate(ref string) (*Key, error) {
 	if !keychainNameRE.MatchString(ref) {
@@ -45,6 +47,12 @@ func winCredCreate(ref string) (*Key, error) {
 	blob := make([]byte, hex.EncodedLen(len(raw)))
 	hex.Encode(blob, raw)
 	clear(raw)
+	// CredWriteW replaces an existing credential silently and has no
+	// create-only flag, so a credential written by someone else between the
+	// check above and this write cannot be refused. The read-back below
+	// catches a write that lands after ours (the key no longer matches); one
+	// that lands in between is overwritten, a window only another process of
+	// this same user can use.
 	err = winCreds.write(target, blob)
 	clear(blob)
 	if err != nil {

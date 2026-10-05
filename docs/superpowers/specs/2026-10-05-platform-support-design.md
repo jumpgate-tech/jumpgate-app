@@ -234,7 +234,7 @@ Build: `scripts/build-agents.sh [OUT]` builds both agents with
 ### 4. Key stores: Windows Credential Manager and a sane Linux default (I-3, I-4, D3)
 
 - `signer.StoreWinCred = "wincred"`: a generic credential, target
-  `jumpgate/<ref>`, persist `CRED_PERSIST_LOCAL_MACHINE`, the key's hex as the
+  `jumpgate.signer/<ref>`, persist `CRED_PERSIST_LOCAL_MACHINE`, the key's hex as the
   blob. Same rules as the other stores: exists-check fails closed, never
   replaces, verifies by reading back. `ref` uses the keychain name rule.
 - `DefaultStore()`: Windows → `wincred`; macOS → `keychain` if `security`

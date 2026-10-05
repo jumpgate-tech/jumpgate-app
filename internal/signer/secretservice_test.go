@@ -114,11 +114,26 @@ func TestRunCmdTimesOut(t *testing.T) {
 	t.Cleanup(func() { toolTimeout = old })
 	start := time.Now()
 	_, err := runCmd(context.Background(), "", "sleep", "5")
-	if err == nil || !strings.Contains(err.Error(), "did not answer within") || !strings.Contains(err.Error(), "--store file") {
+	if err == nil || !strings.Contains(err.Error(), "sleep did not answer within") {
 		t.Fatalf("runCmd = %v; want the timeout message", err)
 	}
 	if time.Since(start) > 3*time.Second {
 		t.Fatal("runCmd did not stop the tool at the timeout")
+	}
+}
+
+// Each tool's timeout names the likely cause: only a locked Secret Service is
+// fixed by switching to a key file; 1Password needs unlocking, not a new store.
+func TestToolTimeoutMessagesFitTheTool(t *testing.T) {
+	for _, c := range []struct{ tool, want, notWant string }{
+		{"secret-tool", "keyring may be locked", ""},
+		{"security", "keychain prompt may be waiting", "locked with nothing to prompt"},
+		{"op", "1Password CLI (op) did not answer within", "--store file"},
+	} {
+		msg := toolTimeoutErr(c.tool).Error()
+		if !strings.Contains(msg, c.want) || (c.notWant != "" && strings.Contains(msg, c.notWant)) {
+			t.Errorf("%s timeout = %q; want %q, not %q", c.tool, msg, c.want, c.notWant)
+		}
 	}
 }
 
