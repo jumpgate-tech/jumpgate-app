@@ -244,3 +244,117 @@ func TestMkdirPrivateRefusesASymlinkIntoAParentOthersCanEmpty(t *testing.T) {
 		t.Fatalf("MkdirPrivate(link into a parent Everyone can empty) = %v, want a refusal", err)
 	}
 }
+
+// otherUserSID stands for a second local account, which hosted runners do
+// not have: the decisions are tested with injected SIDs.
+const otherUserSID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
+
+func sidOf(t *testing.T, s string) *windows.SID {
+	t.Helper()
+	sid, err := windows.StringToSid(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sid
+}
+
+// descriptor parses SDDL and returns its owner and DACL (x/sys copies the
+// descriptor into Go memory, which the returned pointers keep alive).
+func descriptor(t *testing.T, sddl string) (*windows.SID, *windows.ACL) {
+	t.Helper()
+	sd, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return owner, dacl
+}
+
+// Ruling P31, one table: who may own a secret, hold an entry on it, own a
+// parent, or own a followed symlink's target.
+func TestAuthorisedRoles(t *testing.T) {
+	user, err := currentUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	system := sidOf(t, "S-1-5-18")
+	admins := sidOf(t, "S-1-5-32-544")
+	ti := sidOf(t, trustedInstallerSID)
+	other := sidOf(t, otherUserSID)
+	everyone := sidOf(t, "S-1-1-0")
+
+	old := isAdminMember
+	t.Cleanup(func() { isAdminMember = old })
+	for _, elevated := range []bool{false, true} {
+		isAdminMember = func(*windows.SID) (bool, error) { return elevated, nil }
+		cases := []struct {
+			name string
+			sid  *windows.SID
+			want map[role]bool
+		}{
+			{"user", user, map[role]bool{ownerOfSecret: true, trustee: true, ownerOfParent: true, ownerOfLinkTarget: true}},
+			{"SYSTEM", system, map[role]bool{ownerOfSecret: true, trustee: true, ownerOfParent: true, ownerOfLinkTarget: false}},
+			{"Administrators", admins, map[role]bool{ownerOfSecret: true, trustee: true, ownerOfParent: true, ownerOfLinkTarget: elevated}},
+			{"TrustedInstaller", ti, map[role]bool{ownerOfSecret: false, trustee: false, ownerOfParent: true, ownerOfLinkTarget: false}},
+			{"another user", other, map[role]bool{ownerOfSecret: false, trustee: false, ownerOfParent: false, ownerOfLinkTarget: false}},
+			{"Everyone", everyone, map[role]bool{ownerOfSecret: false, trustee: false, ownerOfParent: false, ownerOfLinkTarget: false}},
+			{"nil", nil, map[role]bool{ownerOfSecret: false, trustee: false, ownerOfParent: false, ownerOfLinkTarget: false}},
+		}
+		for _, c := range cases {
+			for r, want := range c.want {
+				if got := authorised(c.sid, user, r); got != want {
+					t.Errorf("elevated=%v: authorised(%s, role %d) = %v, want %v", elevated, c.name, r, got, want)
+				}
+			}
+		}
+	}
+}
+
+// The scenario behind P31: Bob owns a parent of Alice's state directory and
+// grants only Alice and SYSTEM. He can rewrite that DACL whenever he likes,
+// so the parent is refused on its owner alone.
+func TestAncestorOwnedByAnotherUserIsRefused(t *testing.T) {
+	user, err := currentUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := user.String()
+	owner, dacl := descriptor(t, "O:"+otherUserSID+"D:P(A;;FA;;;SY)(A;;FA;;;"+u+")")
+	err = ancestorProblem(`C:\shared\b`, owner, dacl, user)
+	if err == nil || !strings.Contains(err.Error(), "belongs to") {
+		t.Fatalf("ancestorProblem with another user as owner = %v, want a refusal", err)
+	}
+	for _, o := range []string{u, "SY", "BA", trustedInstallerSID} {
+		owner, dacl := descriptor(t, "O:"+o+"D:P(A;;FA;;;SY)(A;;FA;;;"+u+")")
+		if err := ancestorProblem(`C:\x`, owner, dacl, user); err != nil {
+			t.Errorf("ancestorProblem with owner %s = %v, want nil", o, err)
+		}
+	}
+}
+
+// A secret owned by another user, or by TrustedInstaller, is not private
+// even if its DACL is.
+func TestSecretOwnedByAnotherSIDIsNotPrivate(t *testing.T) {
+	user, err := currentUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := user.String()
+	for _, o := range []string{otherUserSID, trustedInstallerSID} {
+		owner, dacl := descriptor(t, "O:"+o+"D:P(A;;FA;;;SY)(A;;FA;;;"+u+")")
+		if err := secretProblem("k", owner, dacl, user); !errors.Is(err, ErrNotPrivate) {
+			t.Errorf("secretProblem with owner %s = %v, want ErrNotPrivate", o, err)
+		}
+	}
+	owner, dacl := descriptor(t, "O:"+u+"D:P(A;;FA;;;SY)(A;;FA;;;"+u+")(A;;FA;;;BA)")
+	if err := secretProblem("k", owner, dacl, user); err != nil {
+		t.Errorf("secretProblem on an owner-only descriptor = %v, want nil", err)
+	}
+}
