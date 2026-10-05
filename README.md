@@ -105,6 +105,9 @@ box, a restricted `jumpgate` tunnel user, and an sshd drop-in that confines that
 user to the agent's unix socket. Every command is a signed intent that the agent
 checks against its policy and answers with a signed receipt. Host keys are
 confirmed by you, by fingerprint, and remembered in `~/.jumpgate/confirmed_hosts`.
+The web UI checks a confirmed or paired box strictly against that record too: a
+changed key is refused, never re-learned. Only boxes that nobody has confirmed
+are still trusted on first use, in `~/.jumpgate/known_hosts`.
 Running `hosts add` again on an existing name re-pairs the address on record
 (to finish an interrupted pairing or upgrade the agent); it refuses a different
 `--ssh` address, so remove the host first to re-point it. Once pairing

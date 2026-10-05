@@ -77,7 +77,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	if local {
 		priv = executor.Sudo(s.newLocalExecutor())
 	} else {
-		hostKey, algos, err := strictHostKey()
+		hostKey, algos, err := config.StrictHostKey()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

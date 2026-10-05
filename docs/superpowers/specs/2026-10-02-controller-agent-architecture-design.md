@@ -251,6 +251,9 @@ once built, the rules in `docs/design/validator-capability.md`:
 | 7 | Validators | Per the constraints above | 4, 6 |
 
 **Migration:** until sub-project 6 the web UI keeps using today's SSH executor.
+That executor passes its host-key policy explicitly. Boxes that are confirmed or
+paired use Strict, and only boxes that nobody has confirmed use TOFU. So
+retiring TOFU means deleting the call sites that pass `TOFUHostKeyCallback`.
 Unpaired boxes show as `SSH-only` in the fleet, so both front ends migrate
 gradually.
 

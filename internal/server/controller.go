@@ -152,24 +152,6 @@ func agentBinary(arch string) (string, error) {
 	return "", fmt.Errorf("%s is not listed in SHA256SUMS", name)
 }
 
-// strictHostKey checks a host key against keys a person confirmed: the
-// confirmed-only store (never written by trust-on-first-use) and the
-// operator's OpenSSH known_hosts. DialSSH hands it to the jump host too. The
-// second result asks each host for the key types on record, so a host known
-// by one type is not mistaken for a changed one.
-func strictHostKey() (ssh.HostKeyCallback, func(string) []string, error) {
-	confirmed, err := config.ConfirmedHostsFile()
-	if err != nil {
-		return nil, nil, err
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, nil, err
-	}
-	known := filepath.Join(home, ".ssh", "known_hosts")
-	return executor.Strict(confirmed, known), executor.KnownHostKeyAlgorithms(confirmed, known), nil
-}
-
 // agentTarget is how this controller reaches t's agent: directly for a local
 // target, otherwise as the jumpgate tunnel user with the transport key and
 // strict host-key checking.
@@ -186,7 +168,7 @@ func agentTarget(t config.Target) (agentclient.Target, error) {
 		if t.SSH == nil {
 			return agentclient.Target{}, fmt.Errorf("target %q has no SSH address", t.ID)
 		}
-		hostKey, algos, err := strictHostKey()
+		hostKey, algos, err := config.StrictHostKey()
 		if err != nil {
 			return agentclient.Target{}, err
 		}

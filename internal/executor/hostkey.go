@@ -95,9 +95,19 @@ func RecordHostKey(hostKeyFile, hostname string, key ssh.PublicKey) error {
 	return nil
 }
 
-// TOFUHostKeyCallback is the exported form of the trust-on-first-use policy
-// NewSSH applies, so callers (and tests of the config migration) can check a
-// known_hosts file against a presented key without dialling.
+// TOFUHostKeyCallback is the trust-on-first-use policy: an unknown host's key
+// is appended to hostKeyFile (created 0600), and a known host presenting a
+// different key is rejected. It is never a default; only the legacy web-UI
+// path asks for it, for boxes nobody confirmed or paired, until sub-project 6
+// retires that path.
 func TOFUHostKeyCallback(hostKeyFile string) ssh.HostKeyCallback {
 	return tofuHostKeyCallback(hostKeyFile)
+}
+
+// IsConfirmed reports whether confirmedFile holds a key for hostport (the
+// host:port string DialSSH hands its callback), that is, whether a person
+// confirmed this host. A file that cannot be read confirms nothing.
+func IsConfirmed(confirmedFile, hostport string) bool {
+	k, err := lookupHostKey(confirmedFile, hostport)
+	return err == nil && k != nil
 }

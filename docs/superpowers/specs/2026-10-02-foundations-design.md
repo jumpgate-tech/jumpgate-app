@@ -329,10 +329,15 @@ sub-project 0; this sub-project does not ship before that check lands.
 5. **ssh-agent auth.** If `SSH_AUTH_SOCK` is set, its keys are offered before
    `KeyPath`. Passphrase-protected key files are supported only through the
    agent (documented).
-6. **Host-key decider.** `SSHConfig.HostKey` is an `ssh.HostKeyCallback`.
-   Implementations in `internal/executor`:
-   - `TOFUHostKeyCallback` (today's behaviour, writing the target's
-     `HostKeyFile`; the web UI keeps it as its default until sub-project 6).
+6. **Host-key decider.** `SSHConfig.HostKey` is an `ssh.HostKeyCallback`, and it
+   is required. `NewSSH` and `DialSSH` refuse a nil one with
+   `executor.ErrNoHostKeyPolicy` before they connect, so trust-on-first-use is
+   never a silent default. Implementations in `internal/executor`:
+   - `TOFUHostKeyCallback` writes the target's `HostKeyFile`. Only the legacy
+     web-UI executor passes it, and that executor (`server.legacySSHConfig`)
+     chooses a policy for each hop explicitly. A hop whose key is in
+     `confirmed_hosts` uses `Strict`, and so does the box itself once it is
+     paired with an agent. Every other hop uses TOFU until sub-project 6.
    - `Strict(confirmedFile, opensshFiles...)`: accepts a host only if its key
      is in the confirmed-only store `~/.jumpgate/confirmed_hosts`
      (`config.ConfirmedHostsFile()`) or in the operator's OpenSSH
@@ -346,7 +351,10 @@ sub-project 0; this sub-project does not ship before that check lands.
      jump hop's) to `~/.jumpgate/known_hosts` and ignores a client-supplied
      path. Every mismatch or revocation wraps `executor.ErrHostKeyMismatch`;
      strict dials also set `SSHConfig.HostKeyAlgorithms` to
-     `KnownHostKeyAlgorithms(confirmedFile, opensshFiles...)`.
+     `KnownHostKeyAlgorithms(confirmedFile, opensshFiles...)`. One builder,
+     `config.StrictHostKey()`, assembles `Strict` with
+     `~/.jumpgate/confirmed_hosts` and `~/.ssh/known_hosts`. The CLI, the
+     server's agent dials and the legacy path all use it.
    - `CaptureHostKey` + `RecordHostKey` (the CLI's confirm flow): capture
      connects far enough to read the key and hangs up before authenticating;
      the CLI prints the SHA256 fingerprint, a person confirms, and
