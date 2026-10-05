@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -93,5 +94,31 @@ func TestDockerStart(t *testing.T) {
 			t.Errorf("POST /api/docker/start = %d, want 400 off darwin", res.StatusCode)
 		}
 		res.Body.Close()
+	}
+}
+
+func TestMacStartPlan(t *testing.T) {
+	cases := []struct {
+		ctx        string
+		openCmd    string
+		colima     bool // colima may be started at all
+		colimaOnly bool // colima is the only thing to try
+	}{
+		{"colima", "", true, true},
+		{"colima-dev", "", true, true},
+		{"orbstack", "open -a OrbStack || open -a Docker", false, false},
+		{"desktop-linux", "open -a Docker || open -a OrbStack", false, false},
+		{"something-else", "open -a Docker || open -a OrbStack", false, false},
+		{"default", "open -a Docker || open -a OrbStack", true, false},
+		{"", "open -a Docker || open -a OrbStack", true, false},
+	}
+	for _, c := range cases {
+		p := macStartPlan(c.ctx)
+		if p.openCmd != c.openCmd || p.colima != c.colima || p.colimaOnly != c.colimaOnly {
+			t.Errorf("context %q: got %+v", c.ctx, p)
+		}
+	}
+	if !strings.Contains(colimaStartCommand, "command -v colima") {
+		t.Error("colima must only be tried when it is on PATH")
 	}
 }

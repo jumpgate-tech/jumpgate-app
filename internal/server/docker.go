@@ -1,14 +1,18 @@
 // This file backs the panel's Docker readiness gate. GET /api/docker reports
 // whether the LOCAL machine — the box the one-click gateway is provisioned on —
 // has Docker present and its daemon running. POST /api/docker/start launches
-// Docker Desktop (or OrbStack) on macOS so the daemon comes up, so the power
+// Docker Desktop, OrbStack or colima on macOS so the daemon comes up, so the power
 // button can wait for Docker instead of failing on a raw "docker not found".
 package server
 
 import (
+	"context"
 	"errors"
+	"log"
 	"net/http"
 	"runtime"
+	"strings"
+	"time"
 
 	"github.com/valve-tech/jumpgate/internal/ops"
 )
@@ -27,7 +31,7 @@ type dockerStatusResponse struct {
 	Hint string `json:"hint,omitempty"`
 }
 
-const dockerStartHint = "Docker is installed but not running. Start Docker Desktop or OrbStack."
+const dockerStartHint = "Docker is installed but not running. Start Docker Desktop, OrbStack or colima (`colima start`)."
 
 func (s *Server) handleDockerStatus(w http.ResponseWriter, r *http.Request) {
 	info, err := ops.ProbeDocker(r.Context(), s.newLocalExecutor())
@@ -53,7 +57,7 @@ func (s *Server) handleDockerStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleDockerStart launches Docker Desktop (or OrbStack) on macOS so the
+// handleDockerStart launches Docker Desktop, OrbStack or colima on macOS so the
 // daemon comes up. It returns as soon as the launch is issued — the daemon
 // takes a while to be ready, so the caller polls GET /api/docker until running
 // flips true. Only macOS can open a desktop app; elsewhere the operator starts
@@ -63,14 +67,81 @@ func (s *Server) handleDockerStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "auto-start is only available on macOS; start the Docker engine yourself")
 		return
 	}
-	// Try Docker Desktop, then OrbStack. `open -a` returns non-zero when the
-	// named app is not installed, so the || falls through to the next one.
-	res, err := s.newLocalExecutor().Run(r.Context(), "open -a Docker || open -a OrbStack", nil)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
+	// Prefer the runtime the active docker context points at, then try the
+	// rest. `docker context show` failing just means no preference.
+	ctxName := ""
+	if cr, cerr := s.newLocalExecutor().Run(r.Context(), "docker context show", nil); cerr == nil && cr.ExitCode == 0 {
+		ctxName = strings.TrimSpace(cr.Stdout)
+	}
+	plan := macStartPlan(ctxName)
+	started := false
+	if plan.openCmd != "" {
+		res, err := s.newLocalExecutor().Run(r.Context(), plan.openCmd, nil)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		started = res.ExitCode == 0
+	}
+	if !started && plan.colima {
+		s.startColimaDetached()
+		started = true
 	}
 	writeJSON(w, http.StatusOK, struct {
 		Started bool `json:"started"`
-	}{Started: res.ExitCode == 0})
+	}{Started: started})
+}
+
+// colimaStartCommand starts colima only when it is installed. `colima start`
+// is idempotent, so a running VM is harmless.
+const colimaStartCommand = "command -v colima >/dev/null 2>&1 && colima start"
+
+// colimaStartTimeout bounds a detached `colima start`; a first boot downloads
+// and boots a VM, which takes minutes.
+const colimaStartTimeout = 10 * time.Minute
+
+// macStartPlanT says how to bring Docker up on macOS for a docker context.
+type macStartPlanT struct {
+	openCmd    string // `open -a` launchers, run synchronously; "" for none
+	colima     bool   // colima may be started (context is colima or default)
+	colimaOnly bool   // colima is the only runtime to try
+}
+
+// macStartPlan prefers the runtime the active docker context names. Colima is
+// only ever started when the context is colima (or the unnamed default): with
+// the context on desktop-linux, orbstack or anything else, starting a colima
+// VM would be a surprise.
+func macStartPlan(dockerContext string) macStartPlanT {
+	c := strings.ToLower(strings.TrimSpace(dockerContext))
+	const desktop, orb = "open -a Docker", "open -a OrbStack"
+	switch {
+	case strings.Contains(c, "colima"):
+		return macStartPlanT{colima: true, colimaOnly: true}
+	case strings.Contains(c, "orb"):
+		return macStartPlanT{openCmd: orb + " || " + desktop}
+	case c == "" || c == "default":
+		return macStartPlanT{openCmd: desktop + " || " + orb, colima: true}
+	}
+	return macStartPlanT{openCmd: desktop + " || " + orb}
+}
+
+// startColimaDetached launches `colima start` outside the HTTP request: its
+// context is not the request's (a client disconnect must not kill a VM
+// mid-boot), the local executor runs it in its own process group, and the
+// outcome is logged. The handler returns as soon as this is issued.
+func (s *Server) startColimaDetached() {
+	e := s.newLocalExecutor()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), colimaStartTimeout)
+		defer cancel()
+		res, err := e.Run(ctx, colimaStartCommand, nil)
+		switch {
+		case err != nil:
+			log.Printf("jumpgate: colima start: %v", err)
+		case res.ExitCode != 0:
+			log.Printf("jumpgate: colima start exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+		default:
+			log.Printf("jumpgate: colima start finished")
+		}
+	}()
 }

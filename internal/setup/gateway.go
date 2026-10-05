@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -384,6 +385,13 @@ func (p *gatewayPlan) preflight(ctx context.Context, e executor.Executor, st *St
 		}
 		if !info.DaemonReachable {
 			return fmt.Errorf("preflight: the docker CLI is installed but no engine answered — start Docker Desktop / OrbStack / colima (or `systemctl start docker`) and retry: %s", info.DaemonError)
+		}
+		// The image is built on the target, so BuildKit must be there — unless
+		// the image is already present and no build will happen.
+		if present, _ := ops.ImageExists(ctx, e, ops.ERPCImageTag()); !present {
+			if err := ops.CheckBuildx(ctx, e); err != nil {
+				return fmt.Errorf("preflight: %w", err)
+			}
 		}
 	case BackendSystemd:
 		if err := requireLinuxRoot(ctx, e); err != nil {
@@ -1111,6 +1119,9 @@ func (p *gatewayPlan) gatewayCheck(ctx context.Context, e executor.Executor) err
 		return fmt.Errorf("gateway: eth_chainId probe: %w", err)
 	}
 	if res.ExitCode != 0 {
+		if derr := p.diagnoseContainer(ctx, e); derr != nil {
+			return derr
+		}
 		return fmt.Errorf("gateway: eth_chainId at %s failed (curl exit %d): %s", url, res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 
@@ -1246,4 +1257,70 @@ func parseHexChainID(hex string) (int, error) {
 		return 0, err
 	}
 	return int(n), nil
+}
+
+// diagnoseContainer explains a failed readiness probe when the docker
+// gateway's container is crash-looping or has exited — the commonest cause of
+// "curl exit 7" (e.g. a bind mount outside the VM's shared paths). It returns
+// nil when the container looks healthy or cannot be inspected, so the caller
+// falls back to the plain probe error.
+func (p *gatewayPlan) diagnoseContainer(ctx context.Context, e executor.Executor) error {
+	if p.backend != BackendDocker {
+		return nil
+	}
+	name := p.containerName()
+	res, err := ops.DockerRun(ctx, e, "inspect", "-f", "{{.State.Status}}|{{.RestartCount}}", name)
+	if err != nil || res.ExitCode != 0 {
+		return nil
+	}
+	status, restarts, _ := strings.Cut(strings.TrimSpace(res.Stdout), "|")
+	var state string
+	switch status {
+	case "restarting":
+		state = "restarting"
+	case "exited", "dead":
+		state = status
+	default:
+		return nil
+	}
+	logs := ""
+	if lr, lerr := ops.DockerRun(ctx, e, "logs", "--tail", "20", name); lerr == nil {
+		// docker logs replays the container's stderr on its own stderr, so
+		// a crash message is usually there rather than on stdout.
+		logs = strings.TrimSpace(strings.TrimSpace(lr.Stdout) + "\n" + strings.TrimSpace(lr.Stderr))
+	}
+	return fmt.Errorf("gateway container %s is %s (%s restarts); last log lines:\n%s", name, state, strings.TrimSpace(restarts), sanitizeLogs(logs))
+}
+
+var (
+	logUserinfoRE = regexp.MustCompile(`(://)[^/\s:@]+:[^/\s@]*@`)
+	logSecretRE   = regexp.MustCompile(`(?i)((?:[\w.-]*(?:key|token|secret|passw(?:or)?d|authorization))["']?\s*[=:]\s*["']?)[^\s"',;&]+`)
+)
+
+const (
+	logMaxBytes = 2048
+	logMaxLine  = 200
+)
+
+// sanitizeLogs prepares container log lines for an error message: it redacts
+// URL userinfo and key/token/secret/password values, wraps long lines, and
+// keeps only the last ~2 KB.
+func sanitizeLogs(s string) string {
+	s = logUserinfoRE.ReplaceAllString(s, "${1}[redacted]@")
+	s = logSecretRE.ReplaceAllString(s, "${1}[redacted]")
+	var b strings.Builder
+	for _, line := range strings.Split(s, "\n") {
+		for len(line) > logMaxLine {
+			b.WriteString(line[:logMaxLine])
+			b.WriteByte('\n')
+			line = line[logMaxLine:]
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	out := strings.TrimRight(b.String(), "\n")
+	if len(out) > logMaxBytes {
+		out = "...\n" + out[len(out)-logMaxBytes:]
+	}
+	return out
 }
