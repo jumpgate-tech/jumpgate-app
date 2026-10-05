@@ -162,4 +162,3 @@ jobs:
         env:
           JUMPGATE_TEST_WIN_AGENT: "1"
         run: go test -count=1 -run TestOpenSSHAgentPipe -v ./internal/executor/
-```
