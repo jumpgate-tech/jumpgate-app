@@ -3,9 +3,11 @@
 package agentbin
 
 import (
+	"bytes"
 	"debug/elf"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
@@ -14,11 +16,14 @@ import (
 func TestEmbeddedAgentsAreStaticLinuxOfTheRightArch(t *testing.T) {
 	for arch, machine := range map[string]elf.Machine{"amd64": elf.EM_X86_64, "arm64": elf.EM_AARCH64} {
 		testutil.Home(t)
-		p, src, err := Path(arch)
+		b, src, err := Load(arch)
 		if err != nil || src != SourceEmbedded {
-			t.Fatalf("%s: Path = %q, %q, %v; want the embedded agent", arch, p, src, err)
+			t.Fatalf("%s: Load = %d bytes, %q, %v; want the embedded agent", arch, len(b), src, err)
 		}
-		f, err := elf.Open(p)
+		if !buildinfo.IsStaticELF(bytes.NewReader(b)) {
+			t.Errorf("%s: not a static executable", arch)
+		}
+		f, err := elf.NewFile(bytes.NewReader(b))
 		if err != nil {
 			t.Fatalf("%s: %v", arch, err)
 		}
@@ -30,6 +35,5 @@ func TestEmbeddedAgentsAreStaticLinuxOfTheRightArch(t *testing.T) {
 				t.Errorf("%s: dynamically linked (has PT_INTERP)", arch)
 			}
 		}
-		f.Close()
 	}
 }

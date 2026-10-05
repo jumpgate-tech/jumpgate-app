@@ -13,7 +13,12 @@ version="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo d
 # gzip(1) reads options from $GZIP, so take ours out of the environment.
 compress="${GZIP:-0}"
 unset GZIP
+# Owner-only: jumpgate refuses a developer agents directory, or a file in it,
+# that anyone else could change (ruling P35), since they could pick what
+# pairing uploads, sums and all.
 mkdir -p "$out"
+chmod 700 "$out"
+umask 077
 sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi
 }

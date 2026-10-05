@@ -29,6 +29,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/testutil"
 )
@@ -510,19 +511,20 @@ func (b *linuxBoxExec) Run(ctx context.Context, cmd string, o *executor.RunOpts)
 func TestPairStreamNamesTheAgentSource(t *testing.T) {
 	ts, token := localPairServer(t, "linux", 0, &linuxBoxExec{})
 	dir := filepath.Join(os.Getenv("HOME"), ".jumpgate", "agents")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsperm.MkdirPrivate(dir); err != nil {
 		t.Fatal(err)
 	}
 	body := []byte("dev agent")
 	sum := sha256.Sum256(body)
-	if err := os.WriteFile(filepath.Join(dir, "jumpgate-linux-amd64"), body, 0o755); err != nil {
+	if err := fsperm.WriteFilePrivate(filepath.Join(dir, "jumpgate-linux-amd64"), body); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(hex.EncodeToString(sum[:])+"  jumpgate-linux-amd64\n"), 0o644); err != nil {
+	if err := fsperm.WriteFilePrivate(filepath.Join(dir, "SHA256SUMS"), []byte(hex.EncodeToString(sum[:])+"  jumpgate-linux-amd64\n")); err != nil {
 		t.Fatal(err)
 	}
 
 	res := postPair(t, ts, token, `{}`)
+	defer res.Body.Close()
 	stream, _ := io.ReadAll(res.Body)
 	want := `"line":"agent binary for linux/amd64: dev override ~/.jumpgate/agents"`
 	if !strings.Contains(string(stream), want) {

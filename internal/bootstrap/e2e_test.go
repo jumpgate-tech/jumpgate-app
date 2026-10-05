@@ -51,7 +51,7 @@ func e2ePort(t *testing.T) int {
 
 // e2eAgents returns a binary lookup after checking that both agents exist, so
 // a bad directory fails here and not halfway through pairing a box.
-func e2eAgents(t *testing.T) func(arch string) (string, error) {
+func e2eAgents(t *testing.T) func(arch string) ([]byte, error) {
 	t.Helper()
 	dir := e2eEnv(t, "JUMPGATE_E2E_AGENTS")
 	for _, arch := range []string{"amd64", "arm64"} {
@@ -59,7 +59,7 @@ func e2eAgents(t *testing.T) func(arch string) (string, error) {
 			t.Fatalf("JUMPGATE_E2E_AGENTS: %v", err)
 		}
 	}
-	return func(arch string) (string, error) { return dir + "/jumpgate-linux-" + arch, nil }
+	return func(arch string) ([]byte, error) { return os.ReadFile(dir + "/jumpgate-linux-" + arch) }
 }
 
 // waitAgentSocket waits (about 10s) for the agent's socket to exist: bootstrap
