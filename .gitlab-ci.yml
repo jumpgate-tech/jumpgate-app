@@ -1,0 +1,83 @@
+# Mirrors .github/workflows/ci.yml. Keep the two in sync.
+stages: [test]
+
+variables:
+  GOPATH: $CI_PROJECT_DIR/.go
+
+.go-cache: &go-cache
+  cache:
+    key:
+      files: [go.sum]
+    paths: [.go/pkg/mod/]
+
+linux:
+  stage: test
+  image: golang:1.25
+  <<: *go-cache
+  before_script:
+    - export HOME="$(mktemp -d)"
+    - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    - apt-get install -y nodejs
+  script:
+    - (cd cmd/jumpgate/web && npm ci && npm run build)
+    - git diff --exit-code cmd/jumpgate/web/dist
+    - go vet ./...
+    - go vet -tags e2e ./...
+    - go vet -tags livebox ./...
+    - go vet -tags realsecret ./...
+    - go test -p 2 ./...
+    - go build ./cmd/jumpgate
+    - GOOS=windows go build ./...
+    - GOOS=darwin go build ./...
+
+windows:
+  stage: test
+  tags: [saas-windows-medium-amd64]
+  <<: *go-cache
+  script:
+    - |
+      $goVer = (Select-String -Path go.mod -Pattern '^go\s+(\S+)').Matches[0].Groups[1].Value
+      Write-Host "go.mod wants Go $goVer"
+      $zip = "$env:TEMP\go.zip"
+      Invoke-WebRequest "https://go.dev/dl/go$goVer.windows-amd64.zip" -OutFile $zip
+      Expand-Archive $zip -DestinationPath C:\goroot -Force
+      $env:PATH = "C:\goroot\go\bin;$env:PATH"
+      $tmp = Join-Path $env:TEMP "jg-home"
+      New-Item -ItemType Directory -Force $tmp | Out-Null
+      $env:USERPROFILE = $tmp
+      $env:HOME = $tmp
+      $env:GOPATH = "$env:CI_PROJECT_DIR\.go"
+      go version
+      go vet ./...
+      if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      go test -p 2 ./...
+      if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# GitLab.com macOS runners require a paid tier, so this is opt-in and never
+# blocks the pipeline. Needs a runner tagged saas-macos-medium-m1.
+macos:
+  stage: test
+  tags: [saas-macos-medium-m1]
+  when: manual
+  allow_failure: true
+  script:
+    - export HOME="$(mktemp -d)"
+    - go vet ./...
+    - go test -p 2 ./...
+
+billing:
+  stage: test
+  image: rust:1
+  cache:
+    key:
+      files: [services/billing/Cargo.lock]
+    paths: [services/billing/target/, .cargo/]
+  variables:
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  before_script:
+    - cd services/billing
+    - rustup component add rustfmt clippy
+  script:
+    - cargo fmt --all --check
+    - cargo clippy --all-targets --locked -- -D warnings
+    - cargo test --locked
