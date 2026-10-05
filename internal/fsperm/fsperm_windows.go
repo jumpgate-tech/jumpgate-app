@@ -116,12 +116,15 @@ func createPrivate(path string, _ bool) (*os.File, error) {
 	}
 	sa := &windows.SecurityAttributes{SecurityDescriptor: sd}
 	sa.Length = uint32(unsafe.Sizeof(*sa))
-	// CREATE_NEW fails on anything already at path, a link included. The
-	// descriptor is applied as the file is created; its DACL is protected,
-	// so nothing is inherited from the directory. A new file is empty, so
-	// plain write access appends as well as append access would.
+	// CREATE_NEW alone follows a dangling symlink at path and creates its
+	// target; FILE_FLAG_OPEN_REPARSE_POINT makes the link itself the file
+	// that already exists, so CREATE_NEW fails on it as on anything else.
+	// The descriptor is applied as the file is created; its DACL is
+	// protected, so nothing is inherited from the directory. A new file is
+	// empty, so plain write access appends as well as append access would.
 	h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, sa, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, sa, windows.CREATE_NEW,
+		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
