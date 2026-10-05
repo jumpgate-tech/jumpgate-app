@@ -210,9 +210,10 @@ type Server struct {
 
 	// codes are the outstanding one-time browser login codes (login.go).
 	codes loginCodes
-	// peerUID reports the uid owning a request's client socket, where the
-	// OS lets us read it (Linux); nil elsewhere. selfUID is this process's.
-	peerUID func(*http.Request) (int, bool)
+	// peerUID reports the uid owning a request's client socket and whether
+	// it was found, missing (refuse) or unknowable (allow), where the OS
+	// lets us read it (Linux); nil elsewhere. selfUID is this process's.
+	peerUID func(*http.Request) (int, peerVerdict)
 	selfUID int
 }
 

@@ -56,3 +56,55 @@ func procAddr(ap netip.AddrPort, v6 bool) string {
 	fmt.Fprintf(&sb, ":%04X", ap.Port())
 	return sb.String()
 }
+
+// peerVerdict is what the socket tables say about a login request's client.
+type peerVerdict int
+
+const (
+	// peerUnknown: the tables could not be read, or they do not list even
+	// the server's own end of the connection (WSL1, gVisor, a restricted
+	// /proc). Nothing can be decided; the login is allowed with a warning.
+	peerUnknown peerVerdict = iota
+	// peerFound: the client's socket was found; its uid decides.
+	peerFound
+	// peerMissing: the server's own end is listed but the client's is not,
+	// even on a second read. A live loopback connection has both ends in
+	// the tables, so this is a torn read an attacker can provoke by churning
+	// connections, and the login is refused.
+	peerMissing
+)
+
+// procTable is the contents of /proc/net/tcp (v6 false) or tcp6 (v6 true).
+type procTable struct {
+	data []byte
+	v6   bool
+}
+
+// peerFromTables looks up a loopback connection in the socket tables that
+// read returns: the client's socket (local end client, remote end local) and
+// the server's accepted one (the two swapped). Either may sit in either
+// table: a dual-stack listener's accepted socket is listed in tcp6,
+// v4-mapped, while an IPv4 client's is in tcp. When only the server's row
+// turns up, the tables are read once more before the client is declared
+// missing; read returning no tables at all means they are unreadable.
+func peerFromTables(read func() []procTable, client, local netip.AddrPort) (int, peerVerdict) {
+	for attempt := 0; attempt < 2; attempt++ {
+		tables := read()
+		serverSeen := false
+		for _, t := range tables {
+			if uid, ok := socketUID(t.data, t.v6, client, local); ok {
+				return uid, peerFound
+			}
+			if _, ok := socketUID(t.data, t.v6, local, client); ok {
+				serverSeen = true
+			}
+		}
+		// Only a first read that lacks the server's row is inconclusive. A
+		// second read happens only once the tables proved they list this
+		// connection, so a miss of both rows then is as torn as a miss of one.
+		if !serverSeen && attempt == 0 {
+			return 0, peerUnknown
+		}
+	}
+	return 0, peerMissing
+}
