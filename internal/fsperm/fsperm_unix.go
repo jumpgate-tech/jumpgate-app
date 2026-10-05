@@ -49,7 +49,7 @@ func checkPrivate(path string) error {
 	if fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%w: %s is a symlink; jumpgate keeps secrets only in regular files and directories", ErrNotPrivate, path)
 	}
-	return checkMode(path, fi.Mode())
+	return checkInfo(path, fi)
 }
 
 func checkPrivateFile(f *os.File) error {
@@ -57,10 +57,24 @@ func checkPrivateFile(f *os.File) error {
 	if err != nil {
 		return err
 	}
-	return checkMode(f.Name(), fi.Mode())
+	return checkInfo(f.Name(), fi)
 }
 
-func checkMode(path string, m os.FileMode) error {
+func checkInfo(path string, fi os.FileInfo) error {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("fsperm: no owner information for %s", path)
+	}
+	return checkOwnerMode(path, fi.Mode(), st.Uid, os.Geteuid())
+}
+
+// checkOwnerMode is the decision for a secret on unix (unix's half of ruling
+// P31): it must belong to this euid, unless that is root, and nobody else
+// may have any permission bit.
+func checkOwnerMode(path string, m os.FileMode, uid uint32, euid int) error {
+	if euid != 0 && int(uid) != euid {
+		return fmt.Errorf("%w: %s belongs to uid %d, not you (uid %d); delete it and let jumpgate recreate it", ErrNotPrivate, path, uid, euid)
+	}
 	if m.Perm()&0o077 != 0 {
 		return fmt.Errorf("%w: %s is mode %o; run chmod %o %s", ErrNotPrivate, path, m.Perm(), privateMode(m), path)
 	}
