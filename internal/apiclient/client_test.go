@@ -140,3 +140,13 @@ func TestNewCanRediscover(t *testing.T) {
 		t.Fatal("New's client cannot rediscover a restarted server")
 	}
 }
+
+func TestTargets(t *testing.T) {
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"id":"a","mode":"ssh","agent":{"address":"0x1","transport":"ssh"},"link":"agent"}]`)
+	})
+	ts, err := c.Targets(context.Background())
+	if err != nil || len(ts) != 1 || ts[0].Link != api.LinkAgent || ts[0].Agent.Address != "0x1" {
+		t.Fatalf("Targets = %+v, %v", ts, err)
+	}
+}

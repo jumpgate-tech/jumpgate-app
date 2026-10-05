@@ -8,21 +8,26 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/valve-tech/jumpgate/internal/agent"
 	"github.com/valve-tech/jumpgate/internal/api"
+	"github.com/valve-tech/jumpgate/internal/apiclient"
+	"github.com/valve-tech/jumpgate/internal/apiclient/apiclienttest"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/server"
 )
 
 func TestParseSSHTarget(t *testing.T) {
@@ -585,6 +590,7 @@ func TestExitClasses(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	cliServer(t)
 	if code := cmdKeys([]string{"show"}); code != 1 {
 		t.Errorf("keys show with no key: exit %d, want 1", code)
 	}
@@ -771,5 +777,37 @@ func TestHostsAddRefusesToRepointAnExistingTarget(t *testing.T) {
 	confirmed, _ := config.ConfirmedHostsFile()
 	if _, err := os.Stat(confirmed); err == nil {
 		t.Fatal("confirmed_hosts was written")
+	}
+}
+
+// cliServer points the CLI at an in-process server over the current HOME, so
+// a test never starts a detached `serve` (which would be this test binary).
+func cliServer(t *testing.T) {
+	t.Helper()
+	token := server.NewSessionToken()
+	ts := httptest.NewServer(server.New(server.Config{Token: token, UI: fstest.MapFS{}}).Handler())
+	t.Cleanup(ts.Close)
+	old := connect
+	connect = func(context.Context) (*apiclient.Client, error) { return apiclienttest.NewHTTP(t, ts.URL, token), nil }
+	t.Cleanup(func() { connect = old })
+}
+
+func TestHostsListComesFromTheServer(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if _, err := config.Update(func(c *config.Config) error {
+		c.Targets = []config.Target{{ID: "box", Mode: "ssh", SSH: &executor.SSHConfig{Host: "h", User: "u"}, Agent: &config.AgentPairing{Address: "0xabc", Transport: "ssh"}}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cliServer(t)
+	var out strings.Builder
+	if code := hostsList(context.Background(), &out); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(out.String(), "box") || !strings.Contains(out.String(), "agent 0xabc") {
+		t.Fatalf("output %q", out.String())
 	}
 }

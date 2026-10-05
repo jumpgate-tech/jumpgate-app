@@ -721,11 +721,11 @@ func (s *Server) handleListTargets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	targets := cfg.Targets
-	if targets == nil {
-		targets = []config.Target{}
+	views := make([]api.TargetView, 0, len(cfg.Targets))
+	for _, t := range cfg.Targets {
+		views = append(views, targetView(t))
 	}
-	writeJSON(w, http.StatusOK, targets)
+	writeJSON(w, http.StatusOK, views)
 }
 
 func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {

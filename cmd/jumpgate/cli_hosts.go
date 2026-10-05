@@ -26,22 +26,36 @@ func cmdHosts(args []string) int {
 	}
 	switch args[0] {
 	case "list":
-		c, err := config.Load()
-		if err != nil {
-			return failed("%v", err)
-		}
-		for _, t := range c.Targets {
-			paired := "not paired"
-			if t.Agent != nil {
-				paired = "agent " + t.Agent.Address
-			}
-			fmt.Printf("%-16s %-6s %s\n", t.ID, t.Mode, paired)
-		}
-		return 0
+		return hostsList(context.Background(), os.Stdout)
 	case "add":
 		return hostsAdd(args[1:])
 	}
 	return usage("unknown hosts subcommand %q", args[0])
+}
+
+// hostsList prints every target from the server, which is the one reader and
+// writer of config.json (the CLI used to read the file itself).
+func hostsList(ctx context.Context, w io.Writer) int {
+	c, err := connect(ctx)
+	if err != nil {
+		return failed("%v", err)
+	}
+	ts, err := c.Targets(ctx)
+	var e *api.Error
+	if errors.As(err, &e) {
+		return reportServerErrorFrom(os.Stderr, "hosts list", c.Info(), *e)
+	}
+	if err != nil {
+		return failed("%v", err)
+	}
+	for _, t := range ts {
+		paired := "not paired"
+		if t.Agent != nil {
+			paired = "agent " + t.Agent.Address
+		}
+		fmt.Fprintf(w, "%-16s %-6s %s\n", t.ID, t.Mode, paired)
+	}
+	return 0
 }
 
 func hostsAdd(args []string) int {

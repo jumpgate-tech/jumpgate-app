@@ -64,3 +64,10 @@ func (c *Client) WatchLogs(ctx context.Context, target string, backlog int) <-ch
 		return []api.LogHit{h}, false, nil
 	})
 }
+
+// Targets lists every target with its link.
+func (c *Client) Targets(ctx context.Context) ([]api.TargetView, error) {
+	var ts []api.TargetView
+	err := c.Do(ctx, http.MethodGet, "/api/targets", nil, &ts)
+	return ts, err
+}
