@@ -20,3 +20,19 @@ func TestRealToolNotFoundOutputIsRecognised(t *testing.T) {
 		t.Fatal("real `op item get` not-found was not recognised")
 	}
 }
+
+// Fixtures captured from the real secret-tool 0.20.5 (Debian 12, gnome-keyring).
+func TestRealSecretToolOutputsAreClassified(t *testing.T) {
+	missing := &cmdError{Name: "secret-tool", ExitCode: 1, Err: errors.New("exit status 1")}
+	if !keychainNotFound("secret-tool", missing) {
+		t.Fatal("real `secret-tool lookup` of a missing item was not recognised")
+	}
+	headless := &cmdError{Name: "secret-tool", ExitCode: 1, Stderr: "secret-tool: Cannot autolaunch D-Bus without X11 $DISPLAY\n", Err: errors.New("exit status 1")}
+	if keychainNotFound("secret-tool", headless) {
+		t.Fatal("a missing D-Bus session was mistaken for an absent item")
+	}
+	locked := &cmdError{Name: "secret-tool", ExitCode: 1, Stderr: "secret-tool: Cannot create an item in a locked collection\n", Err: errors.New("exit status 1")}
+	if keychainNotFound("secret-tool", locked) {
+		t.Fatal("a locked-collection store failure was mistaken for an absent item")
+	}
+}

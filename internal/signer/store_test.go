@@ -223,6 +223,12 @@ func memStore(f *fakeRunner) func(string, string, []string) (string, error) {
 			return "", nil
 		case name == "secret-tool" && args[0] == "store":
 			items["kc:"+args[len(args)-1]] = stdin
+		case name == "secret-tool" && args[0] == "search":
+			// the real search exits 0 with empty output when nothing matches
+			if _, ok := items["kc:"+args[len(args)-1]]; ok {
+				return realSecretSearchHit, nil
+			}
+			return "", nil
 		case name == "secret-tool":
 			v, ok := items["kc:"+args[len(args)-1]]
 			if !ok {
@@ -567,5 +573,42 @@ func TestRealRunnerReportsExitCodeAndStderr(t *testing.T) {
 	}
 	if out, err := realRunCmd(context.Background(), "in", "cat"); err != nil || out != "in" {
 		t.Fatalf("success path = %q, %v", out, err)
+	}
+}
+
+// Captured from the real secret-tool 0.20.5 (libsecret-tools, Debian 12) with
+// gnome-keyring. A LOCKED keyring answers `lookup` for an item that exists with
+// exit 1 and empty stdout and stderr, exactly like a missing item; `search`
+// still lists the item (attributes on stderr, exit 0).
+const realSecretSearchHit = "[/1]\nlabel = jumpgate controller key\ncreated = 2026-10-05 16:59:30\nmodified = 2026-10-05 16:59:39\nschema = org.freedesktop.Secret.Generic\n"
+
+func lockedKeyringRunner() *fakeRunner {
+	f := &fakeRunner{}
+	f.fn = func(stdin, name string, args []string) (string, error) {
+		switch args[0] {
+		case "lookup":
+			return "", &cmdError{Name: name, ExitCode: 1, Err: errors.New("exit status 1")}
+		case "search":
+			return realSecretSearchHit, nil
+		}
+		return "", &cmdError{Name: name, ExitCode: 1, Stderr: "secret-tool: Cannot create an item in a locked collection\n", Err: errors.New("exit status 1")}
+	}
+	return f
+}
+
+func TestLockedKeyringIsNotTreatedAsAbsent(t *testing.T) {
+	f := lockedKeyringRunner()
+	withRunner(t, f, "linux", "secret-tool")
+	if _, err := Create(context.Background(), StoreKeychain, "controller"); !errors.Is(err, ErrKeyExists) {
+		t.Fatalf("Create = %v, want ErrKeyExists", err)
+	}
+	for _, c := range f.calls {
+		if c[1] == "store" {
+			t.Fatalf("Create tried to store over an item it could not read: %v", f.calls)
+		}
+	}
+	_, err := Open(context.Background(), StoreKeychain, "controller")
+	if err == nil || !strings.Contains(err.Error(), "locked") || strings.Contains(err.Error(), "no item") {
+		t.Fatalf("Open = %v, want a locked-keyring error, not not-found", err)
 	}
 }

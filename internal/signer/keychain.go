@@ -76,9 +76,11 @@ func keychainCreate(ctx context.Context, ref string) (*Key, error) {
 }
 
 // keychainNotFound recognises each tool's "no such item" result and nothing
-// else. Assumptions: `security` exits 44 (errSecItemNotFound); `secret-tool
-// lookup` exits 1 with empty stdout and empty stderr (a missing Secret Service
-// also exits 1, but prints an error, so it is not mistaken for absence).
+// else. `security` exits 44 (errSecItemNotFound). Verified against the real
+// secret-tool 0.20.5 + gnome-keyring: `lookup` of a missing item exits 1 with
+// empty stdout and stderr; no D-Bus session exits 1 with an error on stderr.
+// A LOCKED keyring also looks like not-found, so callers confirm with
+// secretToolItemListed before treating it as absence.
 func keychainNotFound(tool string, err error) bool {
 	var ce *cmdError
 	if !errors.As(err, &ce) {
@@ -104,10 +106,30 @@ func keychainExists(ctx context.Context, tool, ref string) (bool, error) {
 	case err == nil:
 		return true, nil
 	case keychainNotFound(tool, err):
+		if tool == "secret-tool" {
+			// A locked keyring answers `lookup` for an existing item exactly
+			// like a missing one, so ask `search`, which still lists it.
+			return secretToolItemListed(ctx, ref)
+		}
 		return false, nil
 	}
 	return false, keychainErr("existence check failed", err)
 }
+
+// secretToolItemListed reports whether `secret-tool search` lists the item.
+// It prints nothing (exit 0) when no item matches; a listed item is present
+// even if its secret cannot be read.
+func secretToolItemListed(ctx context.Context, ref string) (bool, error) {
+	out, err := runCmd(ctx, "", "secret-tool", "search", "service", keychainService, "account", ref)
+	if err != nil {
+		return false, keychainErr("existence check failed", err)
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
+// ErrKeychainLocked means the item exists but the tool could not read it,
+// which on Linux is a locked Secret Service collection.
+var ErrKeychainLocked = errors.New("signer: the keychain item exists but could not be read (is the keyring locked? unlock it, or use --store file)")
 
 // keychainErr wraps a tool failure. On Linux the usual cause is a headless box
 // with no Secret Service, so the error names the file store.
@@ -131,6 +153,13 @@ func keychainRead(ctx context.Context, ref string) (*Key, error) {
 	}
 	if err != nil {
 		if keychainNotFound(keychainTool(), err) {
+			if keychainTool() == "secret-tool" {
+				if listed, serr := secretToolItemListed(ctx, ref); serr != nil {
+					return nil, serr
+				} else if listed {
+					return nil, ErrKeychainLocked
+				}
+			}
 			return nil, fmt.Errorf("signer: keychain read: no item %q: %w", ref, err)
 		}
 		return nil, keychainErr("read", err)
