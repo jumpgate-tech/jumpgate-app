@@ -471,3 +471,99 @@ pairing, and double-clicking each launcher on a real desktop of each OS.
   `~/.jumpgate/agents` directory.
 - `jumpgate hosts add me --local` works on Linux as root without sudo and as a
   NOPASSWD user, and refuses with a hint everywhere else.
+
+
+## Addendum: local Docker on a Windows controller, and a prebuilt eRPC image
+
+Date: 2026-10-05. Written after the gap analysis (`.superpowers/sdd/followups/gap-analysis.md`), which found two problems:
+- The README's Windows gateway and devnet cells are false on `main`, and no task fixed them. Task 13 only made the refusal official.
+- The gateway's local `docker build` fails on every distro Docker without buildx, and takes about 12 minutes on an Intel Mac.
+
+The plan implements this addendum as Tasks 15 and 16, and amends Task 13. The decisions below are binding, like D1–D28.
+
+### Goal, extended
+
+On Windows, "supported" now also covers the local Docker features. With Docker Desktop in Linux-container mode, the RPC gateway and the devnet run on the Windows machine itself. When the engine is in Windows-container mode, the user is told which fix applies to their engine.
+
+On every OS, the gateway's eRPC image is downloaded as a prebuilt, pinned, signed, multi-arch image. It is built locally only as a fallback.
+
+### Decisions
+
+Each line: the decision, why, and what it costs if it is wrong.
+
+| # | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| D29 | A Windows controller runs Docker by starting `docker` directly from an argument vector (`executor.RunArgv`). Each Docker call is written once as an `executor.Command`: argv on the local machine on **every** OS, and the same shell string as before over SSH. The Docker Engine API over `npipe:////./pipe/docker_engine` was rejected, as was a WSL-backed executor. | Every Docker call jumpgate makes is already an argv that `DockerRun` quotes only so `sh -c` can split it again. Running the argv removes the shell and nothing else: the `docker` CLI keeps its contexts, `DOCKER_HOST`, credential helpers, `--platform` and BuildKit. The Engine API needs either the Docker SDK (a new module dependency) or a hand-written client that re-implements `docker run`'s flags, git-context builds and registry auth, as a second Docker path SSH never uses. WSL is optional under Docker Desktop's Hyper-V backend, and would add path translation. Using argv on macOS and Linux too means the code Windows runs is exercised daily on developers' machines and in Linux CI. | A Docker feature that has no CLI equivalent would need the API after all. None is planned. The cost is one `ArgvRunner` implementation; the call sites would not change. |
+| D30 | The shell-less local executor is constructed on Windows. `Run` still refuses with `ErrNoPOSIXShell`. `RunArgv`, `ReadFile`, `WriteFile` and the `LocalHost` facts work. Shell-needing server routes refuse through `executor.RequireShell` with 409 `local_unsupported` (Task 13, amended). Before, construction refused. | The gateway and devnet need a local target on Windows. Node setup, services, logs, diagnostics and the VPN still need a shell, so the refusal moves from "this target cannot exist" to "this route needs a shell". | A new shell-needing route that forgets `getShellExecutor` fails mid-stream with `ErrNoPOSIXShell` instead of a clean 409. `TestShellRoutesRefuseAShellLessTarget` lists the routes. A new route has to be added there. |
+| D31 | On the local machine, readiness and metrics probes run in process (`net/http`, dialled through `LocalHost`). `--resolve` becomes a dial override, `--cacert` becomes `RootCAs`, and curl's `\|\| retry` becomes one retry with system roots. SSH targets run the same curl strings as before. | Windows 10 1803+ ships `curl.exe`, but it uses Schannel. Schannel does revocation checks that fail for Caddy's internal CA, and its `--cacert` support differs. In process, the probes are deterministic, and testable with `httptest` on every OS. | Two renderings of one probe could drift. `TestHTTPProbeCurlCommandIsTheHistoricString` pins the curl form, and the shared `HTTPProbe` struct keeps them one request. |
+| D32 | On the local machine, the port check is a 500 ms connect to `127.0.0.1:N` and `[::1]:N`, not `ss`/`netstat`/`lsof` through a shell. | Wildcard and loopback listeners accept that connect, and they are what a loopback publish collides with. A listener on one LAN address does not collide with a loopback publish. For a wildcard publish, docker fails loudly on a real collision, which the reclaim policy already relies on. | The evidence line no longer names the process; the user sees "something accepts connections on 127.0.0.1:4000" and finds the owner themselves. |
+| D33 | File bind mounts use `--mount type=bind,source=…,target=…,readonly`, rendered as a CSV record, on every OS. Named volumes keep `-v`. | A Windows source path's drive letter is a colon that `-v` must guess about. `--mount` refuses a missing source, where `-v` mounts an empty directory: the live colima crash loop ("read /erpc.yaml: is a directory") in the gap analysis. | Existing containers keep their old args until recreated, which is harmless. A path docker's CSV reader cannot parse is quoted by `encoding/csv`. |
+| D34 | A gateway hosted on a Windows controller refuses the "files" certificate source, with a message naming internal and ACME. | The TLS front mounts a certificate at its own host path inside a Linux container, and `C:\…` cannot be a Linux path. Mapping it means changing the rendered Caddyfile on every OS for a rare case. | Windows users with their own certificate host the gateway on a Linux box, or use internal or ACME, until a mapped path is added. |
+| D35 | Windows-container mode is reported as **not ready**. `GET /api/docker` returns `running:false`, `windowsContainers:true`, `canStart:false` and the hint. The containers view and both preflights carry the same hint. The hint depends on the engine. Docker Desktop is told to "Switch to Linux containers…". Docker Engine on Windows Server is told it runs Windows containers only, and is pointed at Docker Desktop or an SSH Linux machine. Desktop in Windows mode is recognised by its installed `Docker Desktop.exe`, because `docker info` then describes the Windows daemon. | The UI's existing not-running path shows `hint`, so no UI rebuild is needed (D23 keeps UI work in sub-project 6). Telling a Windows Server user to switch sends them looking for a menu that does not exist. | The Machine screen's banner title still reads "no engine answered" for this state; its hint line is correct. A later UI pass can retitle it. |
+| D36 | No Docker auto-start on Windows. `POST /api/docker/start` stays macOS-only. | Starting Docker Desktop is not the hard part of this gap, and it could not be tested in CI. | A Windows user starts Docker Desktop by hand; the hint says so. |
+| D37 | The eRPC image is prebuilt and published to `ghcr.io/jumpgate-tech/erpc`, for `linux/amd64` and `linux/arm64`, each built natively on its own runner. It is tagged `src-<commit>` and `<commit8>`, and labelled `org.opencontainers.image.revision`. The catalog (`internal/catalog/erpc.go`) pins the source commit and the image's index digest, and the gateway pulls and runs `repo@digest`. GHCR under the repo's own org was chosen because `GITHUB_TOKEN` can publish there with no extra secret, and anonymous pulls are free. | It removes the buildx dependency, the ~12-minute first run, and the "legacy builder" failure on distro Docker (gap W1, W2). A digest makes every controller of a release run byte-identical gateway code. | GHCR down or blocked means the fallback (D39). Moving registries later is a catalog change plus a re-publish. |
+| D38 | Integrity on the client is the compiled-in digest. A pull by digest is content-addressed, and the binary carrying the digest is covered by the release's `checksums.txt`. The image is signed with cosign keyless, by the `erpc-image` workflow's identity, and the signature is verified in CI and before every release, not on the client. | Client-side signature checks need cosign or sigstore-go, which is a new dependency. For a fixed artifact, a pinned digest is at least as strong. A compromised repository could sign whatever it pins, so a client check adds nothing against it. | A user who wants to check the signature runs the README's `cosign verify` by hand. |
+| D39 | Fallback order when the pinned image is absent. First, pull it, with a 10-minute timeout. If the pull fails, use the published `src-<commit>` tag only if its revision label equals the pinned commit (an air-gapped `docker load`), or the earlier local-build tag. Otherwise, if `docker buildx version` succeeds, build from source, with a 30-minute timeout. Otherwise, fail with one message naming every fix: connect; `docker pull/save/load`; or install BuildKit. `JUMPGATE_ERPC_LOCAL_BUILD=1` skips the pull, for work on the fork. | Offline and air-gapped machines need a path that does not depend on the network. Checking the label stops a mislabelled tarball from running silently. Checking for BuildKit before building turns gap W1's misleading first line into an actionable message. | A user who builds a different ref by hand and tags it `valve-node-app/erpc:<commit8>` is trusted, as before. That tag has always meant "built here". |
+| D40 | One workflow, `.github/workflows/erpc-image.yml`, both publishes and verifies. It runs on a push that changes the pin, on `workflow_dispatch`, and on `workflow_call`. If `src-<commit>` does not exist, it builds, merges, tags and signs. It never overwrites an existing tag unless `force` is set. It then verifies the platforms, the label, the signature, and that the pinned digest equals the published one; if not, it fails with the digest to commit. The release workflow calls it, and `binaries` (and through it `desktop`) needs it. | Publishing happens once per eRPC commit, not once per jumpgate release. A rebuild would change the digest, because the build is not reproducible. The digest must be committed before a release, because the binary carries it. A release can never ship a pin that points at nothing. | Moving to a new eRPC commit takes two pushes: the first publishes and prints the digest, the second commits it. Publishing from a feature branch is possible for anyone with push access to this repo, which is the same group that can change the pin. |
+
+### Design
+
+**15. Local Docker without a shell.** The plan's Task 15 has the full inventory of the shell constructs on the gateway and devnet paths, and what replaces each one.
+- **Executor:**
+  - `executor.ArgvRunner` and `executor.LocalHost` (`HostGOOS`, `HomeDir`, `NativeArch`, `DialContext`) are implemented by the local executor on every OS.
+  - `executor.Command` and `executor.Exec` pick argv or the shell string. `executor.QuoteArgv` is byte-identical to the old `DockerRun` quoting.
+  - `lookPathIn` resolves programs against the PATH that `localEnv` extends. On Windows that adds Docker Desktop's `resources\bin`, with `Path` matched without case, `;` as the separator, and `PATHEXT`.
+- **ops:**
+  - `DockerRun`, the probes, `ImageExists`, `BuildImage` and `readEmulation` go through `Exec`.
+  - `HTTPProbe` (`CurlCommand` and `Do`) replaces three hand-built curl strings.
+  - `bindMount` renders `--mount`.
+  - `DockerInfo.WindowsContainersHint` picks the fix for the engine.
+- **setup:**
+  - `homeOn`, `joinOn` and `dirOn` apply the target's path rules, so on Windows the config lives at `C:\Users\<u>\.valve-node-app\erpc.yaml`.
+  - `probeListeners` replaces the port check.
+  - The systemd backend and the cert-files source refuse clearly on a shell-less controller.
+- **server:**
+  - A local target is constructed on every OS.
+  - `/api/docker` reports Windows-container mode as not ready (D35).
+  - Trust-cert on Windows answers with an elevated-prompt command to run by hand.
+- **Task 13 (amended):** adds `RequireShell`, `getShellExecutor`, and `writeExecutorError(w, err, otherwise)`, and guards every shell-needing route.
+
+**16. Prebuilt eRPC image.**
+- `catalog/erpc.go` holds `ERPCSourceRepo`, `ERPCSourceRef`, `ERPCImageRepo` and `ERPCImageDigest`, plus `ERPCImageRef()` and `ERPCImageSourceTag()`. The `ops` names alias them.
+- `ensureImage` follows D39 and returns the reference `runDocker` runs.
+- `ops.PullImage` and `BuildImage` report the last lines of docker's output, not the first.
+- Scripts and CI:
+  - `scripts/erpc-pin.sh` reads the pin for CI.
+  - `scripts/erpc-verify.sh` checks it against the registry.
+  - `erpc-image.yml` publishes per D40, and `release.yml` gates on it.
+- The README documents verifying the image and loading it offline.
+
+### Testing realism (addendum)
+
+| Section | Mac | Linux | Win (Actions) | Win (QEMU Windows Server VM, no nested virtualisation) | Win (Docker Desktop, physical or nested-virt VM) |
+|---|---|---|---|---|---|
+| 15 argv and probes | Unit tests. The whole gateway and devnet plans run against `argvfake`, a shell-less Windows double that fails a test on any shell use. `TestLocalDockerLive` on colima runs the devnet through the real argv path. | The same, plus the `docker-live` CI job (the devnet, end to end, on ubuntu-24.04) | `go` job: the Windows-only unit tests (`PATHEXT`, `IsWow64Process2`, `Path` casing). `windows-docker` job: the engine is in Windows-container mode, so `TestLocalDockerLive` asserts the refusal, and `windows-docker-smoke.ps1` asserts the hint through a real `jumpgate.exe` | By hand: the smoke script and the cross-built `setup.test.exe` in Windows-container mode (Moby, process isolation). Also daemon stopped, and docker absent. | By hand: Linux mode, with the devnet and a gateway end to end; then switched to Windows containers, checking that the hint names the Desktop switch |
+| 16 eRPC image | Unit tests with `argvfake` for every branch of D39. Live: a gateway via pull on colima. By hand: offline and air-gapped. | `docker-live` provisions a gateway from the pulled image. `erpc-image.yml` builds on native amd64 and arm64 runners, signs and verifies. | — | — | By hand: a gateway provisions by pulling, without buildx |
+
+What no CI can cover: Linux containers on Windows need Docker Desktop on hardware with virtualisation. GitHub's Windows runners and the QEMU VM cannot run them. What is Windows-specific on that path is unit-tested on Windows CI: path joins, `--mount` rendering of `C:\` paths, program lookup, and architecture. The engine-facing code is the same argv path that Linux CI runs live.
+
+### Coverage (addendum)
+
+| Gap item | Section / plan task |
+|---|---|
+| W1 (buildx preflight, last stderr lines) | 16 / Task 16: BuildKit is checked before building, and pull and build failures show the last lines |
+| W2 (prebuilt multi-arch image) | 16 / Task 16 |
+| W3, partly (silent bind-mount crash loop) | 15 / Task 15 (D33). The crash-loop diagnosis in readiness is still open. |
+| W5 (Docker on a Windows controller) | 15 / Task 15; Task 13 amended |
+| The README's Windows gateway and devnet cells | Tasks 15, 16 (Linux mode), with the Windows-container message (D35) |
+
+### Deferred (addendum)
+
+| Item | Deferred to | Reason |
+|---|---|---|
+| Windows Docker Desktop auto-start | When asked | D36 |
+| The "files" certificate source on a Windows-hosted gateway | When asked | D34 |
+| The Machine screen banner title for Windows-container mode | Sub-project 6 | D35, D23 |
+| Pinning the devnet (`reth:latest`) and Caddy (`caddy:2-alpine`) images by digest | A follow-up | The same mechanism as D37; out of this gap's scope |
+| Signature verification in the client | Not planned | D38 |
+| Readiness diagnosis of a crash-looping container (the rest of W3) | A follow-up (S) | Independent of these tasks |
