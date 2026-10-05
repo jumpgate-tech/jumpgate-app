@@ -72,7 +72,7 @@ user: if one is already running, launching the app opens it instead of
 starting a second.
 
 ```bash
-jumpgate keys init                      # create the controller signing key: --store keychain (default where macOS `security` or Linux `secret-tool` exists), file (a 0600 file) or 1password (--ref op://vault/item/field)
+jumpgate keys init                      # create the controller signing key: --store keychain (macOS, or Linux with a desktop session), wincred (Windows Credential Manager, the Windows default), file (an owner-only file; the default over SSH and on headless Linux) or 1password (--ref op://vault/item/field)
 jumpgate hosts add box-a --ssh root@203.0.113.7   # pair a box (or: --local for this machine)
 jumpgate status box-a                   # also: disk, endpoints, firewall
 jumpgate logs box-a -n 200

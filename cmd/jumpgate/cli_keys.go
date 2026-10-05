@@ -34,10 +34,15 @@ func cmdKeys(args []string) int {
 
 func keysInit(args []string) int {
 	fset := flag.NewFlagSet("keys init", flag.ContinueOnError)
-	store := fset.String("store", string(signer.DefaultStore()), "file | keychain | 1password")
-	ref := fset.String("ref", "", "key file path, keychain item, or op://vault/item/field")
+	// The default is resolved only when --store is not given, so an explicit
+	// store never runs the Secret Service probe.
+	store := fset.String("store", "", "file | keychain | wincred | 1password (default: this machine's OS key store, else file)")
+	ref := fset.String("ref", "", "key file path, keychain or Windows credential name, or op://vault/item/field")
 	if err := fset.Parse(args); err != nil {
 		return exitCode("usage")
+	}
+	if *store == "" {
+		*store = string(signer.DefaultStore())
 	}
 	c, err := config.Load()
 	if err != nil {
@@ -50,12 +55,12 @@ func keysInit(args []string) int {
 		switch signer.Store(*store) {
 		case signer.StoreFile:
 			*ref = jgFile("keys", "controller.key")
-		case signer.StoreKeychain:
+		case signer.StoreKeychain, signer.StoreWinCred:
 			*ref = "controller"
 		case signer.StoreOnePassword:
 			return usage("--ref op://<vault>/<item>/<field> is required for 1password")
 		default:
-			return usage("unknown --store %q: want file, keychain or 1password", *store)
+			return usage("unknown --store %q: want file, keychain, wincred or 1password", *store)
 		}
 	}
 	k, err := signer.Create(context.Background(), signer.Store(*store), *ref)

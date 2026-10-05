@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // Store names where a controller key lives.
@@ -18,6 +19,7 @@ type Store string
 const (
 	StoreFile        Store = "file"
 	StoreKeychain    Store = "keychain"
+	StoreWinCred     Store = "wincred"
 	StoreOnePassword Store = "1password"
 )
 
@@ -27,11 +29,20 @@ var (
 	hostOS   = runtime.GOOS
 	lookPath = func(name string) error { _, err := exec.LookPath(name); return err }
 	runCmd   = func(ctx context.Context, stdin, name string, args ...string) (string, error) {
+		ctx, cancel := context.WithTimeoutCause(ctx, toolTimeout, errToolTimeout)
+		defer cancel()
 		c := exec.CommandContext(ctx, name, args...)
+		isolateTool(c, name)
+		// Once the tool is killed, stop waiting for anything it left holding
+		// its output pipes.
+		c.WaitDelay = 2 * time.Second
 		c.Stdin = strings.NewReader(stdin)
 		var out, errb bytes.Buffer
 		c.Stdout, c.Stderr = &out, &errb
 		if err := c.Run(); err != nil {
+			if errors.Is(context.Cause(ctx), errToolTimeout) {
+				err = fmt.Errorf("%s did not answer within %s; the keyring may be locked with nothing to prompt you. Unlock it, or use --store file", name, toolTimeout)
+			}
 			ce := &cmdError{Name: name, ExitCode: -1, Stdout: out.String(), Stderr: errb.String(), Err: err}
 			var ee *exec.ExitError
 			if errors.As(err, &ee) {
@@ -42,6 +53,10 @@ var (
 		return out.String(), nil
 	}
 )
+
+// errToolTimeout marks a tool run cut off by toolTimeout, as opposed to the
+// caller's own deadline.
+var errToolTimeout = errors.New("key-store tool timed out")
 
 // cmdError is a failed tool run. Stdout is kept only so callers can tell an
 // empty result from a non-empty one; Error never prints it, because a tool's
@@ -60,11 +75,22 @@ func (e *cmdError) Error() string {
 
 func (e *cmdError) Unwrap() error { return e.Err }
 
-// DefaultStore prefers the OS keychain and falls back to a key file only when
-// no keychain tool exists, as on a headless box.
+// DefaultStore picks the OS key store when it can actually be used here:
+// Credential Manager on Windows; the macOS keychain; on Linux the Secret
+// Service only when a D-Bus session exists and the service answers (a
+// headless box or an SSH login has neither). Otherwise a key file.
 func DefaultStore() Store {
-	if keychainTool() != "" {
-		return StoreKeychain
+	switch hostOS {
+	case "windows":
+		return StoreWinCred
+	case "darwin":
+		if lookPath("security") == nil {
+			return StoreKeychain
+		}
+	case "linux":
+		if keychainTool() == "secret-tool" && secretServiceAnswers(context.Background()) {
+			return StoreKeychain
+		}
 	}
 	return StoreFile
 }
@@ -76,6 +102,8 @@ func Open(ctx context.Context, store Store, ref string) (*Key, error) {
 		return LoadKeyFile(ref)
 	case StoreKeychain:
 		return keychainRead(ctx, ref)
+	case StoreWinCred:
+		return winCredRead(ref)
 	case StoreOnePassword:
 		return onePasswordRead(ctx, ref)
 	}
@@ -89,6 +117,8 @@ func Create(ctx context.Context, store Store, ref string) (*Key, error) {
 		return GenerateKeyFile(ref)
 	case StoreKeychain:
 		return keychainCreate(ctx, ref)
+	case StoreWinCred:
+		return winCredCreate(ref)
 	case StoreOnePassword:
 		return onePasswordCreate(ctx, ref)
 	}

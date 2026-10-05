@@ -10,10 +10,10 @@ import (
 	"strings"
 )
 
-// ErrNoKeychain means this machine has no keychain tool. It is an error rather
-// than a quiet fallback to a file, so a key never lands somewhere the operator
-// did not choose.
-var ErrNoKeychain = errors.New("signer: no OS keychain here (need `security` on macOS or `secret-tool` on Linux); use --store file")
+// ErrNoKeychain means this machine has no usable keychain. It is an error
+// rather than a quiet fallback to a file, so a key never lands somewhere the
+// operator did not choose.
+var ErrNoKeychain = errors.New("signer: no OS keychain here (macOS needs `security`; Linux needs `secret-tool` and a D-Bus session; Windows uses --store wincred); use --store file")
 
 const keychainService = "jumpgate"
 
@@ -28,11 +28,20 @@ func keychainTool() string {
 			return "security"
 		}
 	case "linux":
-		if lookPath("secret-tool") == nil {
+		if lookPath("secret-tool") == nil && dbusSession() {
 			return "secret-tool"
 		}
 	}
 	return ""
+}
+
+// noKeychainErr explains why there is no keychain, naming the common
+// headless case where secret-tool is installed but unreachable.
+func noKeychainErr() error {
+	if hostOS == "linux" && lookPath("secret-tool") == nil && !dbusSession() {
+		return fmt.Errorf("%w: secret-tool is installed but there is no D-Bus session (usual over SSH)", ErrNoKeychain)
+	}
+	return ErrNoKeychain
 }
 
 // keychainCreate stores a new key. The key's hex is passed on stdin only:
@@ -41,7 +50,7 @@ func keychainTool() string {
 func keychainCreate(ctx context.Context, ref string) (*Key, error) {
 	tool := keychainTool()
 	if tool == "" {
-		return nil, ErrNoKeychain
+		return nil, noKeychainErr()
 	}
 	if !keychainNameRE.MatchString(ref) {
 		return nil, fmt.Errorf("signer: keychain item name %q may only contain letters, digits, '.', '_' and '-'", ref)
@@ -149,7 +158,7 @@ func keychainRead(ctx context.Context, ref string) (*Key, error) {
 	case "secret-tool":
 		out, err = runCmd(ctx, "", "secret-tool", "lookup", "service", keychainService, "account", ref)
 	default:
-		return nil, ErrNoKeychain
+		return nil, noKeychainErr()
 	}
 	if err != nil {
 		if keychainNotFound(keychainTool(), err) {

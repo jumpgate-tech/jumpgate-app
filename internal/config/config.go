@@ -76,7 +76,7 @@ type AgentPairing struct {
 // Controller is this machine's signing identity. The key itself is never here:
 // KeyRef names where it lives (a path, a keychain item, an op:// reference).
 type Controller struct {
-	KeyStore string `json:"keyStore"` // "file" | "keychain" | "1password"
+	KeyStore string `json:"keyStore"` // "file" | "keychain" | "wincred" | "1password"
 	KeyRef   string `json:"keyRef"`
 	Address  string `json:"address"`
 }
