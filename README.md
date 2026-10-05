@@ -261,6 +261,14 @@ Requirements above); the node services it installs run unprivileged.
 
 ## Contributing
 
+**macOS apps.** `cmd/jumpgate/build-macos-app.sh` builds `Jumpgate.app` and
+`Jumpgate Terminal.app`; run `scripts/test-macos-bundle.sh` on a Mac to build
+and check both (plist lint, signature, bundle layout, terminal hand-off). The
+icon is committed as `cmd/jumpgate/AppIcon.icns`; after editing `icon.svg`,
+run `scripts/render-icons.sh` (needs docker). The apps are ad-hoc signed, not
+notarized: if Gatekeeper prompts about a quarantined download, right-click the
+app and choose Open.
+
 The web UI (`cmd/jumpgate/web/`) has no end-to-end (Playwright) test suite
 by design for v1 — the API layer it talks to (`internal/server`) is fully
 covered by Go tests, and the UI itself is a thin, framework-free render
