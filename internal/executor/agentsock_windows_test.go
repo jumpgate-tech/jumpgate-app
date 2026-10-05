@@ -3,6 +3,7 @@
 package executor
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
@@ -47,11 +48,20 @@ func TestOpenSSHAgentPipe(t *testing.T) {
 	t.Cleanup(func() { _ = addCmd(sshAdd, "-d", keyFile).Run() })
 	sshPub, _ := ssh.NewPublicKey(pub)
 
+	t.Log("ssh-add done; dialling the pipe")
 	c := dialAgent(time.Now().Add(5 * time.Second))
 	if c == nil {
 		t.Fatal("dialAgent: no agent on the OpenSSH pipe")
 	}
-	keys, err := agent.NewClient(c).List()
+	t.Log("dialled; listing keys")
+	listed := make(chan struct{})
+	var keys []*agent.Key
+	go func() { keys, err = agent.NewClient(c).List(); close(listed) }()
+	select {
+	case <-listed:
+	case <-time.After(20 * time.Second):
+		t.Fatal("agent List hung on the pipe")
+	}
 	c.Close()
 	found := false
 	for _, k := range keys {
@@ -75,6 +85,7 @@ func TestOpenSSHAgentPipe(t *testing.T) {
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
 
+	t.Log("listed; dialling ssh through the agent")
 	deadline := time.Now().Add(10 * time.Second)
 	methods, release, err := authMethods(SSHConfig{}, deadline)
 	if err != nil {
@@ -133,7 +144,9 @@ func TestDialAgentRefusesAForeignPipeServer(t *testing.T) {
 // addCmd runs ssh-add without SSH_AUTH_SOCK in its environment: the test sets
 // it to "", and OpenSSH reads an empty value as a socket path, not as unset.
 func addCmd(name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	time.AfterFunc(31*time.Second, cancel)
+	cmd := exec.CommandContext(ctx, name, args...)
 	for _, e := range os.Environ() {
 		if !strings.HasPrefix(strings.ToUpper(e), "SSH_AUTH_SOCK=") {
 			cmd.Env = append(cmd.Env, e)

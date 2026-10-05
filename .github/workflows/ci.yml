@@ -161,4 +161,4 @@ jobs:
         shell: bash
         env:
           JUMPGATE_TEST_WIN_AGENT: "1"
-        run: go test -count=1 -run TestOpenSSHAgentPipe -v ./internal/executor/
+        run: go test -count=1 -timeout 120s -run TestOpenSSHAgentPipe -v ./internal/executor/
