@@ -166,7 +166,8 @@ was confirmed, a reply not signed by the paired agent, or a controller key whose
 address is not the one `config.json` records), whether it is found while pairing
 or by any later box command. `jumpgate keys show` prints the address of the key
 actually in the key store, and flags it if that address differs from the
-recorded one.
+recorded one. `jumpgate keys show --recorded` prints only the recorded address,
+without opening the key, so it never prompts the keychain or 1Password.
 
 ## Requirements
 

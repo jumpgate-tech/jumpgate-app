@@ -97,7 +97,8 @@ Implementations in this sub-project:
   in memory. Requires the `op` CLI to be signed in.
 
 `jumpgate keys init [--store keychain|file|1password]` creates the controller
-key. `jumpgate keys show` opens the key and prints its real address. Default
+key. `jumpgate keys show` opens the key and prints its real address, and
+`keys show --recorded` prints the recorded address without opening the key. Default
 store: keychain where available, otherwise file. The server checks the key's
 identity whenever it opens the key: the key's `Address()` must equal
 `controller.address` in `config.json`. A key with a different address, such as

@@ -71,7 +71,7 @@ func TestKeysShowPrintsTheRealAddress(t *testing.T) {
 	ref, addr := fileController(t)
 	writeControllerConfig(t, "file", ref, strings.ToLower(addr))
 	var out, errOut strings.Builder
-	if code := keysShow(&out, &errOut); code != 0 {
+	if code := keysShow(nil, &out, &errOut); code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
 	if !strings.Contains(out.String(), addr) {
@@ -85,7 +85,7 @@ func TestKeysShowFlagsAMismatch(t *testing.T) {
 	ref, addr := fileController(t)
 	writeControllerConfig(t, "file", ref, otherAddress)
 	var out, errOut strings.Builder
-	code := keysShow(&out, &errOut)
+	code := keysShow(nil, &out, &errOut)
 	if code != exitCode("controller_key_mismatch") || code != 4 {
 		t.Fatalf("exit %d, want 4", code)
 	}
@@ -105,5 +105,28 @@ func TestServerKeyMismatchExitsAsSecurity(t *testing.T) {
 	code := reportServerError(&w, "box", apiError{Status: 503, Error: "mismatch", Code: "controller_key_mismatch"})
 	if code != 4 || !strings.Contains(w.String(), "SECURITY") || !strings.Contains(w.String(), "->") {
 		t.Fatalf("exit %d, output %q", code, w.String())
+	}
+}
+
+// `keys show --recorded` prints what config.json records without opening the
+// key, so it never prompts a keychain or 1Password and works with the key
+// store unavailable.
+func TestKeysShowRecordedDoesNotOpenTheKey(t *testing.T) {
+	shortHome(t)
+	writeControllerConfig(t, "file", "/nonexistent/controller.key", otherAddress)
+	var out, errOut strings.Builder
+	if code := keysShow([]string{"--recorded"}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), otherAddress) || !strings.Contains(out.String(), "/nonexistent/controller.key") {
+		t.Fatalf("stdout %q", out.String())
+	}
+	// Without the flag the same config fails, because the key will not open.
+	out.Reset()
+	if code := keysShow(nil, &out, &errOut); code == 0 {
+		t.Fatal("keys show succeeded without opening the key")
+	}
+	if code := keysShow([]string{"--bogus"}, &out, &errOut); code != exitCode("usage") {
+		t.Fatalf("a bad flag: exit %d", code)
 	}
 }

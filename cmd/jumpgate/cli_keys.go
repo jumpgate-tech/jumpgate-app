@@ -15,11 +15,11 @@ import (
 
 func cmdKeys(args []string) int {
 	if len(args) == 0 {
-		return usage("usage: jumpgate keys init|show")
+		return usage("usage: jumpgate keys init|show [--recorded]")
 	}
 	switch args[0] {
 	case "show":
-		return keysShow(os.Stdout, os.Stderr)
+		return keysShow(args[1:], os.Stdout, os.Stderr)
 	case "init":
 		return keysInit(args[1:])
 	}
@@ -29,8 +29,16 @@ func cmdKeys(args []string) int {
 // keysShow opens the controller key and prints its REAL address, so a
 // replaced key cannot hide behind the address config.json recorded. A
 // mismatch is a security failure (exit 4); a key that will not open is a
-// failure (exit 1) that still shows what is recorded.
-func keysShow(stdout, stderr io.Writer) int {
+// failure (exit 1) that still shows what is recorded. With --recorded it
+// prints only what config.json records and never opens the key, so it cannot
+// prompt a keychain or 1Password.
+func keysShow(args []string, stdout, stderr io.Writer) int {
+	fset := flag.NewFlagSet("keys show", flag.ContinueOnError)
+	fset.SetOutput(stderr)
+	recorded := fset.Bool("recorded", false, "print the address config.json records, without opening the key")
+	if err := fset.Parse(args); err != nil || fset.NArg() > 0 {
+		return exitCode("usage")
+	}
 	c, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(stderr, "jumpgate: load config: %v\n", err)
@@ -41,6 +49,10 @@ func keysShow(stdout, stderr io.Writer) int {
 		return exitCode("failed")
 	}
 	rec := c.Controller
+	if *recorded {
+		fmt.Fprintf(stdout, "%s (%s: %s)\n", rec.Address, rec.KeyStore, rec.KeyRef)
+		return 0
+	}
 	k, err := signer.Open(context.Background(), signer.Store(rec.KeyStore), rec.KeyRef)
 	if err != nil {
 		fmt.Fprintf(stderr, "jumpgate: config.json records %s (%s: %s), but the key could not be opened: %v\n", rec.Address, rec.KeyStore, rec.KeyRef, err)
