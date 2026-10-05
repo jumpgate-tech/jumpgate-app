@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch supersedes an older run, so parallel feature
+# branches do not starve each other of hosted runners.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   # The embedded web UI must be committed and reproducible. It is checked once,
   # on Linux; the Go jobs below use the committed dist.
