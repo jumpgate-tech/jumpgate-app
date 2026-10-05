@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/valve-tech/jumpgate/internal/agentclient"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -281,11 +282,14 @@ func (r runner) dropIn() error {
 	return nil
 }
 
-// authorize appends the restricted key line unless the key is already there,
-// and always leaves authorized_keys owned by the tunnel user so a re-pair
-// repairs a half-finished earlier attempt.
+// authorize makes authorized_keys carry exactly one line for the transport
+// key, in the current form: an old line for the same key (matched on type and
+// base64 alone, whatever its options, comment or line ending) is replaced in
+// place, so a re-pair upgrades boxes paired with older options. Every other
+// line is kept byte for byte. An already-current line is not rewritten, and
+// the file is always left owned by the tunnel user so a re-pair repairs a
+// half-finished earlier attempt.
 func (r runner) authorize(key string) error {
-	blob := strings.Fields(key)[1]
 	// Decide existence explicitly: a failed read must never be mistaken for
 	// "no keys", or every other controller's key would be overwritten.
 	res, err := r.o.Exec.Run(r.ctx, "test -e "+AuthorizedKeys, nil)
@@ -306,23 +310,78 @@ func (r runner) authorize(key string) error {
 	if _, err := r.sh("sshd", "install -d -m 0700 -o jumpgate -g jumpgate "+HomeDir+"/.ssh"); err != nil {
 		return err
 	}
-	if hasKeyBlob(string(existing), blob) {
+	merged, changed := mergeTransportKey(string(existing), key)
+	if !changed {
+		r.emit("sshd", "transport key unchanged")
 		_, err := r.sh("sshd", "chown jumpgate:jumpgate "+AuthorizedKeys+" && chmod 0600 "+AuthorizedKeys)
 		return err
 	}
-	merged := strings.TrimRight(string(existing), "\n")
-	if merged != "" {
-		merged += "\n"
-	}
-	merged += `restrict,port-forwarding,command="/bin/false" ` + key + "\n"
 	// Stage, hand to the tunnel user, then rename: the final path is never
-	// root-owned, so an interruption cannot lock every tunnel login out.
+	// root-owned and is replaced atomically, so an interruption leaves the
+	// previous file intact. A failed hand-over drops the staged copy.
 	tmp := AuthorizedKeys + ".new"
 	if err := r.o.Exec.WriteFile(r.ctx, tmp, []byte(merged), 0o600); err != nil {
 		return &StepError{Step: "sshd", Err: err}
 	}
-	_, err = r.sh("sshd", fmt.Sprintf("chown jumpgate:jumpgate %s && chmod 0600 %s && mv -f %s %s", tmp, tmp, tmp, AuthorizedKeys))
-	return err
+	if _, err = r.sh("sshd", fmt.Sprintf("chown jumpgate:jumpgate %s && chmod 0600 %s && mv -f %s %s", tmp, tmp, tmp, AuthorizedKeys)); err != nil {
+		_, _ = r.o.Exec.Run(r.ctx, "rm -f "+tmp, nil)
+		return err
+	}
+	return nil
+}
+
+// mergeTransportKey returns authorizedKeys with key's line in the current form
+// and whether that changed anything. The first line carrying key (type and
+// base64 as adjacent fields) is replaced; later lines for the same key are
+// dropped; with none, the line is appended. Other lines are untouched.
+func mergeTransportKey(authorizedKeys, key string) (string, bool) {
+	want := transportKeyOptions + " " + key
+	f := strings.Fields(key)
+	typ, blob := f[0], f[1]
+	lines := strings.Split(authorizedKeys, "\n")
+	out := make([]string, 0, len(lines)+1)
+	found, changed := false, false
+	for i, l := range lines {
+		if !lineHasKey(l, typ, blob) {
+			out = append(out, l)
+			continue
+		}
+		if found {
+			changed = true // a duplicate of our own key
+			continue
+		}
+		found = true
+		if l != want {
+			changed = true
+		}
+		out = append(out, want)
+		if i == len(lines)-1 {
+			// Our line ended the file without a newline; give it one.
+			out = append(out, "")
+			changed = true
+		}
+	}
+	if found {
+		return strings.Join(out, "\n"), changed
+	}
+	merged := strings.TrimRight(authorizedKeys, "\n")
+	if merged != "" {
+		merged += "\n"
+	}
+	return merged + want + "\n", true
+}
+
+// lineHasKey reports whether an authorized_keys line is for the key typ blob:
+// the two appear as adjacent whole fields. Options precede the type, so the
+// position varies; a trailing \r or blanks are only whitespace to Fields.
+func lineHasKey(line, typ, blob string) bool {
+	f := strings.Fields(line)
+	for i := 1; i < len(f); i++ {
+		if f[i] == blob && f[i-1] == typ {
+			return true
+		}
+	}
+	return false
 }
 
 // canonicalTransportKey accepts exactly one bare public key and returns its
@@ -389,29 +448,28 @@ func (r runner) service() error {
 	if _, err := r.sh("service", "systemctl daemon-reload && systemctl enable --now jumpgate-agent.service && systemctl restart jumpgate-agent.service"); err != nil {
 		return err
 	}
-	// is-active exits 3 and prints the state when the unit is not active, so
-	// the state is read whatever the exit code.
-	res, err := r.o.Exec.Run(r.ctx, "systemctl is-active jumpgate-agent.service", nil)
+	// systemd reports "active" as soon as it forks the agent, before the agent
+	// has read its key, so a crash-looping agent would pass a one-shot
+	// is-active. Wait (about 10s) for the unit to be active AND its socket to
+	// exist; the restart removed the old socket with the runtime directory.
+	// is-active exits 3 when not active, so its output is read regardless.
+	res, err := r.o.Exec.Run(r.ctx, waitListening, nil)
 	if err != nil {
 		return &StepError{Step: "service", Err: err}
 	}
-	if state := strings.TrimSpace(res.Stdout); state != "active" {
-		return &StepError{Step: "service", Err: fmt.Errorf("jumpgate-agent.service is %q; see journalctl -u jumpgate-agent", state)}
+	if state := strings.TrimSpace(res.Stdout); state != "listening" {
+		msg := fmt.Sprintf("jumpgate-agent.service is %q and not listening on %s", state, agentclient.DefaultSocket)
+		if j, err := r.o.Exec.Run(r.ctx, "journalctl -u jumpgate-agent.service -n 5 --no-pager -o cat", nil); err == nil && strings.TrimSpace(j.Stdout) != "" {
+			msg += "; journal: " + tail(j.Stdout)
+		}
+		return &StepError{Step: "service", Err: fmt.Errorf("%s; see journalctl -u jumpgate-agent", msg)}
 	}
 	return nil
 }
 
-func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'" }
+// waitListening prints "listening" once the agent is up, else the unit's last
+// state.
+const waitListening = `for i in $(seq 1 20); do s=$(systemctl is-active jumpgate-agent.service); ` +
+	`if [ "$s" = active ] && [ -S ` + agentclient.DefaultSocket + ` ]; then echo listening; exit 0; fi; sleep 0.5; done; echo "$s"`
 
-// hasKeyBlob reports whether any authorized_keys line carries blob as a whole
-// field. Options precede the key type, so the blob's position varies.
-func hasKeyBlob(authorizedKeys, blob string) bool {
-	for _, l := range strings.Split(authorizedKeys, "\n") {
-		for _, f := range strings.Fields(l) {
-			if f == blob {
-				return true
-			}
-		}
-	}
-	return false
-}
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'" }
