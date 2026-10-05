@@ -74,6 +74,29 @@ cross:
       done
     - GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null ./cmd/jumpgate
 
+# The Windows tray build (jumpgate-tray.exe) needs cgo for WebView2, which the
+# CGO_ENABLED=0 cross job above cannot compile. trixie's mingw-w64 ships the
+# WebView2 headers' dependencies; EventToken.h is spelled eventtoken.h there,
+# which only matters on a case-sensitive file system, hence the one-line shim.
+# Running the tray tests needs Windows: the local VM or the windows job.
+windows-tray-cross:
+  stage: test
+  image: golang:1.25-trixie
+  cache:
+    key:
+      files: [go.sum]
+    paths: [.cache/go-mod/, .cache/go-build/]
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends g++-mingw-w64-x86-64 >/dev/null
+    - mkdir -p /opt/mingw-case && echo '#include <eventtoken.h>' > /opt/mingw-case/EventToken.h
+  script:
+    - |
+      set -euo pipefail
+      export GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ CGO_CXXFLAGS=-I/opt/mingw-case
+      go vet -tags tray ./cmd/jumpgate
+      go test -c -tags tray -o "$(mktemp -d)/" ./cmd/jumpgate
+      go build -tags tray -ldflags "-H windowsgui" -o "$(mktemp -d)/jumpgate-tray.exe" ./cmd/jumpgate
+
 billing:
   stage: test
   image: rust:1-bookworm
