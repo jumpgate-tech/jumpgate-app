@@ -138,3 +138,22 @@ func TestRenameReplacesTheTarget(t *testing.T) {
 		t.Fatalf("a still exists after Rename: %v", err)
 	}
 }
+
+// On unix CheckPrivate looks at the path itself, as on Windows: a link is
+// not a private file whatever its target's mode. (On Windows a link has its
+// own DACL, which CheckPrivate checks like any other.)
+func TestCheckPrivateRefusesASymlinkOnUnix(t *testing.T) {
+	testutil.RequireUnix(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := fsperm.WriteFilePrivate(target, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := fsperm.CheckPrivate(link); !errors.Is(err, fsperm.ErrNotPrivate) {
+		t.Fatalf("CheckPrivate(symlink) = %v, want ErrNotPrivate", err)
+	}
+}

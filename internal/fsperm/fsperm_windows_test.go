@@ -3,6 +3,7 @@
 package fsperm
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -68,4 +69,124 @@ func TestMakePrivateOnAUnixSocket(t *testing.T) {
 // netListenUnix is kept in the test so production code has no net import.
 func netListenUnix(path string) (interface{ Close() error }, error) {
 	return net.Listen("unix", path)
+}
+
+// grantEveryone adds an allow ACE for Everyone to path's DACL. fsperm's own
+// tests cannot use testutil.Loosen: testutil imports fsperm.
+func grantEveryone(t *testing.T, path string, mask windows.ACCESS_MASK, inherit uint32) {
+	t.Helper()
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	everyone, err := windows.CreateWellKnownSid(windows.WinWorldSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
+		AccessPermissions: mask,
+		AccessMode:        windows.GRANT_ACCESS,
+		Inheritance:       inherit,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeType:  windows.TRUSTEE_IS_WELL_KNOWN_GROUP,
+			TrusteeValue: windows.TrusteeValueFromSID(everyone),
+		},
+	}}, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.UNPROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// looseDir is a directory whose DACL hands Everyone read access to
+// everything created in it, the way a shared or redirected folder might.
+func looseDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	grantEveryone(t, dir, windows.GENERIC_READ, windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT)
+	return dir
+}
+
+// A grant inherited from the parent counts as much as an explicit one.
+func TestCheckPrivateSeesAnInheritedGrant(t *testing.T) {
+	p := filepath.Join(looseDir(t), "plain")
+	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckPrivate(p); !errors.Is(err, ErrNotPrivate) {
+		t.Fatalf("CheckPrivate on a file inheriting Everyone:R = %v, want ErrNotPrivate", err)
+	}
+}
+
+// A NULL DACL is the opposite of private: it grants everyone everything.
+func TestCheckPrivateRefusesANullDACL(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "k")
+	if err := WriteFilePrivate(p, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	h, err := openForSecurity(p, windows.READ_CONTROL|windows.WRITE_DAC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, nil, nil)
+	windows.CloseHandle(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd, err := windows.GetNamedSecurityInfo(p, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dacl, _, err := sd.DACL(); err != nil || dacl != nil {
+		t.Fatalf("setup: the DACL is %v, %v; want a NULL DACL", dacl, err)
+	}
+	if err := CheckPrivate(p); !errors.Is(err, ErrNotPrivate) {
+		t.Fatalf("CheckPrivate on a NULL DACL = %v, want ErrNotPrivate", err)
+	}
+}
+
+// Delete access lets another user remove a secret and plant their own.
+func TestCheckPrivateRefusesADeleteGrant(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "k")
+	if err := WriteFilePrivate(p, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	grantEveryone(t, p, windows.DELETE, windows.NO_INHERITANCE)
+	if err := CheckPrivate(p); !errors.Is(err, ErrNotPrivate) {
+		t.Fatalf("CheckPrivate with Everyone:DELETE = %v, want ErrNotPrivate", err)
+	}
+}
+
+func TestMakePrivateMakesTheUserTheOwner(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "k")
+	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := MakePrivate(p); err != nil {
+		t.Fatal(err)
+	}
+	sd, err := windows.GetNamedSecurityInfo(p, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := currentUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !owner.Equals(user) {
+		t.Fatalf("owner = %s, want the current user %s", accountName(owner), accountName(user))
+	}
 }

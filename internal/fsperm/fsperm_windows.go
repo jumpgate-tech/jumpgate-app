@@ -12,12 +12,22 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// accessMask is every right that lets a SID read the content, change it, or
-// change who may: an allow ACE with any of these for a stranger means the
-// file is not private.
+// accessMask is every right that lets a SID read the content, change it,
+// delete it, or change who may: an allow ACE with any of these for a stranger
+// means the file is not private.
 const accessMask = windows.GENERIC_ALL | windows.GENERIC_READ | windows.GENERIC_WRITE |
 	0x1 /* FILE_READ_DATA */ | 0x2 /* FILE_WRITE_DATA */ | 0x4 /* FILE_APPEND_DATA */ |
+	0x40 /* FILE_DELETE_CHILD */ | windows.DELETE |
 	windows.WRITE_DAC | windows.WRITE_OWNER
+
+// The deny ACE types. A deny entry only takes access away, so it never makes
+// a file less private.
+var denyACETypes = map[byte]bool{
+	windows.ACCESS_DENIED_ACE_TYPE: true,
+	0x6:                            true, // ACCESS_DENIED_OBJECT_ACE_TYPE
+	0xA:                            true, // ACCESS_DENIED_CALLBACK_ACE_TYPE
+	0xC:                            true, // ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE
+}
 
 // openForSecurity opens path itself, never what it points to: the flags make
 // it work on directories (BACKUP_SEMANTICS) and on AF_UNIX sockets and links
@@ -40,6 +50,23 @@ func currentUser() (*windows.SID, error) {
 	return tu.User.Sid.Copy()
 }
 
+// privateSD is the descriptor every private object gets: owned by the
+// current user, with a protected DACL (no inherited entries) granting full
+// access to that user and SYSTEM only. A directory's entries are inherited
+// by what is created in it.
+func privateSD(dir bool) (*windows.SECURITY_DESCRIPTOR, error) {
+	user, err := currentUser()
+	if err != nil {
+		return nil, err
+	}
+	inherit := ""
+	if dir {
+		inherit = "OICI"
+	}
+	u := user.String()
+	return windows.SecurityDescriptorFromString(fmt.Sprintf("O:%sD:P(A;%s;FA;;;%s)(A;%s;FA;;;SY)", u, inherit, u, inherit))
+}
+
 func makePrivate(path string) error {
 	fi, err := os.Lstat(path)
 	if err != nil {
@@ -48,46 +75,70 @@ func makePrivate(path string) error {
 	if fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("fsperm: %s is a symlink; refusing to change what it points to", path)
 	}
-	user, err := currentUser()
+	sd, err := privateSD(fi.IsDir())
 	if err != nil {
 		return err
 	}
-	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	dacl, _, err := sd.DACL()
 	if err != nil {
 		return err
 	}
-	inherit := uint32(windows.NO_INHERITANCE)
-	if fi.IsDir() {
-		inherit = windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return err
 	}
-	grant := func(sid *windows.SID, kind windows.TRUSTEE_TYPE) windows.EXPLICIT_ACCESS {
-		return windows.EXPLICIT_ACCESS{
-			AccessPermissions: windows.GENERIC_ALL,
-			AccessMode:        windows.GRANT_ACCESS,
-			Inheritance:       inherit,
-			Trustee: windows.TRUSTEE{
-				TrusteeForm:  windows.TRUSTEE_IS_SID,
-				TrusteeType:  kind,
-				TrusteeValue: windows.TrusteeValueFromSID(sid),
-			},
+	if err := setSecurity(path, windows.WRITE_DAC, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, dacl); err != nil {
+		return err
+	}
+	// Take ownership second: the new DACL grants this user WRITE_OWNER, which
+	// the old one may not have. A file already owned by SYSTEM or
+	// Administrators is acceptable to checkHandle, so failing to take it over
+	// is not an error.
+	if err := setSecurity(path, windows.WRITE_OWNER, windows.OWNER_SECURITY_INFORMATION, owner, nil); err != nil {
+		if ok, oerr := ownerTrusted(path); oerr == nil && ok {
+			return nil
 		}
+		return fmt.Errorf("fsperm: take ownership of %s: %w", path, err)
 	}
-	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{
-		grant(user, windows.TRUSTEE_IS_USER),
-		grant(system, windows.TRUSTEE_IS_WELL_KNOWN_GROUP),
-	}, nil)
-	if err != nil {
-		return err
-	}
-	h, err := openForSecurity(path, windows.READ_CONTROL|windows.WRITE_DAC)
+	return nil
+}
+
+func setSecurity(path string, access uint32, info windows.SECURITY_INFORMATION, owner *windows.SID, dacl *windows.ACL) error {
+	h, err := openForSecurity(path, windows.READ_CONTROL|access)
 	if err != nil {
 		return fmt.Errorf("fsperm: open %s: %w", path, err)
 	}
 	defer windows.CloseHandle(h)
-	// PROTECTED drops inherited ACEs: a profile's inherited grants are
-	// exactly what this must not depend on.
-	return windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil)
+	return windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT, info, owner, nil, dacl, nil)
+}
+
+// ownerTrusted reports whether path's owner is one checkHandle accepts.
+func ownerTrusted(path string) (bool, error) {
+	h, err := openForSecurity(path, windows.READ_CONTROL)
+	if err != nil {
+		return false, err
+	}
+	defer windows.CloseHandle(h)
+	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return false, err
+	}
+	owner, _, err := sd.Owner()
+	if err != nil || owner == nil {
+		return false, err
+	}
+	user, err := currentUser()
+	if err != nil {
+		return false, err
+	}
+	return trusted(owner, user), nil
+}
+
+// trusted is the set of SIDs a private file may grant access to or be owned
+// by (spec D16): the user, SYSTEM, and Administrators, who can take
+// ownership of any file anyway.
+func trusted(sid, user *windows.SID) bool {
+	return sid.Equals(user) || sid.IsWellKnown(windows.WinLocalSystemSid) || sid.IsWellKnown(windows.WinBuiltinAdministratorsSid)
 }
 
 func checkPrivate(path string) error {
@@ -103,14 +154,26 @@ func checkPrivateFile(f *os.File) error {
 	return checkHandle(f.Name(), windows.Handle(f.Fd()))
 }
 
-// checkHandle accepts allow ACEs for the owner, SYSTEM and Administrators
-// only (spec D16). Administrators can take ownership of any file anyway, and
-// default profile ACLs include them. Inherit-only ACEs do not apply to the
-// object itself and are skipped.
+// checkHandle requires a trusted owner and accepts allow ACEs for trusted
+// SIDs only. Inherit-only ACEs do not apply to the object itself and are
+// skipped; deny ACEs only take access away. Any other ACE type (callback,
+// object, compound allows) is one this check cannot reason about, so it
+// counts as not private.
 func checkHandle(path string, h windows.Handle) error {
-	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
-		return fmt.Errorf("fsperm: read the DACL of %s: %w", path, err)
+		return fmt.Errorf("fsperm: read the security of %s: %w", path, err)
+	}
+	user, err := currentUser()
+	if err != nil {
+		return err
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("fsperm: read the owner of %s: %w", path, err)
+	}
+	if owner == nil || !trusted(owner, user) {
+		return fmt.Errorf("%w: %s is owned by %s; delete it and let jumpgate recreate it", ErrNotPrivate, path, accountName(owner))
 	}
 	dacl, _, err := sd.DACL()
 	if err != nil {
@@ -119,32 +182,37 @@ func checkHandle(path string, h windows.Handle) error {
 	if dacl == nil {
 		return fmt.Errorf("%w: %s has no DACL, so everyone has full access", ErrNotPrivate, path)
 	}
-	user, err := currentUser()
-	if err != nil {
-		return err
-	}
 	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, i, &ace); err != nil {
 			return err
 		}
-		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
+		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 || denyACETypes[ace.Header.AceType] {
 			continue
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return fmt.Errorf("%w: %s has an access entry of type %d that jumpgate cannot verify; delete the file and let jumpgate recreate it", ErrNotPrivate, path, ace.Header.AceType)
 		}
 		if uint32(ace.Mask)&accessMask == 0 {
 			continue
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		if sid.Equals(user) || sid.IsWellKnown(windows.WinLocalSystemSid) || sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+		if trusted(sid, user) {
 			continue
 		}
-		who := sid.String()
-		if acct, dom, _, lerr := sid.LookupAccount(""); lerr == nil {
-			who = dom + `\` + acct
-		}
-		return fmt.Errorf("%w: %s grants access to %s; remove that entry (Properties > Security) or delete the file and let jumpgate recreate it", ErrNotPrivate, path, who)
+		return fmt.Errorf("%w: %s grants access to %s; remove that entry (Properties > Security) or delete the file and let jumpgate recreate it", ErrNotPrivate, path, accountName(sid))
 	}
 	return nil
+}
+
+func accountName(sid *windows.SID) string {
+	if sid == nil {
+		return "nobody"
+	}
+	if acct, dom, _, err := sid.LookupAccount(""); err == nil {
+		return dom + `\` + acct
+	}
+	return sid.String()
 }
 
 // moveFile is a seam for the retry test.
