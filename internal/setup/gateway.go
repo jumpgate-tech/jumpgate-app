@@ -385,6 +385,13 @@ func (p *gatewayPlan) preflight(ctx context.Context, e executor.Executor, st *St
 		if !info.DaemonReachable {
 			return fmt.Errorf("preflight: the docker CLI is installed but no engine answered — start Docker Desktop / OrbStack / colima (or `systemctl start docker`) and retry: %s", info.DaemonError)
 		}
+		// The image is built on the target, so BuildKit must be there — unless
+		// the image is already present and no build will happen.
+		if present, _ := ops.ImageExists(ctx, e, ops.ERPCImageTag()); !present {
+			if err := ops.CheckBuildx(ctx, e); err != nil {
+				return fmt.Errorf("preflight: %w", err)
+			}
+		}
 	case BackendSystemd:
 		if err := requireLinuxRoot(ctx, e); err != nil {
 			return err

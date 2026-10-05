@@ -816,3 +816,27 @@ func TestRunDocker_SkipsTheBuildWhenTheImageIsPresent(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayPreflight_MissingBuildxNamesTheFixPerPlatform(t *testing.T) {
+	e := dockerReady().
+		script("docker buildx version", executor.Result{ExitCode: 1, Stderr: "docker: 'buildx' is not a docker command.\n"})
+	step := stepByID(t, mustPlanGateway(t, testGateway(), BackendDocker), "preflight")
+
+	err := step.Verify(context.Background(), e, &State{})
+	if err == nil {
+		t.Fatal("want a buildx preflight failure")
+	}
+	for _, want := range []string{"buildx", "brew install docker-buildx", "cli-plugins", "apt install docker-buildx", "docker-buildx-plugin", "Docker Desktop"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q, got: %v", want, err)
+		}
+	}
+}
+
+func TestGatewayPreflight_BuildxPresentPasses(t *testing.T) {
+	e := dockerReady().script("docker buildx version", executor.Result{Stdout: "github.com/docker/buildx v0.17.1\n"})
+	step := stepByID(t, mustPlanGateway(t, testGateway(), BackendDocker), "preflight")
+	if err := step.Verify(context.Background(), e, &State{}); err != nil {
+		t.Fatal(err)
+	}
+}
