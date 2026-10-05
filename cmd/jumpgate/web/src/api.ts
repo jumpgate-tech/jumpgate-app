@@ -1657,9 +1657,9 @@ export class ApiError extends Error {
   status: number;
   // hint is the server's operator-facing guidance (e.g. ops' "start Docker
   // Desktop / OrbStack / colima" for an unreachable engine), and code is the
-  // machine-readable kind ("docker-absent", "docker-unreachable",
-  // "service-not-created", "not-configured"). Both are optional: only the
-  // container routes populate them.
+  // machine-readable kind ("docker_absent", "docker_unreachable",
+  // "service_not_created", "not_configured"; the registry is internal/api).
+  // Every /api error carries a code; the hint is optional.
   hint?: string;
   code?: string;
   constructor(status: number, message: string, hint?: string, code?: string) {

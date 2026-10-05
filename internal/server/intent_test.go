@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/agent"
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
@@ -133,12 +134,12 @@ func TestIntentEndpointRefusesUnpairedAndKeylessServers(t *testing.T) {
 		c.Targets = append(c.Targets, config.Target{ID: "raw", Mode: "local"})
 		return nil
 	})
-	if res, out := postIntent(t, ts, token, "/api/targets/raw/intent/agent.info", `{}`); res.StatusCode != http.StatusConflict || out["code"] != "not_paired" {
+	if res, out := postIntent(t, ts, token, "/api/targets/raw/intent/agent.info", `{}`); res.StatusCode != http.StatusConflict || out["code"] != "not_paired" || out["hint"] != api.HintFor(api.CodeNotPaired) {
 		t.Fatalf("unpaired: %d %v", res.StatusCode, out)
 	}
 	keyless := httptest.NewServer(New(Config{Token: token, UI: fstest.MapFS{}}).Handler())
 	defer keyless.Close()
-	if res, out := postIntent(t, keyless, token, "/api/targets/box/intent/agent.info", `{}`); res.StatusCode != http.StatusServiceUnavailable || out["code"] != "no_controller_key" {
+	if res, out := postIntent(t, keyless, token, "/api/targets/box/intent/agent.info", `{}`); res.StatusCode != http.StatusServiceUnavailable || out["code"] != "no_controller_key" || out["hint"] != api.HintFor(api.CodeNoControllerKey) {
 		t.Fatalf("keyless: %d %v", res.StatusCode, out)
 	}
 }

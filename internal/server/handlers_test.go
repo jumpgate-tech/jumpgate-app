@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -112,12 +113,12 @@ func TestExplain_AProviderFailureIsReportedAsUpstream(t *testing.T) {
 	a.fakeAI.err = errors.New("401 invalid x-api-key")
 
 	res := a.do(t, "POST", "/api/targets/local/explain", map[string]any{"lines": []string{"boom"}})
-	body := decode[errorDetail](t, res)
+	body := decode[api.Error](t, res)
 	if res.StatusCode != http.StatusBadGateway {
 		t.Fatalf("got %d, want 502", res.StatusCode)
 	}
-	if !strings.Contains(body.Error, "invalid x-api-key") {
-		t.Errorf("error %q does not carry the provider's own words", body.Error)
+	if !strings.Contains(body.Message, "invalid x-api-key") {
+		t.Errorf("error %q does not carry the provider's own words", body.Message)
 	}
 }
 
@@ -229,12 +230,12 @@ func TestAddTarget_AnUnreachableMachineIsNotStored(t *testing.T) {
 		"id": "unreachable", "mode": "ssh",
 		"ssh": map[string]string{"host": "10.0.0.1", "user": "ops", "keyPath": "/k"},
 	})
-	body := decode[errorDetail](t, res)
+	body := decode[api.Error](t, res)
 	if res.StatusCode != http.StatusBadGateway {
 		t.Fatalf("got %d, want 502", res.StatusCode)
 	}
-	if !strings.Contains(body.Error, "no route to host") {
-		t.Errorf("error %q does not say why it could not be reached", body.Error)
+	if !strings.Contains(body.Message, "no route to host") {
+		t.Errorf("error %q does not say why it could not be reached", body.Message)
 	}
 
 	list := decode[[]config.Target](t, a.do(t, "GET", "/api/targets", nil))
@@ -316,7 +317,7 @@ func TestContainerProvision_ClaimsTheMachinesRunSlot(t *testing.T) {
 	}
 }
 
-// A service this app has no plan for is a 400 with the typed not-configured
+// A service this app has no plan for is a 400 with the typed not_configured
 // code — not a 404. The machine and the route both exist; what does not exist
 // is anything to provision, and the code is what lets the UI say so.
 func TestContainerProvision_UnknownServiceIsRefusedWithATypedCode(t *testing.T) {
@@ -325,12 +326,12 @@ func TestContainerProvision_UnknownServiceIsRefusedWithATypedCode(t *testing.T) 
 	addTarget(t, a)
 
 	res := a.do(t, "POST", "/api/targets/local/containers/nonesuch/provision", nil)
-	body := decode[errorDetail](t, res)
+	body := decode[api.Error](t, res)
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.StatusCode)
 	}
-	if body.Code != codeNotConfigured {
-		t.Errorf("code: got %q, want %q", body.Code, codeNotConfigured)
+	if body.Code != api.CodeNotConfigured {
+		t.Errorf("code: got %q, want %q", body.Code, api.CodeNotConfigured)
 	}
 }
 
@@ -356,12 +357,12 @@ func TestGatewayCreate_RefusesADuplicateID(t *testing.T) {
 		"id":        "default",
 		"placement": map[string]string{"targetId": "local"},
 	})
-	body := decode[errorDetail](t, res)
+	body := decode[api.Error](t, res)
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.StatusCode)
 	}
-	if !strings.Contains(body.Error, "already exists") {
-		t.Errorf("error %q does not say the id is taken", body.Error)
+	if !strings.Contains(body.Message, "already exists") {
+		t.Errorf("error %q does not say the id is taken", body.Message)
 	}
 
 	// And the first gateway is untouched — a rejected create must not have

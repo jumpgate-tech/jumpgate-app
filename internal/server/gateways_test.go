@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -406,9 +407,9 @@ func TestGateways_NoChainsOffersNoCreateAndSaysWhy(t *testing.T) {
 	}
 
 	res := a.do(t, "POST", "/api/gateways/empty/provision", nil)
-	body := decode[errorDetail](t, res)
-	if res.StatusCode != http.StatusBadRequest || body.Code != codeNotConfigured {
-		t.Fatalf("provision with no chains: got %d/%q, want 400/%s", res.StatusCode, body.Code, codeNotConfigured)
+	body := decode[api.Error](t, res)
+	if res.StatusCode != http.StatusBadRequest || body.Code != api.CodeNotConfigured {
+		t.Fatalf("provision with no chains: got %d/%q, want 400/%s", res.StatusCode, body.Code, api.CodeNotConfigured)
 	}
 }
 
@@ -430,9 +431,9 @@ func TestGateways_WipeRequiresTypedConfirmation(t *testing.T) {
 func TestGateways_UnknownGatewayIs404WithATypedCode(t *testing.T) {
 	a := gatewayServer(t)
 	res := a.do(t, "GET", "/api/gateways/nope", nil)
-	body := decode[errorDetail](t, res)
-	if res.StatusCode != http.StatusNotFound || body.Code != codeGatewayNotFound {
-		t.Fatalf("got %d/%q, want 404/%s", res.StatusCode, body.Code, codeGatewayNotFound)
+	body := decode[api.Error](t, res)
+	if res.StatusCode != http.StatusNotFound || body.Code != api.CodeGatewayNotFound {
+		t.Fatalf("got %d/%q, want 404/%s", res.StatusCode, body.Code, api.CodeGatewayNotFound)
 	}
 }
 
@@ -1395,9 +1396,9 @@ func TestGatewayCreate_RefusesASlotItCannotFill(t *testing.T) {
 		raw, _ := io.ReadAll(res.Body)
 		t.Fatalf("got %d, want 400: %s", res.StatusCode, raw)
 	}
-	body := decode[errorDetail](t, res)
-	if !strings.Contains(body.Error, "INFURA_API_KEY") {
-		t.Errorf("the refusal must name the key to go get: %q", body.Error)
+	body := decode[api.Error](t, res)
+	if !strings.Contains(body.Message, "INFURA_API_KEY") {
+		t.Errorf("the refusal must name the key to go get: %q", body.Message)
 	}
 
 	stored, _ := config.Load()
@@ -1424,9 +1425,9 @@ func TestGatewayPutConfig_RefusesASlotItCannotFill(t *testing.T) {
 		raw, _ := io.ReadAll(res.Body)
 		t.Fatalf("got %d, want 400: %s", res.StatusCode, raw)
 	}
-	body := decode[errorDetail](t, res)
-	if !strings.Contains(body.Error, "INFURA_API_KEY") {
-		t.Errorf("the refusal must name the key to go get: %q", body.Error)
+	body := decode[api.Error](t, res)
+	if !strings.Contains(body.Message, "INFURA_API_KEY") {
+		t.Errorf("the refusal must name the key to go get: %q", body.Message)
 	}
 
 	stored, _ := config.Load()
@@ -1469,8 +1470,8 @@ func TestGatewayListCarriesThePerChainKnownSetSize(t *testing.T) {
 func TestKnownSetUnknownGatewayIs404(t *testing.T) {
 	a := gatewayServer(t)
 	res := a.do(t, "GET", "/api/gateways/nope/knownset/1", nil)
-	body := decode[errorDetail](t, res)
-	if res.StatusCode != http.StatusNotFound || body.Code != codeGatewayNotFound {
-		t.Fatalf("got %d/%q, want 404/%s", res.StatusCode, body.Code, codeGatewayNotFound)
+	body := decode[api.Error](t, res)
+	if res.StatusCode != http.StatusNotFound || body.Code != api.CodeGatewayNotFound {
+		t.Fatalf("got %d/%q, want 404/%s", res.StatusCode, body.Code, api.CodeGatewayNotFound)
 	}
 }

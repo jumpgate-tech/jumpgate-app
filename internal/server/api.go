@@ -26,6 +26,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/valve-tech/jumpgate/internal/ai"
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -470,10 +471,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
-}
-
 // writeSSEEvent marshals v and writes it as one `data: <json>\n\n` SSE
 // frame. Marshal failures are dropped silently — there is no way to report
 // an error mid-stream that wouldn't also break the stream framing.
@@ -707,7 +704,7 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, ok := findTarget(existing, t.ID); ok {
-		writeError(w, http.StatusConflict, fmt.Sprintf("target %q already exists", t.ID))
+		writeErrorDetail(w, http.StatusConflict, fmt.Sprintf("target %q already exists", t.ID), "", api.CodeTargetExists)
 		return
 	}
 
@@ -719,8 +716,10 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	exists := false
 	cfg, err := s.updateConfig(func(c *config.Config) error {
 		if _, ok := findTarget(*c, t.ID); ok {
+			exists = true
 			return fmt.Errorf("target %q already exists", t.ID)
 		}
 		c.Targets = append(c.Targets, t)
@@ -728,7 +727,13 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		ex.Close()
-		writeError(w, http.StatusConflict, err.Error())
+		// A second add that won the race to the config is the same answer as
+		// the check above, so a client re-pairs on the code either way.
+		code := api.CodeConflict
+		if exists {
+			code = api.CodeTargetExists
+		}
+		writeErrorDetail(w, http.StatusConflict, err.Error(), "", code)
 		return
 	}
 
@@ -759,7 +764,7 @@ func (s *Server) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !found {
-		writeError(w, http.StatusNotFound, "target not found")
+		writeTargetNotFound(w)
 		return
 	}
 
@@ -891,13 +896,13 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	target, ok := findTarget(cfg, id)
 	if !ok {
-		writeError(w, http.StatusNotFound, "target not found")
+		writeTargetNotFound(w)
 		return
 	}
 
 	ex, err := s.getExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 
@@ -1116,17 +1121,17 @@ func (s *Server) handleTargetMonitorStream(w http.ResponseWriter, r *http.Reques
 	}
 	target, ok := findTarget(cfg, id)
 	if !ok {
-		writeError(w, http.StatusNotFound, "target not found")
+		writeTargetNotFound(w)
 		return
 	}
 	if target.Wire == nil {
-		writeError(w, http.StatusConflict, "target has not completed setup")
+		writeTargetNotSetUp(w)
 		return
 	}
 
 	mon, retired, err := s.getMonitor(target, cfg.RefRPCBase)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 
@@ -1177,17 +1182,17 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	target, ok := findTarget(cfg, id)
 	if !ok {
-		writeError(w, http.StatusNotFound, "target not found")
+		writeTargetNotFound(w)
 		return
 	}
 	if target.Wire == nil {
-		writeError(w, http.StatusConflict, "target has not completed setup")
+		writeTargetNotSetUp(w)
 		return
 	}
 
 	watch, _, err := s.getWatcher(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 
@@ -1215,17 +1220,17 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	}
 	target, ok := findTarget(cfg, id)
 	if !ok {
-		writeError(w, http.StatusNotFound, "target not found")
+		writeTargetNotFound(w)
 		return
 	}
 	if target.Wire == nil {
-		writeError(w, http.StatusConflict, "target has not completed setup")
+		writeTargetNotSetUp(w)
 		return
 	}
 
 	watch, retired, err := s.getWatcher(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 
@@ -1288,7 +1293,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	}
 	target, ok := findTarget(cfg, id)
 	if !ok {
-		writeError(w, http.StatusNotFound, "target not found")
+		writeTargetNotFound(w)
 		return
 	}
 	if cfg.AIProvider == "" {
@@ -1370,11 +1375,11 @@ func (s *Server) targetWithWire(w http.ResponseWriter, r *http.Request, id strin
 	}
 	target, ok := findTarget(cfg, id)
 	if !ok {
-		writeError(w, http.StatusNotFound, "target not found")
+		writeTargetNotFound(w)
 		return config.Target{}, false
 	}
 	if target.Wire == nil {
-		writeError(w, http.StatusConflict, "target has not completed setup")
+		writeTargetNotSetUp(w)
 		return config.Target{}, false
 	}
 	return target, true
@@ -1399,7 +1404,7 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 
 	ex, err := s.getExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 
@@ -1438,7 +1443,7 @@ func (s *Server) handleServiceClear(w http.ResponseWriter, r *http.Request) {
 
 	ex, err := s.getExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 
@@ -1468,7 +1473,7 @@ func (s *Server) handleDiskUsage(w http.ResponseWriter, r *http.Request) {
 
 	ex, err := s.getExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 
@@ -1491,7 +1496,7 @@ func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 
 	ex, err := s.getExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 
@@ -1520,7 +1525,7 @@ func (s *Server) handleFirewall(w http.ResponseWriter, r *http.Request) {
 
 	ex, err := s.getExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 
@@ -1597,12 +1602,12 @@ func (s *Server) handleDiskFree(w http.ResponseWriter, r *http.Request) {
 	}
 	target, ok := findTarget(cfg, id)
 	if !ok {
-		writeError(w, http.StatusNotFound, "target not found")
+		writeTargetNotFound(w)
 		return
 	}
 	ex, err := s.getExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 	free, err := ops.FreeBytesAt(r.Context(), ex, path)

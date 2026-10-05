@@ -43,9 +43,7 @@ func (s *Server) registerKeyRoutes(mux *http.ServeMux) {
 // rather than a nil dereference.
 func (s *Server) keyAdmin(w http.ResponseWriter) (KeyAdmin, bool) {
 	if s.cfg.Keys == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]string{
-			"error": "this gateway has no key store configured",
-		})
+		writeError(w, http.StatusNotImplemented, "this gateway has no key store configured")
 		return nil, false
 	}
 	return s.cfg.Keys, true
@@ -60,7 +58,7 @@ func (s *Server) handleKeyList(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// A broken store is reported. An empty list would read as "this gateway
 		// has no keys", which is a different and much more alarming fact.
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "the key store did not answer"})
+		writeError(w, http.StatusBadGateway, "the key store did not answer")
 		return
 	}
 	if keys == nil {
@@ -84,7 +82,7 @@ func (s *Server) handleKeyCreate(w http.ResponseWriter, r *http.Request) {
 
 	id, rawKey, err := admin.CreateKey(r.Context(), req.Label)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "the key store did not answer"})
+		writeError(w, http.StatusBadGateway, "the key store did not answer")
 		return
 	}
 	// The raw key is returned HERE AND NOWHERE ELSE. The store keeps only a
@@ -98,7 +96,7 @@ func (s *Server) handleKeyRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := admin.RevokeKey(r.Context(), r.PathValue("keyId")); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "the key store did not answer"})
+		writeError(w, http.StatusBadGateway, "the key store did not answer")
 		return
 	}
 	// Revocation is eventually consistent: the relay caches key records, so a

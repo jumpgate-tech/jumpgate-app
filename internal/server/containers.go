@@ -39,6 +39,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -62,15 +63,6 @@ const (
 	actionCreate   = "create"   // provision from nothing
 	actionRecreate = "recreate" // re-provision onto the current config
 	actionWipe     = "wipe"
-)
-
-// Error codes carried alongside every container failure, so the UI can
-// branch on the KIND of failure without matching on message text.
-const (
-	codeDockerAbsent      = "docker-absent"
-	codeDockerUnreachable = "docker-unreachable"
-	codeNotCreated        = "service-not-created"
-	codeNotConfigured     = "not-configured"
 )
 
 // ---------------------------------------------------------------------
@@ -134,9 +126,9 @@ type containerView struct {
 	// Error and Hint report a per-service read failure inside a list
 	// response, where one unreadable service must not blank the whole
 	// screen. Single-service routes return these as an HTTP error instead.
-	Error string `json:"error,omitempty"`
-	Hint  string `json:"hint,omitempty"`
-	Code  string `json:"code,omitempty"`
+	Error string   `json:"error,omitempty"`
+	Hint  string   `json:"hint,omitempty"`
+	Code  api.Code `json:"code,omitempty"`
 }
 
 // dockerView is the engine reading the whole screen depends on. It is
@@ -176,7 +168,20 @@ type wipeResponse struct {
 	Status ops.ContainerStatus `json:"status"`
 	Error  string              `json:"error,omitempty"`
 	Hint   string              `json:"hint,omitempty"`
-	Code   string              `json:"code,omitempty"`
+	Code   api.Code            `json:"code,omitempty"`
+}
+
+// setOpsError fills the error fields from a failed wipe and returns the status
+// to answer with. A failure ops has no specific code for takes the status's
+// generic one, so this body carries a code like every other error the API
+// sends.
+func (res *wipeResponse) setOpsError(err error) int {
+	status, hint, code := classifyOpsError(err)
+	if code == "" {
+		code = api.CodeForStatus(status)
+	}
+	res.Error, res.Hint, res.Code = err.Error(), hint, code
+	return status
 }
 
 // containerConfigResponse is the read/write shape for a service's stored
@@ -185,20 +190,6 @@ type containerConfigResponse struct {
 	ID         string                `json:"id"`
 	Configured bool                  `json:"configured"`
 	Devnet     *catalog.DevnetConfig `json:"devnet,omitempty"`
-}
-
-// errorDetail is writeError's body plus the two fields a container failure
-// needs: a typed code to branch on and the operator-facing hint the ops
-// error already carries. Both are omitempty, so this is wire-compatible with
-// every existing {"error": ...} response.
-type errorDetail struct {
-	Error string `json:"error"`
-	Hint  string `json:"hint,omitempty"`
-	Code  string `json:"code,omitempty"`
-}
-
-func writeErrorDetail(w http.ResponseWriter, status int, msg, hint, code string) {
-	writeJSON(w, status, errorDetail{Error: msg, Hint: hint, Code: code})
 }
 
 // classifyOpsError maps one of ops' typed lifecycle errors onto the HTTP
@@ -212,19 +203,17 @@ func writeErrorDetail(w http.ResponseWriter, status int, msg, hint, code string)
 //     executor-backed route in this package gives a target-side fault. Both
 //     carry a Hint written for an operator, and it is passed through verbatim
 //     so the UI can show it without paraphrasing.
-func classifyOpsError(err error) (status int, hint, code string) {
+func classifyOpsError(err error) (status int, hint string, code api.Code) {
 	var notCreated *ops.ServiceNotCreatedError
 	var absent *ops.DockerAbsentError
 	var unreachable *ops.DockerUnreachableError
 	switch {
 	case errors.As(err, &notCreated):
-		return http.StatusConflict,
-			"this service has not been created on the target yet — create it first",
-			codeNotCreated
+		return http.StatusConflict, api.HintFor(api.CodeServiceNotCreated), api.CodeServiceNotCreated
 	case errors.As(err, &absent):
-		return http.StatusBadGateway, absent.Hint, codeDockerAbsent
+		return http.StatusBadGateway, absent.Hint, api.CodeDockerAbsent
 	case errors.As(err, &unreachable):
-		return http.StatusBadGateway, unreachable.Hint, codeDockerUnreachable
+		return http.StatusBadGateway, unreachable.Hint, api.CodeDockerUnreachable
 	default:
 		return http.StatusBadGateway, "", ""
 	}
@@ -270,7 +259,7 @@ func (s *Server) configAndTarget(w http.ResponseWriter, id string) (config.Confi
 	}
 	t, ok := findTarget(cfg, id)
 	if !ok {
-		writeError(w, http.StatusNotFound, "target not found")
+		writeTargetNotFound(w)
 		return config.Config{}, config.Target{}, false
 	}
 	return cfg, t, true
@@ -295,7 +284,7 @@ func (s *Server) resolveService(w http.ResponseWriter, r *http.Request) (config.
 	}
 	ex, err := s.getExecutor(t)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return config.Target{}, ops.DockerService{}, nil, false
 	}
 	return t, dsvc, ex, true
@@ -319,7 +308,7 @@ func (s *Server) handleContainerList(w http.ResponseWriter, r *http.Request) {
 	}
 	ex, err := s.getExecutor(t)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 
@@ -638,9 +627,7 @@ func (s *Server) handleContainerWipe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, res)
 		return
 	}
-	status, hint, code := classifyOpsError(wipeErr)
-	res.Error, res.Hint, res.Code = wipeErr.Error(), hint, code
-	writeJSON(w, status, res)
+	writeJSON(w, res.setOpsError(wipeErr), res)
 }
 
 // ---------------------------------------------------------------------
@@ -685,7 +672,7 @@ func (s *Server) handleContainerReset(w http.ResponseWriter, r *http.Request) {
 	}
 	ex, err := s.getExecutor(t)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 	// Only the devnet's own machine is claimed. The gateways bounced on
@@ -713,11 +700,9 @@ func (s *Server) handleContainerReset(w http.ResponseWriter, r *http.Request) {
 	res := wipeResponse{Report: rep, Status: st}
 	switch {
 	case wipeErr != nil:
-		status, hint, code := classifyOpsError(wipeErr)
-		res.Error, res.Hint, res.Code = wipeErr.Error(), hint, code
-		writeJSON(w, status, res)
+		writeJSON(w, res.setOpsError(wipeErr), res)
 	case remoteErr != nil:
-		res.Error = remoteErr.Error()
+		res.Error, res.Code = remoteErr.Error(), api.CodeUpstream
 		writeJSON(w, http.StatusBadGateway, res)
 	default:
 		writeJSON(w, http.StatusOK, res)
@@ -789,13 +774,13 @@ func (s *Server) handleContainerProvision(w http.ResponseWriter, r *http.Request
 
 	steps, err := containerPlan(t, svc)
 	if err != nil {
-		writeErrorDetail(w, http.StatusBadRequest, err.Error(), "", codeNotConfigured)
+		writeErrorDetail(w, http.StatusBadRequest, err.Error(), "", api.CodeNotConfigured)
 		return
 	}
 
 	ex, err := s.getExecutor(t)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 

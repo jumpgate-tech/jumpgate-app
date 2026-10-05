@@ -108,7 +108,9 @@ func hostsAdd(args []string) int {
 		return failed("%v", err)
 	}
 	if e := call(info, "/api/targets", target, nil); e != nil {
-		if e.Status != http.StatusConflict || e.Code != "" {
+		// target_exists is the server's answer for a name already on record;
+		// an older server sent the same 409 with no code.
+		if e.Status != http.StatusConflict || (e.Code != "" && e.Code != "target_exists") {
 			return reportServerErrorFrom(os.Stderr, "add "+name, info, *e)
 		}
 		// The name is already a target: pairing it again is how a box is

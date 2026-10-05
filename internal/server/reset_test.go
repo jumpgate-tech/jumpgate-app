@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -138,15 +139,15 @@ func TestReset_RefusedForAnythingButTheDevnet(t *testing.T) {
 	// handler's JSON refusal, and there is nothing of ours to assert about it.
 	for _, svc := range []string{"erpc", "gateway", "reth", "node"} {
 		res := a.do(t, "POST", "/api/targets/local/containers/"+svc+"/reset", nil)
-		body := decode[errorDetail](t, res)
+		body := decode[api.Error](t, res)
 		if res.StatusCode != http.StatusNotFound {
 			t.Errorf("reset %q: got %d, want 404", svc, res.StatusCode)
 			continue
 		}
 		// The message has to point at the real path for a node, or the
 		// operator concludes the feature is missing and looks for another way.
-		if !strings.Contains(body.Error, "clear-and-resync") {
-			t.Errorf("reset %q: message does not name the guarded path a node actually has: %q", svc, body.Error)
+		if !strings.Contains(body.Message, "clear-and-resync") {
+			t.Errorf("reset %q: message does not name the guarded path a node actually has: %q", svc, body.Message)
 		}
 	}
 }

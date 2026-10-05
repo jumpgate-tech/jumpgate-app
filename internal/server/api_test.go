@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/ai"
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -1464,9 +1465,9 @@ func TestSettingsRefusesAProviderKeyNameThatIsNotAPlaceholder(t *testing.T) {
 			t.Errorf("name %q: got %d, want 400", bad, res.StatusCode)
 			continue
 		}
-		body := decodeJSON[errorDetail](t, res)
-		if !strings.Contains(body.Error, "letters, digits and underscores") {
-			t.Errorf("name %q: the refusal must state the rule: %q", bad, body.Error)
+		body := decodeJSON[api.Error](t, res)
+		if !strings.Contains(body.Message, "letters, digits and underscores") {
+			t.Errorf("name %q: the refusal must state the rule: %q", bad, body.Message)
 		}
 	}
 

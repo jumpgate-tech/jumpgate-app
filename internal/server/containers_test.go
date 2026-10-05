@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -312,12 +313,12 @@ func TestContainers_ProvisionWithoutAConfigExplainsWhat(t *testing.T) {
 	addTarget(t, a)
 
 	res := a.do(t, "POST", "/api/targets/local/containers/devnet/provision", nil)
-	body := decode[errorDetail](t, res)
+	body := decode[api.Error](t, res)
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.StatusCode)
 	}
-	if body.Code != codeNotConfigured {
-		t.Errorf("code: got %q, want %q", body.Code, codeNotConfigured)
+	if body.Code != api.CodeNotConfigured {
+		t.Errorf("code: got %q, want %q", body.Code, api.CodeNotConfigured)
 	}
 }
 
@@ -332,20 +333,20 @@ func TestClassifyOpsError(t *testing.T) {
 	for name, tc := range map[string]struct {
 		err      error
 		status   int
-		code     string
+		code     api.Code
 		wantHint bool
 	}{
 		"not created": {
 			err:    &ops.ServiceNotCreatedError{ID: "erpc", ContainerName: "x", Action: "start"},
-			status: http.StatusConflict, code: codeNotCreated, wantHint: true,
+			status: http.StatusConflict, code: api.CodeServiceNotCreated, wantHint: true,
 		},
 		"docker absent": {
 			err:    &ops.DockerAbsentError{Probe: "command -v docker", ExitCode: 127, Hint: "install Docker"},
-			status: http.StatusBadGateway, code: codeDockerAbsent, wantHint: true,
+			status: http.StatusBadGateway, code: api.CodeDockerAbsent, wantHint: true,
 		},
 		"docker unreachable": {
 			err:    &ops.DockerUnreachableError{Probe: "docker inspect", ExitCode: 1, Detail: "cannot connect", Hint: "start the engine"},
-			status: http.StatusBadGateway, code: codeDockerUnreachable, wantHint: true,
+			status: http.StatusBadGateway, code: api.CodeDockerUnreachable, wantHint: true,
 		},
 		"wrapped absent still classifies": {
 			err:    errors.New("outer: " + (&ops.DockerAbsentError{Hint: "install Docker"}).Error()),
@@ -378,8 +379,8 @@ func TestClassifyOpsError_UnwrapsThroughContext(t *testing.T) {
 	inner := &ops.DockerUnreachableError{Hint: "start the engine and retry"}
 	wrapped := errors.Join(errors.New("wipe devnet"), inner)
 	status, hint, code := classifyOpsError(wrapped)
-	if status != http.StatusBadGateway || code != codeDockerUnreachable || hint != inner.Hint {
-		t.Fatalf("got %d/%q/%q, want 502/%q/%q", status, code, hint, codeDockerUnreachable, inner.Hint)
+	if status != http.StatusBadGateway || code != api.CodeDockerUnreachable || hint != inner.Hint {
+		t.Fatalf("got %d/%q/%q, want 502/%q/%q", status, code, hint, api.CodeDockerUnreachable, inner.Hint)
 	}
 }
 

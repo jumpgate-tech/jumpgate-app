@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -179,12 +180,12 @@ func TestStartSetup_RejectsABadSnapshotKeyBeforeRunningAnything(t *testing.T) {
 		"ExecSnapshot": true,
 		"SnapshotKey":  "vk_x; touch pwned",
 	})
-	body := decode[errorDetail](t, res)
+	body := decode[api.Error](t, res)
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.StatusCode)
 	}
-	if !strings.Contains(body.Error, "SnapshotKey") {
-		t.Errorf("error does not name the field: %q", body.Error)
+	if !strings.Contains(body.Message, "SnapshotKey") {
+		t.Errorf("error does not name the field: %q", body.Message)
 	}
 	// Nothing was run against the machine — the rejection is before the plan.
 	if len(f.commands(t, "local")) != 0 {

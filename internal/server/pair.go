@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/agentclient"
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/bootstrap"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -24,11 +25,11 @@ type pairRequest struct {
 // pairEvent is one SSE frame of a pairing: a step's progress line, or the
 // error that ended it (with a code and, when there is one, a hint).
 type pairEvent struct {
-	Step string `json:"step"`
-	Line string `json:"line,omitempty"`
-	Err  string `json:"err,omitempty"`
-	Code string `json:"code,omitempty"`
-	Hint string `json:"hint,omitempty"`
+	Step string   `json:"step"`
+	Line string   `json:"line,omitempty"`
+	Err  string   `json:"err,omitempty"`
+	Code api.Code `json:"code,omitempty"`
+	Hint string   `json:"hint,omitempty"`
 }
 
 // handlePair installs and pairs the target's agent, streaming each step, then
@@ -52,7 +53,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 	t, ok := findTarget(cfg, r.PathValue("id"))
 	if !ok {
-		writeError(w, http.StatusNotFound, "no such target")
+		writeTargetNotFound(w)
 		return
 	}
 	local := t.Mode == "local"
@@ -87,21 +88,15 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		ex, err := executor.NewSSHContext(ctx, login)
 		var unknown *executor.UnknownHostError
 		if errors.As(err, &unknown) {
-			writeJSON(w, http.StatusConflict, map[string]string{
-				"error":       err.Error(),
-				"hint":        "confirm this fingerprint against the box's console, then pair again",
-				"code":        "unknown_host",
-				"host":        unknown.Host,
-				"fingerprint": unknown.Fingerprint,
-			})
+			writeAPIError(w, http.StatusConflict, api.Error{Message: err.Error(), Hint: "confirm this fingerprint against the box's console, then pair again", Code: api.CodeUnknownHost, Host: unknown.Host, Fingerprint: unknown.Fingerprint})
 			return
 		}
 		if errors.Is(err, executor.ErrHostKeyMismatch) {
-			writeErrorDetail(w, http.StatusBadGateway, err.Error(), hintHostKey, "host_key")
+			writeErrorDetail(w, http.StatusBadGateway, err.Error(), "", api.CodeHostKey)
 			return
 		}
 		if err != nil {
-			writeErrorDetail(w, http.StatusGatewayTimeout, err.Error(), "check the address, user and key", "unreachable")
+			writeErrorDetail(w, http.StatusGatewayTimeout, err.Error(), "check the address, user and key", api.CodeUnreachable)
 			return
 		}
 		priv = ex
@@ -123,7 +118,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	transportKey := ""
 	if !local {
 		if transportKey, err = ensureTransportKey(); err != nil {
-			send(pairEvent{Step: "transport-key", Err: err.Error(), Code: "transport_key"})
+			send(pairEvent{Step: "transport-key", Err: err.Error(), Code: api.CodeTransportKey})
 			return
 		}
 	}
@@ -138,7 +133,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &se) {
 			step = se.Step
 		}
-		send(pairEvent{Step: step, Err: err.Error(), Code: "step_failed"})
+		send(pairEvent{Step: step, Err: err.Error(), Code: api.CodeStepFailed})
 		return
 	}
 
@@ -163,7 +158,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		}
 		return errors.New("target disappeared during pairing")
 	}); err != nil {
-		send(pairEvent{Step: "record", Err: err.Error(), Code: "record_failed"})
+		send(pairEvent{Step: "record", Err: err.Error(), Code: api.CodeRecordFailed})
 		return
 	}
 	writeSSEEvent(w, map[string]any{"done": true, "agent": addr.Hex()})
@@ -178,40 +173,40 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 // the client resynchronises from its signed answer, and the returned value
 // follows it.
 func (s *Server) verifyPairing(ctx context.Context, t config.Target) (uint64, *pairEvent) {
-	fail := func(err error, code, hint string) (uint64, *pairEvent) {
+	fail := func(err error, code api.Code, hint string) (uint64, *pairEvent) {
 		return 0, &pairEvent{Step: "verify", Err: err.Error(), Code: code, Hint: hint}
 	}
 	at, err := agentTarget(t)
 	if err != nil {
-		return fail(err, "verify_failed", "")
+		return fail(err, api.CodeVerifyFailed, "")
 	}
 	seqs := agentclient.NewMemorySeqStore()
 	client, err := agentclient.Dial(ctx, at, s.cfg.Signer, seqs)
 	switch {
 	case errors.Is(err, executor.ErrUnknownHost):
-		return fail(err, "unknown_host", hintUnknownHost)
+		return fail(err, api.CodeUnknownHost, api.HintFor(api.CodeUnknownHost))
 	case errors.Is(err, executor.ErrHostKeyMismatch):
-		return fail(err, "host_key", hintHostKey)
+		return fail(err, api.CodeHostKey, api.HintFor(api.CodeHostKey))
 	case err != nil:
-		return fail(err, "unreachable", hintUnreachable)
+		return fail(err, api.CodeUnreachable, api.HintFor(api.CodeUnreachable))
 	}
 	defer client.Close()
 	res, err := client.Do(ctx, intent.KindAgentInfo, struct{}{})
 	switch {
 	case errors.Is(err, agentclient.ErrBadReceipt):
-		return fail(err, "bad_receipt", hintBadReceipt)
+		return fail(err, api.CodeBadReceipt, api.HintFor(api.CodeBadReceipt))
 	case errors.Is(err, agentclient.ErrAgentHTTP):
-		return fail(err, "agent_http", hintAgentHTTP)
+		return fail(err, api.CodeAgentHTTP, api.HintFor(api.CodeAgentHTTP))
 	case errors.Is(err, agentclient.ErrUnreachable):
-		return fail(err, "unreachable", hintUnreachable)
+		return fail(err, api.CodeUnreachable, api.HintFor(api.CodeUnreachable))
 	case err != nil:
-		return fail(err, "verify_failed", "")
+		return fail(err, api.CodeVerifyFailed, "")
 	case res.Status != intent.StatusOK:
-		return fail(fmt.Errorf("agent refused agent.info: %s", res.Result), "refused", "")
+		return fail(fmt.Errorf("agent refused agent.info: %s", res.Result), api.CodeRejected, "")
 	}
 	next, err := seqs.Next(at.Agent)
 	if err != nil {
-		return fail(err, "verify_failed", "")
+		return fail(err, api.CodeVerifyFailed, "")
 	}
 	return next, nil
 }

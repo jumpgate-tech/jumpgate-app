@@ -48,6 +48,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/chainlist"
 	"github.com/valve-tech/jumpgate/internal/config"
@@ -61,10 +62,6 @@ import (
 // path segment, and the intersection of what those four accept is roughly
 // this. Validating once, here, is what lets every downstream use it directly.
 var gatewayIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,38}$`)
-
-// codeGatewayNotFound is the typed code for "no gateway with that id", so the
-// UI can tell it apart from a target-side failure without matching on text.
-const codeGatewayNotFound = "gateway-not-found"
 
 // ---------------------------------------------------------------------
 // wire shapes
@@ -253,9 +250,9 @@ type gatewayView struct {
 	// is still the real dialable URL.
 	Config catalog.GatewayConfig `json:"config"`
 
-	Error string `json:"error,omitempty"`
-	Hint  string `json:"hint,omitempty"`
-	Code  string `json:"code,omitempty"`
+	Error string   `json:"error,omitempty"`
+	Hint  string   `json:"hint,omitempty"`
+	Code  api.Code `json:"code,omitempty"`
 }
 
 // upstreamSource is one thing in the fleet a new upstream can be built from.
@@ -371,7 +368,7 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) (config.Config,
 	gw, ok := cfg.FindGateway(r.PathValue("gid"))
 	if !ok {
 		writeErrorDetail(w, http.StatusNotFound,
-			fmt.Sprintf("no gateway %q", r.PathValue("gid")), "", codeGatewayNotFound)
+			fmt.Sprintf("no gateway %q", r.PathValue("gid")), "", api.CodeGatewayNotFound)
 		return config.Config{}, config.Gateway{}, false
 	}
 	return cfg, gw, true
@@ -422,7 +419,7 @@ func (s *Server) handleKnownSet(w http.ResponseWriter, r *http.Request) {
 	}
 	gw, ok := cfg.FindGateway(gid)
 	if !ok {
-		writeErrorDetail(w, http.StatusNotFound, "no gateway "+gid, "", codeGatewayNotFound)
+		writeErrorDetail(w, http.StatusNotFound, "no gateway "+gid, "", api.CodeGatewayNotFound)
 		return
 	}
 
@@ -1441,7 +1438,7 @@ func (s *Server) handleGatewayPutConfig(w http.ResponseWriter, r *http.Request) 
 		return fmt.Errorf("no gateway %q", gid)
 	})
 	if err != nil {
-		writeErrorDetail(w, http.StatusNotFound, err.Error(), "", codeGatewayNotFound)
+		writeErrorDetail(w, http.StatusNotFound, err.Error(), "", api.CodeGatewayNotFound)
 		return
 	}
 
@@ -1549,7 +1546,7 @@ func (s *Server) handleGatewayDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		return fmt.Errorf("no gateway %q", gid)
 	}); err != nil {
-		writeErrorDetail(w, http.StatusNotFound, err.Error(), "", codeGatewayNotFound)
+		writeErrorDetail(w, http.StatusNotFound, err.Error(), "", api.CodeGatewayNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
@@ -1627,7 +1624,7 @@ func (s *Server) gatewayExecutor(w http.ResponseWriter, cfg config.Config, gw co
 	}
 	ex, err := s.getExecutor(host)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return nil, config.Target{}, false
 	}
 	return ex, host, true
@@ -1676,7 +1673,7 @@ func (s *Server) handleGatewayTrustCert(w http.ResponseWriter, r *http.Request) 
 	resolved, _ := resolveGateway(cfg, gw)
 	if !resolved.Fronted() {
 		writeErrorDetail(w, http.StatusBadRequest, setup.ErrNoTLSFront.Error(),
-			"turn on “Serve HTTPS” in this gateway's settings and re-create it — there is no certificate to trust until it is fronted", codeNotConfigured)
+			"turn on “Serve HTTPS” in this gateway's settings and re-create it — there is no certificate to trust until it is fronted", api.CodeNotConfigured)
 		return
 	}
 
@@ -1881,9 +1878,7 @@ func (s *Server) handleGatewayWipe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, res)
 		return
 	}
-	status, hint, code := classifyOpsError(wipeErr)
-	res.Error, res.Hint, res.Code = wipeErr.Error(), hint, code
-	writeJSON(w, status, res)
+	writeJSON(w, res.setOpsError(wipeErr), res)
 }
 
 // ---------------------------------------------------------------------
@@ -1912,13 +1907,13 @@ func (s *Server) handleGatewayProvision(w http.ResponseWriter, r *http.Request) 
 		// Redacted for the reason gatewayViewFor's Warnings are: these are the
 		// same resolveUpstream strings, reaching the same browser.
 		writeErrorDetail(w, http.StatusBadRequest,
-			gatewayUnprovisionable(gw, redactEach(problems, providerKeys(cfg))), "", codeNotConfigured)
+			gatewayUnprovisionable(gw, redactEach(problems, providerKeys(cfg))), "", api.CodeNotConfigured)
 		return
 	}
 
 	steps, err := setup.PlanGateway(gw.ID, resolved, gw.Placement.Backend)
 	if err != nil {
-		writeErrorDetail(w, http.StatusBadRequest, err.Error(), "", codeNotConfigured)
+		writeErrorDetail(w, http.StatusBadRequest, err.Error(), "", api.CodeNotConfigured)
 		return
 	}
 
@@ -1930,7 +1925,7 @@ func (s *Server) handleGatewayProvision(w http.ResponseWriter, r *http.Request) 
 	}
 	ex, err := s.getExecutor(host)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeDialError(w, err)
 		return
 	}
 
@@ -1986,7 +1981,7 @@ func (s *Server) handleGatewayTLSVerify(w http.ResponseWriter, r *http.Request) 
 	resolved, _ := resolveGateway(cfg, gw)
 	if !resolved.Fronted() {
 		writeErrorDetail(w, http.StatusBadRequest, setup.ErrNoTLSFront.Error(),
-			"turn on “Serve HTTPS” in this gateway's settings and re-create it, then there will be something to verify", codeNotConfigured)
+			"turn on “Serve HTTPS” in this gateway's settings and re-create it, then there will be something to verify", api.CodeNotConfigured)
 		return
 	}
 

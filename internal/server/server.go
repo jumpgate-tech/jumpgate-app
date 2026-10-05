@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/ai"
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/chainlist"
@@ -270,7 +271,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if q := r.URL.Query().Get("token"); q != "" {
 			if !tokensEqual(q, s.cfg.Token) {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				writeErrorDetail(w, http.StatusUnauthorized, "unauthorized", "", api.CodeUnauthorized)
 				return
 			}
 			http.SetCookie(w, &http.Cookie{
@@ -299,14 +300,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			// cross-origin page cannot set Authorization without a CORS
 			// preflight, and this server grants none.
 			if !isSafeMethod(r.Method) && !sameOrigin(r) {
-				http.Error(w, "cross-origin request refused", http.StatusForbidden)
+				writeErrorDetail(w, http.StatusForbidden, "cross-origin request refused", "", api.CodeForbidden)
 				return
 			}
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErrorDetail(w, http.StatusUnauthorized, "unauthorized", "", api.CodeUnauthorized)
 	})
 }
 

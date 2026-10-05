@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -110,9 +111,9 @@ func TestHandleGatewayTLSVerify_NoFrontIs400WithTheFix(t *testing.T) {
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.StatusCode)
 	}
-	body := decode[errorDetail](t, res)
-	if body.Code != codeNotConfigured {
-		t.Errorf("code: got %q, want %q", body.Code, codeNotConfigured)
+	body := decode[api.Error](t, res)
+	if body.Code != api.CodeNotConfigured {
+		t.Errorf("code: got %q, want %q", body.Code, api.CodeNotConfigured)
 	}
 	if body.Hint == "" {
 		t.Error("the hint must say what to turn on — the fix is a setting, not a repair")
@@ -131,13 +132,13 @@ func TestHandleGatewayTLSVerify_FailuresKeepTheirClassification(t *testing.T) {
 		name     string
 		err      error
 		want     int
-		wantCode string
+		wantCode api.Code
 	}{
 		{
 			name:     "the front was never created",
 			err:      &ops.ServiceNotCreatedError{ID: "caddy:default", ContainerName: "valve-node-app-caddy", Action: "start"},
 			want:     http.StatusConflict,
-			wantCode: codeNotCreated,
+			wantCode: api.CodeServiceNotCreated,
 		},
 		{
 			name: "anything else is upstream of this app",
@@ -155,11 +156,11 @@ func TestHandleGatewayTLSVerify_FailuresKeepTheirClassification(t *testing.T) {
 			if res.StatusCode != tc.want {
 				t.Fatalf("got %d, want %d", res.StatusCode, tc.want)
 			}
-			body := decode[errorDetail](t, res)
+			body := decode[api.Error](t, res)
 			if tc.wantCode != "" && body.Code != tc.wantCode {
 				t.Errorf("code: got %q, want %q", body.Code, tc.wantCode)
 			}
-			if body.Error == "" {
+			if body.Message == "" {
 				t.Error("the reason must reach the operator")
 			}
 
@@ -179,8 +180,8 @@ func TestHandleGatewayTLSVerify_UnknownGatewayIs404(t *testing.T) {
 		return setup.TLSVerification{}, nil
 	})
 	res := a.do(t, "GET", "/api/gateways/nope/tls/verify", nil)
-	body := decode[errorDetail](t, res)
-	if res.StatusCode != http.StatusNotFound || body.Code != codeGatewayNotFound {
+	body := decode[api.Error](t, res)
+	if res.StatusCode != http.StatusNotFound || body.Code != api.CodeGatewayNotFound {
 		t.Fatalf("got %d/%q", res.StatusCode, body.Code)
 	}
 }

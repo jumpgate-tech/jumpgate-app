@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -85,14 +86,14 @@ func TestGatewayAction_RefusesAnythingThatIsNotStartStopRestart(t *testing.T) {
 	// reach this handler at all.
 	for _, action := range []string{"create", "recreate", "delete", "rm", "bounce"} {
 		res := a.do(t, "POST", "/api/gateways/default/"+action, nil)
-		body := decode[errorDetail](t, res)
+		body := decode[api.Error](t, res)
 		if res.StatusCode != http.StatusBadRequest {
 			t.Errorf("action %q: got %d, want 400", action, res.StatusCode)
 			continue
 		}
 		for _, want := range []string{"provision", "wipe"} {
-			if !strings.Contains(body.Error, want) {
-				t.Errorf("action %q: message does not point at %q: %q", action, want, body.Error)
+			if !strings.Contains(body.Message, want) {
+				t.Errorf("action %q: message does not point at %q: %q", action, want, body.Message)
 			}
 		}
 	}
@@ -119,12 +120,12 @@ func TestGatewayAction_SaysWhenThePlacementMachineIsGone(t *testing.T) {
 	res.Body.Close()
 
 	res = a.do(t, "POST", "/api/gateways/edge/restart", nil)
-	body := decode[errorDetail](t, res)
+	body := decode[api.Error](t, res)
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("got %d, want 404", res.StatusCode)
 	}
-	if !strings.Contains(body.Error, "boxa") {
-		t.Errorf("message must name the machine that is gone: %q", body.Error)
+	if !strings.Contains(body.Message, "boxa") {
+		t.Errorf("message must name the machine that is gone: %q", body.Message)
 	}
 	if f.ran(t, "local", "'restart'", "'valve-node-app-erpc-edge'") {
 		t.Error("the action fell through to the local machine — that restarts a container on the wrong box")
@@ -356,12 +357,12 @@ func TestGatewayTLSVerify_SaysWhatToTurnOnWhenThereIsNoFront(t *testing.T) {
 	addGateway(t, a, "default", "local", pulsechainOnly(4100))
 
 	res := a.do(t, "GET", "/api/gateways/default/tls/verify", nil)
-	body := decode[errorDetail](t, res)
+	body := decode[api.Error](t, res)
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.StatusCode)
 	}
-	if body.Code != codeNotConfigured {
-		t.Errorf("code: got %q, want %q", body.Code, codeNotConfigured)
+	if body.Code != api.CodeNotConfigured {
+		t.Errorf("code: got %q, want %q", body.Code, api.CodeNotConfigured)
 	}
 	if !strings.Contains(body.Hint, "Serve HTTPS") {
 		t.Errorf("hint does not name the setting to turn on: %q", body.Hint)
@@ -701,12 +702,12 @@ func TestGatewayTrustCert_RefusesAnythingButItsOwnInternalRoot(t *testing.T) {
 	})
 
 	res := a.do(t, "POST", "/api/gateways/default/trust-cert", nil)
-	body := decode[errorDetail](t, res)
+	body := decode[api.Error](t, res)
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.StatusCode)
 	}
-	if !strings.Contains(body.Error, catalog.CertFiles) {
-		t.Errorf("refusal should name the cert source that is not ours: %q", body.Error)
+	if !strings.Contains(body.Message, catalog.CertFiles) {
+		t.Errorf("refusal should name the cert source that is not ours: %q", body.Message)
 	}
 }
 
@@ -719,12 +720,12 @@ func TestGatewayTrustCert_RefusesWhenNotFronted(t *testing.T) {
 	addGateway(t, a, "default", "local", pulsechainOnly(4100))
 
 	res := a.do(t, "POST", "/api/gateways/default/trust-cert", nil)
-	body := decode[errorDetail](t, res)
+	body := decode[api.Error](t, res)
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.StatusCode)
 	}
-	if body.Code != codeNotConfigured {
-		t.Errorf("code: got %q, want %q", body.Code, codeNotConfigured)
+	if body.Code != api.CodeNotConfigured {
+		t.Errorf("code: got %q, want %q", body.Code, api.CodeNotConfigured)
 	}
 }
 
@@ -738,11 +739,11 @@ func TestGatewayTrustCert_SaysWhenTheRootIsNotExportedYet(t *testing.T) {
 	addGateway(t, a, "default", "local", internalTLSGateway(4100))
 
 	res := a.do(t, "POST", "/api/gateways/default/trust-cert", nil)
-	body := decode[errorDetail](t, res)
+	body := decode[api.Error](t, res)
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.StatusCode)
 	}
-	if !strings.Contains(body.Error, "not been exported") {
-		t.Errorf("message should say the root is not exported yet: %q", body.Error)
+	if !strings.Contains(body.Message, "not been exported") {
+		t.Errorf("message should say the root is not exported yet: %q", body.Message)
 	}
 }

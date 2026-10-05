@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/vpn"
@@ -17,10 +18,6 @@ import (
 // operator did not name one. "jumpgate0" so a `wg show` on the box says whose
 // interface it is at a glance.
 const defaultVPNInterface = "jumpgate0"
-
-// codeVPNNotFound is the typed code for "no overlay with that id", the VPN
-// counterpart to codeGatewayNotFound.
-const codeVPNNotFound = "vpn-not-found"
 
 // vpnIDPattern constrains an overlay id: it appears in URLs and (via the
 // default) in an interface name, so it stays to the same lower-case,
@@ -173,7 +170,7 @@ func (s *Server) vpnByID(w http.ResponseWriter, r *http.Request) (config.Config,
 	v, ok := cfg.FindVPN(r.PathValue("id"))
 	if !ok {
 		writeErrorDetail(w, http.StatusNotFound,
-			fmt.Sprintf("no overlay %q", r.PathValue("id")), "", codeVPNNotFound)
+			fmt.Sprintf("no overlay %q", r.PathValue("id")), "", api.CodeVPNNotFound)
 		return config.Config{}, config.VPN{}, false
 	}
 	return cfg, v, true
@@ -429,7 +426,7 @@ func (s *Server) handleVPNDelete(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		writeErrorDetail(w, http.StatusNotFound, err.Error(), "", codeVPNNotFound)
+		writeErrorDetail(w, http.StatusNotFound, err.Error(), "", api.CodeVPNNotFound)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

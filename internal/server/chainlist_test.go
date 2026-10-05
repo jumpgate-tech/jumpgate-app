@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/chainlist"
 	"github.com/valve-tech/jumpgate/internal/config"
@@ -214,9 +215,9 @@ func TestHandleChainlist_ChainMissingFromAHealthyFeedIs502(t *testing.T) {
 	if res.StatusCode != http.StatusBadGateway {
 		t.Fatalf("got %d, want 502", res.StatusCode)
 	}
-	body := decode[errorDetail](t, res)
-	if !strings.Contains(body.Error, "999999") {
-		t.Errorf("the message must name the chain nobody could offer anything for: %q", body.Error)
+	body := decode[api.Error](t, res)
+	if !strings.Contains(body.Message, "999999") {
+		t.Errorf("the message must name the chain nobody could offer anything for: %q", body.Message)
 	}
 }
 

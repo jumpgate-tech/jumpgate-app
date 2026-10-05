@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/vpn"
@@ -23,9 +24,6 @@ const (
 	defaultServerPort    = 51820
 	defaultServerIface   = defaultVPNInterface // "jumpgate0", shared with vpn.go
 )
-
-// codeVPNServerNotFound is the typed code for "no provisioned server with that id".
-const codeVPNServerNotFound = "vpn-server-not-found"
 
 func (s *Server) registerVPNServerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/vpn-servers", s.handleVPNServerList)
@@ -112,7 +110,7 @@ func (s *Server) vpnServerByID(w http.ResponseWriter, r *http.Request) (config.C
 	sv, ok := cfg.FindVPNServer(r.PathValue("id"))
 	if !ok {
 		writeErrorDetail(w, http.StatusNotFound,
-			fmt.Sprintf("no provisioned server %q", r.PathValue("id")), "", codeVPNServerNotFound)
+			fmt.Sprintf("no provisioned server %q", r.PathValue("id")), "", api.CodeVPNServerNotFound)
 		return config.Config{}, config.VPNServer{}, false
 	}
 	return cfg, sv, true
@@ -432,7 +430,7 @@ func (s *Server) handleVPNServerDelete(w http.ResponseWriter, r *http.Request) {
 	if teardownErr != "" && !force {
 		writeErrorDetail(w, http.StatusBadGateway,
 			"could not tear the server down on its host: "+teardownErr,
-			"the record was kept so it is not lost; retry, or delete with ?force=true to forget it anyway", "")
+			"the record was kept so it is not lost; retry, or delete with ?force=true to forget it anyway", api.CodeUpstream)
 		return
 	}
 

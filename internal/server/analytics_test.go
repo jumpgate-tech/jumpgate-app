@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
 )
@@ -226,9 +227,9 @@ func TestHandleGatewayAnalytics_ScrapeFailureIs200WithTheReason(t *testing.T) {
 func TestHandleGatewayAnalytics_UnknownGatewayIs404(t *testing.T) {
 	a := trafficAPIServer(t, readyExecutor())
 	res := a.do(t, "GET", "/api/gateways/nope/analytics", nil)
-	body := decode[errorDetail](t, res)
-	if res.StatusCode != http.StatusNotFound || body.Code != codeGatewayNotFound {
-		t.Fatalf("got %d/%q, want 404/%s", res.StatusCode, body.Code, codeGatewayNotFound)
+	body := decode[api.Error](t, res)
+	if res.StatusCode != http.StatusNotFound || body.Code != api.CodeGatewayNotFound {
+		t.Fatalf("got %d/%q, want 404/%s", res.StatusCode, body.Code, api.CodeGatewayNotFound)
 	}
 }
 
