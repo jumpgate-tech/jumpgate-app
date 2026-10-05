@@ -76,6 +76,38 @@ func waitAgentSocket(ctx context.Context, t *testing.T, ex executor.Executor) {
 	t.Fatalf("agent socket %s never appeared", agentclient.DefaultSocket)
 }
 
+// assertTunnelPinned: the tunnel user gets no shell, reaches the agent's socket,
+// and is refused TCP and any other socket. PermitOpen's [path]:* form is
+// undocumented (see sshdDropIn), so this is what guards it.
+func assertTunnelPinned(ctx context.Context, t *testing.T, cfg executor.SSHConfig) {
+	t.Helper()
+	tun, err := executor.DialSSH(ctx, cfg)
+	if err != nil {
+		t.Fatalf("the tunnel user cannot connect: %v", err)
+	}
+	defer tun.Close()
+	if sess, err := tun.NewSession(); err == nil {
+		out, _ := sess.CombinedOutput("id")
+		sess.Close()
+		if strings.Contains(string(out), "uid=") {
+			t.Fatal("the tunnel user got a shell")
+		}
+	}
+	conn, err := tun.Dial("unix", agentclient.DefaultSocket)
+	if err != nil {
+		t.Fatalf("the tunnel user cannot reach the agent socket: %v", err)
+	}
+	conn.Close()
+	if conn, err := tun.Dial("tcp", "127.0.0.1:22"); err == nil {
+		conn.Close()
+		t.Fatal("the tunnel user can forward TCP")
+	}
+	if conn, err := tun.Dial("unix", "/run/systemd/private"); err == nil {
+		conn.Close()
+		t.Fatal("the tunnel user can reach a socket other than the agent's")
+	}
+}
+
 func TestE2EPairAndRoundTrip(t *testing.T) {
 	port := e2ePort(t)
 	root := executor.SSHConfig{Host: "127.0.0.1", Port: port, User: "root", KeyPath: e2eEnv(t, "JUMPGATE_E2E_ROOT_KEY"), HostKey: ssh.InsecureIgnoreHostKey()}
@@ -112,28 +144,30 @@ func TestE2EPairAndRoundTrip(t *testing.T) {
 		t.Fatalf("agent.info over the tunnel: %+v %v", res, err)
 	}
 
-	// The tunnel user can do nothing else: no shell, no TCP forwarding.
-	tun, err := executor.DialSSH(ctx, tunnel.SSH)
-	if err != nil {
-		t.Fatalf("the tunnel user cannot connect: %v", err)
+	// The tunnel user can reach the agent's socket and nothing else.
+	assertTunnelPinned(ctx, t, tunnel.SSH)
+
+	// An admin's Match block that loads before 50-jumpgate.conf wins (sshd keeps
+	// the first value), here opening every forward. The key's own permitopen
+	// must still pin the tunnel to the agent socket.
+	const adminConf = "/etc/ssh/sshd_config.d/10-admin.conf"
+	reload := "PATH=$PATH:/usr/sbin:/sbin sshd -t && (systemctl reload ssh 2>/dev/null || systemctl reload sshd)"
+	if err := ex.WriteFile(ctx, adminConf, []byte("Match User jumpgate\n    AllowTcpForwarding yes\n    AllowStreamLocalForwarding yes\n    PermitOpen any\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if sess, err := tun.NewSession(); err == nil {
-		out, _ := sess.CombinedOutput("id")
-		sess.Close()
-		if strings.Contains(string(out), "uid=") {
-			t.Fatal("the tunnel user got a shell")
-		}
+	t.Cleanup(func() { _, _ = ex.Run(context.Background(), "rm -f "+adminConf+" && "+reload, nil) })
+	if r, err := ex.Run(ctx, reload, nil); err != nil || r.ExitCode != 0 {
+		t.Fatalf("reload sshd with the admin override: %+v %v", r, err)
 	}
-	if conn, err := tun.Dial("tcp", "127.0.0.1:22"); err == nil {
-		conn.Close()
-		t.Fatal("the tunnel user can forward TCP")
+	r, err := ex.Run(ctx, "PATH=$PATH:/usr/sbin:/sbin sshd -T -C user=jumpgate,host=localhost,addr=127.0.0.1", nil)
+	if err != nil || !strings.Contains(r.Stdout, "permitopen any") || !strings.Contains(r.Stdout, "allowtcpforwarding yes") {
+		t.Fatalf("the admin override did not take precedence, so this proves nothing: %v\n%s", err, r.Stdout)
 	}
-	// PermitOpen pins streamlocal to the agent's socket; systemd's is refused.
-	if conn, err := tun.Dial("unix", "/run/systemd/private"); err == nil {
-		conn.Close()
-		t.Fatal("the tunnel user can reach a socket other than the agent's")
+	time.Sleep(time.Second) // let the reloaded listener settle
+	assertTunnelPinned(ctx, t, tunnel.SSH)
+	if _, err := ex.Run(ctx, "rm -f "+adminConf+" && "+reload, nil); err != nil {
+		t.Fatal(err)
 	}
-	tun.Close()
 
 	// Re-running bootstrap keeps the agent's identity.
 	again, err := Run(ctx, Options{Exec: ex, Controller: controller.Address(), ControllerLabel: "e2e",

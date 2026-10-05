@@ -315,7 +315,7 @@ func (r runner) authorize(key string) error {
 	if merged != "" {
 		merged += "\n"
 	}
-	merged += `restrict,port-forwarding,command="/bin/false" ` + key + "\n"
+	merged += transportKeyOptions + " " + key + "\n"
 	// Stage, hand to the tunnel user, then rename: the final path is never
 	// root-owned, so an interruption cannot lock every tunnel login out.
 	tmp := AuthorizedKeys + ".new"

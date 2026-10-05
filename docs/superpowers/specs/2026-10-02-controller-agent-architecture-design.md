@@ -49,7 +49,7 @@ the approval tier.
 - Remote controllers reach it through an SSH `direct-streamlocal@openssh.com`
   channel (`ssh.Client.Dial("unix", path)` in `golang.org/x/crypto/ssh`), as a
   dedicated unprivileged `jumpgate` user that can do nothing else:
-  - `authorized_keys`: `restrict,port-forwarding,command="/bin/false" <key>`
+  - `authorized_keys`: `restrict,port-forwarding,permitopen="[/run/jumpgate/agent.sock]:*",command="/bin/false" <key>`
   - sshd drop-in: `Match User jumpgate` / `AllowTcpForwarding local` /
     `AllowStreamLocalForwarding local` / `PermitOpen [/run/jumpgate/agent.sock]:*`
     / `PermitTTY no`. Not `AllowTcpForwarding no`: OpenSSH checks

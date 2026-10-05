@@ -148,7 +148,7 @@ func TestRunPairsAFreshBox(t *testing.T) {
 			t.Errorf("never ran %q", want)
 		}
 	}
-	if !strings.Contains(box.files[AuthorizedKeys], `restrict,port-forwarding,command="/bin/false" `+key) {
+	if !strings.Contains(box.files[AuthorizedKeys], `restrict,port-forwarding,permitopen="[/run/jumpgate/agent.sock]:*",command="/bin/false" `+key) {
 		t.Errorf("authorized_keys = %q", box.files[AuthorizedKeys])
 	}
 	if !strings.Contains(box.files[DropInPath], "AllowStreamLocalForwarding local") {
@@ -287,7 +287,7 @@ func TestTransportKeyIsWrittenCanonically(t *testing.T) {
 	if _, err := Run(context.Background(), optsWithKey(t, box, k+" laptop comment\n")); err != nil {
 		t.Fatal(err)
 	}
-	if want := `restrict,port-forwarding,command="/bin/false" ` + k + "\n"; box.files[AuthorizedKeys] != want {
+	if want := `restrict,port-forwarding,permitopen="[/run/jumpgate/agent.sock]:*",command="/bin/false" ` + k + "\n"; box.files[AuthorizedKeys] != want {
 		t.Fatalf("authorized_keys = %q, want %q", box.files[AuthorizedKeys], want)
 	}
 }
