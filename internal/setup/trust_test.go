@@ -68,14 +68,16 @@ func TestTrustStoreCommand_PerOS(t *testing.T) {
 		}
 	}
 
-	windows, err := TrustStoreCommand("windows", path, "default")
+	// On Windows the root lives under the user's profile, a drive path.
+	winPath := `C:\Users\O'Neil Smith\.valve-node-app\caddy-root.crt`
+	windows, err := TrustStoreCommand("windows", winPath, "default")
 	if err != nil {
 		t.Fatalf("windows: %v", err)
 	}
 	if !windows.NeedsRoot {
 		t.Error("windows certutil -addstore ROOT needs an elevated shell")
 	}
-	if !strings.Contains(windows.Command, `certutil -addstore -f ROOT "`+path+`"`) {
+	if !strings.Contains(windows.Command, `certutil -addstore -f ROOT "`+winPath+`"`) {
 		t.Errorf("windows command wrong:\n%s", windows.Command)
 	}
 }
@@ -106,8 +108,8 @@ func TestTrustVerifyCommand_PerOS(t *testing.T) {
 
 	// linux and windows have no equally cheap, side-effect-free probe, so they opt
 	// out with "" — the caller then keeps its existing install-and-report path.
-	for _, goos := range []string{"linux", "windows"} {
-		cmd, err := TrustVerifyCommand(goos, path)
+	for goos, p := range map[string]string{"linux": path, "windows": `C:\Users\dev\.valve-node-app\caddy-root.crt`} {
+		cmd, err := TrustVerifyCommand(goos, p)
 		if err != nil {
 			t.Fatalf("%s: %v", goos, err)
 		}
@@ -159,6 +161,25 @@ func TestTrustStoreCommand_RejectsUnsafePaths(t *testing.T) {
 			if _, err := TrustStoreCommand(goos, bad, "default"); err == nil {
 				t.Errorf("%s: unsafe path %q was accepted", goos, bad)
 			}
+		}
+	}
+}
+
+// A Windows path is pasted into an elevated cmd.exe, double-quoted: %VAR%,
+// !VAR!, ^ and a double quote would still act there, and a POSIX path is not
+// a Windows one.
+func TestTrustStoreCommandWindowsRefusesCmdMetacharacters(t *testing.T) {
+	for _, bad := range []string{
+		"/var/lib/x/caddy-root.crt",
+		`relative\caddy-root.crt`,
+		`C:\Users\%USERNAME%\root.crt`,
+		`C:\Users\a!b!\root.crt`,
+		`C:\Users\a^b\root.crt`,
+		`C:\Users\a" & calc & "\root.crt`,
+		"C:\\x\nroot.crt",
+	} {
+		if _, err := TrustStoreCommand("windows", bad, "default"); err == nil {
+			t.Errorf("unsafe Windows path %q was accepted", bad)
 		}
 	}
 }

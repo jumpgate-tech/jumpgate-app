@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor/argvfake"
 	"github.com/valve-tech/jumpgate/internal/ops"
 )
 
@@ -392,5 +394,19 @@ func assertActions(t *testing.T, got, want []string) {
 		if got[i] != want[i] {
 			t.Fatalf("actions: got %v, want %v", got, want)
 		}
+	}
+}
+
+func TestContainerListShowsTheWindowsContainerHint(t *testing.T) {
+	f := argvfake.New().
+		Script("docker --version", executor.Result{Stdout: "Docker version 27.4.0\n"}).
+		Script("docker info --format", executor.Result{Stdout: "27.4.0|windows|x86_64|WIN-RUNNER|Microsoft Windows Server 2022 Datacenter\n"})
+	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) { return f, nil })
+	if res := a.do(t, "POST", "/api/targets", map[string]any{"id": "me", "mode": "local"}); res.StatusCode != http.StatusCreated {
+		t.Fatalf("add: %d", res.StatusCode)
+	}
+	got := decodeJSON[containersResponse](t, a.do(t, "GET", "/api/targets/me/containers", nil))
+	if !strings.Contains(got.Docker.Hint, "Linux containers") {
+		t.Fatalf("docker view %+v, want the Windows-container hint", got.Docker)
 	}
 }

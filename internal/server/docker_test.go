@@ -1,12 +1,15 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor/argvfake"
 )
 
 // newDockerTestServer builds an API test server whose LOCAL executor is fake,
@@ -120,5 +123,33 @@ func TestMacStartPlan(t *testing.T) {
 	}
 	if !strings.Contains(colimaStartCommand, "command -v colima") {
 		t.Error("colima must only be tried when it is on PATH")
+	}
+}
+
+// A Windows controller can now probe its engine (it used to answer 500).
+// An engine in Windows-container mode is up but unusable: not running, and
+// with the hint, so the panel's "not running" path shows it and does not
+// start provisioning (spec D35).
+func TestDockerStatusWindowsContainers(t *testing.T) {
+	f := argvfake.New().
+		Script("docker --version", executor.Result{Stdout: "Docker version 27.4.0\n"}).
+		Script("docker info --format", executor.Result{Stdout: "27.4.0|windows|x86_64|WIN-RUNNER|Microsoft Windows Server 2022 Datacenter\n"})
+	a := newDockerTestServer(t, f)
+	got := decodeJSON[dockerStatusResponse](t, a.do(t, "GET", "/api/docker", nil))
+	if !got.Present || got.Running || !got.WindowsContainers || got.CanStart || !strings.Contains(got.Hint, "Linux containers") {
+		t.Fatalf("got %+v, want present, not running, windowsContainers, the hint, no auto-start", got)
+	}
+}
+
+// "This computer" can be added on any OS. On Windows it has no shell, and
+// RequireShell is what the shell routes check (Task 13).
+func TestDefaultExecutorBuildsALocalTargetEverywhere(t *testing.T) {
+	ex, err := defaultNewExecutor(config.Target{ID: "me", Mode: "local"})
+	if err != nil {
+		t.Fatalf("local target refused on %s: %v", runtime.GOOS, err)
+	}
+	shellErr := executor.RequireShell(ex)
+	if (runtime.GOOS == "windows") != errors.Is(shellErr, executor.ErrNoPOSIXShell) {
+		t.Fatalf("RequireShell on %s = %v", runtime.GOOS, shellErr)
 	}
 }

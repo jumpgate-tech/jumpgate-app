@@ -1745,12 +1745,14 @@ func (s *Server) handleGatewayTrustCert(w http.ResponseWriter, r *http.Request) 
 	// linux (and windows) need root and do not elevate on their own. If the
 	// executor is not root, do not prompt for a password we cannot supply — hand
 	// back the exact command to run with elevation instead.
-	if install.NeedsRoot && !targetIsRoot(r.Context(), ex) {
+	// Windows is never executed: there is no shell to run certutil through,
+	// and it needs an elevated prompt jumpgate does not have (spec, Task 15
+	// row 17), so the command is always handed back.
+	if install.NeedsRoot && (goos == "windows" || !targetIsRoot(r.Context(), ex)) {
 		writeJSON(w, http.StatusOK, trustCertResult{
 			OK:         false,
 			RanCommand: install.Command,
-			Message: fmt.Sprintf(
-				"installing a root certificate needs root on machine %q. Run this on it (e.g. with sudo):", host.ID),
+			Message:    trustNeedsRootMessage(goos, host.ID),
 		})
 		return
 	}
@@ -1820,6 +1822,16 @@ func targetGOOS(ctx context.Context, ex executor.Executor, host config.Target) (
 	default:
 		return strings.ToLower(strings.TrimSpace(res.Stdout)), nil
 	}
+}
+
+// trustNeedsRootMessage is what a person is told when installing the root
+// needs privileges jumpgate does not have. Windows has no sudo: certutil
+// -addstore ROOT needs a prompt opened with "Run as administrator".
+func trustNeedsRootMessage(goos, hostID string) string {
+	if goos == "windows" {
+		return fmt.Sprintf("installing a root certificate needs an administrator on machine %q. Open a Command Prompt with \"Run as administrator\" and run:", hostID)
+	}
+	return fmt.Sprintf("installing a root certificate needs root on machine %q. Run this on it (e.g. with sudo):", hostID)
 }
 
 // targetIsRoot reports whether the executor runs as root on the target, so the

@@ -273,14 +273,10 @@ func (sr *setupRun) subscribe() ([]setup.Event, chan setup.Event, func()) {
 func defaultNewExecutor(t config.Target) (executor.Executor, error) {
 	switch t.Mode {
 	case "local":
-		// Local mode drives this machine with POSIX shell commands, so a
-		// control plane without a POSIX shell (Windows) cannot support it.
-		// Refuse here, at construction, so POST /targets answers with an
-		// actionable message instead of the target being persisted and then
-		// failing on every command it ever runs.
-		if err := executor.LocalAvailable(); err != nil {
-			return nil, fmt.Errorf("target %q: %w", t.ID, err)
-		}
+		// "This computer" exists on every OS. On one with no POSIX shell
+		// (Windows) it runs the Docker gateway and devnet through RunArgv
+		// (spec D29). The routes that need a shell refuse it through
+		// getShellExecutor (Task 13), so it is not refused here any more.
 		return executor.NewLocal(), nil
 	case "ssh":
 		if t.SSH == nil {

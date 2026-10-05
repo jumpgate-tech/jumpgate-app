@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
-// On real Windows nothing is faked: the default executor factory itself
-// refuses "this host", and the VPN route turns that into local_unsupported.
+// On real Windows nothing is faked: the default executor factory builds
+// "this host" (it runs Docker through RunArgv), and the VPN route, which
+// needs a shell, refuses it through RequireShell as local_unsupported.
 func TestVPNUpOnWindowsIsLocalUnsupported(t *testing.T) {
 	a := newAPITestServerCfg(t, nil, nil)
 	createTestVPN(t, a, "pvpn")

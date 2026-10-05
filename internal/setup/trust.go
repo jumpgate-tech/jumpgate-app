@@ -54,7 +54,7 @@ type TrustStoreInstall struct {
 // check is refused rather than escaped-and-hoped, because the cost of getting
 // the escaping wrong is a command injection running with administrator rights.
 func TrustStoreCommand(goos, certPath, gatewayID string) (TrustStoreInstall, error) {
-	if err := validateCertPath(certPath); err != nil {
+	if err := validateCertPath(goos, certPath); err != nil {
 		return TrustStoreInstall{}, err
 	}
 	switch goos {
@@ -137,7 +137,7 @@ func TrustStoreCommand(goos, certPath, gatewayID string) (TrustStoreInstall, err
 // and single-quoted the same way, because it is interpolated into a shell
 // command; a path that fails the check is refused, not escaped-and-hoped.
 func TrustVerifyCommand(goos, certPath string) (string, error) {
-	if err := validateCertPath(certPath); err != nil {
+	if err := validateCertPath(goos, certPath); err != nil {
 		return "", err
 	}
 	switch goos {
@@ -152,10 +152,13 @@ func TrustVerifyCommand(goos, certPath string) (string, error) {
 // trust-store commands rely on. It is deliberately strict: the path is one this
 // app derived (rootCAPath), so a metacharacter in it is far likelier a bug than
 // a real filename, and a root-CA install is the wrong place to be lenient.
-func validateCertPath(p string) error {
+func validateCertPath(goos, p string) error {
 	p = strings.TrimSpace(p)
 	if p == "" {
 		return fmt.Errorf("trust: empty certificate path")
+	}
+	if goos == "windows" {
+		return validateWindowsCertPath(p)
 	}
 	if !strings.HasPrefix(p, "/") {
 		return fmt.Errorf("trust: certificate path %q is not an absolute POSIX path", p)
@@ -163,6 +166,25 @@ func validateCertPath(p string) error {
 	for _, r := range p {
 		switch r {
 		case '\'', '"', '\\', '`', '$', '\n', '\r', 0:
+			return fmt.Errorf("trust: certificate path %q contains an unsafe character %q", p, string(r))
+		}
+	}
+	return nil
+}
+
+// validateWindowsCertPath is validateCertPath for the Windows command, which
+// a person pastes into an elevated cmd.exe with the path double-quoted. A
+// Windows path is drive-absolute (C:\…) and its separator is a backslash,
+// which cmd.exe does not treat specially. Inside double quotes cmd.exe still
+// expands %VAR% (and !VAR! with delayed expansion), and ^ escapes; those, a
+// double quote, and a line break are refused.
+func validateWindowsCertPath(p string) error {
+	if len(p) < 3 || !(('A' <= p[0] && p[0] <= 'Z') || ('a' <= p[0] && p[0] <= 'z')) || p[1] != ':' || p[2] != '\\' {
+		return fmt.Errorf("trust: certificate path %q is not an absolute Windows path", p)
+	}
+	for _, r := range p {
+		switch r {
+		case '"', '%', '!', '^', '\n', '\r', 0:
 			return fmt.Errorf("trust: certificate path %q contains an unsafe character %q", p, string(r))
 		}
 	}
