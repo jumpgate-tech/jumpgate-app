@@ -52,8 +52,13 @@ func (f *fakeRunner) run(_ context.Context, stdin string, name string, args ...s
 
 func withRunner(t *testing.T, f *fakeRunner, goos string, have ...string) {
 	t.Helper()
-	oldRun, oldGOOS, oldLook := runCmd, hostOS, lookPath
+	oldRun, oldGOOS, oldLook, oldDBus := runCmd, hostOS, lookPath, dbusSession
 	runCmd, hostOS = f.run, goos
+	// A Linux keychain needs a D-Bus session; tests of the no-session case
+	// call withDBus(t, false) after this.
+	if goos == "linux" {
+		dbusSession = func() bool { return true }
+	}
 	lookPath = func(name string) error {
 		for _, h := range have {
 			if h == name {
@@ -62,7 +67,7 @@ func withRunner(t *testing.T, f *fakeRunner, goos string, have ...string) {
 		}
 		return errors.New("not found")
 	}
-	t.Cleanup(func() { runCmd, hostOS, lookPath = oldRun, oldGOOS, oldLook })
+	t.Cleanup(func() { runCmd, hostOS, lookPath, dbusSession = oldRun, oldGOOS, oldLook, oldDBus })
 }
 
 func assertNoSecretInArgv(t *testing.T, f *fakeRunner, secret string) {
