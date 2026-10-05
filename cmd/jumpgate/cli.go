@@ -25,16 +25,20 @@ var subcommands = map[string]func(args []string) int{
 	"serve": cmdServe, "stop": cmdStop, "keys": cmdKeys, "agent": cmdAgent, "hosts": cmdHosts,
 	"status": cmdIntent("status", intent.KindStatusRead), "disk": cmdIntent("disk", intent.KindDiskRead),
 	"endpoints": cmdIntent("endpoints", intent.KindEndpointsRead), "firewall": cmdIntent("firewall", intent.KindFirewallRead),
-	"logs": cmdLogs, "service": cmdService,
+	"logs": cmdLogs, "service": cmdService, "help": cmdHelp,
 }
 
 func main() {
 	if err := migrateOnStartup(os.Args, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "jumpgate:", err)
+		pauseIfStandalone(os.Stdin, os.Stderr)
 		os.Exit(1)
 	}
 	if code, handled := dispatch(os.Args, os.Stderr); handled {
 		os.Exit(code)
+	}
+	if isTerminalLaunch(os.Args) {
+		os.Exit(runTerminalHome(context.Background(), os.Stdin, os.Stdout))
 	}
 	runApp()
 }
@@ -74,7 +78,7 @@ func dispatch(args []string, stderr io.Writer) (code int, handled bool) {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	fmt.Fprintf(stderr, "jumpgate: unknown command %q\ncommands: %s\n(run `jumpgate` with no arguments, or with flags such as --bind, for the web app)\n", args[1], strings.Join(names, " "))
+	fmt.Fprintf(stderr, "jumpgate: unknown command %q\ncommands: %s\n(run `jumpgate help` for the commands; `jumpgate serve` runs the server in the foreground)\n", args[1], strings.Join(names, " "))
 	return exitCode("usage"), true
 }
 
