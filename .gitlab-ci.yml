@@ -128,7 +128,10 @@ windows:
 secret-service:
   stage: test
   image: golang:1.25-bookworm
-  <<: *go-cache
+  cache:
+    key:
+      files: [go.sum]
+    paths: [.cache/go-mod/, .cache/go-build/]
   script:
     - export HOME="$(mktemp -d)"
     - scripts/test-secret-service.sh --inside
