@@ -327,6 +327,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// ?token= stays for one caller only: the tray's in-process webview
+		// (D26), whose URL is handed to a window inside this process and
+		// reaches no process's command line. A URL with ?token= must never
+		// be produced for a browser opener (open, xdg-open, rundll32): every
+		// local user can read an opener's argv and would get the session
+		// token outright, not a one-time code. Browsers use /login?code=.
 		if q := r.URL.Query().Get("token"); q != "" {
 			if !tokensEqual(q, s.cfg.Token) {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
