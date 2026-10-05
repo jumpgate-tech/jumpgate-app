@@ -51,3 +51,20 @@ JUMPGATE_E2E_TRANSPORT_KEY="$work/transport" \
 JUMPGATE_E2E_TRANSPORT_PUB="$(cat "$work/transport.pub")" \
 JUMPGATE_E2E_AGENTS="$work/agents" \
   go test -tags e2e -count=1 -v ./internal/bootstrap/ -run E2E
+
+# The --local case runs inside the box: a linux build of the same tests, run as
+# alice (a non-root sudoer) against the copied agents; bob is the stranger.
+case "$(docker exec "$name" uname -m)" in
+  x86_64) arch=amd64 ;;
+  aarch64) arch=arm64 ;;
+  *) echo "unsupported container arch" >&2; exit 1 ;;
+esac
+CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go test -c -tags e2e -o "$work/bootstrap.test" ./internal/bootstrap/
+docker exec "$name" mkdir -p /opt/jumpgate-e2e
+docker cp -q "$work/bootstrap.test" "$name:/opt/jumpgate-e2e/bootstrap.test"
+docker cp -q "$work/agents" "$name:/opt/jumpgate-e2e/agents"
+docker exec "$name" chmod -R a+rX /opt/jumpgate-e2e
+docker exec -u alice -w /home/alice \
+  -e JUMPGATE_E2E_AGENTS=/opt/jumpgate-e2e/agents \
+  -e JUMPGATE_E2E_STRANGER=bob \
+  "$name" /opt/jumpgate-e2e/bootstrap.test -test.run '^TestE2ELocalPairAndPeerGate$' -test.v -test.count=1

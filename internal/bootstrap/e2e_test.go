@@ -6,10 +6,14 @@ package bootstrap
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/user"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,6 +22,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/valve-tech/jumpgate/internal/agentclient"
+	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/signer"
@@ -238,4 +243,131 @@ func TestE2ECancelKillsTheRemoteCommand(t *testing.T) {
 	if strings.TrimSpace(r.Stdout) != "" {
 		t.Fatalf("remote command survived cancellation: pids %s", r.Stdout)
 	}
+}
+
+// The --local cases run INSIDE the container: scripts/e2e-agent.sh copies a
+// linux build of this test binary in and runs it as JUMPGATE_E2E_LOCAL_USER, a
+// non-root sudoer, with JUMPGATE_E2E_AGENTS pointing at the copied agents and
+// JUMPGATE_E2E_STRANGER naming a second non-root user outside group jumpgate.
+
+// TestE2ELocalPairAndPeerGate is `jumpgate hosts add local --local` from a
+// non-root sudoer: bootstrap through sudo with the caller's uid enrolled, then
+// a signed intent straight over the unix socket. It proves ruling R23: the
+// socket goes 0666 once a local uid is enrolled, the peer gate admits that uid,
+// and it refuses a different non-root uid even with a valid signature.
+func TestE2ELocalPairAndPeerGate(t *testing.T) {
+	stranger := e2eEnv(t, "JUMPGATE_E2E_STRANGER")
+	agents := e2eAgents(t)
+	uid := os.Getuid()
+	if uid == 0 {
+		t.Fatal("run this as a non-root sudoer; root would pass the peer gate on uid alone")
+	}
+	jg, err := user.LookupGroup("jumpgate")
+	if err == nil {
+		gids, _ := os.Getgroups()
+		for _, g := range gids {
+			if strconv.Itoa(g) == jg.Gid {
+				t.Fatal("the local user is in group jumpgate, so the group, not the enrolment, would admit it")
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	ex := executor.Sudo(executor.NewLocal())
+	defer ex.Close()
+
+	// Before: a box paired only for remote controllers keeps the socket 0660.
+	if r, err := ex.Run(ctx, "test -S "+agentclient.DefaultSocket+" && ! grep -q localUids /etc/jumpgate/policy.json && stat -c %a "+agentclient.DefaultSocket, nil); err == nil && r.ExitCode == 0 {
+		if mode := strings.TrimSpace(r.Stdout); mode != "660" {
+			t.Fatalf("remote-only socket is %s, want 660", mode)
+		}
+		t.Log("remote-only socket was 660 before the local pairing")
+	}
+
+	controller, _ := signer.GenerateKey()
+	agentAddr, err := Run(ctx, Options{
+		Exec: ex, Local: true, LocalUID: uid, Controller: controller.Address(), ControllerLabel: "e2e-local",
+		AgentBinary: agents,
+		Event:       func(step, line string) { t.Logf("[%s] %s", step, line) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(agentclient.DefaultSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := fi.Mode().Perm(); mode != 0o666 {
+		t.Fatalf("socket mode %o with a local uid enrolled, want 666", mode)
+	}
+
+	c, err := agentclient.Dial(ctx, agentclient.Target{Local: true, Agent: agentAddr}, controller, agentclient.NewMemorySeqStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	res, err := c.Do(ctx, intent.KindAgentInfo, struct{}{})
+	if err != nil || res.Status != intent.StatusOK {
+		t.Fatalf("agent.info from enrolled uid %d: %+v %v", uid, res, err)
+	}
+	t.Logf("enrolled uid %d: agent.info ok", uid)
+
+	// The same controller's intent, sent by a uid that is not enrolled.
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(ctx, "sudo", "-n", "-u", stranger, "env",
+		"JUMPGATE_E2E_STRANGER_KEY="+hex.EncodeToString(controller.Bytes()),
+		"JUMPGATE_E2E_STRANGER_AGENT="+agentAddr.Hex(),
+		exe, "-test.run", "^TestE2ELocalStrangerIsRefused$", "-test.v", "-test.count=1")
+	out, err := cmd.CombinedOutput()
+	t.Logf("as %s:\n%s", stranger, out)
+	if err != nil || !strings.Contains(string(out), "--- PASS: TestE2ELocalStrangerIsRefused") {
+		t.Fatalf("stranger run: %v", err)
+	}
+}
+
+// TestE2ELocalStrangerIsRefused runs as the stranger, started by the test
+// above. The kernel lets it connect (the socket is 0666), and then the peer
+// gate closes the connection before a validly signed intent is read.
+func TestE2ELocalStrangerIsRefused(t *testing.T) {
+	keyHex := e2eEnv(t, "JUMPGATE_E2E_STRANGER_KEY")
+	agentAddr, err := eip712.ParseAddress(e2eEnv(t, "JUMPGATE_E2E_STRANGER_AGENT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.Getuid() == 0 {
+		t.Fatal("the stranger must not be root")
+	}
+	b, err := hex.DecodeString(keyHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := signer.KeyFromBytes(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	conn, err := net.Dial("unix", agentclient.DefaultSocket)
+	if err != nil {
+		t.Fatalf("uid %d cannot even connect, so the socket mode (not the peer gate) refused it: %v", os.Getuid(), err)
+	}
+	conn.Close()
+
+	c, err := agentclient.Dial(ctx, agentclient.Target{Local: true, Agent: agentAddr}, controller, agentclient.NewMemorySeqStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	res, err := c.Do(ctx, intent.KindAgentInfo, struct{}{})
+	if err == nil {
+		t.Fatalf("uid %d was served: %+v", os.Getuid(), res)
+	}
+	if !errors.Is(err, agentclient.ErrUnreachable) {
+		t.Fatalf("uid %d: %v; want the connection closed by the peer gate", os.Getuid(), err)
+	}
+	t.Logf("uid %d connected but was refused: %v", os.Getuid(), err)
 }
