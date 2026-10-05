@@ -173,15 +173,63 @@ func TestPairLocalForegroundAsksForTheSudoPassword(t *testing.T) {
 	}
 }
 
+// captureStderr redirects os.Stderr to a file for the rest of the test and
+// returns a function reading what was written.
+func captureStderr(t *testing.T) func() string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = f
+	t.Cleanup(func() { os.Stderr = old; f.Close() })
+	return func() string {
+		b, _ := os.ReadFile(f.Name())
+		return string(b)
+	}
+}
+
 func TestPairLocalForegroundStopsWhenSudoIsRefused(t *testing.T) {
 	localSeams(t, "linux", 1000, true)
 	withController(t)
+	stderr := captureStderr(t)
 	_, _, ran := stubForeground(t, errors.New("a password is required"), errors.New("user is not in the sudoers file"), eip712.Address{})
 	if _, code := pairLocalForeground(context.Background(), io.Discard, config.Target{ID: "me", Mode: "local"}); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
 	if *ran {
 		t.Fatal("bootstrap ran without root")
+	}
+	// hosts add saved the target already; the operator must learn it is
+	// unpaired and how to finish.
+	if got := stderr(); !strings.Contains(got, "saved but not paired") || !strings.Contains(got, "jumpgate hosts add me --local") {
+		t.Fatalf("stderr %q does not say the target is saved but unpaired", got)
+	}
+}
+
+func TestPairLocalForegroundFailureSaysHowToFinish(t *testing.T) {
+	localSeams(t, "linux", 1000, true)
+	withController(t)
+	stderr := captureStderr(t)
+	stubForeground(t, nil, nil, eip712.Address{})
+	runBootstrap = func(context.Context, bootstrap.Options) (eip712.Address, error) {
+		return eip712.Address{}, errors.New("preflight: not systemd")
+	}
+	if _, code := pairLocalForeground(context.Background(), io.Discard, config.Target{ID: "me", Mode: "local"}); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if got := stderr(); !strings.Contains(got, "saved but not paired") {
+		t.Fatalf("stderr %q does not say the target is saved but unpaired", got)
+	}
+}
+
+func TestPairedMessageAdvisesOnRootSSHOnlyAfterSSH(t *testing.T) {
+	if m := pairedMessage("0x01", true); strings.Contains(m, "PermitRootLogin") || !strings.Contains(m, "paired: agent 0x01") {
+		t.Fatalf("local: %q", m)
+	}
+	if m := pairedMessage("0x01", false); !strings.Contains(m, "PermitRootLogin") {
+		t.Fatalf("ssh: %q", m)
 	}
 }
 

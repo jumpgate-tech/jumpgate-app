@@ -139,9 +139,9 @@ func hostsAdd(args []string) int {
 		if code != 0 {
 			return code
 		}
-		return streamPair(info, name, pairBody{Installed: addr})
+		return streamPair(info, name, pairBody{Installed: addr}, true)
 	}
-	return streamPair(info, name, pairBody{Sudo: *sudo})
+	return streamPair(info, name, pairBody{Sudo: *sudo}, *local)
 }
 
 // errBadAddress marks an --ssh or --jump value that does not parse.
@@ -369,8 +369,9 @@ var pairFailureCodes = map[string]bool{
 	"": true, "step_failed": true, "verify_failed": true, "record_failed": true, "transport_key": true,
 }
 
-// streamPair prints each pairing event as it arrives.
-func streamPair(info daemon.Info, name string, body pairBody) int {
+// streamPair prints each pairing event as it arrives. local says the target
+// is this machine, which pairing reached without SSH.
+func streamPair(info daemon.Info, name string, body pairBody, local bool) int {
 	b, _ := json.Marshal(body)
 	res, err := info.Client().Do(mustRequest(context.Background(), info, "/api/targets/"+name+"/pair", b))
 	if err != nil {
@@ -404,7 +405,7 @@ func streamPair(info daemon.Info, name string, body pairBody) int {
 		}
 		switch {
 		case ev.Done:
-			fmt.Printf("paired: agent %s\nRecommended now: disable root SSH login on the box (PermitRootLogin no). Keep console access as the way back in.\n", ev.Agent)
+			fmt.Print(pairedMessage(ev.Agent, local))
 			return 0
 		case ev.Err != "":
 			code := reportServerError(os.Stderr, "pairing failed at "+ev.Step, apiError{Error: ev.Err, Code: ev.Code, Hint: ev.Hint})
@@ -417,4 +418,15 @@ func streamPair(info daemon.Info, name string, body pairBody) int {
 		}
 	}
 	return failed("the server closed the stream before pairing finished")
+}
+
+// pairedMessage is what a finished pairing prints. The advice to turn off
+// root SSH login follows an SSH pairing, which may have used it; pairing
+// this machine never touched SSH.
+func pairedMessage(agent string, local bool) string {
+	msg := "paired: agent " + agent + "\n"
+	if !local {
+		msg += "Recommended now: disable root SSH login on the box (PermitRootLogin no). Keep console access as the way back in.\n"
+	}
+	return msg
 }

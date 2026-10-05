@@ -68,6 +68,14 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "this target has no SSH address")
 		return
 	}
+	// The OS comes first: off Linux the answer is local_unsupported whatever
+	// else the request says.
+	if local {
+		if err := bootstrap.LocalSupported(s.goos); err != nil {
+			writeErrorDetail(w, http.StatusBadRequest, err.Error(), "", "local_unsupported")
+			return
+		}
+	}
 	var installed eip712.Address
 	if req.Installed != "" {
 		if !local {
@@ -81,16 +89,10 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		}
 		installed = a
 	}
-	if local {
-		if err := bootstrap.LocalSupported(s.goos); err != nil {
-			writeErrorDetail(w, http.StatusBadRequest, err.Error(), "", "local_unsupported")
-			return
-		}
-		if req.Installed == "" && s.geteuid() != 0 {
-			writeErrorDetail(w, http.StatusConflict,
-				"pairing this machine needs root, and the server has no terminal to ask for a sudo password on", hintLocalPair, "local_needs_terminal")
-			return
-		}
+	if local && req.Installed == "" && s.geteuid() != 0 {
+		writeErrorDetail(w, http.StatusConflict,
+			"pairing this machine needs root, and the server has no terminal to ask for a sudo password on", hintLocalPair, "local_needs_terminal")
+		return
 	}
 
 	// Pairing runs root commands on the box, so it takes turns with setup

@@ -3,9 +3,10 @@
 # CLI (B-4, D5): (a) as root on a box without sudo, where the server runs the
 # steps itself; (b) as alice, a NOPASSWD sudoer from scripts/e2e/Dockerfile, on
 # a terminal, where `hosts add --local` runs them in the foreground. Each must
-# pair and then get a signed answer from the agent (not_set_up: no node is set
-# up in the container). e2e-agent.sh's TestE2ELocalPairAndPeerGate is the
-# library-level proof of (b); this is the CLI-level one. Needs Docker.
+# pair and then get a signed answer from the agent: not_set_up in (a); in (b)
+# the target carries a node configuration, which must reach node.json, and
+# status answers with a snapshot. e2e-agent.sh's TestE2ELocalPairAndPeerGate
+# is the library-level proof of (b); this is the CLI-level one. Needs Docker.
 #   BASE=ubuntu:24.04 scripts/e2e-local.sh    # the second distro
 #   KEEP=1 scripts/e2e-local.sh               # keep the containers to inspect
 set -euo pipefail
@@ -101,11 +102,29 @@ as root /root jumpgate stop
 
 echo "== (b) alice, a NOPASSWD sudoer, on a terminal"
 fresh_box alice
+# The target already carries a node configuration, as after the setup
+# wizard; the foreground pairing must write it to node.json (P6).
+docker exec -i -u alice "$name" sh -c 'umask 077 && mkdir -p /home/alice/.jumpgate && cat > /home/alice/.jumpgate/config.json' <<'JSON'
+{"targets": [{"id": "me", "mode": "local",
+  "wire": {"ChainID": 369, "ExecID": "reth", "BeaconID": "lighthouse", "DataDir": "/var/lib/jumpgate-e2e/369"}}]}
+JSON
 as alice /home/alice jumpgate keys init --store file
 # -t gives the CLI a terminal on stdin, which non-root local pairing requires.
 docker exec -t -u alice -e HOME=/home/alice "$name" jumpgate hosts add me --local
 expect_paired alice /home/alice
-expect_signed_answer alice /home/alice
+node="$(docker exec "$name" cat /etc/jumpgate/node.json)" ||
+  { echo "FAIL: no /etc/jumpgate/node.json after alice's pairing" >&2; exit 1; }
+echo "$node"
+for want in '"ChainID":369' '"ExecID":"reth"' '"BeaconID":"lighthouse"' '"DataDir":"/var/lib/jumpgate-e2e/369"'; do
+  case "$node" in *"$want"*) ;; *) echo "FAIL: node.json lacks $want" >&2; exit 1 ;; esac
+done
+# With a node set up, status is a real signed snapshot: exit 0 means the CLI
+# verified the agent's receipt, and the agent parsed and validated node.json.
+if ! out="$(as alice /home/alice jumpgate status me 2>&1)"; then
+  echo "$out" >&2
+  echo "FAIL: no signed status for alice" >&2
+  exit 1
+fi
 as alice /home/alice jumpgate stop
 
 echo "e2e-local: OK"

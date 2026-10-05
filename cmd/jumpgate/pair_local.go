@@ -57,10 +57,15 @@ func pairLocalForeground(ctx context.Context, out io.Writer, t config.Target) (s
 	if err != nil {
 		return "", failed("controller address in config.json: %v", err)
 	}
+	// hosts add saved the target before calling here, so a failure from now
+	// on leaves it saved but unpaired; say so, and how to finish.
+	unpaired := func(format string, a ...any) (string, int) {
+		return "", failed(format+"\nTarget %s is saved but not paired yet; run `jumpgate hosts add %s --local` again to finish.", append(a, t.ID, t.ID)...)
+	}
 	if err := sudoNonInteractive(ctx); err != nil {
 		fmt.Fprintln(out, "pairing this machine runs commands as root; sudo may ask for your password")
 		if err := sudoPrompt(ctx); err != nil {
-			return "", failed("sudo: %v. Pairing this machine needs root: ask an administrator for sudo rights, or run jumpgate as root", err)
+			return unpaired("sudo: %v. Pairing this machine needs root: ask an administrator for sudo rights, or run jumpgate as root", err)
 		}
 	}
 	label, _ := os.Hostname()
@@ -74,7 +79,7 @@ func pairLocalForeground(ctx context.Context, out io.Writer, t config.Target) (s
 		Event: func(step, line string) { fmt.Fprintf(out, "[%s] %s\n", step, line) },
 	})
 	if err != nil {
-		return "", failed("pairing failed: %v", err)
+		return unpaired("pairing failed: %v", err)
 	}
 	return addr.Hex(), 0
 }

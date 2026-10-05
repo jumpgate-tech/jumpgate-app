@@ -408,6 +408,15 @@ func TestPairLocalIsRefusedOffLinux(t *testing.T) {
 	}
 }
 
+// Off Linux the refusal is the same whatever else the request carries.
+func TestPairLocalOffLinuxRefusesBeforeReadingInstalled(t *testing.T) {
+	ts, token := localPairServer(t, "windows", 1000, &recordingExec{})
+	status, code, _ := readCode(t, postPair(t, ts, token, `{"installed":"me"}`))
+	if status != http.StatusBadRequest || code != "local_unsupported" {
+		t.Fatalf("got %d %q, want 400 local_unsupported", status, code)
+	}
+}
+
 // D5: the detached server has no terminal, so it never tries sudo for a
 // non-root local pairing; it says how to do it instead.
 func TestPairLocalNonRootNeedsTheTerminal(t *testing.T) {
