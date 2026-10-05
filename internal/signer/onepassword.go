@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // parseOPRef splits op://vault/item/field.
@@ -64,7 +66,7 @@ func onePasswordCreate(ctx context.Context, ref string) (*Key, error) {
 	}
 	path := f.Name()
 	defer os.Remove(path)
-	if err := f.Chmod(0o600); err != nil {
+	if err := fsperm.MakePrivate(f.Name()); err != nil {
 		f.Close()
 		return nil, err
 	}

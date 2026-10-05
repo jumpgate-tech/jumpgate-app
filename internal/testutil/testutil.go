@@ -1,5 +1,6 @@
 // Package testutil holds helpers that keep tests portable across macOS, Linux
-// and Windows. Only test files import it.
+// and Windows. Only test files import it; it imports internal/fsperm, so
+// fsperm's own tests are external (package fsperm_test).
 package testutil
 
 import (
@@ -7,6 +8,8 @@ import (
 	"os/exec"
 	"runtime"
 	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // ShortTempDir returns a fresh directory, removed when the test ends, whose
@@ -63,12 +66,14 @@ func RequireUnix(t testing.TB) {
 }
 
 // AssertPrivate fails the test unless only the file's owner can read or
-// change path. On unix that is the mode bits; Windows is checked through its
-// DACL once internal/fsperm exists (Task 2 of the platform plan).
+// change path. On unix that is the mode bits. On Windows it checks the DACL
+// through fsperm.CheckPrivate.
 func AssertPrivate(t testing.TB, path string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Logf("AssertPrivate(%s): DACL check not implemented yet", path)
+		if err := fsperm.CheckPrivate(path); err != nil {
+			t.Fatal(err)
+		}
 		return
 	}
 	fi, err := os.Stat(path)

@@ -19,6 +19,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/filelock"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // defaultRefRPCBase is the public demo-key reference RPC base URL, used
@@ -802,7 +803,7 @@ func lockPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsperm.MkdirPrivate(dir); err != nil {
 		return "", fmt.Errorf("config: create %s: %w", dir, err)
 	}
 	return filepath.Join(dir, lockFileName), nil
@@ -862,53 +863,23 @@ func load() (Config, error) {
 }
 
 // Save writes c to ~/.jumpgate/config.json, creating the directory if
-// needed. The write is atomic (write to a temp file in the same directory,
-// then rename over the target) and the file is mode 0600, since it may
-// contain an AI provider API key.
+// needed. The write is atomic and owner-only (fsperm.WriteFilePrivate), since
+// the file may contain AI provider API keys and VPN private keys.
 func (c Config) Save() error {
 	dir, err := Dir()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsperm.MkdirPrivate(dir); err != nil {
 		return fmt.Errorf("config: create %s: %w", dir, err)
 	}
-
-	path := filepath.Join(dir, configFileName)
-
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return fmt.Errorf("config: marshal: %w", err)
 	}
-
-	tmp, err := os.CreateTemp(dir, configFileName+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("config: create temp file: %w", err)
+	if err := fsperm.WriteFilePrivate(filepath.Join(dir, configFileName), data); err != nil {
+		return fmt.Errorf("config: write: %w", err)
 	}
-	tmpPath := tmp.Name()
-	// If anything below fails before the rename, don't leave the temp file
-	// behind.
-	success := false
-	defer func() {
-		if !success {
-			os.Remove(tmpPath)
-		}
-	}()
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("config: write temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("config: close temp file: %w", err)
-	}
-	if err := os.Chmod(tmpPath, 0o600); err != nil {
-		return fmt.Errorf("config: chmod temp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("config: rename into place: %w", err)
-	}
-	success = true
 	return nil
 }
 
