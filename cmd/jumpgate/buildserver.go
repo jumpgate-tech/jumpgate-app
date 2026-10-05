@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/relay"
+	"github.com/valve-tech/jumpgate/internal/secretenv"
 	"github.com/valve-tech/jumpgate/internal/server"
 )
 
@@ -50,11 +52,43 @@ const (
 
 const defaultERPCURL = "http://127.0.0.1:4000"
 
+// readToken reads a credential from the environment variable name, or from the
+// file named by name+"_FILE" (one token, surrounding whitespace ignored). The
+// file form is preferred: it keeps the token out of shell profiles and out of
+// every process that inherits the environment. Setting both is an error, as is
+// a named file that is unreadable or empty.
+func readToken(getenv func(string) string, name string) (string, error) {
+	direct, file := getenv(name), getenv(name+"_FILE")
+	if file == "" {
+		return direct, nil
+	}
+	if direct != "" {
+		return "", fmt.Errorf("both %s and %s_FILE are set; use one", name, name)
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return "", fmt.Errorf("%s_FILE: %w", name, err)
+	}
+	tok := strings.TrimSpace(string(b))
+	if tok == "" {
+		return "", fmt.Errorf("%s_FILE: %s is empty", name, file)
+	}
+	return tok, nil
+}
+
+// secretEnvNames are the credentials the server reads and then removes from
+// its own environment, so no child it launches can inherit them.
+var secretEnvNames = []string{envRelayToken, envAdminToken, envRelayToken + "_FILE", envAdminToken + "_FILE"}
+
 // addServerFlags registers the server flags on fs, each defaulting from its
 // environment variable, and returns the options the parse fills in. A flag
 // given on the command line wins over the environment.
 func addServerFlags(fs *flag.FlagSet, getenv func(string) string) (*serverOptions, error) {
-	o := &serverOptions{AdminToken: getenv(envAdminToken)}
+	admin, err := readToken(getenv, envAdminToken)
+	if err != nil {
+		return nil, err
+	}
+	o := &serverOptions{AdminToken: admin}
 	fs.StringVar(&o.Bind, "bind", "127.0.0.1:8799", bindFlagUsage)
 	if err := addRelayFlags(fs, getenv, o); err != nil {
 		return nil, err
@@ -80,7 +114,11 @@ func addRelayFlags(fs *flag.FlagSet, getenv func(string) string, o *serverOption
 		}
 		meter = b
 	}
-	o.RelayToken = getenv(envRelayToken)
+	tok, err := readToken(getenv, envRelayToken)
+	if err != nil {
+		return err
+	}
+	o.RelayToken = tok
 	// The data plane is off unless an operator asks for it. It is a separate
 	// listener from --bind on purpose: --bind carries the session token that
 	// controls the operator's servers, and this one carries customer traffic
@@ -161,6 +199,9 @@ type builtServer struct {
 // relay) is fatal.
 func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtServer, error) {
 	logf := func(format string, a ...any) { fmt.Fprintf(logw, "jumpgate: "+format+"\n", a...) }
+	// opts already holds the tokens; drop them from the environment before
+	// anything here can launch a child (a key-store helper, a local target).
+	secretenv.Unset(secretEnvNames...)
 
 	// Fail fast on a corrupt config before serving. The server re-reads it per
 	// request rather than holding this value.

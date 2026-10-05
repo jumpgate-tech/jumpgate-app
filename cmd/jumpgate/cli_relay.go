@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/valve-tech/jumpgate/internal/relay"
+	"github.com/valve-tech/jumpgate/internal/secretenv"
 	"github.com/valve-tech/jumpgate/internal/server"
 )
 
@@ -29,7 +30,11 @@ func relayMain(ctx context.Context, args []string, getenv func(string) string, l
 	fset := flag.NewFlagSet("relay", flag.ContinueOnError)
 	fset.SetOutput(logw)
 	var o serverOptions
-	if err := addRelayFlags(fset, getenv, &o); err != nil {
+	err := addRelayFlags(fset, getenv, &o)
+	// The token is read (or failed to read); either way it leaves the
+	// environment now.
+	secretenv.Unset(secretEnvNames...)
+	if err != nil {
 		fmt.Fprintf(logw, "jumpgate: relay: %v\n", err)
 		return exitCode("usage")
 	}

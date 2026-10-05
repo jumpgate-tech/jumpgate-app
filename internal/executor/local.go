@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/valve-tech/jumpgate/internal/secretenv"
 )
 
 // ErrNoPOSIXShell reports that this machine cannot run local mode because it
@@ -73,7 +75,9 @@ func (l *local) Run(ctx context.Context, cmd string, opts *RunOpts) (Result, err
 	// so `command -v docker` fails even when docker works in a terminal. Extend
 	// PATH for local commands so tools are found the same way they are in a
 	// shell. See localEnv.
-	c.Env = localEnv(os.Environ(), runtime.GOOS, os.Getenv("HOME"))
+	// The server's own secrets (JUMPGATE_*TOKEN*, *_SECRET*) are never handed
+	// to a command run on a local target.
+	c.Env = localEnv(secretenv.Environ(), runtime.GOOS, os.Getenv("HOME"))
 
 	// See proc_unix.go / proc_windows.go: on unix this runs cmd in its own
 	// process group so ctx cancellation can kill every descendant it spawned,

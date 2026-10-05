@@ -5,6 +5,8 @@ import (
 	"flag"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -269,5 +271,55 @@ func TestBuildServerWarnsOfAnUnmeteredRelay(t *testing.T) {
 	}
 	if strings.Contains(log.String(), "WARNING") {
 		t.Fatalf("warned with metering on: %q", log.String())
+	}
+}
+
+// Fix round 1: the tokens leave the process environment once read, so no
+// child (a local-target shell, a keychain or 1Password helper) inherits them.
+func TestBuildServerUnsetsTheTokens(t *testing.T) {
+	shortHome(t)
+	t.Setenv("JUMPGATE_ADMIN_TOKEN", "at")
+	t.Setenv("JUMPGATE_RELAY_TOKEN", "rt")
+	opts, err := parseServeArgs(nil, os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := buildServer(opts, func() {}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"JUMPGATE_ADMIN_TOKEN", "JUMPGATE_RELAY_TOKEN"} {
+		if _, set := os.LookupEnv(k); set {
+			t.Errorf("%s is still in the environment", k)
+		}
+	}
+	if opts.AdminToken != "at" || opts.RelayToken != "rt" {
+		t.Fatalf("tokens were not read first: %+v", opts)
+	}
+}
+
+// A token can come from a file named by JUMPGATE_*_TOKEN_FILE, so it need
+// not sit in a shell profile.
+func TestTokensFromFiles(t *testing.T) {
+	dir := t.TempDir()
+	admin := filepath.Join(dir, "admin")
+	relayTok := filepath.Join(dir, "relay")
+	_ = os.WriteFile(admin, []byte("admin-from-file\n"), 0o600)
+	_ = os.WriteFile(relayTok, []byte("relay-from-file\n"), 0o600)
+	env := map[string]string{"JUMPGATE_ADMIN_TOKEN_FILE": admin, "JUMPGATE_RELAY_TOKEN_FILE": relayTok}
+	opts, err := parseServeArgs(nil, func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.AdminToken != "admin-from-file" || opts.RelayToken != "relay-from-file" {
+		t.Fatalf("opts = %+v", opts)
+	}
+	env["JUMPGATE_ADMIN_TOKEN"] = "both"
+	if _, err := parseServeArgs(nil, func(k string) string { return env[k] }); err == nil {
+		t.Fatal("a token set both directly and by file was accepted")
+	}
+	delete(env, "JUMPGATE_ADMIN_TOKEN")
+	env["JUMPGATE_ADMIN_TOKEN_FILE"] = filepath.Join(dir, "missing")
+	if _, err := parseServeArgs(nil, func(k string) string { return env[k] }); err == nil {
+		t.Fatal("an unreadable token file was accepted")
 	}
 }

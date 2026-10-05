@@ -157,3 +157,13 @@ func TestRelayIsASubcommand(t *testing.T) {
 		t.Fatal("no relay subcommand")
 	}
 }
+
+func TestRelayUnsetsItsToken(t *testing.T) {
+	t.Setenv("JUMPGATE_RELAY_TOKEN", "rt")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // build, then stop at once
+	_ = relayMain(ctx, []string{"--relay-bind", freeAddr(t), "--billing-socket", "/tmp/jg-none.sock"}, os.Getenv, io.Discard)
+	if _, set := os.LookupEnv("JUMPGATE_RELAY_TOKEN"); set {
+		t.Fatal("JUMPGATE_RELAY_TOKEN is still in the environment")
+	}
+}

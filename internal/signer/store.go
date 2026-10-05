@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/valve-tech/jumpgate/internal/secretenv"
 )
 
 // Store names where a controller key lives.
@@ -28,6 +30,9 @@ var (
 	lookPath = func(name string) error { _, err := exec.LookPath(name); return err }
 	runCmd   = func(ctx context.Context, stdin, name string, args ...string) (string, error) {
 		c := exec.CommandContext(ctx, name, args...)
+		// The helpers (security, secret-tool, op) need their own credentials,
+		// never the server's tokens.
+		c.Env = secretenv.Environ()
 		c.Stdin = strings.NewReader(stdin)
 		var out, errb bytes.Buffer
 		c.Stdout, c.Stderr = &out, &errb

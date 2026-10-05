@@ -81,7 +81,7 @@ jumpgate service box-a beacon restart   # exec|beacon, start|stop|restart
 jumpgate serve                          # run the controller server (the other commands start it for you)
 jumpgate stop                           # stop it, via its local API
 jumpgate relay --relay-bind 127.0.0.1:8545 --billing-socket /run/jumpgate-billing/billing.sock --meter
-                                        # run the metered RPC data plane on its own (JUMPGATE_RELAY_TOKEN in the environment)
+                                        # run the metered RPC data plane on its own (token via JUMPGATE_RELAY_TOKEN_FILE)
 ```
 
 ### Selling RPC access: run `jumpgate relay`
@@ -95,7 +95,8 @@ internet-facing proxy away from the key that controls your fleet.
 The relay takes its settings only from flags and the environment:
 `--relay-bind`, `--billing-socket`, `--erpc-url`, `--erpc-project` and
 `--meter`, or the matching `JUMPGATE_*` variables. The relay token comes from
-`JUMPGATE_RELAY_TOKEN`. Point Caddy at `--relay-bind`, and bind the relay to
+`JUMPGATE_RELAY_TOKEN_FILE` (preferred) or `JUMPGATE_RELAY_TOKEN`; see below.
+Point Caddy at `--relay-bind`, and bind the relay to
 loopback or the interface Caddy reaches, never to `0.0.0.0`.
 
 For now, the controller (`jumpgate --relay-bind …` or `jumpgate serve
@@ -107,11 +108,20 @@ same server flags: `--bind`, `--relay-bind`, `--billing-socket`, `--erpc-url`,
 `--erpc-project` and `--meter`. Each of these flags also reads an environment
 variable (`JUMPGATE_RELAY_BIND`, `JUMPGATE_BILLING_SOCKET`, `JUMPGATE_ERPC_URL`,
 `JUMPGATE_ERPC_PROJECT`, `JUMPGATE_METER`), and a flag on the command line wins
-over its variable. The two credentials come only from the environment:
-`JUMPGATE_RELAY_TOKEN` and `JUMPGATE_ADMIN_TOKEN`. A server that a CLI command
-starts for you inherits that command's environment. So set the variables once,
-in your shell profile or service unit, and every entry point builds the same
-relay and key admin. If the app finds a server already running with different
+over its variable. A server that a CLI command starts for you inherits that
+command's environment. So set these variables once, in your shell profile or
+service unit, and every entry point builds the same relay and key admin.
+
+The two credentials, the relay token and the admin token, never come from a
+flag. Put each one in its own file, readable only by you (`chmod 600`), and
+point to the file with `JUMPGATE_RELAY_TOKEN_FILE` and
+`JUMPGATE_ADMIN_TOKEN_FILE`. The server reads the file once and keeps the token
+in memory. `JUMPGATE_RELAY_TOKEN` and `JUMPGATE_ADMIN_TOKEN` also work, but
+don't put the token values themselves in a shell profile. Every program you
+start from that shell would see them. Setting a token both ways is an error.
+After reading them, the server removes these variables from its own
+environment. Nothing it starts inherits them, including commands on a local
+target and the keychain and 1Password helpers. If the app finds a server already running with different
 options, it prints which options are not in effect. Run `jumpgate stop` and
 launch again to apply them. The same applies after an upgrade. If the server
 still running is a different jumpgate version, commands warn you, and you run

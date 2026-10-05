@@ -19,6 +19,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/daemon"
+	"github.com/valve-tech/jumpgate/internal/secretenv"
 )
 
 // bindFlagUsage is --bind's help text. Called out here (rather than inline
@@ -35,6 +36,9 @@ func runApp() {
 	tray := flag.Bool("tray", false, "open the UI in a native desktop window (tiny-app mode) instead of a browser tab; requires a build made with -tags tray")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	// opts holds the tokens now. The attach path below launches a browser
+	// without going through buildServer, so drop them here too.
+	secretenv.Unset(secretEnvNames...)
 
 	if *showVersion {
 		fmt.Println(buildinfo.Version())
