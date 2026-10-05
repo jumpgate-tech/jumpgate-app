@@ -125,7 +125,7 @@ func runApp() {
 			log.Printf("jumpgate: %v; run `jumpgate open`", err)
 			return
 		}
-		handOffLogin(os.Stdout, bind, link, !*noOpen)
+		handOffLogin(os.Stdout, bind, link, serveHandOff(*noOpen))
 	}()
 
 	if err := serveAndPublish(ctx, stop, s, holder, bind, token, &b.shape); err != nil {
@@ -153,7 +153,7 @@ func openRunningServer(ctx context.Context, info daemon.Info, windowed, noOpen b
 		log.Printf("jumpgate: %v; run `jumpgate open`", err)
 		return
 	}
-	handOffLogin(out, info.HTTPAddr, link, !noOpen)
+	handOffLogin(out, info.HTTPAddr, link, serveHandOff(noOpen))
 }
 
 // shutdownContext returns a context canceled by the first SIGINT or SIGTERM.
