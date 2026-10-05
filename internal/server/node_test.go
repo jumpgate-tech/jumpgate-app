@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -32,6 +33,15 @@ type pairedOpts struct {
 	target func(*config.Target) // adjust the saved target after it is paired
 }
 
+// requireAgentPeer skips a test that needs the agent to answer: it runs on
+// Linux (and on macOS for tests) and refuses every peer elsewhere.
+func requireAgentPeer(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("the agent refuses every peer on " + runtime.GOOS)
+	}
+}
+
 // pairedBox is pairedLocal with a node set up on the box (when setUp) and the
 // agent's commands answered by ex. The controller's target has no wire: a
 // paired box's agent owns its own node.json.
@@ -42,7 +52,16 @@ func pairedBox(t *testing.T, ex executor.Executor, setUp bool) (*httptest.Server
 
 func pairedBoxWith(t *testing.T, ex executor.Executor, o pairedOpts) (*httptest.Server, string) {
 	t.Helper()
-	home, _ := os.MkdirTemp("/tmp", "jgn")
+	// A short directory keeps the agent's socket path under the Unix
+	// sun_path limit (104 bytes on macOS); Windows has no /tmp.
+	base := "/tmp"
+	if runtime.GOOS == "windows" {
+		base = ""
+	}
+	home, err := os.MkdirTemp(base, "jgn")
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { os.RemoveAll(home) })
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -89,6 +108,7 @@ func pairedBoxWith(t *testing.T, ex executor.Executor, o pairedOpts) (*httptest.
 }
 
 func TestServiceActionOnAPairedBoxUsesTheAgent(t *testing.T) {
+	requireAgentPeer(t)
 	ts, token := pairedBox(t, nopExec{}, true)
 	res, e := do(t, ts, token, "POST", "/api/targets/box/services/exec/restart", "")
 	if res.StatusCode != http.StatusOK || res.Header.Get("X-Jumpgate-Via") != "agent" {
@@ -101,6 +121,7 @@ func TestServiceActionOnAPairedBoxUsesTheAgent(t *testing.T) {
 }
 
 func TestAgentRejectionIsRejectedWithItsHint(t *testing.T) {
+	requireAgentPeer(t)
 	ts, token := pairedBox(t, nopExec{}, false)
 	res, e := do(t, ts, token, "GET", "/api/targets/box/du", "")
 	if res.StatusCode != http.StatusConflict || e.Code != api.CodeRejected || e.Reason != intent.ReasonNotSetUp || e.Hint != api.RejectionHint(intent.ReasonNotSetUp) {
@@ -152,6 +173,7 @@ func TestSSHOnlyBoxWithoutWireIsNotSetUp(t *testing.T) {
 
 // Each paired route reaches the agent and answers in the route's own shape.
 func TestPairedNodeRoutesAnswerThroughTheAgent(t *testing.T) {
+	requireAgentPeer(t)
 	ts, token := pairedBox(t, &autoSucceedExecutor{}, true)
 	for _, path := range []string{"/du", "/endpoints", "/firewall", "/logs?n=5"} {
 		res, e := do(t, ts, token, "GET", "/api/targets/box"+path, "")
@@ -214,6 +236,7 @@ func (failingExec) Run(context.Context, string, *executor.RunOpts) (executor.Res
 }
 
 func TestAgentFailureIsAgentFailed(t *testing.T) {
+	requireAgentPeer(t)
 	ts, token := pairedBox(t, failingExec{}, true)
 	res, e := do(t, ts, token, "GET", "/api/targets/box/du", "")
 	if res.StatusCode != http.StatusBadGateway || e.Code != api.CodeAgentFailed || !strings.Contains(e.Message, "cannot access") {
@@ -224,6 +247,7 @@ func TestAgentFailureIsAgentFailed(t *testing.T) {
 // An answer not signed by the paired agent is a security error, and the
 // legacy executor is not tried instead.
 func TestForeignReceiptIsBadReceiptWithoutFallback(t *testing.T) {
+	requireAgentPeer(t)
 	var legacy countingExec
 	other, _ := signer.GenerateKey()
 	ts, token := pairedBoxWith(t, nopExec{}, pairedOpts{setUp: true,
@@ -308,6 +332,7 @@ func readFrames(t *testing.T, ts *httptest.Server, token, path string, n int) ([
 }
 
 func TestPairedMonitorStreamPollsTheAgent(t *testing.T) {
+	requireAgentPeer(t)
 	old := agentStatusInterval
 	agentStatusInterval = 20 * time.Millisecond
 	t.Cleanup(func() { agentStatusInterval = old })
@@ -324,6 +349,7 @@ func TestPairedMonitorStreamPollsTheAgent(t *testing.T) {
 }
 
 func TestPairedLogsStreamSendsSnapshots(t *testing.T) {
+	requireAgentPeer(t)
 	ts, token := pairedBox(t, nopExec{}, true)
 	frames, _ := readFrames(t, ts, token, "/api/targets/box/logs/stream?backlog=10", 2)
 	if !strings.HasPrefix(frames[0], "event: note\n") || !strings.HasPrefix(frames[1], "event: reset\n") {
