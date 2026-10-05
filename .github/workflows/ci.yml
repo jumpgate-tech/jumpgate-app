@@ -227,3 +227,12 @@ jobs:
         env:
           JUMPGATE_TEST_WIN_AGENT: "1"
         run: go test -count=1 -timeout 120s -run TestOpenSSHAgentPipe -v ./internal/executor/
+
+  desktop-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: build, install and open the Linux desktop bundle
+        run: scripts/test-linux-desktop.sh
