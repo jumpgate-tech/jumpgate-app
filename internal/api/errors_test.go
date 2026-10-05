@@ -1,8 +1,12 @@
 package api
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/intent"
@@ -85,5 +89,44 @@ func TestErrorStringNamesTheCode(t *testing.T) {
 	e := &Error{Message: "box is down", Code: CodeUnreachable}
 	if e.Error() != "box is down (unreachable)" {
 		t.Fatalf("Error() = %q", e.Error())
+	}
+}
+
+// Every Code constant declared in errors.go has a registry row. Without one,
+// Exit() silently answers 1 and HintFor answers "", so a security code added
+// without a row would stop exiting 4. The source is the list of constants;
+// the registry must cover it.
+func TestEveryDeclaredCodeIsKnown(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "errors.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs := spec.(*ast.ValueSpec)
+			if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "Code" {
+				continue
+			}
+			for i, name := range vs.Names {
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					t.Errorf("%s: want a string literal value", name.Name)
+					continue
+				}
+				v, _ := strconv.Unquote(lit.Value)
+				n++
+				if !Known(Code(v)) {
+					t.Errorf("%s (%q) is declared but has no registry row", name.Name, v)
+				}
+			}
+		}
+	}
+	if n != len(Codes()) {
+		t.Errorf("errors.go declares %d Code constants, the registry has %d rows", n, len(Codes()))
 	}
 }

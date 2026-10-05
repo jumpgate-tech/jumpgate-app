@@ -87,7 +87,7 @@ type codeInfo struct {
 // with its own hint keeps it; HintFor fills in only an empty one.
 var registry = map[Code]codeInfo{
 	CodeBadRequest:     {"", ExitFailed},
-	CodeUnauthorized:   {"the session token did not match; run `jumpgate stop` and run the command again, or reopen the app with `jumpgate open`", ExitFailed},
+	CodeUnauthorized:   {"sign in again: run `jumpgate open` (browser) or retry the command (CLI); if it persists, `jumpgate stop` and retry", ExitFailed},
 	CodeForbidden:      {"a page from another origin cannot change this server", ExitFailed},
 	CodeNotFound:       {"", ExitFailed},
 	CodeConflict:       {"", ExitFailed},
