@@ -143,6 +143,16 @@ macos:
     - export HOME="$(mktemp -d)"
     - go vet ./...
     - go test -p 2 ./...
+    - scripts/test-macos-bundle.sh
+
+# The committed macOS icon must match icon.svg.
+icons:
+  stage: test
+  image: debian:12
+  script:
+    - apt-get update -qq && apt-get install -y -qq git librsvg2-bin icnsutils
+    - IN_CONTAINER=1 bash scripts/render-icons.sh
+    - git diff --exit-code -- cmd/jumpgate/AppIcon.icns
 
 # Pairs against systemd containers, which needs Docker with systemd and so
 # cannot run on the shared docker runners. scripts/e2e-agent.sh is the local gate.

@@ -5,7 +5,7 @@
 #
 # macOS stalls exec of freshly built binaries, so locally nothing built here is
 # run: the hand-off check runs the launcher through /bin/sh with /bin/echo
-# standing in for `open`. With CI=true (a runner, where that is safe) the app
+# standing in for `open`. Run it locally on a Mac (README, developer section). With CI=true (a runner, where that is safe) the app
 # binaries also run `--version`.
 set -euo pipefail
 cd "$(dirname "$0")/.."

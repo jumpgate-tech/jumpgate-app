@@ -12,7 +12,7 @@
 #     inside a .app (see inAppBundle in main.go) and enters tray mode itself.
 #
 # The tray build needs CGo (WebKit via webview_go), so this is macOS-only and
-# cannot cross-compile. Requires: go, rsvg-convert, iconutil, sips.
+# cannot cross-compile. Requires: go and the Xcode command line tools.
 #
 # Usage:  cmd/jumpgate/build-macos-app.sh [output-dir]
 #   output-dir defaults to the repo root, producing <repo>/Jumpgate.app
@@ -46,23 +46,8 @@ CGO_ENABLED=1 go build -tags "tray embedagents" \
 	-o "$APP/Contents/MacOS/$EXE_NAME" \
 	"$REPO_ROOT/cmd/jumpgate"
 
-# --- icon: icon.svg -> AppIcon.icns -----------------------------------------
-echo "--> rendering AppIcon.icns from icon.svg"
-ICONSET="$(mktemp -d)/AppIcon.iconset"
-mkdir -p "$ICONSET"
-render() { rsvg-convert -w "$1" -h "$1" "$SCRIPT_DIR/icon.svg" -o "$ICONSET/$2"; }
-render 16   icon_16x16.png
-render 32   icon_16x16@2x.png
-render 32   icon_32x32.png
-render 64   icon_32x32@2x.png
-render 128  icon_128x128.png
-render 256  icon_128x128@2x.png
-render 256  icon_256x256.png
-render 512  icon_256x256@2x.png
-render 512  icon_512x512.png
-render 1024 icon_512x512@2x.png
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
-rm -rf "$(dirname "$ICONSET")"
+# --- icon: the committed AppIcon.icns (regenerate with scripts/render-icons.sh)
+cp "$SCRIPT_DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
 # --- Info.plist -------------------------------------------------------------
 cat >"$APP/Contents/Info.plist" <<PLIST
