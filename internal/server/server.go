@@ -191,6 +191,9 @@ type Server struct {
 	// now is the server's clock, defaulting to time.Now. A test sets it to
 	// drive the update-check cache window without waiting real hours.
 	now func() time.Time
+
+	// codes are the outstanding one-time browser login codes (login.go).
+	codes loginCodes
 }
 
 // New constructs a Server from the given Config.
@@ -262,6 +265,13 @@ func (s *Server) Handler() http.Handler {
 		go s.cfg.Shutdown()
 	})
 
+	// A second app launch or `jumpgate open` asks for a login link over the
+	// authenticated socket; the code, not the token, goes to the browser.
+	mux.HandleFunc("POST /api/login-code", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, map[string]string{"code": s.NewLoginCode()})
+	})
+
 	s.registerAPIRoutes(mux)
 	s.registerKeyRoutes(mux)
 
@@ -274,21 +284,24 @@ func (s *Server) Handler() http.Handler {
 // authMiddleware enforces the session token on every request. The token may
 // arrive as an Authorization: Bearer header, a jumpgate_token cookie, or a
 // ?token= query parameter. A valid ?token= query parameter sets the cookie
-// and redirects to the same path without the query parameter.
+// and redirects to the same path without the query parameter; only the
+// in-process tray window uses it (D26). Browsers sign in through GET
+// /login?code=…, a one-time code (login.go).
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A login link carries a one-time code, not the token; it is its own
+		// authentication, so it is checked before the token is required.
+		if r.URL.Path == "/login" && r.Method == http.MethodGet {
+			s.handleLogin(w, r)
+			return
+		}
+
 		if q := r.URL.Query().Get("token"); q != "" {
 			if !tokensEqual(q, s.cfg.Token) {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			http.SetCookie(w, &http.Cookie{
-				Name:     cookieName,
-				Value:    q,
-				Path:     "/",
-				HttpOnly: true,
-				SameSite: http.SameSiteStrictMode,
-			})
+			http.SetCookie(w, sessionCookie(q))
 			http.Redirect(w, r, r.URL.Path, http.StatusFound)
 			return
 		}

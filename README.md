@@ -125,10 +125,10 @@ tar xzf jumpgate_<os>_<arch>.tar.gz   # the Windows archive is a .zip
 ./jumpgate
 ```
 
-In a terminal, bare `jumpgate` opens the terminal home: status and a menu, where `o` opens the web app in your browser. `jumpgate serve` runs the server in the foreground and prints a local URL with a one-time session token:
+In a terminal, bare `jumpgate` opens the terminal home: status and a menu, where `o` opens the web app in your browser. `jumpgate serve` runs the server in the foreground; `jumpgate open` starts it if needed and signs your browser in with a one-time login link, which works once, within 60 seconds, from this computer only. When no browser can be opened, it prints the link instead:
 
 ```
-http://127.0.0.1:8799/?token=<token>
+http://127.0.0.1:8799/login?code=<one-time code>
 ```
 
 Without a terminal (a pipe, the app bundle) or with flags such as `--bind`, the app behaves as before: it starts the server and opens it in your browser.
@@ -156,9 +156,10 @@ compiled to static assets and embedded directly into the binary via
 to run — just the binary.
 
 The local server binds to `127.0.0.1` by default and requires a session
-token for every request (via `Authorization: Bearer`, a cookie set from the
-initial `?token=` link, or the query parameter itself), so nothing on your
-machine can drive it without that token.
+token for every request (via `Authorization: Bearer`, or a cookie set when
+a one-time login link is opened), so nothing on your machine can drive it
+without that token. The token itself never appears on a command line or in
+the terminal.
 
 jumpgate itself always runs locally — the UI and API bind to your own
 machine. What it sets up can be **local** (the same machine) or **remote

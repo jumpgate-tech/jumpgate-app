@@ -7,11 +7,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"runtime"
 	"strings"
@@ -78,7 +78,7 @@ func runApp() {
 		if *relayBind != "" || *bind != running.HTTPAddr {
 			fmt.Fprintln(os.Stderr, "jumpgate: this launch's --bind/--relay-bind flags are ignored; stop the running server first to apply them")
 		}
-		openRunningServer(ctx, *running, windowed, *noOpen)
+		openRunningServer(ctx, *running, windowed, *noOpen, os.Stdout)
 		return
 	}
 	defer holder.Release()
@@ -150,8 +150,10 @@ func runApp() {
 		Shutdown:  stop,
 	})
 
-	url := appURL(daemon.Info{HTTPAddr: *bind, Token: token})
-	fmt.Println(url)
+	// The address only: a URL carrying the token would put the long-lived
+	// credential in terminal scrollback and logs (D4). Browsers sign in with
+	// a one-time login link instead.
+	fmt.Printf("jumpgate: serving http://%s/\n", *bind)
 
 	// Warm the update check in the background so the first UI poll is instant.
 	// It respects the disabled setting and reports failures through the API,
@@ -207,15 +209,23 @@ func runApp() {
 		if err := waitReady(ctx, *bind); err != nil {
 			log.Fatalf("jumpgate: server did not come up: %v", err)
 		}
-		runWindow(ctx, url)
+		// The in-process webview keeps the ?token= URL: it reaches no
+		// process's argv (D26).
+		runWindow(ctx, appURL(daemon.Info{HTTPAddr: *bind, Token: token}))
 		stop()
 		<-srvErr // wait for the shutdown we just asked for; its error is expected
 		return
 	}
 
-	if !*noOpen {
-		openBrowser(url)
-	}
+	// Once the listener accepts, open the browser with a one-time login
+	// link, or with --no-open print one: the token itself never reaches an
+	// opener's command line (spec D4).
+	go func() {
+		if waitReady(ctx, *bind) != nil {
+			return
+		}
+		handOffLogin(os.Stdout, *bind, s.NewLoginCode(), !*noOpen)
+	}()
 
 	if err := serveAndPublish(ctx, stop, s, holder, *bind, token); err != nil {
 		holder.Release()
@@ -225,22 +235,24 @@ func runApp() {
 
 // openRunningServer shows the already-running server instead of starting a
 // second one: in the tray window when this launch is windowed, otherwise in
-// the browser. server.json is 0600 in a 0700 directory, so its token is this
-// user's own.
-func openRunningServer(ctx context.Context, info daemon.Info, windowed, noOpen bool) {
-	url := appURL(info)
+// the browser through a one-time login link (printed instead with --no-open).
+// server.json is 0600 in a 0700 directory, so its token is this user's own;
+// it authorizes minting the code and goes to the in-process window only.
+func openRunningServer(ctx context.Context, info daemon.Info, windowed, noOpen bool, out io.Writer) {
 	fmt.Fprintf(os.Stderr, "jumpgate: already running, pid %d; opening it\n", info.PID)
-	fmt.Println(url)
 	if windowed {
 		if !trayBuilt {
 			log.Fatalf("jumpgate: --tray needs a build made with the tray tag: go build -tags tray ./cmd/jumpgate")
 		}
-		runWindow(ctx, url)
+		runWindow(ctx, appURL(info))
 		return
 	}
-	if !noOpen {
-		openBrowser(url)
+	code, err := requestLoginCode(ctx, info)
+	if err != nil {
+		log.Printf("jumpgate: %v; run `jumpgate open`", err)
+		return
 	}
+	handOffLogin(out, info.HTTPAddr, code, !noOpen)
 }
 
 // shutdownContext returns a context canceled by the first SIGINT or SIGTERM.
@@ -332,19 +344,4 @@ func bindWarningLine(bind string) string {
 			"Only bind beyond 127.0.0.1 on a trusted network (e.g. behind an SSH tunnel), never on the open internet.",
 		bind, bind,
 	)
-}
-
-// openBrowser opens url in the user's default browser. Best-effort: errors
-// are ignored since this is a convenience, not a requirement.
-func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	_ = cmd.Start()
 }
