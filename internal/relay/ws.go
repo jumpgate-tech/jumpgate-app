@@ -202,9 +202,15 @@ func (s *WSSession) handleFrame(ctx context.Context, msg []byte) {
 		return
 	}
 
+	// eth_unsubscribe is exempt from both the throttle and the charge, so a
+	// client that is over its limit or out of credit can still stop the stream
+	// whose notifications are being charged. It opens no free path: it only
+	// cancels a subscription this session owns and never reaches the upstream.
+	exempt := call.Method == "eth_unsubscribe"
+
 	// Throttle before charging, as the HTTP path does, so a refused frame costs
 	// nothing. The session survives: a client that slows down carries on.
-	if s.cfg.Admit != nil && !s.cfg.Admit() {
+	if !exempt && s.cfg.Admit != nil && !s.cfg.Admit() {
 		s.writeError(call.ID, codeRateLimited, "rate limit exceeded for this key")
 		return
 	}
@@ -212,7 +218,7 @@ func (s *WSSession) handleFrame(ctx context.Context, msg []byte) {
 	// Charge BEFORE serving, as the HTTP path does. eth_subscribe is the one
 	// exception: it bills per delivered notification (see deliver), so opening
 	// the stream is free.
-	if call.Method != "eth_subscribe" {
+	if call.Method != "eth_subscribe" && !exempt {
 		if err := s.charge(ctx, call.Method); err != nil {
 			s.writeChargeError(call.ID, err)
 			return

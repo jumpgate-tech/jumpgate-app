@@ -270,3 +270,44 @@ func TestReauthEnforcesRevocationButToleratesAnOutage(t *testing.T) {
 		t.Errorf("deleted key: err=%v, want ErrUnknownKey", err)
 	}
 }
+
+// A client that is rate limited and out of credit must still be able to cancel
+// a subscription it owns. It stays refused for everything else, and an
+// unsubscribe never reaches the upstream.
+func TestWSUnsubscribeIsExemptFromRateLimitAndCharge(t *testing.T) {
+	var limited, broke atomic.Bool
+	h := newWSHarnessWith(t, enabledKey(), func(c *WSConfig) {
+		c.Admit = func() bool { return !limited.Load() }
+		c.Charge = func(context.Context, string) error {
+			if broke.Load() {
+				return ErrInsufficientCredits
+			}
+			return nil
+		}
+	})
+	h.send(t, `{"jsonrpc":"2.0","id":1,"method":"eth_subscribe","params":["newHeads"]}`)
+	id := h.read(t)["result"].(string)
+
+	limited.Store(true)
+	broke.Store(true)
+	h.send(t, `{"jsonrpc":"2.0","id":2,"method":"eth_blockNumber","params":[]}`)
+	if code := errorCode(h.read(t)); code == 0 {
+		t.Fatal("an ordinary call must still be refused")
+	}
+	h.send(t, `{"jsonrpc":"2.0","id":3,"method":"eth_unsubscribe","params":["not-mine"]}`)
+	if got := h.read(t); got["result"] != false {
+		t.Fatalf("foreign id: %v, want false", got)
+	}
+	h.send(t, `{"jsonrpc":"2.0","id":4,"method":"eth_unsubscribe","params":["`+id+`"]}`)
+	if got := h.read(t); got["result"] != true {
+		t.Fatalf("unsubscribe refused for a limited client: %v", got)
+	}
+	if len(h.streams.stopped) != 1 {
+		t.Errorf("stopped = %v, want the stream closed", h.streams.stopped)
+	}
+	for _, m := range h.caller.seen() {
+		if strings.Contains(m, "unsubscribe") {
+			t.Errorf("unsubscribe was proxied upstream: %s", m)
+		}
+	}
+}
