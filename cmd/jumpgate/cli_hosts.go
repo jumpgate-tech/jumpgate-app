@@ -15,8 +15,6 @@ import (
 	"strconv"
 	"strings"
 
-	"golang.org/x/crypto/ssh"
-
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -105,13 +103,13 @@ func hostsAdd(args []string) int {
 	}
 
 	exe, _ := os.Executable()
-	info, err := daemon.EnsureRunning(ctx, exe)
+	info, err := daemon.EnsureRunning(ctx, exe, os.Stderr)
 	if err != nil {
 		return failed("%v", err)
 	}
 	if e := call(info, "/api/targets", target, nil); e != nil {
 		if e.Status != http.StatusConflict || e.Code != "" {
-			return reportServerError(os.Stderr, "add "+name, *e)
+			return reportServerErrorFrom(os.Stderr, "add "+name, info, *e)
 		}
 		// The name is already a target: pairing it again is how a box is
 		// re-paired or an interrupted pairing finished.
@@ -210,7 +208,7 @@ func sshConfigFrom(login, key, jump string) (executor.SSHConfig, error) {
 	if err != nil {
 		return executor.SSHConfig{}, err
 	}
-	check, algos, err := strictCheck()
+	check, algos, err := config.StrictHostKey()
 	if err != nil {
 		return executor.SSHConfig{}, err
 	}
@@ -223,24 +221,6 @@ func sshConfigFrom(login, key, jump string) (executor.SSHConfig, error) {
 		cfg.Jump = &executor.SSHConfig{Host: jh, Port: jp, User: ju, KeyPath: key, HostKeyFile: jgFile("known_hosts"), HostKey: check, HostKeyAlgorithms: algos}
 	}
 	return cfg, nil
-}
-
-// strictCheck is the host-key policy for pairing: keys a person confirmed
-// (the confirmed-hosts file) or listed in the operator's OpenSSH known_hosts.
-// It is deliberately not the trust-on-first-use file, which Strict never reads.
-// The second result asks each host for the key types those files hold, so a
-// host known by one type is not mistaken for a changed one.
-func strictCheck() (ssh.HostKeyCallback, func(string) []string, error) {
-	confirmed, err := config.ConfirmedHostsFile()
-	if err != nil {
-		return nil, nil, err
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, nil, err
-	}
-	known := filepath.Join(home, ".ssh", "known_hosts")
-	return executor.Strict(confirmed, known), executor.KnownHostKeyAlgorithms(confirmed, known), nil
 }
 
 // hostPort is the exact address string DialSSH hands the host-key callback,
@@ -263,7 +243,7 @@ func confirmHostKeys(ctx context.Context, cfg executor.SSHConfig, in *bufio.Read
 		fmt.Fprintf(errw, "jumpgate: "+format+"\n", a...)
 		return exitCode("failed")
 	}
-	check, algos, err := strictCheck()
+	check, algos, err := config.StrictHostKey()
 	if err != nil {
 		return failedTo("%v", err)
 	}
@@ -358,7 +338,7 @@ func streamPair(info daemon.Info, name string, sudo bool) int {
 		if e.Code == "unknown_host" {
 			fmt.Fprintf(os.Stderr, "jumpgate: %s presents an unconfirmed key %s\n", e.Host, e.Fingerprint)
 		}
-		return reportServerError(os.Stderr, "pair", e)
+		return reportServerErrorFrom(os.Stderr, "pair", info, e)
 	}
 	sc := bufio.NewScanner(res.Body)
 	for sc.Scan() {

@@ -109,16 +109,22 @@ func unitOf(cmd string) string {
 	return strings.Trim(strings.Fields(parts[1])[0], "'")
 }
 
+// streamWait bounds how long a stream test waits for something that SHOULD
+// happen (a tail starting, headers, an event). Every wait returns as soon as
+// the event arrives, so this is only a backstop for a hang; it is generous
+// because the full suite under -race -p 2 starves goroutines for seconds.
+const streamWait = 30 * time.Second
+
 // emit pushes one journal line into the exec unit's tail, waiting for the tail
 // to exist first.
 func (j *journalExecutor) emit(t *testing.T, line string) {
 	t.Helper()
 	select {
 	case <-j.ready:
-	case <-time.After(5 * time.Second):
+	case <-time.After(streamWait):
 		t.Fatal("no journal tail was ever started, so nothing could be emitted into it")
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(streamWait)
 	for {
 		j.mu.Lock()
 		fn := j.streams[logUnits[0]]
@@ -178,7 +184,7 @@ func openStream(t *testing.T, a *apiTestServer, path string) (*http.Response, *b
 			t.Fatalf("GET %s: %v", path, r.err)
 		}
 		return r.res, bufio.NewScanner(r.res.Body), cancel
-	case <-time.After(10 * time.Second):
+	case <-time.After(streamWait):
 		cancel()
 		t.Fatalf("GET %s: the response headers never arrived — an event stream must flush its headers when it opens, "+
 			"not when its first event happens, or a client cannot tell a live-but-quiet stream from one still connecting", path)
@@ -215,7 +221,7 @@ func nextEvent[T any](t *testing.T, sc *bufio.Scanner) T {
 			t.Fatalf("reading the next SSE event: %v", r.err)
 		}
 		return r.v
-	case <-time.After(10 * time.Second):
+	case <-time.After(streamWait):
 		t.Fatal("no SSE event arrived")
 	}
 	var zero T
@@ -439,7 +445,7 @@ func TestSetupStream_AnswersWhenThereIsNoRun(t *testing.T) {
 		if code == http.StatusOK {
 			t.Errorf("got 200 for a machine with no setup run — the caller is left holding an empty stream")
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(streamWait):
 		t.Fatal("the request hung: a stream with no run behind it must answer, not block")
 	}
 }
