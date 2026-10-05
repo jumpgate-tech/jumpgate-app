@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -152,8 +154,48 @@ func (d DockerInfo) WindowsContainers() bool {
 const (
 	dockerPresenceProbe = "command -v docker"
 	dockerVersionProbe  = "docker --version"
-	dockerInfoProbe     = "docker info --format '{{.ServerVersion}}|{{.OSType}}|{{.Architecture}}|{{.Name}}|{{.OperatingSystem}}'"
+	dockerInfoProbe     = "docker info --format '" + dockerInfoFormat + "'"
 )
+
+// The probes as Commands: argv for the local machine, and for SSH the exact
+// strings the constants above have always been.
+const (
+	dockerInfoFormat     = "{{.ServerVersion}}|{{.OSType}}|{{.Architecture}}|{{.Name}}|{{.OperatingSystem}}"
+	enginePlatformFormat = "{{.Server.Os}}/{{.Server.Arch}}"
+)
+
+var (
+	// Presence: `command -v` has no argv equivalent, but `docker --version`
+	// exits 127 from RunArgv when there is no docker. Callers read only the
+	// exit code, on which the two forms agree.
+	dockerPresenceCmd = executor.Command{Argv: []string{"docker", "--version"}, Shell: dockerPresenceProbe}
+	dockerVersionCmd  = executor.Command{Argv: []string{"docker", "--version"}, Shell: dockerVersionProbe}
+	dockerInfoCmd     = executor.Command{Argv: []string{"docker", "info", "--format", dockerInfoFormat}, Shell: dockerInfoProbe}
+	enginePlatformCmd = executor.Command{Argv: []string{"docker", "version", "--format", enginePlatformFormat}, Shell: enginePlatformProbe}
+)
+
+// dockerDesktopInstalled reports whether Docker Desktop is installed on this
+// Windows machine. A package var so tests on any OS can answer it.
+var dockerDesktopInstalled = func() bool {
+	pf := os.Getenv("ProgramFiles")
+	if pf == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(pf, "Docker", "Docker", "Docker Desktop.exe"))
+	return err == nil
+}
+
+// WindowsContainersHint is what to do about an engine in Windows-container
+// mode, which cannot run jumpgate's Linux images. Docker Desktop can switch;
+// Docker Engine on Windows Server (Moby, what GitHub's Windows runners have)
+// cannot run Linux containers at all, so telling its user to "switch" would
+// send them looking for a menu that does not exist.
+func (d DockerInfo) WindowsContainersHint() string {
+	if d.Flavor == FlavorDockerDesktop {
+		return `jumpgate's gateway and devnet are Linux images: switch Docker Desktop to Linux containers (right-click the Docker icon in the notification area, then "Switch to Linux containers…") and retry`
+	}
+	return "this Docker engine runs Windows containers only, and jumpgate's gateway and devnet need Linux containers: install Docker Desktop, or put them on a Linux machine added with `jumpgate hosts add NAME --ssh`"
+}
 
 // ProbeDocker reports whether the target can host containers, and what kind
 // of engine it has. It runs entirely over e, so it answers the same
@@ -169,22 +211,26 @@ const (
 func ProbeDocker(ctx context.Context, e executor.Executor) (DockerInfo, error) {
 	var info DockerInfo
 
-	res, err := e.Run(ctx, dockerPresenceProbe, nil)
+	presence := dockerPresenceProbe
+	if _, ok := e.(executor.ArgvRunner); ok {
+		presence = "docker --version"
+	}
+	res, err := executor.Exec(ctx, e, dockerPresenceCmd, nil)
 	if err != nil {
-		return info, fmt.Errorf("ops: docker probe: %s: %w", dockerPresenceProbe, err)
+		return info, fmt.Errorf("ops: docker probe: %s: %w", presence, err)
 	}
 	if res.ExitCode != 0 {
-		return info, &DockerAbsentError{Probe: dockerPresenceProbe, ExitCode: res.ExitCode, Hint: dockerInstallHint}
+		return info, &DockerAbsentError{Probe: presence, ExitCode: res.ExitCode, Hint: dockerInstallHint}
 	}
 	info.Present = true
 
 	// The client banner is best-effort context, never a gate: a CLI that
 	// refuses --version but still talks to a daemon is odd, not fatal.
-	if res, err := e.Run(ctx, dockerVersionProbe, nil); err == nil && res.ExitCode == 0 {
+	if res, err := executor.Exec(ctx, e, dockerVersionCmd, nil); err == nil && res.ExitCode == 0 {
 		info.ClientBanner = strings.TrimSpace(res.Stdout)
 	}
 
-	res, err = e.Run(ctx, dockerInfoProbe, nil)
+	res, err = executor.Exec(ctx, e, dockerInfoCmd, nil)
 	if err != nil {
 		return info, fmt.Errorf("ops: docker probe: %s: %w", dockerInfoProbe, err)
 	}
@@ -200,6 +246,16 @@ func ProbeDocker(ctx context.Context, e executor.Executor) (DockerInfo, error) {
 	info.DaemonReachable = true
 	info.ServerVersion, info.OSType, info.Architecture, info.HostName, info.OperatingSystem = parseDockerInfo(res.Stdout)
 	info.Flavor = detectDockerFlavor(info.ClientBanner, info.HostName, info.OperatingSystem)
+	// Docker Desktop in Windows-container mode answers `docker info` with
+	// the Windows daemon's details, which never mention Desktop. On this
+	// machine, its installed program says so instead (spec D35). The fix
+	// differs: Desktop can switch to Linux containers; Docker Engine on
+	// Windows Server cannot.
+	if info.WindowsContainers() {
+		if h, ok := e.(executor.LocalHost); ok && h.HostGOOS() == "windows" && dockerDesktopInstalled() {
+			info.Flavor = FlavorDockerDesktop
+		}
+	}
 	return info, nil
 }
 
@@ -347,6 +403,19 @@ func resolveRunPlatform(explicit string) string {
 	return DefaultPlatform()
 }
 
+// hostArch is the second opinion EnginePlatform needs: on the local machine
+// LocalHost.NativeArch, which reads the CPU without a shell; on a remote
+// one, unameArchProbe as before.
+func hostArch(ctx context.Context, e executor.Executor) string {
+	if h, ok := e.(executor.LocalHost); ok {
+		return PlatformForArch(h.NativeArch(ctx))
+	}
+	if res, err := e.Run(ctx, unameArchProbe, nil); err == nil && res.ExitCode == 0 {
+		return PlatformForArch(firstNonEmptyLine(res.Stdout))
+	}
+	return ""
+}
+
 // EnginePlatform resolves the --platform value to run images as on this
 // target. It exists because `docker info`'s architecture cannot be trusted
 // on its own, which is a real, hand-observed failure and not a theoretical
@@ -379,12 +448,9 @@ func resolveRunPlatform(explicit string) string {
 func EnginePlatform(ctx context.Context, e executor.Executor, info DockerInfo) string {
 	engine := PlatformForArch(info.Architecture)
 
-	host := ""
 	// Best effort by design: a target without `uname` still deserves the
 	// engine's own reading rather than a failed provisioning run.
-	if res, err := e.Run(ctx, unameArchProbe, nil); err == nil && res.ExitCode == 0 {
-		host = PlatformForArch(firstNonEmptyLine(res.Stdout))
-	}
+	host := hostArch(ctx, e)
 
 	switch {
 	case engine == "" && host == "":
@@ -476,7 +542,7 @@ func ImagePlatformArgs(ref string) []string {
 // enginePlatformProbe asks the ENGINE what it runs natively. `docker version`
 // rather than `docker info` on purpose: it answers the same question and is
 // materially cheaper, and this runs on every status read of a live container.
-const enginePlatformProbe = "docker version --format '{{.Server.Os}}/{{.Server.Arch}}'"
+const enginePlatformProbe = "docker version --format '" + enginePlatformFormat + "'"
 
 // EmulatedPlatform reports whether an image platform is being run on an engine
 // of a different architecture — i.e. through QEMU rather than natively.
@@ -811,7 +877,7 @@ func ERPCRunArgs(spec ERPCRunSpec) []string {
 		args = append(args, "-p", publishSpec("127.0.0.1", spec.LoopbackRPCPort, ERPCContainerPort))
 	}
 	args = append(args,
-		"-v", spec.HostConfigPath+":"+erpcContainerConfigPath+":ro",
+		"--mount", bindMount(spec.HostConfigPath, erpcContainerConfigPath),
 		image,
 	)
 	// NOTHING is appended after the image ref, and that is a correction, not
@@ -1153,7 +1219,7 @@ func CaddyRunArgs(spec CaddyRunSpec) []string {
 		args = append(args, "-p", publishSpec(bind, CaddyHTTPPort, CaddyHTTPPort))
 	}
 	args = append(args,
-		"-v", spec.HostConfigPath+":"+caddyContainerConfigPath+":ro",
+		"--mount", bindMount(spec.HostConfigPath, caddyContainerConfigPath),
 		// The data volume is unconditional. See catalog.CaddyDataVolume: a
 		// regenerated internal CA breaks HTTPS for every device that trusted
 		// the old root, and the operator has no way to know why.
@@ -1163,8 +1229,8 @@ func CaddyRunArgs(spec CaddyRunSpec) []string {
 	// the host, so the Caddyfile can name one path that is true on both sides.
 	if spec.CertFile != "" && spec.KeyFile != "" {
 		args = append(args,
-			"-v", spec.CertFile+":"+spec.CertFile+":ro",
-			"-v", spec.KeyFile+":"+spec.KeyFile+":ro",
+			"--mount", bindMount(spec.CertFile, spec.CertFile),
+			"--mount", bindMount(spec.KeyFile, spec.KeyFile),
 		)
 	}
 	return append(args, image)
@@ -1205,22 +1271,15 @@ func CaddyServiceKeepingCA(gatewayID string) DockerService {
 // container lifecycle helpers
 // ---------------------------------------------------------------------
 
-// DockerRun executes `docker <args...>` over e, shell-quoting every
-// argument. Quoting each element individually is what keeps ERPCRunArgs
-// able to stay a plain []string: the Executor contract is a single `sh -c`
-// string (internal/executor/executor.go), so something has to do the
-// joining, and doing it here means a path with a space or a quote in it
-// cannot break out of its argument.
+// DockerRun runs `docker args...` on e: as argv on the local machine, with
+// no shell (spec D29), and over SSH as the single-quoted string it has always
+// been (executor.QuoteArgv), so a path with a space or a quote in it cannot
+// break out of its argument on either path.
 func DockerRun(ctx context.Context, e executor.Executor, args ...string) (executor.Result, error) {
-	quoted := make([]string, 0, len(args)+1)
-	quoted = append(quoted, "docker")
-	for _, a := range args {
-		quoted = append(quoted, shQuote(a))
-	}
-	cmd := strings.Join(quoted, " ")
-	res, err := e.Run(ctx, cmd, nil)
+	argv := append([]string{"docker"}, args...)
+	res, err := executor.Exec(ctx, e, executor.Command{Argv: argv}, nil)
 	if err != nil {
-		return res, fmt.Errorf("ops: %s: %w", cmd, err)
+		return res, fmt.Errorf("ops: %s: %w", executor.QuoteArgv(argv), err)
 	}
 	return res, nil
 }
@@ -1385,7 +1444,10 @@ func ImageBuildArgs(spec ImageBuildSpec) []string {
 // distinguishes "absent" (non-zero exit) from "daemon unreachable" (an error
 // on the command itself).
 func ImageExists(ctx context.Context, e executor.Executor, tag string) (bool, error) {
-	res, err := e.Run(ctx, "docker image inspect "+shQuote(tag)+" --format '{{.Id}}'", nil)
+	res, err := executor.Exec(ctx, e, executor.Command{
+		Argv:  []string{"docker", "image", "inspect", tag, "--format", "{{.Id}}"},
+		Shell: "docker image inspect " + shQuote(tag) + " --format '{{.Id}}'",
+	}, nil)
 	if err != nil {
 		return false, fmt.Errorf("ops: docker image inspect %s: %w", tag, err)
 	}
@@ -1411,7 +1473,10 @@ func (e *BuildxMissingError) Error() string {
 
 // CheckBuildx verifies `docker buildx version` succeeds on the target.
 func CheckBuildx(ctx context.Context, e executor.Executor) error {
-	res, err := e.Run(ctx, "docker buildx version", nil)
+	res, err := executor.Exec(ctx, e, executor.Command{
+		Argv:  []string{"docker", "buildx", "version"},
+		Shell: "docker buildx version",
+	}, nil)
 	if err != nil {
 		return fmt.Errorf("ops: docker buildx version: %w", err)
 	}
@@ -1421,16 +1486,10 @@ func CheckBuildx(ctx context.Context, e executor.Executor) error {
 	return nil
 }
 
-// BuildImage runs a docker build on the target. Each argv element is quoted at
-// the sh -c boundary, matching DockerRun.
+// BuildImage runs a docker build on the target: argv on the local machine,
+// and over SSH the quoted string DockerRun uses.
 func BuildImage(ctx context.Context, e executor.Executor, args ...string) (executor.Result, error) {
-	quoted := make([]string, 0, len(args)+1)
-	quoted = append(quoted, "docker")
-	for _, a := range args {
-		quoted = append(quoted, shQuote(a))
-	}
-	cmd := strings.Join(quoted, " ")
-	res, err := e.Run(ctx, cmd, nil)
+	res, err := executor.Exec(ctx, e, executor.Command{Argv: append([]string{"docker"}, args...)}, nil)
 	if err != nil {
 		return res, fmt.Errorf("ops: docker build: %w", err)
 	}

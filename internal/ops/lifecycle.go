@@ -523,7 +523,7 @@ func readEmulation(ctx context.Context, e executor.Executor, st *ContainerStatus
 		return
 	}
 
-	vres, err := e.Run(ctx, enginePlatformProbe, nil)
+	vres, err := executor.Exec(ctx, e, enginePlatformCmd, nil)
 	if err != nil || vres.ExitCode != 0 {
 		return
 	}
