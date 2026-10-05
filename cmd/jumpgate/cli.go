@@ -102,6 +102,8 @@ var remedies = map[string]string{
 	"host_key":          "the box's SSH host key does not match the one on record; check it on the box's console before trusting the box again",
 	"no_controller_key": "run `jumpgate keys init`, then `jumpgate stop` so the server restarts with the key",
 	"not_paired":        "pair this box first with `jumpgate hosts add`",
+	"controller_key_mismatch": "the key store holds a different key than the controller identity your boxes trust. " +
+		"Restore the original key (keychain item, 1Password item or key file), then run `jumpgate stop`; do not re-pair boxes to the new key unless you meant to replace the controller",
 }
 
 // exitCode maps an outcome to the process exit status: 0 ok, 1 refused or
@@ -117,7 +119,7 @@ func exitCode(outcome string) int {
 		return 2
 	case "unreachable":
 		return 3
-	case "bad_receipt", "host_key", "unknown_host":
+	case "bad_receipt", "host_key", "unknown_host", "controller_key_mismatch":
 		return 4
 	}
 	return 1
@@ -226,7 +228,7 @@ func reportServerError(w io.Writer, what string, e apiError) int {
 	case "":
 		fmt.Fprintf(w, "jumpgate: %s: %s\n", what, e.Error)
 		return exitCode("failed")
-	case "bad_receipt", "host_key", "unknown_host":
+	case "bad_receipt", "host_key", "unknown_host", "controller_key_mismatch":
 		fmt.Fprintf(w, "jumpgate: SECURITY: %s: %s\n", what, e.Error)
 	case "unreachable":
 		fmt.Fprintf(w, "jumpgate: %s: could not reach the box: %s\n", what, e.Error)
@@ -239,7 +241,7 @@ func reportServerError(w io.Writer, what string, e apiError) int {
 		fmt.Fprintf(w, "  -> %s\n", hint)
 	}
 	switch e.Code {
-	case "unreachable", "bad_receipt", "agent_http", "unknown_host", "host_key", "no_controller_key", "not_paired":
+	case "unreachable", "bad_receipt", "agent_http", "unknown_host", "host_key", "no_controller_key", "not_paired", "controller_key_mismatch":
 		return exitCode(e.Code)
 	}
 	return exitCode("failed")

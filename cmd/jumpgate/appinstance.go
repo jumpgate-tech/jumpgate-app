@@ -77,10 +77,19 @@ func serveAndPublish(ctx context.Context, stop context.CancelFunc, s *server.Ser
 
 // openControllerKey opens the controller key named in the config, or returns
 // nil when none has been made yet (the intent and pair routes then answer 503
-// no_controller_key).
+// no_controller_key). The key must be the identity config.json recorded: a
+// key with another address (a replaced keychain or 1Password item) is
+// signer.ErrAddressMismatch, never silently used.
 func openControllerKey(cfg config.Config) (signer.Signer, error) {
 	if cfg.Controller == nil {
 		return nil, nil
 	}
-	return signer.Open(context.Background(), signer.Store(cfg.Controller.KeyStore), cfg.Controller.KeyRef)
+	k, err := signer.Open(context.Background(), signer.Store(cfg.Controller.KeyStore), cfg.Controller.KeyRef)
+	if err != nil {
+		return nil, err
+	}
+	if err := signer.CheckAddress(k, cfg.Controller.Address); err != nil {
+		return nil, err
+	}
+	return k, nil
 }

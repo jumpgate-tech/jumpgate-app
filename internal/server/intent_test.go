@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -155,6 +156,20 @@ func TestIntentEndpointReportsWhyTheKeyIsMissing(t *testing.T) {
 	}
 	if msg, _ := out["error"].(string); !strings.Contains(msg, "keychain is locked") {
 		t.Fatalf("error %q does not say why the key is missing", out["error"])
+	}
+}
+
+// A controller key that is not the recorded identity has its own code, so the
+// operator is not sent to re-pair boxes that are fine.
+func TestIntentEndpointReportsAControllerKeyMismatch(t *testing.T) {
+	ts, token := pairedLocal(t)
+	ts.Close()
+	mismatch := fmt.Errorf("open controller key: %w", signer.ErrAddressMismatch)
+	broken := httptest.NewServer(New(Config{Token: token, UI: fstest.MapFS{}, SignerErr: mismatch}).Handler())
+	defer broken.Close()
+	res, out := postIntent(t, broken, token, "/api/targets/box/intent/agent.info", `{}`)
+	if res.StatusCode != http.StatusServiceUnavailable || out["code"] != "controller_key_mismatch" || out["hint"] == "" {
+		t.Fatalf("got %d %v", res.StatusCode, out)
 	}
 }
 

@@ -118,8 +118,11 @@ agent.
 Exit codes: 0 success; 1 the operation failed or was refused; 2 bad usage, or a
 missing prerequisite (no controller key yet, box not paired); 3 box unreachable;
 4 security failure (a host key nobody confirmed, a host key that changed since it
-was confirmed, or a reply not signed by the paired agent), whether it is found
-while pairing or by any later box command.
+was confirmed, a reply not signed by the paired agent, or a controller key whose
+address is not the one `config.json` records), whether it is found while pairing
+or by any later box command. `jumpgate keys show` prints the address of the key
+actually in the key store, and flags it if that address differs from the
+recorded one.
 
 ## Requirements
 

@@ -97,8 +97,14 @@ Implementations in this sub-project:
   in memory. Requires the `op` CLI to be signed in.
 
 `jumpgate keys init [--store keychain|file|1password]` creates the controller
-key; `jumpgate keys show` prints the address. Default store: keychain where
-available, otherwise file.
+key. `jumpgate keys show` opens the key and prints its real address. Default
+store: keychain where available, otherwise file. The server checks the key's
+identity whenever it opens the key: the key's `Address()` must equal
+`controller.address` in `config.json`. A key with a different address, such as
+a replaced keychain or 1Password item, is `signer.ErrAddressMismatch`, and
+it is never used to sign. The box routes answer 503 with
+`controller_key_mismatch` and a hint. `keys show` flags the mismatch and names
+both addresses. The CLI treats the mismatch as a security failure (exit 4).
 
 Signatures are low-s normalized on signing and rejected on verify if high-s.
 
@@ -383,7 +389,9 @@ sub-project 0; this sub-project does not ship before that check lands.
   covers `no_controller_key` and `not_paired` (the operator has to run a
   different command first); 3 `unreachable`; 4 security: `bad_receipt` (a
   reply not signed by the paired agent), `unknown_host` (nobody confirmed the
-  box's SSH host key) and `host_key` (the presented key contradicts the
+  box's SSH host key), `controller_key_mismatch` (the controller key in the
+  key store is not the recorded controller identity) and `host_key` (the
+  presented key contradicts the
   confirmed store or the operator's OpenSSH known_hosts, is revoked there, or
   the box offers none of the key types on record). The two host-key codes come
   from `hosts add`'s own confirmation, the pairing login, the pairing verify
