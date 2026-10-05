@@ -11,6 +11,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/signer"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // envelope builds and signs one intent like rig.send, but hands back the
@@ -49,6 +50,7 @@ func (r *rig) verified(t *testing.T, out intent.ReceiptEnvelope) (intent.Receipt
 // M8: a signature that does not parse or recover is bad_signature, in a
 // signed receipt, and consumes nothing: the same seq then succeeds.
 func TestBadSignaturesAreRejectedAtHandle(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	highS := func(valid string) string {
 		sig, _ := signer.ParseSignature(valid)
 		var s secp256k1.ModNScalar
@@ -108,6 +110,7 @@ func (b *blockingExec) Run(ctx context.Context, cmd string, o *executor.RunOpts)
 // M8: while one intent from a controller runs, a second from the same
 // controller is rejected busy, signed, without consuming its seq.
 func TestAConcurrentIntentFromTheSameControllerIsBusy(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r := newRig(t, true)
 	be := &blockingExec{fakeExec: fakeExec{res: executor.Result{Stdout: "active\nactive\n"}}, started: make(chan struct{}), release: make(chan struct{})}
 	r.a.cfg.Exec = be

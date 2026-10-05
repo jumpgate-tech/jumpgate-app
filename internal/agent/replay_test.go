@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 var t0 = time.Unix(1_800_000_000, 0)
@@ -28,6 +29,7 @@ func newReplay(t *testing.T) (*Replay, string) {
 }
 
 func TestAdmitEnforcesIncreasingSeqAndPersistsIt(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r, path := newReplay(t)
 	exp := uint64(t0.Unix() + 120)
 	if err := r.Admit(addr(1), 5, nonce(1), exp, t0); err != nil {
@@ -48,6 +50,7 @@ func TestAdmitEnforcesIncreasingSeqAndPersistsIt(t *testing.T) {
 }
 
 func TestAdmitRejectsAReplayedNonceWithinItsWindow(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r, _ := newReplay(t)
 	exp := uint64(t0.Unix() + 120)
 	if err := r.Admit(addr(1), 1, nonce(7), exp, t0); err != nil {
@@ -65,6 +68,7 @@ func TestAdmitRejectsAReplayedNonceWithinItsWindow(t *testing.T) {
 
 // Review Focus 2: each controller has its own sequence.
 func TestControllersAreIndependent(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r, _ := newReplay(t)
 	exp := uint64(t0.Unix() + 120)
 	if err := r.Admit(addr(1), 50, nonce(1), exp, t0); err != nil {
@@ -100,6 +104,7 @@ func TestOpenReplayFailsClosed(t *testing.T) {
 // If the directory fsync fails the rename is not known to be durable, so Admit
 // must refuse and leave its in-memory state untouched.
 func TestAdmitFailsWhenTheDirectorySyncFails(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r, _ := newReplay(t)
 	orig := syncDir
 	syncDir = func(string) error { return errors.New("injected dir sync failure") }

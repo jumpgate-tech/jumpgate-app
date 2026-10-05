@@ -7,6 +7,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func addr(b byte) eip712.Address { var a eip712.Address; a[19] = b; return a }
@@ -52,6 +53,7 @@ func TestAuthoriseApprovalTierNeedsASecondSigner(t *testing.T) {
 }
 
 func TestPolicyAddSignerIsIdempotentAndSaveRoundTrips(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	var p Policy
 	if !p.AddSigner(SignerEntry{Address: addr(1).Hex(), Tier: TierRoutine, Label: "a"}) {
 		t.Fatal("first add reported no change")
