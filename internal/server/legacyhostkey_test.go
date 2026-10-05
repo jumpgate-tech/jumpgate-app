@@ -13,6 +13,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func freshHostKey(t *testing.T) ssh.PublicKey {
@@ -39,8 +40,7 @@ func legacyTarget(home string, agent *config.AgentPairing) config.Target {
 // An unconfirmed, unpaired box keeps trust-on-first-use, now passed
 // explicitly: the first key is recorded and accepted.
 func TestLegacySSHConfigIsTOFUForAnUnconfirmedBox(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	cfg, err := legacySSHConfig(legacyTarget(home, nil))
 	if err != nil {
 		t.Fatal(err)
@@ -59,8 +59,7 @@ func TestLegacySSHConfigIsTOFUForAnUnconfirmedBox(t *testing.T) {
 // A box a person confirmed is checked Strictly on the legacy path too: a
 // different key is a mismatch even though the TOFU file never saw the box.
 func TestLegacySSHConfigIsStrictForAConfirmedBox(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	confirmed, err := config.ConfirmedHostsFile()
 	if err != nil {
 		t.Fatal(err)
@@ -86,8 +85,7 @@ func TestLegacySSHConfigIsStrictForAConfirmedBox(t *testing.T) {
 // A paired box is Strict on the legacy path: an unknown key is put in front of
 // a person, never recorded.
 func TestLegacySSHConfigIsStrictForAPairedBox(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	cfg, err := legacySSHConfig(legacyTarget(home, &config.AgentPairing{Address: "0x0000000000000000000000000000000000000001"}))
 	if err != nil {
 		t.Fatal(err)
@@ -104,8 +102,7 @@ func TestLegacySSHConfigIsStrictForAPairedBox(t *testing.T) {
 // The policy is per hop: a confirmed jump host is Strict even in front of an
 // unconfirmed box, and the target's own policy does not leak onto the jump.
 func TestLegacySSHConfigDecidesEachHop(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	confirmed, _ := config.ConfirmedHostsFile()
 	_ = os.MkdirAll(filepath.Dir(confirmed), 0o700)
 	if err := executor.RecordHostKey(confirmed, "10.0.0.1:22", freshHostKey(t)); err != nil {
@@ -147,8 +144,7 @@ func writeKnownHosts(t *testing.T, home, line string) {
 // for it too. Otherwise a box paired while known only there would fall back to
 // TOFU after being removed and re-added from the web UI.
 func TestLegacySSHConfigIsStrictForABoxInOpenSSHKnownHosts(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	known := string(ssh.MarshalAuthorizedKey(freshHostKey(t)))
 	writeKnownHosts(t, home, "10.0.0.5 "+known[:len(known)-1])
 	cfg, err := legacySSHConfig(legacyTarget(home, nil))
@@ -166,8 +162,7 @@ func TestLegacySSHConfigIsStrictForABoxInOpenSSHKnownHosts(t *testing.T) {
 // A @cert-authority line alone does not put a host on record (Strict's own
 // rule), so such a box stays on TOFU.
 func TestLegacySSHConfigIgnoresACertAuthorityLine(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	ca := string(ssh.MarshalAuthorizedKey(freshHostKey(t)))
 	writeKnownHosts(t, home, "@cert-authority 10.0.0.5 "+ca[:len(ca)-1])
 	cfg, err := legacySSHConfig(legacyTarget(home, nil))
