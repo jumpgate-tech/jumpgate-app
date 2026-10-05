@@ -9,4 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && systemctl enable ssh \
     && mkdir -p /root/.ssh && chmod 700 /root/.ssh
 STOPSIGNAL SIGRTMIN+3
-CMD ["/lib/systemd/systemd"]
+# systemd marks / rshared at boot only on a real host; inside a container it
+# leaves Docker's rprivate root alone. Credential setup (LoadCredential=) mounts
+# the per-unit credentials directory from a child mount namespace, so with a
+# private /run the unit sees an empty $CREDENTIALS_DIRECTORY and the agent
+# cannot read its key. Do what systemd does on a host, then become PID 1.
+CMD ["/bin/sh", "-c", "mount --make-rshared / && exec /lib/systemd/systemd"]
