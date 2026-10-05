@@ -10,16 +10,24 @@ import (
 	"os"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/agentbin"
 	"github.com/valve-tech/jumpgate/internal/agentclient"
 	"github.com/valve-tech/jumpgate/internal/bootstrap"
 	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 )
 
 type pairRequest struct {
 	Sudo bool `json:"sudo"`
+	// Installed is set by `jumpgate hosts add --local` run as a non-root
+	// user: the CLI ran the privileged steps in the foreground, where sudo
+	// can prompt, and this server only verifies and records (spec D18).
+	Installed string `json:"installed"`
 }
+
+const hintLocalPair = "run `jumpgate hosts add NAME --local` in a terminal (it asks for your sudo password there), or run jumpgate as root"
 
 // pairEvent is one SSE frame of a pairing: a step's progress line, or the
 // error that ended it (with a code and, when there is one, a hint).
@@ -60,6 +68,32 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "this target has no SSH address")
 		return
 	}
+	// The OS comes first: off Linux the answer is local_unsupported whatever
+	// else the request says.
+	if local {
+		if err := bootstrap.LocalSupported(s.goos); err != nil {
+			writeErrorDetail(w, http.StatusBadRequest, err.Error(), "", "local_unsupported")
+			return
+		}
+	}
+	var installed eip712.Address
+	if req.Installed != "" {
+		if !local {
+			writeError(w, http.StatusBadRequest, `"installed" applies only to pairing this machine`)
+			return
+		}
+		a, err := eip712.ParseAddress(req.Installed)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "installed: "+err.Error())
+			return
+		}
+		installed = a
+	}
+	if local && req.Installed == "" && s.geteuid() != 0 {
+		writeErrorDetail(w, http.StatusConflict,
+			"pairing this machine needs root, and the server has no terminal to ask for a sudo password on", hintLocalPair, "local_needs_terminal")
+		return
+	}
 
 	// Pairing runs root commands on the box, so it takes turns with setup
 	// runs, wipes and clears on the same target.
@@ -74,9 +108,14 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	defer done()
 
 	var priv executor.Executor
-	if local {
-		priv = executor.Sudo(s.newLocalExecutor())
-	} else {
+	switch {
+	case local && req.Installed != "":
+		// The CLI already ran the privileged steps; nothing runs as root here.
+	case local:
+		// Root (checked above): run the steps directly. A root controller on
+		// stock Debian may have no sudo at all (B-4).
+		priv = s.newLocalExecutor()
+	default:
 		hostKey, algos, err := strictHostKey()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -109,7 +148,9 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 			priv = executor.Sudo(ex)
 		}
 	}
-	defer priv.Close()
+	if priv != nil {
+		defer priv.Close()
+	}
 
 	sseHeaders(w)
 	flusher, _ := w.(http.Flusher)
@@ -127,19 +168,26 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	addr, err := bootstrap.Run(ctx, bootstrap.Options{
-		Exec: priv, Local: local, LocalUID: os.Getuid(), AgentBinary: agentBinary,
-		Controller: s.cfg.Signer.Address(), ControllerLabel: controllerLabel(), TransportKey: transportKey, Wire: t.Wire,
-		Event: func(step, line string) { send(pairEvent{Step: step, Line: line}) },
-	})
-	if err != nil {
-		var se *bootstrap.StepError
-		step := ""
-		if errors.As(err, &se) {
-			step = se.Step
+	var addr eip712.Address
+	if req.Installed != "" {
+		addr = installed
+		send(pairEvent{Step: "install", Line: "done in the foreground by the CLI"})
+	} else {
+		addr, err = bootstrap.Run(ctx, bootstrap.Options{
+			Exec: priv, Local: local, LocalUID: os.Getuid(),
+			AgentBinary: agentbin.Reporting(func(line string) { send(pairEvent{Step: "upload", Line: line}) }),
+			Controller:  s.cfg.Signer.Address(), ControllerLabel: controllerLabel(), TransportKey: transportKey, Wire: t.Wire,
+			Event: func(step, line string) { send(pairEvent{Step: step, Line: line}) },
+		})
+		if err != nil {
+			var se *bootstrap.StepError
+			step := ""
+			if errors.As(err, &se) {
+				step = se.Step
+			}
+			send(pairEvent{Step: step, Err: err.Error(), Code: "step_failed"})
+			return
 		}
-		send(pairEvent{Step: step, Err: err.Error(), Code: "step_failed"})
-		return
 	}
 
 	transport := "ssh"

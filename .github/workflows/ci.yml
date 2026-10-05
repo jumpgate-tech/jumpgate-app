@@ -101,6 +101,28 @@ jobs:
           CGO_ENABLED: "0"
         run: go build -o /dev/null ./cmd/jumpgate
 
+  # Pairing against real systemd containers: over SSH (e2e-agent) and this
+  # machine itself through the CLI (e2e-local), on both supported distros.
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        base: ["debian:12", "ubuntu:24.04"]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: pair over SSH
+        env:
+          BASE: ${{ matrix.base }}
+        run: scripts/e2e-agent.sh
+      - name: pair this machine
+        env:
+          BASE: ${{ matrix.base }}
+        run: scripts/e2e-local.sh
+
   # The Rust billing service. It is a standalone crate under services/billing,
   # invisible to the Go tooling above, so it needs its own gate.
   billing:

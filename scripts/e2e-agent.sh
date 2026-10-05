@@ -22,7 +22,8 @@ ssh-keygen -q -t ed25519 -N '' -f "$work/root"
 ssh-keygen -q -t ed25519 -N '' -C jumpgate-controller -f "$work/transport"
 
 docker build -q -t jumpgate-e2e --build-arg BASE="$base" scripts/e2e >/dev/null
-docker run -d --name "$name" --privileged -p 127.0.0.1::22 jumpgate-e2e >/dev/null
+# shellcheck disable=SC2086 # E2E_DOCKER_FLAGS is a list of flags
+docker run -d --name "$name" ${E2E_DOCKER_FLAGS:---privileged} -p 127.0.0.1::22 jumpgate-e2e >/dev/null
 port="$(docker port "$name" 22/tcp | head -1 | sed 's/.*://')"
 
 # Ready means systemd finished booting (running, or degraded by some unrelated
