@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -223,6 +224,12 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusConflict, vpnInterfaceTakenMessage(other))
 		return
 	}
+	if existing, ok := cfg.FindVPNServer(id); ok {
+		if msg := vpnServerMoveWithPeers(existing, targetID, iface, address); msg != "" {
+			writeError(w, http.StatusConflict, msg)
+			return
+		}
+	}
 
 	ex, ok := s.hostExecutor(w, cfg, targetID)
 	if !ok {
@@ -256,6 +263,7 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 
 	created := false
 	var taken *config.VPNServer
+	moved := ""
 	cfg, err = s.updateConfig(func(c *config.Config) error {
 		// Checked again under the config lock, in case a concurrent provision
 		// claimed the interface after the check above.
@@ -266,6 +274,12 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 		for i := range c.VPNServers {
 			if c.VPNServers[i].ID != id {
 				continue
+			}
+			// Checked again under the lock: a device enrolled since the check
+			// above would be stranded the same way.
+			if msg := vpnServerMoveWithPeers(c.VPNServers[i], targetID, iface, address); msg != "" {
+				moved = msg
+				return errors.New(msg)
 			}
 			// Re-provision keeps the peers: the server key is idempotent, so
 			// every config already handed out stays valid, and ProvisionServer
@@ -288,7 +302,7 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 		})
 		return nil
 	})
-	if taken != nil {
+	if taken != nil || moved != "" {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -556,17 +570,6 @@ func (s *Server) handleVPNServerEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Allocate the device's overlay address from the server's subnet.
-	taken := make([]string, 0, len(sv.Peers))
-	for _, p := range sv.Peers {
-		taken = append(taken, p.AllowedIP)
-	}
-	ip, err := vpn.NextPeerIP(sv.Address, taken)
-	if err != nil {
-		writeError(w, http.StatusConflict, err.Error())
-		return
-	}
-
 	// What the DEVICE routes through the tunnel: an explicit override, else
 	// everything (full tunnel), else just the server's subnet — the default,
 	// which reaches the services on the box over the overlay and leaves the
@@ -590,14 +593,44 @@ func (s *Server) handleVPNServerEnroll(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Authorize on the host first, so the config we hand back is one that
-	// actually works; persist to our records second.
-	if err := vpn.AddPeer(r.Context(), ex, vpn.AddPeerParams{
-		Iface: sv.Interface, PeerPublicKey: key.PublicKey, AllowedIP: ip,
+
+	// Reserve the device's overlay address under the config lock: allocate it
+	// from the peers recorded NOW and record the peer in the same step. Two
+	// enrolls allocating from snapshots taken outside the lock got the same
+	// address, and WireGuard then silently moved it to the second device. The
+	// host call comes after the reservation; a failure rolls it back.
+	var ip string
+	var full bool
+	if _, err := s.updateConfig(func(c *config.Config) error {
+		for i := range c.VPNServers {
+			if c.VPNServers[i].ID != sv.ID {
+				continue
+			}
+			taken := make([]string, 0, len(c.VPNServers[i].Peers))
+			for _, p := range c.VPNServers[i].Peers {
+				taken = append(taken, p.AllowedIP)
+			}
+			next, err := vpn.NextPeerIP(c.VPNServers[i].Address, taken)
+			if err != nil {
+				full = true
+				return err
+			}
+			ip = next
+			c.VPNServers[i].Peers = append(c.VPNServers[i].Peers, config.VPNPeer{
+				Name: name, PublicKey: key.PublicKey, AllowedIP: ip,
+			})
+			return nil
+		}
+		return fmt.Errorf("server %q vanished mid-enroll", sv.ID)
 	}); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		status := http.StatusInternalServerError
+		if full {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
 		return
 	}
+	release := func() { s.forgetVPNPeer(sv.ID, key.PublicKey) }
 
 	clientConf, err := vpn.RenderClientConfig(vpn.ClientConfigParams{
 		PrivateKey:          key.PrivateKey,
@@ -609,23 +642,18 @@ func (s *Server) handleVPNServerEnroll(w http.ResponseWriter, r *http.Request) {
 		PersistentKeepalive: 25,
 	})
 	if err != nil {
+		release()
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	if _, err := s.updateConfig(func(c *config.Config) error {
-		for i := range c.VPNServers {
-			if c.VPNServers[i].ID != sv.ID {
-				continue
-			}
-			c.VPNServers[i].Peers = append(c.VPNServers[i].Peers, config.VPNPeer{
-				Name: name, PublicKey: key.PublicKey, AllowedIP: ip,
-			})
-			return nil
-		}
-		return fmt.Errorf("server %q vanished mid-enroll", sv.ID)
+	// Authorize on the host, so the config we hand back is one that actually
+	// works. A refusal there frees the reserved address again.
+	if err := vpn.AddPeer(r.Context(), ex, vpn.AddPeerParams{
+		Iface: sv.Interface, PeerPublicKey: key.PublicKey, AllowedIP: ip,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		release()
+		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
@@ -689,6 +717,66 @@ func (s *Server) handleVPNServerRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// forgetVPNPeer drops the peer with pub from server id's records. It undoes an
+// enroll's reservation when the enroll fails after it; a failure to undo is
+// logged, since the enroll's own error is what the caller must see.
+func (s *Server) forgetVPNPeer(id, pub string) {
+	if _, err := s.updateConfig(func(c *config.Config) error {
+		for i := range c.VPNServers {
+			if c.VPNServers[i].ID != id {
+				continue
+			}
+			kept := c.VPNServers[i].Peers[:0]
+			for _, p := range c.VPNServers[i].Peers {
+				if p.PublicKey != pub {
+					kept = append(kept, p)
+				}
+			}
+			c.VPNServers[i].Peers = kept
+		}
+		return nil
+	}); err != nil {
+		log.Printf("jumpgate: vpn server %q: could not release a failed enroll's reservation: %v", id, err)
+	}
+}
+
+// vpnServerMoveWithPeers explains why re-provisioning existing as (targetID,
+// iface, address) would strand its peers, or returns "" when it would not. A
+// server with devices cannot move to another machine or interface, or onto
+// another subnet: the configs already handed out name the old endpoint and
+// key, and the carried peers' addresses would sit outside the new subnet,
+// while the UI still listed every device as enrolled.
+func vpnServerMoveWithPeers(existing config.VPNServer, targetID, iface, address string) string {
+	if len(existing.Peers) == 0 {
+		return ""
+	}
+	var moves []string
+	if strings.TrimSpace(existing.TargetID) != strings.TrimSpace(targetID) {
+		moves = append(moves, fmt.Sprintf("machine %q to %q", existing.TargetID, targetID))
+	}
+	if existing.Interface != iface {
+		moves = append(moves, fmt.Sprintf("interface %s to %s", existing.Interface, iface))
+	}
+	if !sameSubnet(existing.Address, address) {
+		moves = append(moves, fmt.Sprintf("subnet %s to %s", existing.Address, address))
+	}
+	if len(moves) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("server %q has %d enrolled device(s); re-provisioning would change its %s and strand every config already handed out. "+
+		"wipe or migrate first: revoke the devices (or wipe the server), then provision it again", existing.ID, len(existing.Peers), strings.Join(moves, ", "))
+}
+
+// sameSubnet reports whether two CIDRs name the same network.
+func sameSubnet(a, b string) bool {
+	_, na, errA := net.ParseCIDR(a)
+	_, nb, errB := net.ParseCIDR(b)
+	if errA != nil || errB != nil {
+		return a == b
+	}
+	return na.String() == nb.String()
 }
 
 // vpnServerOnInterface returns the server record, other than id, that already

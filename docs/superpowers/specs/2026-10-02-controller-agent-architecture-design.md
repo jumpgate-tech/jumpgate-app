@@ -251,7 +251,7 @@ once built, the rules in `docs/design/validator-capability.md`:
 | 3 | TUI core + browser approvals | Fleet, host detail, jobs inbox, hosts, signers, toggles, `/api/fleet`, browser signing page | 1, 2 |
 | 4 | Native hardware signers | Ledger, Trezor, Keystone, Lattice | 1 (3 for UI) |
 | 5 | Setup wizard over intents | `Setup` as a durable job | 2, 3 |
-| 6 | Full web-UI parity | Gateways, VPN (fixes the re-provision peer loss), customer keys; web UI moves onto agents; legacy SSH-executor path retired | 3, 5 |
+| 6 | Full web-UI parity | Gateways, VPN (port to agent intents), customer keys; web UI moves onto agents; legacy SSH-executor path retired. Several VPN bugs are already fixed. a154306 fixed the peer loss on an in-place re-provision. The review hotfixes refuse with 409 a re-provision that would move a server with peers to another machine, interface or subnet, and they allocate enroll addresses under the config lock | 3, 5 |
 | 7 | Validators | Per the constraints above | 4, 6 |
 
 **Migration:** until sub-project 6 the web UI keeps using today's SSH executor.
