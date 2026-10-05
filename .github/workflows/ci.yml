@@ -244,3 +244,13 @@ jobs:
           go test -tags tray ./cmd/jumpgate
       - name: build and check both apps
         run: scripts/test-macos-bundle.sh
+
+  desktop-linux:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: build, install and open the Linux desktop bundle
+        run: scripts/test-linux-desktop.sh
