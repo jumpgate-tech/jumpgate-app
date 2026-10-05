@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,10 +41,10 @@ func TestOpenSSHAgentPipe(t *testing.T) {
 	if err := os.WriteFile(keyFile, pem.EncodeToMemory(block), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command(sshAdd, keyFile).CombinedOutput(); err != nil {
+	if out, err := addCmd(sshAdd, keyFile).CombinedOutput(); err != nil {
 		t.Fatalf("ssh-add: %v: %s", err, out)
 	}
-	t.Cleanup(func() { _ = exec.Command(sshAdd, "-d", keyFile).Run() })
+	t.Cleanup(func() { _ = addCmd(sshAdd, "-d", keyFile).Run() })
 	sshPub, _ := ssh.NewPublicKey(pub)
 
 	c := dialAgent(time.Now().Add(5 * time.Second))
@@ -127,4 +128,16 @@ func TestDialAgentRefusesAForeignPipeServer(t *testing.T) {
 		c.Close()
 		t.Fatal("dialAgent accepted a pipe served by Everyone")
 	}
+}
+
+// addCmd runs ssh-add without SSH_AUTH_SOCK in its environment: the test sets
+// it to "", and OpenSSH reads an empty value as a socket path, not as unset.
+func addCmd(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(e), "SSH_AUTH_SOCK=") {
+			cmd.Env = append(cmd.Env, e)
+		}
+	}
+	return cmd
 }
