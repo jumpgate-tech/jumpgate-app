@@ -22,7 +22,7 @@ import (
 // subcommands maps a first argument to its handler. Anything else falls
 // through to runApp, so `jumpgate` and `jumpgate --bind …` behave as before.
 var subcommands = map[string]func(args []string) int{
-	"serve": cmdServe, "stop": cmdStop, "keys": cmdKeys, "agent": cmdAgent, "hosts": cmdHosts,
+	"serve": cmdServe, "relay": cmdRelay, "stop": cmdStop, "keys": cmdKeys, "agent": cmdAgent, "hosts": cmdHosts,
 	"status": cmdIntent("status", intent.KindStatusRead), "disk": cmdIntent("disk", intent.KindDiskRead),
 	"endpoints": cmdIntent("endpoints", intent.KindEndpointsRead), "firewall": cmdIntent("firewall", intent.KindFirewallRead),
 	"logs": cmdLogs, "service": cmdService,
@@ -44,9 +44,10 @@ func main() {
 // lock, the run directory, a key), so a migration left to the web app or
 // serve would find it in the way. `agent` runs on the box as root and never
 // reads controller state, so a stray legacy directory there must not stop
-// the agent.
+// the agent. `relay` never touches controller state at all, migration
+// included.
 func migrateOnStartup(args []string, stderr io.Writer) error {
-	if len(args) >= 2 && args[1] == "agent" {
+	if len(args) >= 2 && (args[1] == "agent" || args[1] == "relay") {
 		return nil
 	}
 	moved, kept, err := config.MigrateLegacyDir()

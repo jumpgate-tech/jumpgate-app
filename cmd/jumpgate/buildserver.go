@@ -54,6 +54,18 @@ const defaultERPCURL = "http://127.0.0.1:4000"
 // environment variable, and returns the options the parse fills in. A flag
 // given on the command line wins over the environment.
 func addServerFlags(fs *flag.FlagSet, getenv func(string) string) (*serverOptions, error) {
+	o := &serverOptions{AdminToken: getenv(envAdminToken)}
+	fs.StringVar(&o.Bind, "bind", "127.0.0.1:8799", bindFlagUsage)
+	if err := addRelayFlags(fs, getenv, o); err != nil {
+		return nil, err
+	}
+	return o, nil
+}
+
+// addRelayFlags registers the data-plane flags, shared by the controller
+// server and `jumpgate relay`, filling o's relay fields. Each defaults from its
+// environment variable; the relay token comes only from the environment.
+func addRelayFlags(fs *flag.FlagSet, getenv func(string) string, o *serverOptions) error {
 	orDefault := func(key, def string) string {
 		if v := getenv(key); v != "" {
 			return v
@@ -64,19 +76,19 @@ func addServerFlags(fs *flag.FlagSet, getenv func(string) string) (*serverOption
 	if v := getenv(envMeter); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
-			return nil, fmt.Errorf("%s=%q: want true or false", envMeter, v)
+			return fmt.Errorf("%s=%q: want true or false", envMeter, v)
 		}
 		meter = b
 	}
-	o := &serverOptions{RelayToken: getenv(envRelayToken), AdminToken: getenv(envAdminToken)}
-	fs.StringVar(&o.Bind, "bind", "127.0.0.1:8799", bindFlagUsage)
+	o.RelayToken = getenv(envRelayToken)
 	// The data plane is off unless an operator asks for it. It is a separate
 	// listener from --bind on purpose: --bind carries the session token that
 	// controls the operator's servers, and this one carries customer traffic
 	// authenticated by key. Bind it to the interface Caddy reaches, never to
 	// 0.0.0.0 — Caddy is the public door and the TLS terminator, and a
 	// plaintext keyed URL would expose the key on the wire.
-	fs.StringVar(&o.RelayBind, "relay-bind", getenv(envRelayBind), "address to serve the metered RPC data plane on (empty disables it; env "+envRelayBind+")")
+	fs.StringVar(&o.RelayBind, "relay-bind", getenv(envRelayBind), "address to serve the metered RPC data plane on (empty disables it; env "+envRelayBind+"). "+
+		"In the controller this is supported for now; `jumpgate relay` is the recommended deployment, since it keeps the data plane out of the process that holds the controller key")
 	fs.StringVar(&o.BillingSocket, "billing-socket", getenv(envBillingSocket), "unix socket of the billing key store (env "+envBillingSocket+")")
 	fs.StringVar(&o.ERPCURL, "erpc-url", orDefault(envERPCURL, defaultERPCURL), "base URL of the keyless eRPC the relay forwards to (env "+envERPCURL+")")
 	fs.StringVar(&o.ERPCProject, "erpc-project", getenv(envERPCProject), "eRPC project segment, empty means main (env "+envERPCProject+")")
@@ -84,7 +96,19 @@ func addServerFlags(fs *flag.FlagSet, getenv func(string) string) (*serverOption
 	// charging customers is a deliberate act rather than a side effect of
 	// pointing the relay at a key store.
 	fs.BoolVar(&o.Meter, "meter", meter, "charge credits for metered RPC; off means serve without billing (env "+envMeter+")")
-	return o, nil
+	return nil
+}
+
+// relayBuildOptions is the relay's startup configuration from o.
+func relayBuildOptions(o serverOptions) relay.BuildOptions {
+	return relay.BuildOptions{
+		RelayBind:      o.RelayBind,
+		BillingSocket:  o.BillingSocket,
+		RelayToken:     o.RelayToken,
+		ERPCURL:        o.ERPCURL,
+		ProjectID:      o.ERPCProject,
+		EnableMetering: o.Meter,
+	}
 }
 
 // newServeFlagSet is `jumpgate serve`'s flag set before the server flags.
@@ -155,14 +179,7 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 		return nil, fmt.Errorf("embedded UI: %w", err)
 	}
 
-	relayOpts := relay.BuildOptions{
-		RelayBind:      opts.RelayBind,
-		BillingSocket:  opts.BillingSocket,
-		RelayToken:     opts.RelayToken,
-		ERPCURL:        opts.ERPCURL,
-		ProjectID:      opts.ERPCProject,
-		EnableMetering: opts.Meter,
-	}
+	relayOpts := relayBuildOptions(opts)
 	relayHandler, relayRuntime, err := relay.Build(relayOpts)
 	if err != nil {
 		// A half-configured relay is fatal rather than quietly off. Serving

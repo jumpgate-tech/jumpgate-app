@@ -190,6 +190,18 @@ All signers implement one `Signer` interface (`Address()`,
   controller key that will not open is tolerated by both entry points: the box
   routes answer 503 `no_controller_key` with the reason.
 
+## The metered relay is its own process
+
+`jumpgate relay` runs the metered RPC data plane alone, and it is the
+recommended deployment. It never opens `config.json`, the controller key or an
+executor. It takes no lock, and it does not migrate or publish controller
+state. Its billing and eRPC settings come from flags or the `JUMPGATE_*`
+environment. The process that holds authority over the fleet is therefore not
+the internet-facing proxy. The in-process relay in the controller
+(`--relay-bind` on the app or on `serve`) still works for existing setups.
+Both paths build the relay with the same `relay.Build`. Both log a warning
+when the relay runs without `--meter`.
+
 ## The TUI
 
 Bubble Tea, Lip Gloss and Bubbles. The TUI holds no keys and does no work: it

@@ -80,7 +80,27 @@ jumpgate logs box-a -n 200
 jumpgate service box-a beacon restart   # exec|beacon, start|stop|restart
 jumpgate serve                          # run the controller server (the other commands start it for you)
 jumpgate stop                           # stop it, via its local API
+jumpgate relay --relay-bind 127.0.0.1:8545 --billing-socket /run/jumpgate-billing/billing.sock --meter
+                                        # run the metered RPC data plane on its own (JUMPGATE_RELAY_TOKEN in the environment)
 ```
+
+### Selling RPC access: run `jumpgate relay`
+
+`jumpgate relay` is the recommended way to serve keyed, metered RPC. It runs
+the metered data plane as a process of its own, separate from the controller.
+It never opens `config.json`, the controller key or an SSH executor. It also
+never takes the controller server's lock or migrates its state. That keeps the
+internet-facing proxy away from the key that controls your fleet.
+
+The relay takes its settings only from flags and the environment:
+`--relay-bind`, `--billing-socket`, `--erpc-url`, `--erpc-project` and
+`--meter`, or the matching `JUMPGATE_*` variables. The relay token comes from
+`JUMPGATE_RELAY_TOKEN`. Point Caddy at `--relay-bind`, and bind the relay to
+loopback or the interface Caddy reaches, never to `0.0.0.0`.
+
+For now, the controller (`jumpgate --relay-bind …` or `jumpgate serve
+--relay-bind …`) can still serve the relay in-process. That mode is kept for
+existing setups, but new deployments should use `jumpgate relay`.
 
 The web app and `jumpgate serve` build the server the same way and take the
 same server flags: `--bind`, `--relay-bind`, `--billing-socket`, `--erpc-url`,
