@@ -412,7 +412,13 @@ impl Store {
                  credits_reserved = excluded.credits_reserved, \
                  escrow_ceiling = excluded.escrow_ceiling, \
                  updated_at = excluded.updated_at",
-            params![address, credits_remaining, credits_reserved, escrow_ceiling, unix_now()],
+            params![
+                address,
+                credits_remaining,
+                credits_reserved,
+                escrow_ceiling,
+                unix_now()
+            ],
         )?;
         Ok(())
     }
@@ -1001,7 +1007,10 @@ mod tests {
         let verify = Store::open(&path).unwrap();
         let (remaining, reserved, _) = verify.get_account("0xconcurrent").unwrap().unwrap();
         assert_eq!(remaining, 0, "every available credit was reserved");
-        assert_eq!(reserved, 55, "the reservation total matches what was granted");
+        assert_eq!(
+            reserved, 55,
+            "the reservation total matches what was granted"
+        );
         remove_db(&path);
     }
 

@@ -644,10 +644,7 @@ mod tests {
         let km = manager();
         let (id, raw) = km.create(KeyConfig::default()).unwrap();
         km.revoke(&id).unwrap();
-        assert_eq!(
-            km.authenticate_status(&raw).unwrap(),
-            AuthOutcome::Disabled
-        );
+        assert_eq!(km.authenticate_status(&raw).unwrap(), AuthOutcome::Disabled);
     }
 
     #[test]
