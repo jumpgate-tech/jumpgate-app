@@ -4,6 +4,8 @@
 // defaults below.
 package buildinfo
 
+import "runtime"
+
 // version is the app version. The default "dev" marks an unversioned local
 // build — the update check treats "dev" as "never newer", so a developer
 // build is never told to update itself.
@@ -27,3 +29,11 @@ func Version() string { return version }
 // ReleaseRepo returns the "owner/repo" whose GitHub releases the update check
 // reads.
 func ReleaseRepo() string { return releaseRepo }
+
+// SelfIsStaticLinux reports whether this binary can itself run as the agent
+// on a Linux box of the same arch. Only a Linux build without cgo is
+// statically linked. A cgo build (every tray build, and a source build with
+// Go's default CGO_ENABLED=1) links the build host's glibc and desktop
+// libraries and would fail to start on a headless box, so it must never be
+// uploaded as the agent.
+func SelfIsStaticLinux() bool { return runtime.GOOS == "linux" && !cgoEnabled }

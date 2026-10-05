@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"io"
@@ -481,5 +483,49 @@ func TestPairInstalledOnlyAppliesToLocalTargets(t *testing.T) {
 	res := postPair(t, ts, token, `{"installed":"0x0000000000000000000000000000000000000001"}`)
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400", res.StatusCode)
+	}
+}
+
+// linuxBoxExec passes bootstrap's preflight as an amd64 systemd box and
+// fails every later command, so a pairing gets as far as choosing the agent
+// binary and stops at the upload.
+type linuxBoxExec struct{ recordingExec }
+
+func (b *linuxBoxExec) Run(ctx context.Context, cmd string, o *executor.RunOpts) (executor.Result, error) {
+	_, _ = b.recordingExec.Run(ctx, cmd, o)
+	switch {
+	case cmd == "uname -s":
+		return executor.Result{Stdout: "Linux\n"}, nil
+	case cmd == "uname -m":
+		return executor.Result{Stdout: "x86_64\n"}, nil
+	case strings.HasPrefix(cmd, "command -v systemctl"):
+		return executor.Result{}, nil
+	}
+	return executor.Result{ExitCode: 1, Stderr: "refused by the test box"}, nil
+}
+
+// D14 / P19: the pairing stream says where the agent binary came from, so a
+// stale developer override is visible to the person pairing. (The e2e
+// harness drives bootstrap directly, so it is asserted here, on the stream.)
+func TestPairStreamNamesTheAgentSource(t *testing.T) {
+	ts, token := localPairServer(t, "linux", 0, &linuxBoxExec{})
+	dir := filepath.Join(os.Getenv("HOME"), ".jumpgate", "agents")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("dev agent")
+	sum := sha256.Sum256(body)
+	if err := os.WriteFile(filepath.Join(dir, "jumpgate-linux-amd64"), body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(hex.EncodeToString(sum[:])+"  jumpgate-linux-amd64\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := postPair(t, ts, token, `{}`)
+	stream, _ := io.ReadAll(res.Body)
+	want := `"line":"agent binary for linux/amd64: dev override ~/.jumpgate/agents"`
+	if !strings.Contains(string(stream), want) {
+		t.Fatalf("stream does not name the agent source (%s):\n%s", want, stream)
 	}
 }
