@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -662,6 +663,74 @@ func ConfirmedHostsFile() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "confirmed_hosts"), nil
+}
+
+// TightenState restricts ~/.jumpgate and every secret already in it to the
+// owner (ruling P29). Writes go through fsperm, but a file that is never
+// rewritten keeps whatever permissions it had: a transport key made by an
+// older release, files moved over from ~/.valve-node-app, a known_hosts
+// another user can append to. The server runs this once at startup. keyFile
+// is the controller key's path when it is kept in a file, else "".
+//
+// Missing files are skipped. Nothing here fails startup: it returns the
+// files it had to tighten, so the caller can say so (other users may already
+// have read them), and the errors for files it could not fix.
+func TightenState(keyFile string) (tightened []string, errs []error) {
+	dir, err := Dir()
+	if err != nil {
+		return nil, []error{err}
+	}
+	if err := fsperm.MkdirPrivate(dir); err != nil {
+		return nil, []error{fmt.Errorf("config: restrict %s: %w", dir, err)}
+	}
+	paths := []string{
+		filepath.Join(dir, configFileName),
+		filepath.Join(dir, "run", "server.json"),
+		filepath.Join(dir, "confirmed_hosts"),
+		filepath.Join(dir, "known_hosts"),
+	}
+	// ssh/ holds the transport key, keys/ the default controller key file.
+	for _, sub := range []string{"run", "ssh", "keys"} {
+		d := filepath.Join(dir, sub)
+		if _, err := os.Lstat(d); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err := fsperm.MkdirPrivate(d); err != nil {
+			errs = append(errs, fmt.Errorf("config: restrict %s: %w", d, err))
+			continue
+		}
+		if sub == "run" {
+			continue // only server.json in it is a secret; the socket is restricted when it is made
+		}
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("config: read %s: %w", d, err))
+			continue
+		}
+		for _, e := range entries {
+			paths = append(paths, filepath.Join(d, e.Name()))
+		}
+	}
+	if keyFile != "" && !slices.Contains(paths, keyFile) {
+		paths = append(paths, keyFile)
+	}
+	for _, p := range paths {
+		if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			errs = append(errs, fmt.Errorf("config: inspect %s: %w", p, err))
+			continue
+		}
+		if fsperm.CheckPrivate(p) == nil {
+			continue
+		}
+		if err := fsperm.MakePrivate(p); err != nil {
+			errs = append(errs, fmt.Errorf("config: restrict %s: %w", p, err))
+			continue
+		}
+		tightened = append(tightened, p)
+	}
+	return tightened, errs
 }
 
 // MigrateLegacyDir moves ~/.valve-node-app to ~/.jumpgate once, and leaves a

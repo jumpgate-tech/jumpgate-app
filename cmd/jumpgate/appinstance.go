@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -73,6 +74,29 @@ func serveAndPublish(ctx context.Context, stop context.CancelFunc, s *server.Ser
 			fmt.Fprintf(os.Stderr, "jumpgate server on %s and %s\n", bind, sock)
 			return nil
 		})
+}
+
+// loadServerConfig is the start of serve and of the app, once the server
+// lock is held: it loads the config, then restricts the state directory and
+// every secret already in it to this user (ruling P29). A file it cannot
+// restrict is reported, not fatal: the server still has to come up.
+func loadServerConfig(stderr io.Writer) (config.Config, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return cfg, err
+	}
+	keyFile := ""
+	if cfg.Controller != nil && signer.Store(cfg.Controller.KeyStore) == signer.StoreFile {
+		keyFile = cfg.Controller.KeyRef
+	}
+	tightened, errs := config.TightenState(keyFile)
+	for _, p := range tightened {
+		fmt.Fprintf(stderr, "jumpgate: other users could read or change %s; it is now restricted to you (if it holds a key, treat that key as exposed)\n", p)
+	}
+	for _, err := range errs {
+		fmt.Fprintf(stderr, "jumpgate: %v\n", err)
+	}
+	return cfg, nil
 }
 
 // openControllerKey opens the controller key named in the config, or returns

@@ -20,7 +20,6 @@ import (
 
 	"github.com/valve-tech/jumpgate/cmd/jumpgate/web"
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
-	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/relay"
 	"github.com/valve-tech/jumpgate/internal/server"
@@ -88,7 +87,7 @@ func runApp() {
 	// The server re-reads it per-request rather than holding this value, so
 	// it's only loaded here to fail fast on a corrupt file before the
 	// server starts serving.
-	cfg, err := config.Load()
+	cfg, err := loadServerConfig(os.Stderr)
 	if err != nil {
 		log.Fatalf("jumpgate: load config: %v", err)
 	}
