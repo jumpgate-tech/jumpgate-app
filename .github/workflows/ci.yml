@@ -54,6 +54,13 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: go build -o "$RUNNER_TEMP/jumpgate-ci" ./cmd/jumpgate
+      # The release builds the controller with cgo on these two, so the cgo
+      # path (no tray tag) must keep compiling.
+      - name: go build (headless, cgo)
+        if: runner.os != 'Windows'
+        env:
+          CGO_ENABLED: "1"
+        run: go build -o "$RUNNER_TEMP/jumpgate-ci-cgo" ./cmd/jumpgate
 
   # Cheap guard for targets no runner tests natively, including the linux/arm64
   # build the agent ships as.

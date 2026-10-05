@@ -1,5 +1,3 @@
-//go:build unix
-
 package executor
 
 import (

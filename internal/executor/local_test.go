@@ -1,5 +1,3 @@
-//go:build unix
-
 package executor
 
 import (
@@ -11,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // TestLocalShellError covers the control-plane-OS decision without needing to
@@ -96,6 +96,7 @@ func TestLocal_UnsupportedHostFailsEveryCall(t *testing.T) {
 }
 
 func TestLocal_Run_CapturesStdout(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -114,6 +115,7 @@ func TestLocal_Run_CapturesStdout(t *testing.T) {
 // The --local bootstrap uploads the agent binary through RunOpts.Stdin, so
 // the local executor must feed it to the command.
 func TestLocal_Run_FeedsStdin(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -127,6 +129,7 @@ func TestLocal_Run_FeedsStdin(t *testing.T) {
 }
 
 func TestLocal_Run_CapturesStderrSeparately(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -143,6 +146,7 @@ func TestLocal_Run_CapturesStderrSeparately(t *testing.T) {
 }
 
 func TestLocal_Run_NonZeroExitIsNotAnError(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -156,6 +160,7 @@ func TestLocal_Run_NonZeroExitIsNotAnError(t *testing.T) {
 }
 
 func TestLocal_Run_StreamReceivesLinesInOrder(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -177,6 +182,7 @@ func TestLocal_Run_StreamReceivesLinesInOrder(t *testing.T) {
 }
 
 func TestLocal_WriteFile_ReadFile_RoundTrips(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -206,6 +212,7 @@ func TestLocal_WriteFile_ReadFile_RoundTrips(t *testing.T) {
 }
 
 func TestLocal_WriteFile_OverwriteAppliesNewMode(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -236,6 +243,7 @@ func TestLocal_WriteFile_OverwriteAppliesNewMode(t *testing.T) {
 }
 
 func TestLocal_Run_CtxCancelKillsFast(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -261,6 +269,7 @@ func TestLocal_Run_CtxCancelKillsFast(t *testing.T) {
 // orphan naturally exits (30s here) or the process's own WaitDelay elapses.
 // Killing the whole process group must make Run return well under 2s.
 func TestLocal_Run_CtxCancelKillsProcessGroup(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -285,6 +294,7 @@ func TestLocal_Run_CtxCancelKillsProcessGroup(t *testing.T) {
 const largeLineCmd = "head -c 2097152 /dev/zero | tr '\\0' 'x'"
 
 func TestLocal_Run_LargeSingleLineStdout_NoStream(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -306,6 +316,7 @@ func TestLocal_Run_LargeSingleLineStdout_NoStream(t *testing.T) {
 }
 
 func TestLocal_Run_LargeSingleLineStdout_WithStream(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 

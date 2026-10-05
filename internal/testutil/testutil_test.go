@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 )
 
@@ -50,5 +51,45 @@ func TestRequirePOSIXShellSkipsOnWindows(t *testing.T) {
 	})
 	if !ran {
 		t.Fatal("inner test failed instead of skipping")
+	}
+}
+
+// failRecorder stands in for *testing.T so a test can observe a helper's
+// failure without failing itself. Fatalf stops the calling goroutine, as the
+// real one does.
+type failRecorder struct {
+	testing.TB
+	failed bool
+}
+
+func (f *failRecorder) Helper() {}
+func (f *failRecorder) Fatalf(string, ...any) {
+	f.failed = true
+	runtime.Goexit()
+}
+func (f *failRecorder) Fatal(...any) {
+	f.failed = true
+	runtime.Goexit()
+}
+
+func TestAssertPrivateRejectsAWorldReadableFile(t *testing.T) {
+	RequireUnix(t)
+	p := filepath.Join(t.TempDir(), "open")
+	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := &failRecorder{TB: t}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		AssertPrivate(rec, p)
+	}()
+	wg.Wait()
+	if !rec.failed {
+		t.Fatal("AssertPrivate accepted a 0644 file")
 	}
 }

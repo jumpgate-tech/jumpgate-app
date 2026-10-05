@@ -1,5 +1,3 @@
-//go:build unix
-
 package executor
 
 import (
@@ -8,11 +6,14 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // The wrapper must preserve the command's stdout and exit status exactly,
 // apart from one leading marker line the executor consumes.
 func TestWrapInProcessGroupPreservesOutputAndStatus(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	out, err := exec.Command("sh", "-c", wrapInProcessGroup("echo one; echo two; exit 7")).Output()
 	exitErr, ok := err.(*exec.ExitError)
 	if !ok || exitErr.ExitCode() != 7 {
@@ -26,6 +27,7 @@ func TestWrapInProcessGroupPreservesOutputAndStatus(t *testing.T) {
 
 // Stdin still reaches the command, so WriteFile works through the wrapper.
 func TestWrapInProcessGroupPassesStdin(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	c := exec.Command("sh", "-c", wrapInProcessGroup("cat"))
 	c.Stdin = strings.NewReader("hello")
 	var out bytes.Buffer
@@ -41,6 +43,7 @@ func TestWrapInProcessGroupPassesStdin(t *testing.T) {
 // A command containing single quotes and shell metacharacters survives the
 // wrapper's quoting unchanged.
 func TestWrapInProcessGroupQuoting(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	out, err := exec.Command("sh", "-c", wrapInProcessGroup(`printf '%s|%s\n' "it's" '$HOME "x"'`)).Output()
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +95,7 @@ func runBranch(t *testing.T, shell, script string, setup ...func(*exec.Cmd)) (ma
 // for perl doing what setsid -w does (fork, setsid, exec, wait), so the
 // branch's quoting and marker are still executed.
 func TestProcessGroupSetsidBranch(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	script := setsidBranch(groupProbeCmd)
 	if exec.Command("sh", "-c", "setsid -w true").Run() != nil {
 		if _, err := exec.LookPath("perl"); err != nil {
@@ -114,6 +118,7 @@ func TestProcessGroupSetsidBranch(t *testing.T) {
 // With a shell that grants job control without a tty (bash, and macOS sh,
 // which is bash), the job-control branch reports the command's real group.
 func TestProcessGroupJobControlBranch(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not installed")
 	}

@@ -112,7 +112,6 @@ func TestServerErrorExit(t *testing.T) {
 
 // agent init is idempotent: the box keeps its identity across re-pairing.
 func TestAgentInitKeepsItsIdentity(t *testing.T) {
-	testutil.RequireUnix(t)
 	state, conf := t.TempDir(), t.TempDir()
 	var out1, out2 strings.Builder
 	if err := agentInit(&out1, state, conf, false); err != nil {
@@ -127,6 +126,7 @@ func TestAgentInitKeepsItsIdentity(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(state, "replay.json")); err != nil {
 		t.Fatal("agent init did not create replay.json")
 	}
+	testutil.RequireUnix(t) // directory mode bits mean nothing on Windows
 	if fi, _ := os.Stat(conf); fi.Mode().Perm() != 0o700 {
 		t.Errorf("config dir mode %o, want 700", fi.Mode().Perm())
 	}
@@ -137,7 +137,6 @@ func TestAgentInitKeepsItsIdentity(t *testing.T) {
 // running agent deliberately fails closed on (replay_state). Only an explicit
 // --reset-replay starts one.
 func TestAgentInitRefusesToRecreateALostReplayRecord(t *testing.T) {
-	testutil.RequireUnix(t)
 	state, conf := t.TempDir(), t.TempDir()
 	var first strings.Builder
 	if err := agentInit(&first, state, conf, false); err != nil {
@@ -169,7 +168,6 @@ func TestAgentInitRefusesToRecreateALostReplayRecord(t *testing.T) {
 // A key file that exists but cannot be used is an error, never a reason to
 // make a new identity: only "does not exist" generates.
 func TestAgentInitNeverReplacesAnUnreadableKey(t *testing.T) {
-	testutil.RequireUnix(t)
 	state, conf := t.TempDir(), t.TempDir()
 	keyPath := filepath.Join(state, "agent.key")
 	if err := os.WriteFile(keyPath, []byte("not hex\n"), 0o600); err != nil {
@@ -181,6 +179,9 @@ func TestAgentInitNeverReplacesAnUnreadableKey(t *testing.T) {
 	if b, _ := os.ReadFile(keyPath); string(b) != "not hex\n" {
 		t.Fatalf("key file was rewritten: %q", b)
 	}
+
+	// The rest needs file modes and symlinks, which are unix-only.
+	testutil.RequireUnix(t)
 
 	// A group-readable key is refused the same way, and left alone.
 	if err := os.WriteFile(keyPath, []byte(strings.Repeat("ab", 32)+"\n"), 0o640); err != nil {
