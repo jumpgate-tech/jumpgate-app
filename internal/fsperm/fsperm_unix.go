@@ -5,6 +5,7 @@ package fsperm
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 )
 
@@ -120,6 +121,33 @@ func ownedByCurrentUser(path string) (bool, error) {
 		return false, fmt.Errorf("no owner information for %s", path)
 	}
 	return int(st.Uid) == os.Geteuid(), nil
+}
+
+// checkAncestors refuses a path one of whose parents another user could
+// rename entries in: a parent writable by group or others without the sticky
+// bit (/tmp, mode 1777, is fine: there only an entry's owner may move it), or
+// a parent owned by someone other than this user or root, who could make it
+// so. path itself is not checked; the caller makes it private.
+func checkAncestors(path string) error {
+	for p := filepath.Dir(path); ; p = filepath.Dir(p) {
+		fi, err := os.Lstat(p)
+		if err != nil {
+			return err
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("no owner information for %s", p)
+		}
+		if st.Uid != 0 && int(st.Uid) != os.Geteuid() {
+			return fmt.Errorf("its parent %s belongs to another user, who could move it and put their own in its place", p)
+		}
+		if fi.Mode().Perm()&0o022 != 0 && fi.Mode()&os.ModeSticky == 0 {
+			return fmt.Errorf("its parent %s is writable by other users (mode %o, no sticky bit), who could move it and put their own in its place", p, fi.Mode().Perm())
+		}
+		if filepath.Dir(p) == p {
+			return nil
+		}
+	}
 }
 
 func rename(oldpath, newpath string) error { return os.Rename(oldpath, newpath) }

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -218,5 +219,28 @@ func TestSecretsArePrivateFromCreationUnderALooseParent(t *testing.T) {
 	}
 	if err := CheckPrivate(p); err != nil {
 		t.Fatalf("WriteFilePrivate under a loose parent: %v", err)
+	}
+}
+
+// P28 on Windows: a symlinked directory whose parent lets Everyone delete
+// what is in it could be swapped for another user's, so it is refused.
+func TestMkdirPrivateRefusesASymlinkIntoAParentOthersCanEmpty(t *testing.T) {
+	base := t.TempDir()
+	shared := filepath.Join(base, "shared")
+	if err := os.Mkdir(shared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	grantEveryone(t, shared, 0x40 /* FILE_DELETE_CHILD */, windows.NO_INHERITANCE)
+	real := filepath.Join(shared, "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, ".jumpgate")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	err := MkdirPrivate(link)
+	if err == nil || !strings.Contains(err.Error(), "move or replace") {
+		t.Fatalf("MkdirPrivate(link into a parent Everyone can empty) = %v, want a refusal", err)
 	}
 }

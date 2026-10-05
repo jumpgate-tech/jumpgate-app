@@ -56,6 +56,11 @@ func MkdirPrivate(dir string) error {
 	if !mine {
 		return fmt.Errorf("fsperm: %s is a symlink to %s, which another user owns; jumpgate keeps secrets only in a directory you own", dir, real)
 	}
+	// Owning the directory is not enough if another user can move it: they
+	// could rename it away and put one of their own at the same path.
+	if err := checkAncestors(real); err != nil {
+		return fmt.Errorf("fsperm: %s is a symlink to %s: %w", dir, real, err)
+	}
 	return MakePrivate(real)
 }
 

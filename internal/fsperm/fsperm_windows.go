@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 	"unsafe"
 
@@ -200,6 +201,70 @@ func ownedByCurrentUser(path string) (bool, error) {
 		return windows.Token(0).IsMember(owner)
 	}
 	return false, nil
+}
+
+// moveRights on a directory let a SID rename or replace what is in it:
+// FILE_DELETE_CHILD removes any entry, DELETE removes the directory itself,
+// and full control or WRITE_DAC/WRITE_OWNER can grant either. Adding files
+// or subdirectories alone cannot move an existing entry (C:\ grants
+// Authenticated Users that much), so it is not counted.
+const moveRights = 0x40 /* FILE_DELETE_CHILD */ | windows.DELETE | windows.GENERIC_ALL | windows.WRITE_DAC | windows.WRITE_OWNER
+
+// checkAncestors refuses a path one of whose parents grants someone other
+// than this user, SYSTEM or Administrators a right to rename what is in it,
+// or to rename the parent itself. path itself is not checked; the caller
+// makes it private.
+func checkAncestors(path string) error {
+	user, err := currentUser()
+	if err != nil {
+		return err
+	}
+	for p := filepath.Dir(path); ; p = filepath.Dir(p) {
+		if err := checkAncestor(p, user); err != nil {
+			return err
+		}
+		if filepath.Dir(p) == p {
+			return nil
+		}
+	}
+}
+
+func checkAncestor(p string, user *windows.SID) error {
+	h, err := openForSecurity(p, windows.READ_CONTROL)
+	if err != nil {
+		return fmt.Errorf("open its parent %s: %w", p, err)
+	}
+	defer windows.CloseHandle(h)
+	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("read the DACL of its parent %s: %w", p, err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return fmt.Errorf("read the DACL of its parent %s: %w", p, err)
+	}
+	if dacl == nil {
+		return fmt.Errorf("its parent %s has no DACL, so anyone could move it", p)
+	}
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return err
+		}
+		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 || denyACETypes[ace.Header.AceType] {
+			continue
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return fmt.Errorf("its parent %s has an access entry of type %d that jumpgate cannot verify", p, ace.Header.AceType)
+		}
+		if uint32(ace.Mask)&moveRights == 0 {
+			continue
+		}
+		if sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)); !trusted(sid, user) {
+			return fmt.Errorf("its parent %s lets %s move or replace what is in it", p, accountName(sid))
+		}
+	}
+	return nil
 }
 
 // trusted is the set of SIDs a private file may grant access to or be owned
