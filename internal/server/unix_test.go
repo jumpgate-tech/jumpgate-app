@@ -100,3 +100,47 @@ func TestServeUnixReplacesAStaleSocket(t *testing.T) {
 		t.Fatal("ServeUnix did not return after cancel")
 	}
 }
+
+// I-2: a server killed hard (Task Manager, a crash) leaves its socket file
+// behind. The next server must replace it, on every OS, including Windows
+// where the file is an AF_UNIX reparse point.
+func TestServeUnixServesHealthOverAStaleSocket(t *testing.T) {
+	dir := testutil.ShortTempDir(t)
+	sock := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	ln.Close()
+	if _, err := os.Lstat(sock); err != nil {
+		t.Fatalf("no stale socket left behind: %v", err)
+	}
+
+	token := NewSessionToken()
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- New(Config{Token: token, UI: fstest.MapFS{}}).ServeUnix(ctx, sock) }()
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}}
+	var res *http.Response
+	for i := 0; i < 50; i++ {
+		req, _ := http.NewRequest(http.MethodGet, "http://x/api/health", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		if res, err = client.Do(req); err == nil {
+			res.Body.Close()
+			break
+		}
+		select {
+		case err := <-served:
+			t.Fatalf("ServeUnix over a stale socket: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if err != nil || res.StatusCode != http.StatusOK {
+		t.Fatalf("health: %v", err)
+	}
+	cancel()
+	<-served
+}

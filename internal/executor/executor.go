@@ -51,9 +51,10 @@ type SSHConfig struct {
 	// Jump, if set, is dialled first and this host is reached through it
 	// (ProxyJump). It may itself have a Jump.
 	Jump *SSHConfig `json:"jump,omitempty"`
-	// HostKey overrides host-key checking. Nil keeps trust-on-first-use
-	// against HostKeyFile, which is what the web UI relies on until it moves
-	// onto agents. It is never persisted.
+	// HostKey is the host-key policy, and it is required: DialSSH refuses a
+	// nil one with ErrNoHostKeyPolicy. Use config.StrictHostKey for keys a
+	// person confirmed, or TOFUHostKeyCallback(HostKeyFile) on the legacy
+	// web-UI path for a box nobody confirmed or paired. It is never persisted.
 	HostKey ssh.HostKeyCallback `json:"-"`
 	// HostKeyAlgorithms, if set, names the host-key algorithms to ask a
 	// host:port for, most preferred first; an empty answer keeps x/crypto's

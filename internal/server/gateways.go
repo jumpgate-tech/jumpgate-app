@@ -52,6 +52,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/chainlist"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 	"github.com/valve-tech/jumpgate/internal/ops"
 	"github.com/valve-tech/jumpgate/internal/setup"
 )
@@ -2107,8 +2108,8 @@ func installID() string {
 		return legacyInstallSeed()
 	}
 	id := hex.EncodeToString(buf)
-	if mkerr := os.MkdirAll(dir, 0o700); mkerr == nil {
-		_ = os.WriteFile(path, []byte(id+"\n"), 0o600) // best-effort; retried next run
+	if mkerr := fsperm.MkdirPrivate(dir); mkerr == nil {
+		_ = fsperm.WriteFilePrivate(path, []byte(id+"\n")) // best-effort; retried next run
 	}
 	return id
 }

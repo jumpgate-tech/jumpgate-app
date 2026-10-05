@@ -36,10 +36,8 @@ type sshExecutor struct {
 func NewSSH(cfg SSHConfig) (Executor, error) { return NewSSHContext(context.Background(), cfg) }
 
 // NewSSHContext dials cfg (see DialSSH) and returns an executor over the
-// connection. With no cfg.HostKey the remote host key is verified against
-// cfg.HostKeyFile by trust-on-first-use: an unknown host's key is appended
-// (file created 0600 on first use); a known host presenting a different key
-// is rejected.
+// connection. cfg.HostKey is required: a nil policy is ErrNoHostKeyPolicy, and
+// trust-on-first-use is only ever chosen explicitly with TOFUHostKeyCallback.
 func NewSSHContext(ctx context.Context, cfg SSHConfig) (Executor, error) {
 	client, err := DialSSH(ctx, cfg)
 	if err != nil {

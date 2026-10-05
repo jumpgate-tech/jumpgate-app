@@ -28,6 +28,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/chainlist"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 	"github.com/valve-tech/jumpgate/internal/setup"
 	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/updatecheck"
@@ -115,6 +116,10 @@ type Config struct {
 	// this server process ever holds it. Nil means those routes answer 503
 	// with code "no_controller_key".
 	Signer signer.Signer
+	// SignerErr is why Signer is nil when a controller key is recorded but
+	// would not open (a locked keychain, a missing file). The box routes
+	// report it instead of telling the operator to create a key that exists.
+	SignerErr error
 }
 
 // Server is the jumpgate local HTTP server.
@@ -354,9 +359,14 @@ func (s *Server) ServeUnix(ctx context.Context, path string) error {
 	}
 	ln, err := net.Listen("unix", path)
 	if err != nil {
+		if runtime.GOOS == "windows" {
+			return fmt.Errorf("server: listen on %s: %w (the local socket needs Windows 10 version 1803 or Windows Server 2019 or later)", path, err)
+		}
 		return err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	// Owner-only on every OS: on Windows a mode does nothing, so the socket
+	// gets the same protected DACL as the run dir (spec D2).
+	if err := fsperm.MakePrivate(path); err != nil {
 		ln.Close()
 		return err
 	}

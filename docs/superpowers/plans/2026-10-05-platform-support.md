@@ -6484,6 +6484,8 @@ Expected: `desktop-macos` green.
 
 Covers the server part of I-12 (D23), and M-12.
 
+> **Amended by the addendum (Tasks 15–16).** Read "Changes to Task 13" in the addendum before starting: shell-needing routes refuse through `getShellExecutor`, and `writeExecutorError` takes a fallback status.
+
 **Files:**
 - Modify: `internal/server/vpn.go` (`vpnExecutor`), `internal/server/vpnserver.go` (`hostExecutor`), `internal/server/api.go` (new `writeExecutorError`), `internal/setup/trust.go` (linux, windows), `internal/setup/trust_test.go`, `cmd/jumpgate/cli.go` (`jgFile`)
 - Create: `internal/server/local_unsupported_test.go`, `cmd/jumpgate/jgfile_test.go`
@@ -6981,3 +6983,2935 @@ git push && gh pr checks --watch
 ```
 
 Then run the manual checks listed in Tasks 5, 10 and 11 on real desktops and record them in the PR description before marking it ready for review.
+
+
+---
+
+## Addendum: Tasks 15–16
+
+Added 2026-10-05, after the gap analysis (`.superpowers/sdd/followups/gap-analysis.md`, items W2 and W5, plus parts of W1 and W3). The spec's addendum (decisions D29–D40) is binding for these two tasks, as D1–D28 are for the rest.
+
+**Goal:** a Windows controller runs the local Docker features (RPC gateway and devnet) with no POSIX shell, and tells a user whose engine is in Windows-container mode what to do. Every controller gets the eRPC gateway image as a prebuilt, pinned, multi-arch download instead of a 12-minute local `docker build` that needs buildx.
+
+**Architecture:** the local executor gains a shell-free surface: `RunArgv` (start a program from an argument vector) and `LocalHost` (home directory, native CPU, dialing). Each Docker call is written once as an `executor.Command`. It runs as argv on the local machine on every OS, and as the same shell string as today over SSH. Readiness probes and the port check run in process on the local machine (`net/http`, `net.Dial`) instead of through `curl` and `ss`. File binds move to `--mount`. `Run` still refuses on Windows, and Task 13 (amended) refuses every shell-needing route with `local_unsupported`. Task 16 then pins `ghcr.io/jumpgate-tech/erpc@sha256:…` in the catalog. A workflow publishes and signs that image, and the gateway pulls it by digest. A local build is kept as a fallback.
+
+**Order and dependencies:**
+- **Task 13** is amended (see "Changes to Task 13" below) and must land before Task 15.
+- **Task 15** depends on Task 1 (CI matrix, `testutil`) and on the amended Task 13. Its Windows smoke step (Step 16) also needs Task 6 (the server on Windows) merged.
+- **Task 16** depends on Task 15, which converts the functions Task 16 edits. Land it after Task 14, so the two `release.yml` edits do not conflict.
+
+**Sizes:** Task 15 is L, Task 16 is M, and the amendment to Task 13 adds S.
+
+### Addendum preconditions
+
+- The same as the plan's own: one confirmation from the user before pushing (D22). Every Windows check runs on GitHub Actions, or by hand where a step says so.
+- **Task 16 needs two one-time actions from the user.** Ask once, before Task 16 Step 1:
+  1. Allow the `erpc-image` workflow to push to `ghcr.io/jumpgate-tech/erpc`. The repo is `jumpgate-tech/jumpgate-app`, so `GITHUB_TOKEN` with `packages: write` can create the package; no PAT is needed.
+  2. After the first publish, set that package's visibility to **Public** (GitHub > jumpgate-tech > Packages > erpc > Package settings). Anonymous `docker pull` needs this.
+- Docker via colima on this Mac, for Task 15 Step 15 and Task 16 Step 10.
+
+### Addendum global constraints
+
+These add to the plan's Global Constraints; they do not replace them.
+
+- Shell-free local surface, in package `executor`: `ArgvRunner`, `LocalHost`, `Command`, `Exec`, `QuoteArgv`, `RequireShell`. No Docker call in `internal/ops`, `internal/setup` or `internal/server` builds a `docker …` string for `e.Run` itself. Every one goes through `ops.DockerRun` or `executor.Exec`.
+- `executor.QuoteArgv` is byte-identical to the string `ops.DockerRun` built before Task 15: the program bare, then every argument single-quoted with `'\''` escaping. Today's probe strings (`command -v docker`, `docker --version`, `docker info --format '…'`, `command -p uname -m`, the curl forms, `listenerProbe`, `printf '%s\n' "$HOME"`) stay byte-identical for non-argv executors. This means SSH targets and the existing test fakes see no change.
+- File binds use `--mount type=bind,source=<host path>,target=<container path>,readonly`, rendered as a CSV record. Named volumes keep `-v`.
+- Error code `local_unsupported` keeps its name. Its hint becomes: "node setup, services, logs, diagnostics and the VPN need a POSIX shell, which this computer does not have; add a Linux machine with `jumpgate hosts add NAME --ssh` for those. The Docker gateway and devnet do run here."
+- eRPC image:
+  - Repository: `ghcr.io/jumpgate-tech/erpc`.
+  - Tags: `src-<40-hex ERPCSourceRef>` and `<first 8 hex>`.
+  - Platforms: `linux/amd64` and `linux/arm64`.
+  - Label: `org.opencontainers.image.revision=<ERPCSourceRef>`.
+  - Signed with cosign keyless. The identity regexp is `^https://github.com/jumpgate-tech/jumpgate-app/\.github/workflows/erpc-image\.yml@`, and the issuer is `https://token.actions.githubusercontent.com`.
+  - Pinned by its index digest in `internal/catalog/erpc.go`.
+- Environment variables:
+  - `JUMPGATE_DOCKER_LIVE=1` runs the live Docker tests against this machine's engine.
+  - `JUMPGATE_ERPC_LOCAL_BUILD=1` skips the pull and builds the eRPC image from source.
+- Timeouts: eRPC pull 10 minutes, eRPC build 30 minutes, local port probe 500 ms per address.
+
+### Addendum Review Focus
+
+1. **A Windows user whose Docker Desktop is in Windows-container mode presses the gateway power button.** Expected: `GET /api/docker` says not ready, with the Docker Desktop "Switch to Linux containers…" hint. The panel shows that hint and does not start provisioning; the response is never a 500. Test: Task 15 `TestDockerStatusWindowsContainers`, and the `windows-docker` CI job.
+2. **Docker Engine on Windows Server, which has no Linux mode** (GitHub's runners, the QEMU VM). Expected: the hint says the engine runs Windows containers only, and names Docker Desktop or an SSH Linux machine. It does not send the user looking for a switch menu that does not exist. Test: Task 15 `TestWindowsContainersHintNamesTheRightFix`.
+3. **A home directory with a comma or a space** (`C:\Users\Ann, B`). Expected: the bind still names exactly the config file, and `docker run` does not mis-parse it. Test: Task 15 `TestBindMountQuotesAPathWithACommaOrQuote`.
+4. **The first gateway provision with no network.** Expected: within the pull timeout, one error naming every way out: connect, load the image by hand, or install buildx. Not a hang, and not "legacy builder deprecated". Test: Task 16 `TestEnsureImage_OfflineWithoutBuildKitNamesEveryFix`.
+5. **An air-gapped load of the wrong image under the right tag** (`src-<ref>` built from another ref). Expected: jumpgate refuses that image, says why, and falls through to a local build or the offline error. Test: Task 16 `TestEnsureImage_RefusesASourceTagBuiltFromAnotherRef`.
+
+### Addendum file structure
+
+Created:
+
+| Path | Responsibility |
+|---|---|
+| `internal/executor/argv.go`, `argv_test.go` | `ArgvRunner`, `LocalHost`, `Command`, `Exec`, `QuoteArgv` |
+| `internal/executor/lookpath.go`, `lookpath_test.go`, `lookpath_windows_test.go` | `lookPathIn`: find a program on a given PATH (with PATHEXT on Windows) |
+| `internal/executor/nativearch_unix.go`, `nativearch_windows.go` | The machine's real CPU, past translation |
+| `internal/executor/shell.go`, `shell_test.go` | `RequireShell` (from the amended Task 13) |
+| `internal/executor/argvfake/argvfake.go`, `argvfake_test.go` | A test double for a shell-less local executor, shared by the ops, setup and server tests |
+| `internal/ops/httpprobe.go`, `httpprobe_test.go` | `HTTPProbe`: the curl form for SSH, in-process for local |
+| `internal/ops/mount.go`, `mount_test.go` | `bindMount`: `--mount` values |
+| `internal/setup/targetpath.go`, `targetpath_test.go` | `homeOn`, `joinOn`, `dirOn`: path rules of the machine acted on |
+| `internal/setup/listeners.go`, `listeners_test.go` | `probeListeners`: the port check, local or shell |
+| `internal/setup/shellless_test.go` | Whole gateway and devnet plans against `argvfake` |
+| `internal/setup/docker_live_test.go` | `TestLocalDockerLive` (`JUMPGATE_DOCKER_LIVE=1`) |
+| `scripts/windows-docker-smoke.ps1` | A real `jumpgate.exe` against the machine's Docker engine |
+| `internal/catalog/erpc.go`, `erpc_test.go` | The eRPC source and image pin |
+| `.github/workflows/erpc-image.yml` | Build, push, sign and verify the eRPC image |
+| `scripts/erpc-pin.sh`, `scripts/erpc-verify.sh` | Read the pin from the catalog; verify the published image against it |
+
+Modified: `internal/executor/{local.go,local_test.go,localenv_test.go}`, `internal/ops/{docker.go,lifecycle.go,docker_test.go,lifecycle_test.go}`, `internal/setup/{gateway.go,devnet.go,tls.go,traffic.go,gateway_test.go,devnet_test.go,traffic_test.go}`, `internal/server/{api.go,docker.go,containers.go,gateways.go,docker_test.go,containers_test.go}`, `.github/workflows/{ci.yml,release.yml}`, `README.md`.
+
+### Changes to Task 13
+
+Apply these to Task 13 before it starts. Task 13 as written refuses a shell-less local target only where `getExecutor` fails, which is target construction. Task 15 lets a Windows controller construct a local target, because it needs one to run Docker. From then on the refusal has to come from the routes that need a shell. If the guard is not in place first, Task 15 would turn every such route into a mid-stream `ErrNoPOSIXShell` on Windows.
+
+1. **Interfaces.** Add to Task 13's Produces:
+   - `func RequireShell(e Executor) error` in `internal/executor/shell.go`;
+   - `func (l *local) ShellError() error`;
+   - `func (s *Server) getShellExecutor(t config.Target) (executor.Executor, error)`.
+
+   Change `writeExecutorError`'s signature to `func writeExecutorError(w http.ResponseWriter, err error, otherwise int)`. The routes it is moved into answer an unreachable SSH host with 502 today, and must keep doing so.
+2. **Hint.** Replace `hintLocalUnsupported` with the text in the addendum global constraints.
+3. **Files.** Add these to Task 13's Files:
+   - Create: `internal/executor/shell.go`, `internal/executor/shell_test.go`.
+   - Modify: `internal/server/diag.go`, and the handlers named in item 5.
+4. **Step 1 gains two tests.**
+
+```go
+// internal/executor/shell_test.go
+package executor
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"testing"
+)
+
+type plainExec struct{}
+
+func (plainExec) Run(context.Context, string, *RunOpts) (Result, error)      { return Result{}, nil }
+func (plainExec) WriteFile(context.Context, string, []byte, fs.FileMode) error { return nil }
+func (plainExec) ReadFile(context.Context, string) ([]byte, error)           { return nil, nil }
+func (plainExec) Close() error                                               { return nil }
+
+// Only a local executor on a machine with no POSIX shell refuses; every other
+// executor (SSH, a working local one, a test fake) can run shell commands.
+func TestRequireShell(t *testing.T) {
+	if err := RequireShell(plainExec{}); err != nil {
+		t.Fatalf("an executor without ShellError: %v, want nil", err)
+	}
+	if err := RequireShell(&local{}); err != nil {
+		t.Fatalf("a local executor with a shell: %v, want nil", err)
+	}
+	if err := RequireShell(&local{unsupported: localShellError("windows")}); !errors.Is(err, ErrNoPOSIXShell) {
+		t.Fatalf("a shell-less local executor: %v, want ErrNoPOSIXShell", err)
+	}
+}
+```
+
+Append to `internal/server/local_unsupported_test.go`:
+
+```go
+// shellLess is "this computer" on Windows once Task 15 lands: the target can
+// be added (Docker features need it), but no shell command can run.
+type shellLess struct{ autoSucceedExecutor }
+
+func (*shellLess) Run(context.Context, string, *executor.RunOpts) (executor.Result, error) {
+	return executor.Result{}, fmt.Errorf("%w, which windows does not provide", executor.ErrNoPOSIXShell)
+}
+
+func (*shellLess) ShellError() error {
+	return fmt.Errorf("%w, which windows does not provide", executor.ErrNoPOSIXShell)
+}
+
+// Every route that needs a shell refuses a shell-less target up front with
+// local_unsupported, instead of failing halfway through with a raw error.
+func TestShellRoutesRefuseAShellLessTarget(t *testing.T) {
+	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) { return &shellLess{}, nil })
+	if res := a.do(t, "POST", "/api/targets", map[string]any{"id": "me", "mode": "local"}); res.StatusCode != http.StatusCreated {
+		t.Fatalf("add local target: %d", res.StatusCode)
+	}
+	for _, r := range []struct {
+		method, path string
+		body         any
+	}{
+		{"POST", "/api/targets/me/setup", catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse"}},
+		{"POST", "/api/targets/me/services/execution/restart", nil},
+		{"POST", "/api/targets/me/services/execution/clear", map[string]string{"confirm": "execution"}},
+		{"GET", "/api/targets/me/du", nil},
+		{"GET", "/api/targets/me/disk?path=/", nil},
+		{"GET", "/api/targets/me/endpoints", nil},
+		{"GET", "/api/targets/me/firewall", nil},
+		{"GET", "/api/targets/me/diagnostics", nil},
+	} {
+		res := a.do(t, r.method, r.path, r.body)
+		var e struct{ Code, Hint string }
+		_ = json.NewDecoder(res.Body).Decode(&e)
+		if res.StatusCode != http.StatusConflict || e.Code != "local_unsupported" || e.Hint == "" {
+			t.Errorf("%s %s: %d %+v, want 409 local_unsupported with a hint", r.method, r.path, res.StatusCode, e)
+		}
+	}
+}
+```
+
+(Add `context` and `catalog` to that file's imports.)
+
+5. **Step 2 gains the implementation.**
+
+```go
+// internal/executor/shell.go
+package executor
+
+// RequireShell returns nil when e can run Run's `sh -c` commands, and an
+// error wrapping ErrNoPOSIXShell when it cannot. Only a local executor on a
+// machine with no POSIX shell (Windows) cannot: it still runs Docker through
+// RunArgv (spec D30), so it is constructed, and the routes that need a shell
+// ask this first.
+func RequireShell(e Executor) error {
+	if s, ok := e.(interface{ ShellError() error }); ok {
+		return s.ShellError()
+	}
+	return nil
+}
+```
+
+In `local.go`, add:
+
+```go
+// ShellError is nil when Run works here; see RequireShell.
+func (l *local) ShellError() error { return l.unsupported }
+```
+
+In `api.go`, add:
+
+```go
+// getShellExecutor is getExecutor for the routes whose work is shell
+// commands: node setup, services, disk, endpoints, firewall, diagnostics,
+// logs, the monitor and the VPN. A target whose executor cannot run a shell
+// (this computer, on Windows) is refused here with ErrNoPOSIXShell, which
+// writeExecutorError turns into 409 local_unsupported. Docker routes use
+// getExecutor: they run through RunArgv and need no shell.
+func (s *Server) getShellExecutor(t config.Target) (executor.Executor, error) {
+	ex, err := s.getExecutor(t)
+	if err != nil {
+		return nil, err
+	}
+	if err := executor.RequireShell(ex); err != nil {
+		return nil, fmt.Errorf("target %q: %w", t.ID, err)
+	}
+	return ex, nil
+}
+```
+
+Then make these switches:
+- `handleStartSetup`, `handleServiceAction`, `handleServiceClear`, `handleDiskUsage`, `handleEndpoints`, `handleFirewall` and `handleDiskFree`: replace `s.getExecutor(target)` with `s.getShellExecutor(target)`. Replace the `writeError(w, http.StatusBadGateway, err.Error())` that follows it with `writeExecutorError(w, err, http.StatusBadGateway)`.
+- `runDiagnostics` (`diag.go`), `bringUpOverlay` and `handleVPNServerDelete`: call `getShellExecutor`.
+- `handleDiagnostics`: map `runDiagnostics`'s error through `writeExecutorError(w, err, http.StatusBadGateway)`.
+- `getMonitor` and `getWatcher`: after `s.getExecutorLocked(entry, t)`, add `if err := executor.RequireShell(ex); err != nil { return nil, nil, fmt.Errorf("target %q: %w", t.ID, err) }`. Their HTTP callers map the error through `writeExecutorError(w, err, http.StatusBadGateway)`.
+- `vpnExecutor` and `hostExecutor` keep Task 13's change, now spelled `writeExecutorError(w, err, http.StatusInternalServerError)`. Each also calls `executor.RequireShell` on the executor it got, before returning it.
+- `writeExecutorError` writes `otherwise` instead of the fixed 500.
+
+Leave the Docker routes on `getExecutor`: everything in `containers.go`, `gateways.go` and `docker.go`.
+
+6. **Commit message:** `fix(server): refuse shell-needing routes clearly where there is no POSIX shell; trust installs on Fedora too`.
+
+Until Task 15 lands, construction still refuses a Windows local target, so these guards are unreachable on Windows; the fake exercises them. That is deliberate: Task 15 only removes the construction refusal.
+
+---
+
+### Task 15: Local Docker features on a Windows controller, without a shell
+
+Covers gap W5. Also covers W3's silent bind-mount crash loop, through `--mount` (D33), and makes the Windows-container message reachable (D35). Decisions: D29–D36.
+
+**Why argv, and not the Engine API or WSL (D29).** Every Docker operation jumpgate runs is already an argument vector: `DockerRun` builds the vector and then quotes it into a string only so that `sh -c` can split it again. Running that vector directly removes the shell and changes nothing else. The same `docker` CLI keeps doing the work, with the same contexts, `DOCKER_HOST`, credential helpers, `--platform` handling and BuildKit.
+- **The Engine API over `npipe:////./pipe/docker_engine` was rejected.** It would need either the Docker Go SDK (a new module dependency, which the Global Constraints forbid) or a hand-written client. That client would re-implement `docker run`'s flag semantics (`-p`, `host-gateway`, `--platform`), building from a git context, registry auth and context selection. It would also be a second Docker path that SSH targets never use.
+- **A WSL-backed executor was rejected** because Docker Desktop can run on Hyper-V without any WSL distro, and paths would need translating both ways.
+
+**Shell inventory.** Every shell construct the gateway and devnet paths use today, and what replaces it on the local machine. Over SSH, every row keeps today's string.
+
+| # | Where | Today (shell) | Local, after Task 15 |
+|---|---|---|---|
+| 1 | `ops.ProbeDocker` presence | `command -v docker` | argv `docker --version`; a missing program is exit 127 from `RunArgv` (`lookPathIn` fails) |
+| 2 | `ops.ProbeDocker` banner | `docker --version` | argv, same |
+| 3 | `ops.ProbeDocker` info | `docker info --format '{{.ServerVersion}}\|…'` (single quotes protect `{{`, `\|`) | argv `docker info --format {{.ServerVersion}}\|…`; no quoting needed |
+| 4 | `ops.EnginePlatform` host CPU | `command -p uname -m` | `LocalHost.NativeArch`: `/usr/bin/uname -m` or `/bin/uname -m` as argv on unix; `IsWow64Process2` on Windows |
+| 5 | `ops.readEmulation` | `docker version --format '{{.Server.Os}}/{{.Server.Arch}}'` | argv |
+| 6 | `ops.ImageExists` | `docker image inspect '<tag>' --format '{{.Id}}'` | argv |
+| 7 | `ops.BuildImage` | `docker 'build' …` (QuoteArgv) | argv |
+| 8 | `ops.DockerRun` (run, rm -f, stop, ps, inspect, network, exec, volume, port, start/stop/restart) | `docker 'a' 'b' …` | argv; `--filter name=^x$` and `{{json …}}` reach docker unquoted and unexpanded |
+| 9 | `setup` gateway `configPath` | `printf '%s\n' "$HOME"`, then `path.Join` | `LocalHost.HomeDir()` (`os.UserHomeDir`), then `filepath.Join` (`C:\Users\…` on Windows) |
+| 10 | `setup` `listenerProbe` (gateway and devnet port checks) | `{ ss -ltn \|\| netstat -an \|\| lsof … ; } \| grep -Ei '[:.]N…' \| grep -i listen` (braces, `\|\|`, pipes, redirects, a regex) | `LocalHost.DialContext` to `127.0.0.1:N` and `[::1]:N`, 500 ms each; a connection means a listener |
+| 11 | gateway readiness `probeCommand` | `curl -s --max-time 10 -X POST -H '…' --data '…' [--resolve '…'] [--cacert '…'] '<url>' \|\| <same without --cacert>` | `ops.HTTPProbe.Do`: `net/http` dialled through `LocalHost`; `--resolve` becomes a dial override, `--cacert` becomes `RootCAs` read with `e.ReadFile`, and `\|\|` becomes one retry with system roots |
+| 12 | devnet readiness `rpcCall` | `curl -s -X POST -H '…' --data '…' '<url>'` | `ops.HTTPProbe.Do` |
+| 13 | traffic `ReadGatewaySamples` | `curl -s --max-time N '<url>'` | `ops.HTTPProbe.Do` (GET) |
+| 14 | `exportRootCA` | `docker 'exec' '<c>' 'cat' '<path>'` (the shell is only transport; `cat` runs inside the Linux container) | argv; `cat` still runs in the container |
+| 15 | erpc.yaml, Caddyfile and root CA files | `e.WriteFile` and `e.ReadFile` (the local executor already uses `os`; no shell) | unchanged, but no longer refused on Windows |
+| 16 | systemd backend: `uname`, `id -u`, `chgrp`, `systemctl … && …` | shell | unchanged; on a shell-less executor preflight refuses first, naming the docker backend |
+| 17 | trust-cert: `uname`, `id -u`, `TrustVerifyCommand`, `install.Command` | shell | unchanged; Windows is answered with the elevated-prompt command to run by hand (no execution) |
+| 18 | `POST /api/docker/start` | `open -a Docker \|\| open -a OrbStack` | unchanged (macOS only); Windows auto-start is deferred (D36) |
+
+**Files:**
+- Create: `internal/executor/argv.go`, `argv_test.go`, `lookpath.go`, `lookpath_test.go`, `lookpath_windows_test.go`, `nativearch_unix.go`, `nativearch_windows.go`, `internal/executor/argvfake/argvfake.go`, `argvfake_test.go`, `internal/ops/httpprobe.go`, `httpprobe_test.go`, `internal/ops/mount.go`, `mount_test.go`, `internal/setup/targetpath.go`, `targetpath_test.go`, `listeners.go`, `listeners_test.go`, `shellless_test.go`, `docker_live_test.go`, `scripts/windows-docker-smoke.ps1`
+- Modify: `internal/executor/local.go`, `local_test.go`, `localenv_test.go`, `internal/ops/docker.go`, `lifecycle.go`, `docker_test.go:33,412-426,999,1073`, `internal/setup/gateway.go`, `devnet.go`, `traffic.go`, `gateway_test.go:519`, `internal/server/api.go`, `docker.go`, `containers.go`, `gateways.go`, `docker_test.go`, `.github/workflows/ci.yml`
+
+**Interfaces:**
+- Consumes (amended Task 13): `executor.RequireShell`, `(*local).ShellError`, `writeExecutorError(w, err, otherwise)`. Consumes (Task 1): `testutil.RequireUnix`.
+- Produces (package `executor`):
+  - `type ArgvRunner interface { RunArgv(ctx context.Context, argv []string, opts *RunOpts) (Result, error) }`
+  - `type LocalHost interface { HostGOOS() string; HomeDir() (string, error); NativeArch(ctx context.Context) string; DialContext(ctx context.Context, network, addr string) (net.Conn, error) }`
+  - `type Command struct { Argv []string; Shell string }`
+  - `func Exec(ctx context.Context, e Executor, c Command, opts *RunOpts) (Result, error)`
+  - `func QuoteArgv(argv []string) string`
+  - `*local` implements `ArgvRunner` and `LocalHost` on every OS.
+- Produces (package `argvfake`): `func New() *Fake`; `(*Fake).Script(prefix string, res executor.Result) *Fake`; `(*Fake).Route(addr, to string) *Fake`; the fields `GOOS`, `Home`, `Arch`, `Files`; and `(*Fake).Argvs() [][]string`, `(*Fake).ShellCalls() []string`.
+- Produces (package `ops`):
+  - `type HTTPProbe struct { URL, Body, Resolve, CAFile string; MaxTime time.Duration }`
+  - `func (p HTTPProbe) CurlCommand() string`
+  - `func (p HTTPProbe) Do(ctx context.Context, e executor.Executor) (string, error)`
+  - `type ProbeError struct{ Detail string }`
+  - `func (d DockerInfo) WindowsContainersHint() string`
+  - `func bindMount(src, dst string) string` (unexported; used by `ERPCRunArgs` and `CaddyRunArgs`)
+- Produces (package `setup`): `homeOn`, `joinOn`, `dirOn`, `probeListeners(ctx, e, port int) (string, error)`.
+- Produces (package `server`): `dockerStatusResponse.WindowsContainers bool` (`json:"windowsContainers,omitempty"`).
+
+- [ ] **Step 1: Write the failing executor tests**
+
+```go
+// internal/executor/argv_test.go
+package executor
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
+)
+
+// The shell form of an argv must stay byte-identical to the string
+// ops.DockerRun built before Task 15, so an SSH target, and every test fake
+// keyed on those strings, sees no change.
+func TestQuoteArgvMatchesTheHistoricDockerRunString(t *testing.T) {
+	got := QuoteArgv([]string{"docker", "inspect", "-f", "{{.State.Running}}", "it's"})
+	want := `docker 'inspect' '-f' '{{.State.Running}}' 'it'\''s'`
+	if got != want {
+		t.Fatalf("QuoteArgv = %s\nwant       %s", got, want)
+	}
+}
+
+type shellOnly struct{ ran string }
+
+func (s *shellOnly) Run(_ context.Context, cmd string, _ *RunOpts) (Result, error) {
+	s.ran = cmd
+	return Result{}, nil
+}
+func (*shellOnly) WriteFile(context.Context, string, []byte, fs.FileMode) error { return nil }
+func (*shellOnly) ReadFile(context.Context, string) ([]byte, error)           { return nil, nil }
+func (*shellOnly) Close() error                                               { return nil }
+
+type argvToo struct {
+	shellOnly
+	argv []string
+}
+
+func (a *argvToo) RunArgv(_ context.Context, argv []string, _ *RunOpts) (Result, error) {
+	a.argv = argv
+	return Result{}, nil
+}
+
+func TestExecPrefersArgvAndKeepsTheShellFormForOthers(t *testing.T) {
+	ctx := context.Background()
+	c := Command{Argv: []string{"docker", "info", "--format", "{{.OSType}}"}, Shell: "docker info --format '{{.OSType}}'"}
+
+	sh := &shellOnly{}
+	if _, err := Exec(ctx, sh, c, nil); err != nil || sh.ran != c.Shell {
+		t.Fatalf("shell executor ran %q (%v), want %q", sh.ran, err, c.Shell)
+	}
+	av := &argvToo{}
+	if _, err := Exec(ctx, av, c, nil); err != nil || strings.Join(av.argv, "|") != "docker|info|--format|{{.OSType}}" || av.ran != "" {
+		t.Fatalf("argv executor got argv %q and shell %q (%v)", av.argv, av.ran, err)
+	}
+	sh2 := &shellOnly{}
+	if _, _ = Exec(ctx, sh2, Command{Argv: []string{"docker", "ps"}}, nil); sh2.ran != "docker 'ps'" {
+		t.Fatalf("no Shell given: ran %q, want the quoted argv", sh2.ran)
+	}
+}
+
+// TestHelperProcess is not a test. The RunArgv tests start this test binary
+// as a plain program, which works on every OS (no sh, no echo.exe).
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("JUMPGATE_HELPER_PROCESS") != "1" {
+		return
+	}
+	fmt.Println("argv:" + strings.Join(os.Args[len(os.Args)-2:], "|"))
+	os.Exit(3)
+}
+
+func helperArgv(a, b string) []string {
+	return []string{os.Args[0], "-test.run=^TestHelperProcess$", "--", a, b}
+}
+
+func TestLocal_RunArgvStartsTheProgramWithoutAShell(t *testing.T) {
+	t.Setenv("JUMPGATE_HELPER_PROCESS", "1")
+	res, err := (&local{}).RunArgv(context.Background(), helperArgv("a b", "it's"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 3 || strings.TrimSpace(res.Stdout) != "argv:a b|it's" {
+		t.Fatalf("exit %d stdout %q: want exit 3 and the arguments untouched by any shell", res.ExitCode, res.Stdout)
+	}
+}
+
+// A program that is not there reads the way `sh -c` reports it (exit 127),
+// so ProbeDocker's absence check is one branch for both forms.
+func TestLocal_RunArgvMissingProgramReadsLikeTheShell(t *testing.T) {
+	res, err := (&local{}).RunArgv(context.Background(), []string{"jumpgate-no-such-program"}, nil)
+	if err != nil || res.ExitCode != 127 || !strings.Contains(res.Stderr, "not found") {
+		t.Fatalf("got %+v, %v; want exit 127 with a not-found stderr", res, err)
+	}
+}
+
+// Windows, after Task 15: Run is refused, everything Docker needs works.
+// This replaces TestLocal_UnsupportedHostFailsEveryCall (spec D30).
+func TestLocal_ShellLessHostRefusesOnlyTheShell(t *testing.T) {
+	t.Setenv("JUMPGATE_HELPER_PROCESS", "1")
+	ctx := context.Background()
+	e := &local{unsupported: localShellError("windows")}
+
+	if _, err := e.Run(ctx, "echo hi", nil); !errors.Is(err, ErrNoPOSIXShell) {
+		t.Errorf("Run: %v, want ErrNoPOSIXShell", err)
+	}
+	if err := RequireShell(e); !errors.Is(err, ErrNoPOSIXShell) {
+		t.Errorf("RequireShell: %v, want ErrNoPOSIXShell", err)
+	}
+	if res, err := e.RunArgv(ctx, helperArgv("x", "y"), nil); err != nil || res.ExitCode != 3 {
+		t.Errorf("RunArgv: %+v, %v; want the program to run", res, err)
+	}
+	p := filepath.Join(t.TempDir(), "erpc.yaml")
+	if err := e.WriteFile(ctx, p, []byte("a: 1\n"), 0o644); err != nil {
+		t.Errorf("WriteFile: %v", err)
+	}
+	if got, err := e.ReadFile(ctx, p); err != nil || string(got) != "a: 1\n" {
+		t.Errorf("ReadFile: %q, %v", got, err)
+	}
+	if h, err := e.HomeDir(); err != nil || h == "" {
+		t.Errorf("HomeDir: %q, %v", h, err)
+	}
+	if e.HostGOOS() != runtime.GOOS {
+		t.Errorf("HostGOOS = %q", e.HostGOOS())
+	}
+}
+
+// exec.Command resolves a bare name against this process's PATH, before
+// c.Env applies, so the dirs localEnv adds would never be searched.
+// lookPathIn takes the PATH to search.
+func TestLookPathInSearchesTheGivenPathNotTheProcessPath(t *testing.T) {
+	testutil.RequireUnix(t)
+	dir := t.TempDir()
+	p := filepath.Join(dir, "docker")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/nonexistent")
+	if got, err := lookPathIn("docker", dir, runtime.GOOS, ""); err != nil || got != p {
+		t.Fatalf("lookPathIn = %q, %v; want %q", got, err, p)
+	}
+	if err := os.Chmod(p, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lookPathIn("docker", dir, runtime.GOOS, ""); !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("a non-executable file: %v, want exec.ErrNotFound", err)
+	}
+}
+```
+
+```go
+// internal/executor/lookpath_windows_test.go
+package executor
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestLookPathInHonoursPATHEXT(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "docker.exe")
+	if err := os.WriteFile(p, []byte("MZ"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := lookPathIn("docker", dir, "windows", ".COM;.EXE")
+	if err != nil || !strings.EqualFold(got, p) {
+		t.Fatalf("lookPathIn = %q, %v; want %q", got, err, p)
+	}
+}
+```
+
+Append to `internal/executor/localenv_test.go`:
+
+```go
+// An Explorer-started jumpgate-tray.exe inherits the PATH of the login
+// session. If Docker Desktop was installed after login, its CLI dir is not
+// on that PATH, so localEnv appends it, the same way it appends Homebrew on
+// macOS. Windows spells the variable "Path" and separates entries with ";".
+func TestLocalEnvAddsDockerDesktopOnWindows(t *testing.T) {
+	env := localEnv([]string{`Path=C:\Windows\system32`, `ProgramFiles=C:\Program Files`}, "windows", `C:\Users\dev`)
+	want := `Path=C:\Windows\system32;C:\Program Files\Docker\Docker\resources\bin`
+	if env[0] != want {
+		t.Fatalf("got %q\nwant %q", env[0], want)
+	}
+}
+```
+
+Delete `TestLocal_UnsupportedHostFailsEveryCall` from `local_test.go`; `TestLocal_ShellLessHostRefusesOnlyTheShell` replaces it.
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `go test ./internal/executor/`
+Expected: FAIL to compile: `undefined: QuoteArgv`, `Command`, `Exec`, `lookPathIn`; `e.RunArgv undefined`.
+
+- [ ] **Step 3: Implement the executor side**
+
+```go
+// internal/executor/argv.go
+package executor
+
+import (
+	"context"
+	"net"
+	"strings"
+)
+
+// ArgvRunner is implemented by an executor that can start a program directly
+// from an argument vector, with no shell in between. The local executor is
+// one, on every OS: that is how a Windows controller runs docker, with no sh
+// to hand a command string to (spec D29). The SSH executor is not one,
+// because a remote command is a string the far side's shell parses.
+type ArgvRunner interface {
+	RunArgv(ctx context.Context, argv []string, opts *RunOpts) (Result, error)
+}
+
+// LocalHost is implemented by the local executor. Each method answers a
+// question a caller would otherwise put to the target's shell (`printf
+// "$HOME"`, `uname -m`, `ss`, `curl`), read from this process instead, so the
+// answer does not depend on a shell existing.
+type LocalHost interface {
+	// HostGOOS is runtime.GOOS: whose path rules this target's files follow.
+	HostGOOS() string
+	// HomeDir is the current user's home directory (os.UserHomeDir).
+	HomeDir() (string, error)
+	// NativeArch is the machine's CPU as `uname -m` or GOARCH spells it
+	// (ops.PlatformForArch reads both), or "" when it cannot be read.
+	NativeArch(ctx context.Context) string
+	// DialContext connects from this machine, as net.Dialer does.
+	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+// Command is one program run, in both forms an executor may need.
+type Command struct {
+	// Argv is the program and its arguments, for an ArgvRunner.
+	Argv []string
+	// Shell is the `sh -c` form for every other executor. Empty means
+	// QuoteArgv(Argv). It is set where an existing probe string must stay
+	// byte-identical for SSH targets and the tests that know it.
+	Shell string
+}
+
+// Exec runs c on e: as argv when e can start programs directly, otherwise
+// as a shell string. A caller writes one call, and gets the shell-free path
+// on the local machine and the unchanged shell path over SSH.
+func Exec(ctx context.Context, e Executor, c Command, opts *RunOpts) (Result, error) {
+	if a, ok := e.(ArgvRunner); ok && len(c.Argv) > 0 {
+		return a.RunArgv(ctx, c.Argv, opts)
+	}
+	cmd := c.Shell
+	if cmd == "" {
+		cmd = QuoteArgv(c.Argv)
+	}
+	return e.Run(ctx, cmd, opts)
+}
+
+// QuoteArgv renders argv as a shell command: the program name as is, then
+// every argument single-quoted. It is byte-identical to the string
+// ops.DockerRun has always built ('\'' escaping, not ssh.go's '"'"'), so a
+// shell target sees no change.
+func QuoteArgv(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(argv))
+	parts = append(parts, argv[0])
+	for _, a := range argv[1:] {
+		parts = append(parts, "'"+strings.ReplaceAll(a, "'", `'\''`)+"'")
+	}
+	return strings.Join(parts, " ")
+}
+```
+
+```go
+// internal/executor/lookpath.go
+package executor
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+// lookPathIn is exec.LookPath against a given PATH rather than this
+// process's own. exec.Command resolves a bare name with os.Getenv("PATH")
+// when it is constructed, before c.Env applies. Without this, the dirs
+// localEnv adds (Docker Desktop's CLI dir for an app started from Finder or
+// Explorer) would never be searched.
+func lookPathIn(name, pathList, goos, pathext string) (string, error) {
+	if strings.ContainsAny(name, `/\`) {
+		return name, nil
+	}
+	sep, exts := ":", []string{""}
+	if goos == "windows" {
+		sep, exts = ";", nil
+		if filepath.Ext(name) != "" {
+			exts = append(exts, "")
+		}
+		if pathext == "" {
+			pathext = ".COM;.EXE;.BAT;.CMD"
+		}
+		for _, e := range strings.Split(pathext, ";") {
+			if e != "" {
+				exts = append(exts, strings.ToLower(e))
+			}
+		}
+	}
+	for _, dir := range strings.Split(pathList, sep) {
+		if dir == "" {
+			continue
+		}
+		for _, ext := range exts {
+			p := filepath.Join(dir, name+ext)
+			fi, err := os.Stat(p)
+			if err != nil || !fi.Mode().IsRegular() {
+				continue
+			}
+			if goos == "windows" || fi.Mode()&0o111 != 0 {
+				return p, nil
+			}
+		}
+	}
+	return "", exec.ErrNotFound
+}
+```
+
+```go
+// internal/executor/nativearch_unix.go
+//go:build !windows
+
+package executor
+
+import (
+	"context"
+	"strings"
+)
+
+// nativeArch asks the system's own uname, at a fixed path, never one found
+// on PATH. A Homebrew GNU uname is itself an x86_64 binary on an Apple
+// Silicon Mac and reports x86_64; ops.unameArchProbe documents that
+// measured failure. /bin/uname covers distros without a merged /usr.
+func nativeArch(ctx context.Context, l *local) string {
+	for _, p := range []string{"/usr/bin/uname", "/bin/uname"} {
+		if res, err := l.RunArgv(ctx, []string{p, "-m"}, nil); err == nil && res.ExitCode == 0 {
+			return strings.TrimSpace(res.Stdout)
+		}
+	}
+	return ""
+}
+```
+
+```go
+// internal/executor/nativearch_windows.go
+package executor
+
+import (
+	"context"
+
+	"golang.org/x/sys/windows"
+)
+
+// IMAGE_FILE_MACHINE_* values IsWow64Process2 reports.
+const (
+	imageFileMachineAMD64 = 0x8664
+	imageFileMachineARM64 = 0xAA64
+)
+
+// nativeArch asks Windows for the machine's own architecture. An amd64
+// jumpgate on Windows on Arm runs emulated, and runtime.GOARCH would say
+// amd64, which is the same lie Rosetta tells on a Mac.
+func nativeArch(context.Context, *local) string {
+	var proc, native uint16
+	if err := windows.IsWow64Process2(windows.CurrentProcess(), &proc, &native); err != nil {
+		return ""
+	}
+	switch native {
+	case imageFileMachineAMD64:
+		return "amd64"
+	case imageFileMachineARM64:
+		return "arm64"
+	}
+	return ""
+}
+```
+
+In `internal/executor/local.go`:
+
+1. Move everything in `Run` after the `exec.CommandContext(…)` and `c.Env` lines into `func (l *local) start(ctx context.Context, c *exec.Cmd, opts *RunOpts) (Result, error)`. `Run` becomes the refusal check, `c := exec.CommandContext(ctx, "sh", "-c", cmd)`, `c.Env = localEnv(os.Environ(), runtime.GOOS, os.Getenv("HOME"))`, then `return l.start(ctx, c, opts)`.
+2. Add:
+
+```go
+// RunArgv starts argv[0] directly, with no shell, on every OS (spec D29).
+// A program that is not on PATH comes back as exit 127 with a "not found"
+// stderr, which is the reading `sh -c` gives, so callers branch on one shape.
+func (l *local) RunArgv(ctx context.Context, argv []string, opts *RunOpts) (Result, error) {
+	if len(argv) == 0 {
+		return Result{}, errors.New("executor: RunArgv: empty argv")
+	}
+	env := localEnv(os.Environ(), runtime.GOOS, os.Getenv("HOME"))
+	prog, err := lookPathIn(argv[0], envValue(env, "PATH", runtime.GOOS), runtime.GOOS, envValue(env, "PATHEXT", runtime.GOOS))
+	if err != nil {
+		return Result{ExitCode: 127, Stderr: argv[0] + ": not found on PATH\n"}, nil
+	}
+	c := exec.CommandContext(ctx, prog, argv[1:]...)
+	c.Env = env
+	return l.start(ctx, c, opts)
+}
+
+// The LocalHost facts (see argv.go).
+func (l *local) HostGOOS() string                       { return runtime.GOOS }
+func (l *local) HomeDir() (string, error)               { return os.UserHomeDir() }
+func (l *local) NativeArch(ctx context.Context) string { return nativeArch(ctx, l) }
+func (l *local) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, network, addr)
+}
+
+// envValue reads key from env, ignoring case on Windows, where the
+// variable is usually spelled "Path".
+func envValue(env []string, key, goos string) string {
+	for _, kv := range env {
+		k, v, ok := strings.Cut(kv, "=")
+		if ok && (k == key || (goos == "windows" && strings.EqualFold(k, key))) {
+			return v
+		}
+	}
+	return ""
+}
+```
+
+3. Remove the `l.unsupported` checks from `WriteFile` and `ReadFile`. Rewrite the doc comment on the `unsupported` field: "non-nil when this machine has no POSIX shell. Run refuses with it; RunArgv, the files and the LocalHost facts do not need a shell and keep working (spec D30). RequireShell exposes it to the routes that need a shell."
+4. Reword `localShellError`'s message to: `"%w, which %s does not provide: node setup, services, logs and the VPN need a Linux machine added over SSH; the Docker gateway and devnet do run here"`.
+5. Update `localEnv`, `guiPathDirs` and `appendMissingDirs` for Windows:
+   - Match the PATH key with `strings.EqualFold` when `goos == "windows"`.
+   - Use `;` as the separator on Windows and `:` elsewhere; `appendMissingDirs` takes it as a parameter.
+   - `guiPathDirs("windows", …)` returns `[]string{programFiles + `\Docker\Docker\resources\bin`}`, where `programFiles` is the `ProgramFiles` value read from `env` with `envValue`. Build it by string concatenation, so the test holds on any host OS. Return nil when `ProgramFiles` is unset.
+   - `guiPathDirs` gains an `env []string` parameter, and `localEnv` passes its own.
+
+Then create `internal/executor/argvfake/argvfake.go`:
+
+```go
+// Package argvfake is a test double for the local executor on a machine with
+// no POSIX shell: a Windows controller. Run fails the way the real one does
+// there and records the attempt, so a test can assert a whole plan never
+// needed a shell. RunArgv answers from scripts, files live in memory, the
+// LocalHost facts are fixed, and DialContext reaches only addresses a test
+// routed. It is a non-test package so the ops, setup and server tests can
+// share it; nothing outside tests imports it.
+package argvfake
+
+import (
+	"context"
+	"fmt"
+	"io/fs"
+	"net"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+	"syscall"
+
+	"github.com/valve-tech/jumpgate/internal/executor"
+)
+
+type Fake struct {
+	GOOS, Home, Arch string
+	Files            map[string][]byte
+
+	mu      sync.Mutex
+	scripts map[string]executor.Result
+	routes  map[string]string
+	argvs   [][]string
+	shell   []string
+}
+
+// New is a Windows controller: GOOS "windows", home C:\Users\dev, amd64.
+func New() *Fake {
+	return &Fake{GOOS: "windows", Home: `C:\Users\dev`, Arch: "amd64",
+		Files: map[string][]byte{}, scripts: map[string]executor.Result{}, routes: map[string]string{}}
+}
+
+// Script answers every argv whose space-joined form starts with prefix; the
+// longest matching prefix wins. Unscripted argvs succeed with no output.
+func (f *Fake) Script(prefix string, res executor.Result) *Fake {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scripts[prefix] = res
+	return f
+}
+
+// Route makes DialContext to addr connect to "to" (an httptest listener)
+// instead. Every other address refuses, as a free port does.
+func (f *Fake) Route(addr, to string) *Fake {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.routes[addr] = to
+	return f
+}
+
+func (f *Fake) Argvs() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]string(nil), f.argvs...)
+}
+
+func (f *Fake) ShellCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.shell...)
+}
+
+func (f *Fake) shellErr() error {
+	return fmt.Errorf("%w, which %s does not provide", executor.ErrNoPOSIXShell, f.GOOS)
+}
+
+func (f *Fake) Run(_ context.Context, cmd string, _ *executor.RunOpts) (executor.Result, error) {
+	f.mu.Lock()
+	f.shell = append(f.shell, cmd)
+	f.mu.Unlock()
+	return executor.Result{}, f.shellErr()
+}
+
+func (f *Fake) ShellError() error { return f.shellErr() }
+
+func (f *Fake) RunArgv(_ context.Context, argv []string, opts *executor.RunOpts) (executor.Result, error) {
+	joined := strings.Join(argv, " ")
+	f.mu.Lock()
+	f.argvs = append(f.argvs, append([]string(nil), argv...))
+	keys := make([]string, 0, len(f.scripts))
+	for k := range f.scripts {
+		if strings.HasPrefix(joined, k) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool { return len(keys[i]) > len(keys[j]) })
+	res := executor.Result{}
+	if len(keys) > 0 {
+		res = f.scripts[keys[0]]
+	}
+	f.mu.Unlock()
+	if opts != nil && opts.Stream != nil {
+		for _, line := range strings.Split(strings.TrimRight(res.Stdout, "\n"), "\n") {
+			if line != "" {
+				opts.Stream(line)
+			}
+		}
+	}
+	return res, nil
+}
+
+func (f *Fake) WriteFile(_ context.Context, path string, content []byte, _ fs.FileMode) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Files[path] = append([]byte(nil), content...)
+	return nil
+}
+
+func (f *Fake) ReadFile(_ context.Context, path string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.Files[path]
+	if !ok {
+		return nil, &fs.PathError{Op: "open", Path: path, Err: os.ErrNotExist}
+	}
+	return b, nil
+}
+
+func (f *Fake) Close() error                              { return nil }
+func (f *Fake) HostGOOS() string                          { return f.GOOS }
+func (f *Fake) HomeDir() (string, error)                  { return f.Home, nil }
+func (f *Fake) NativeArch(context.Context) string         { return f.Arch }
+
+func (f *Fake) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	f.mu.Lock()
+	to, ok := f.routes[addr]
+	f.mu.Unlock()
+	if !ok {
+		return nil, &net.OpError{Op: "dial", Net: network, Err: syscall.ECONNREFUSED}
+	}
+	var d net.Dialer
+	return d.DialContext(ctx, network, to)
+}
+
+var (
+	_ executor.Executor   = (*Fake)(nil)
+	_ executor.ArgvRunner = (*Fake)(nil)
+	_ executor.LocalHost  = (*Fake)(nil)
+)
+```
+
+`argvfake_test.go` checks the longest-prefix rule and that `Run` is recorded and refused:
+
+```go
+package argvfake
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/executor"
+)
+
+func TestFakeRefusesTheShellAndAnswersArgvByLongestPrefix(t *testing.T) {
+	f := New().Script("docker", executor.Result{Stdout: "short"}).Script("docker info", executor.Result{Stdout: "long"})
+	if res, _ := f.RunArgv(context.Background(), []string{"docker", "info", "--format", "x"}, nil); res.Stdout != "long" {
+		t.Fatalf("got %q, want the longest prefix's answer", res.Stdout)
+	}
+	if _, err := f.Run(context.Background(), "uname", nil); !errors.Is(err, executor.ErrNoPOSIXShell) || len(f.ShellCalls()) != 1 {
+		t.Fatalf("Run: %v, calls %v", err, f.ShellCalls())
+	}
+}
+```
+
+- [ ] **Step 4: Run the executor tests**
+
+Run: `go test ./internal/executor/... && GOOS=windows go vet ./internal/executor/...`
+Expected: PASS, and vet clean for Windows (`nativearch_windows.go` compiles).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/executor
+git commit -m "feat(executor): run programs from argv without a shell; local host facts; a shell-less test double
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 6: Write the failing ops tests**
+
+```go
+// internal/ops/argv_test.go
+package ops
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor/argvfake"
+)
+
+// On the local machine docker runs as argv, and nothing reaches a shell.
+func TestDockerRun_UsesArgvOnAShellLessExecutor(t *testing.T) {
+	f := argvfake.New()
+	if _, err := DockerRun(context.Background(), f, "ps", "-a", "--filter", "name=^x$", "--format", "{{.Names}}"); err != nil {
+		t.Fatal(err)
+	}
+	got := f.Argvs()
+	if len(got) != 1 || strings.Join(got[0], "|") != "docker|ps|-a|--filter|name=^x$|--format|{{.Names}}" {
+		t.Fatalf("argv %q", got)
+	}
+	if len(f.ShellCalls()) != 0 {
+		t.Fatalf("shell used: %q", f.ShellCalls())
+	}
+}
+
+func TestProbeDocker_OverArgvReadsTheEngine(t *testing.T) {
+	f := argvfake.New().
+		Script("docker --version", executor.Result{Stdout: "Docker version 27.4.0, build bde2b89\n"}).
+		Script("docker info --format", executor.Result{Stdout: "27.4.0|linux|x86_64|docker-desktop|Docker Desktop\n"})
+	info, err := ProbeDocker(context.Background(), f)
+	if err != nil || !info.DaemonReachable || info.Flavor != FlavorDockerDesktop || info.OSType != "linux" {
+		t.Fatalf("got %+v, %v", info, err)
+	}
+	for _, a := range f.Argvs() {
+		if strings.Contains(strings.Join(a, " "), "'") {
+			t.Fatalf("argv %q carries shell quoting", a)
+		}
+	}
+}
+
+func TestProbeDocker_OverArgvAbsentIsTyped(t *testing.T) {
+	f := argvfake.New().Script("docker --version", executor.Result{ExitCode: 127, Stderr: "docker: not found on PATH\n"})
+	_, err := ProbeDocker(context.Background(), f)
+	if !errors.Is(err, ErrDockerAbsent) {
+		t.Fatalf("got %v, want ErrDockerAbsent", err)
+	}
+}
+
+func TestEnginePlatform_UsesTheLocalHostsNativeArch(t *testing.T) {
+	f := argvfake.New()
+	f.Arch = "arm64"
+	info := DockerInfo{Architecture: "x86_64", Flavor: FlavorDockerDesktop}
+	if got := EnginePlatform(context.Background(), f, info); got != "linux/arm64" {
+		t.Fatalf("got %q, want the host's reading on a VM-backed engine", got)
+	}
+}
+
+// Docker Desktop can switch to Linux containers; Docker Engine on Windows
+// Server cannot, and must not be told to look for a menu it does not have.
+func TestWindowsContainersHintNamesTheRightFix(t *testing.T) {
+	desktop := DockerInfo{OSType: "windows", Flavor: FlavorDockerDesktop}.WindowsContainersHint()
+	server := DockerInfo{OSType: "windows", Flavor: FlavorDockerEngine}.WindowsContainersHint()
+	if !strings.Contains(desktop, "Switch to Linux containers") {
+		t.Errorf("Docker Desktop hint %q does not name the switch", desktop)
+	}
+	if strings.Contains(server, "Switch to") || !strings.Contains(server, "Windows containers only") || !strings.Contains(server, "--ssh") {
+		t.Errorf("Windows Server hint %q", server)
+	}
+	for _, h := range []string{desktop, server} {
+		if !strings.Contains(h, "Linux containers") {
+			t.Errorf("hint %q lacks \"Linux containers\", which the preflight tests and the CI job look for", h)
+		}
+	}
+}
+
+// Docker Desktop in Windows-container mode answers `docker info` with the
+// Windows daemon's own details, which say nothing about Desktop. The local
+// machine recognises Desktop by its installed program instead.
+func TestProbeDocker_RecognisesDockerDesktopInWindowsMode(t *testing.T) {
+	old := dockerDesktopInstalled
+	dockerDesktopInstalled = func() bool { return true }
+	t.Cleanup(func() { dockerDesktopInstalled = old })
+	f := argvfake.New().Script("docker info --format", executor.Result{Stdout: "27.4.0|windows|x86_64|DEV-PC|Microsoft Windows 11 Pro\n"})
+	info, err := ProbeDocker(context.Background(), f)
+	if err != nil || !info.WindowsContainers() || info.Flavor != FlavorDockerDesktop {
+		t.Fatalf("got %+v, %v", info, err)
+	}
+}
+```
+
+```go
+// internal/ops/mount_test.go
+package ops
+
+import (
+	"encoding/csv"
+	"strings"
+	"testing"
+)
+
+// docker reads --mount as one CSV record, so a comma or quote in a path
+// must be quoted. A Windows path's drive-letter colon needs nothing.
+func TestBindMountQuotesAPathWithACommaOrQuote(t *testing.T) {
+	for _, src := range []string{`C:\Users\dev\.valve-node-app\erpc.yaml`, `C:\Users\Ann, B\.valve-node-app\erpc.yaml`, `/home/o'neil/x.yaml`, `/Users/a "b"/x.yaml`} {
+		got := bindMount(src, "/erpc.yaml")
+		rec, err := csv.NewReader(strings.NewReader(got)).Read()
+		if err != nil {
+			t.Fatalf("%q: not one CSV record: %v", got, err)
+		}
+		want := []string{"type=bind", "source=" + src, "target=/erpc.yaml", "readonly"}
+		if strings.Join(rec, "\x00") != strings.Join(want, "\x00") {
+			t.Fatalf("%q parsed as %q, want %q", got, rec, want)
+		}
+	}
+}
+
+func TestERPCRunArgsMountsTheConfigFile(t *testing.T) {
+	args := ERPCRunArgs(ERPCRunSpec{HostConfigPath: `C:\Users\dev\.valve-node-app\erpc.yaml`, Platform: "linux/amd64"})
+	if got := valueAfter(t, args, "--mount"); got != `type=bind,source=C:\Users\dev\.valve-node-app\erpc.yaml,target=/erpc.yaml,readonly` {
+		t.Fatalf("--mount %q", got)
+	}
+	for _, a := range args {
+		if a == "-v" {
+			t.Fatalf("a file bind still uses -v: %q", args)
+		}
+	}
+}
+```
+
+```go
+// internal/ops/httpprobe_test.go
+package ops
+
+import (
+	"context"
+	"encoding/pem"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/valve-tech/jumpgate/internal/executor/argvfake"
+)
+
+// The shell forms are the strings gateway.go, devnet.go and traffic.go built
+// by hand before Task 15. SSH targets and the existing fakes see them
+// unchanged.
+func TestHTTPProbeCurlCommandIsTheHistoricString(t *testing.T) {
+	body := `{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}`
+	for _, tc := range []struct {
+		p    HTTPProbe
+		want string
+	}{
+		{HTTPProbe{URL: "http://127.0.0.1:4000/main/evm/1", Body: body, MaxTime: 10 * time.Second},
+			`curl -s --max-time 10 -X POST -H 'Content-Type: application/json' --data '` + body + `' 'http://127.0.0.1:4000/main/evm/1'`},
+		{HTTPProbe{URL: "http://127.0.0.1:8545", Body: body},
+			`curl -s -X POST -H 'Content-Type: application/json' --data '` + body + `' 'http://127.0.0.1:8545'`},
+		{HTTPProbe{URL: "http://127.0.0.1:4001/metrics", MaxTime: 5 * time.Second},
+			`curl -s --max-time 5 'http://127.0.0.1:4001/metrics'`},
+		{HTTPProbe{URL: "https://rpc.lan:8443/main/evm/1", Body: body, MaxTime: 10 * time.Second, Resolve: "rpc.lan:8443:127.0.0.1", CAFile: "/h/ca.crt"},
+			`curl -s --max-time 10 -X POST -H 'Content-Type: application/json' --data '` + body + `' --resolve 'rpc.lan:8443:127.0.0.1' --cacert '/h/ca.crt' 'https://rpc.lan:8443/main/evm/1'` +
+				` || curl -s --max-time 10 -X POST -H 'Content-Type: application/json' --data '` + body + `' --resolve 'rpc.lan:8443:127.0.0.1' 'https://rpc.lan:8443/main/evm/1'`},
+	} {
+		if got := tc.p.CurlCommand(); got != tc.want {
+			t.Errorf("CurlCommand:\n got %s\nwant %s", got, tc.want)
+		}
+	}
+}
+
+// Local: in process, the name resolved to the given address, the CA read
+// with e.ReadFile, and no shell.
+func TestHTTPProbeDoLocalResolvesAndTrustsTheCAFile(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" || string(b) != `{"q":1}` {
+			http.Error(w, "bad request", 400)
+			return
+		}
+		_, _ = w.Write([]byte(`{"result":"0x171"}`))
+	}))
+	defer ts.Close()
+	f := argvfake.New()
+	f.Files["/h/ca.crt"] = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ts.Certificate().Raw})
+	addr := strings.TrimPrefix(ts.URL, "https://")
+	// httptest's certificate is valid for example.com; resolve it to the server.
+	f.Route("127.0.0.1:8443", addr)
+	p := HTTPProbe{URL: "https://example.com:8443/x", Body: `{"q":1}`, Resolve: "example.com:8443:127.0.0.1", CAFile: "/h/ca.crt", MaxTime: 5 * time.Second}
+	got, err := p.Do(context.Background(), f)
+	if err != nil || got != `{"result":"0x171"}` {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if len(f.ShellCalls()) != 0 {
+		t.Fatalf("shell used: %q", f.ShellCalls())
+	}
+}
+
+// curl's `--cacert X || plain` fallback: a CA file that does not sign the
+// server's certificate is retried once against the system roots. Neither
+// signs httptest's certificate here, so the result is one ProbeError naming
+// the TLS failure, not a panic or a hang.
+func TestHTTPProbeDoLocalFallsBackToSystemRootsThenReportsTheTLSFailure(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	defer ts.Close()
+	f := argvfake.New()
+	other := httptest.NewTLSServer(http.NotFoundHandler())
+	other.Close()
+	f.Files["/h/ca.crt"] = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: other.Certificate().Raw})
+	u, _ := url.Parse(ts.URL)
+	f.Route(u.Host, u.Host)
+	_, err := HTTPProbe{URL: ts.URL, CAFile: "/h/ca.crt", MaxTime: 5 * time.Second}.Do(context.Background(), f)
+	var pe *ProbeError
+	if !errors.As(err, &pe) || !strings.Contains(pe.Detail, "certificate") {
+		t.Fatalf("got %v, want a ProbeError about the certificate", err)
+	}
+}
+
+// A refused connection is a ProbeError, so a readiness loop keeps polling.
+func TestHTTPProbeDoLocalRefusedIsAProbeError(t *testing.T) {
+	_, err := HTTPProbe{URL: "http://127.0.0.1:1/"}.Do(context.Background(), argvfake.New())
+	var pe *ProbeError
+	if !errors.As(err, &pe) {
+		t.Fatalf("got %v, want *ProbeError", err)
+	}
+}
+```
+
+Update the existing `-v` assertions so they expect the `--mount` form:
+- `docker_test.go:33`: the expected argv slice becomes `"--mount", "type=bind,source=/var/lib/valve-node-app/369/erpc.yaml,target=/erpc.yaml,readonly"`.
+- `docker_test.go:412-426`: `valueAfter(t, args, "--mount")`, equal to `bindMount(<path>, "/erpc.yaml")`.
+- `docker_test.go:999`: the substring becomes `source=/home/o/.valve-node-app/erpc.yaml,target=/erpc.yaml,readonly`.
+- `docker_test.go:1073`: the substring becomes `type=bind,source=/home/o/.valve-node-app/Caddyfile,target=/etc/caddy/Caddyfile,readonly`.
+- `internal/setup/gateway_test.go:519`: the substring becomes `'type=bind,source=/Users/dev/.valve-node-app/erpc.yaml,target=/erpc.yaml,readonly'`.
+
+Run: `go test ./internal/ops/`
+Expected: FAIL: `undefined: bindMount`, `HTTPProbe`, `ProbeError`, `dockerDesktopInstalled`, `WindowsContainersHint`; the argv tests fail because `DockerRun` calls `Run`.
+
+- [ ] **Step 7: Implement the ops side**
+
+In `internal/ops/docker.go`:
+
+```go
+// The probes as Commands: argv for the local machine, and for SSH the exact
+// strings the constants above have always been.
+const (
+	dockerInfoFormat     = "{{.ServerVersion}}|{{.OSType}}|{{.Architecture}}|{{.Name}}|{{.OperatingSystem}}"
+	enginePlatformFormat = "{{.Server.Os}}/{{.Server.Arch}}"
+)
+
+var (
+	// Presence: `command -v` has no argv equivalent, but `docker --version`
+	// exits 127 from RunArgv when there is no docker. Callers read only the
+	// exit code, on which the two forms agree.
+	dockerPresenceCmd = executor.Command{Argv: []string{"docker", "--version"}, Shell: dockerPresenceProbe}
+	dockerVersionCmd  = executor.Command{Argv: []string{"docker", "--version"}, Shell: dockerVersionProbe}
+	dockerInfoCmd     = executor.Command{Argv: []string{"docker", "info", "--format", dockerInfoFormat}, Shell: dockerInfoProbe}
+	enginePlatformCmd = executor.Command{Argv: []string{"docker", "version", "--format", enginePlatformFormat}, Shell: enginePlatformProbe}
+)
+```
+
+Redefine `dockerInfoProbe` as `"docker info --format '" + dockerInfoFormat + "'"`, and `enginePlatformProbe` (in `lifecycle.go`) as `"docker version --format '" + enginePlatformFormat + "'"`. They stay byte-identical.
+
+`ProbeDocker` changes:
+- Use `executor.Exec(ctx, e, dockerPresenceCmd, nil)`, then the banner and info `Command`s, wherever it called `e.Run(ctx, <probe>, nil)`.
+- `DockerAbsentError.Probe` is `"docker --version"` when `e` is an `executor.ArgvRunner`, and `dockerPresenceProbe` otherwise.
+- After the flavor is detected:
+
+```go
+	// Docker Desktop in Windows-container mode answers `docker info` with
+	// the Windows daemon's details, which never mention Desktop. On this
+	// machine, its installed program says so instead (spec D35). The fix
+	// differs: Desktop can switch to Linux containers; Docker Engine on
+	// Windows Server cannot.
+	if info.WindowsContainers() {
+		if h, ok := e.(executor.LocalHost); ok && h.HostGOOS() == "windows" && dockerDesktopInstalled() {
+			info.Flavor = FlavorDockerDesktop
+		}
+	}
+```
+
+with
+
+```go
+// dockerDesktopInstalled reports whether Docker Desktop is installed on this
+// Windows machine. A package var so tests on any OS can answer it.
+var dockerDesktopInstalled = func() bool {
+	pf := os.Getenv("ProgramFiles")
+	if pf == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(pf, "Docker", "Docker", "Docker Desktop.exe"))
+	return err == nil
+}
+
+// WindowsContainersHint is what to do about an engine in Windows-container
+// mode, which cannot run jumpgate's Linux images. Docker Desktop can switch;
+// Docker Engine on Windows Server (Moby, what GitHub's Windows runners have)
+// cannot run Linux containers at all, so telling its user to "switch" would
+// send them looking for a menu that does not exist.
+func (d DockerInfo) WindowsContainersHint() string {
+	if d.Flavor == FlavorDockerDesktop {
+		return `jumpgate's gateway and devnet are Linux images: switch Docker Desktop to Linux containers (right-click the Docker icon in the notification area, then "Switch to Linux containers…") and retry`
+	}
+	return "this Docker engine runs Windows containers only, and jumpgate's gateway and devnet need Linux containers: install Docker Desktop, or put them on a Linux machine added with `jumpgate hosts add NAME --ssh`"
+}
+```
+
+`EnginePlatform`: replace the `e.Run(ctx, unameArchProbe, nil)` block with `host := hostArch(ctx, e)`:
+
+```go
+// hostArch is the second opinion EnginePlatform needs: on the local machine
+// LocalHost.NativeArch, which reads the CPU without a shell; on a remote
+// one, unameArchProbe as before.
+func hostArch(ctx context.Context, e executor.Executor) string {
+	if h, ok := e.(executor.LocalHost); ok {
+		return PlatformForArch(h.NativeArch(ctx))
+	}
+	if res, err := e.Run(ctx, unameArchProbe, nil); err == nil && res.ExitCode == 0 {
+		return PlatformForArch(firstNonEmptyLine(res.Stdout))
+	}
+	return ""
+}
+```
+
+`DockerRun`:
+
+```go
+// DockerRun runs `docker args...` on e: as argv on the local machine, with
+// no shell (spec D29), and over SSH as the single-quoted string it has always
+// been (executor.QuoteArgv).
+func DockerRun(ctx context.Context, e executor.Executor, args ...string) (executor.Result, error) {
+	argv := append([]string{"docker"}, args...)
+	res, err := executor.Exec(ctx, e, executor.Command{Argv: argv}, nil)
+	if err != nil {
+		return res, fmt.Errorf("ops: %s: %w", executor.QuoteArgv(argv), err)
+	}
+	return res, nil
+}
+```
+
+`ImageExists` uses `executor.Exec` with `Argv: {"docker", "image", "inspect", tag, "--format", "{{.Id}}"}` and `Shell:` today's string. `BuildImage` calls `DockerRun(ctx, e, args...)` and keeps its error wording. In `lifecycle.go`, `readEmulation` uses `executor.Exec(ctx, e, enginePlatformCmd, nil)`.
+
+```go
+// internal/ops/mount.go
+package ops
+
+import (
+	"encoding/csv"
+	"strings"
+)
+
+// bindMount renders a read-only file bind as a --mount value (spec D33).
+// --mount, not -v, for two reasons. First, a Windows source path's drive
+// letter (C:\…) is a colon that -v has to guess about. Second, --mount
+// refuses a source that does not exist, where -v quietly bind-mounts an
+// empty directory in its place. On colima that produced the crash loop the
+// gap analysis saw live ("read /erpc.yaml: is a directory"). docker parses
+// the value as one CSV record, so a comma or a quote in a path is quoted.
+func bindMount(src, dst string) string {
+	var b strings.Builder
+	w := csv.NewWriter(&b)
+	_ = w.Write([]string{"type=bind", "source=" + src, "target=" + dst, "readonly"})
+	w.Flush()
+	return strings.TrimSuffix(b.String(), "\n")
+}
+```
+
+In `ERPCRunArgs`, replace `"-v", spec.HostConfigPath+":"+erpcContainerConfigPath+":ro"` with `"--mount", bindMount(spec.HostConfigPath, erpcContainerConfigPath)`. In `CaddyRunArgs`, make the Caddyfile and the cert and key binds `"--mount", bindMount(…)`. The data volume keeps `"-v", volume+":"+catalog.CaddyDataPath`.
+
+```go
+// internal/ops/httpprobe.go
+package ops
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/valve-tech/jumpgate/internal/executor"
+)
+
+// HTTPProbe is one HTTP request a check makes FROM the target, to a service
+// on the target: a gateway's eth_chainId, a devnet's block number, the
+// metrics page. It has two renderings that must mean the same request: the
+// curl command an SSH target runs, unchanged from before Task 15, and an
+// in-process request on the local machine, which needs neither curl nor a
+// shell (spec D31).
+type HTTPProbe struct {
+	URL string
+	// Body, when set, is POSTed as application/json; otherwise the probe is a GET.
+	Body string
+	// Resolve, when set, is curl's --resolve value "name:port:addr": the
+	// URL's name:port is connected at addr:port, so a TLS front is probed by
+	// its hostname without that name resolving.
+	Resolve string
+	// CAFile, when set, is a PEM file on the target trusted for the server's
+	// certificate. A request that fails with it is retried once with the
+	// system roots, as the curl form's `|| …` does.
+	CAFile string
+	// MaxTime bounds the request; 0 leaves it to ctx.
+	MaxTime time.Duration
+}
+
+// ProbeError is a probe that ran and got no answer: curl exited non-zero,
+// or the in-process request failed. A readiness loop keeps polling on it;
+// any other error from Do is the executor failing.
+type ProbeError struct{ Detail string }
+
+func (e *ProbeError) Error() string { return e.Detail }
+
+// CurlCommand renders p as the command an SSH target runs. The byte layout
+// is the one gateway.go, devnet.go and traffic.go each built by hand before.
+func (p HTTPProbe) CurlCommand() string {
+	base := []string{"curl -s"}
+	if p.MaxTime > 0 {
+		base = append(base, fmt.Sprintf("--max-time %d", int(p.MaxTime/time.Second)))
+	}
+	if p.Body != "" {
+		base = append(base, "-X POST -H 'Content-Type: application/json' --data "+shQuote(p.Body))
+	}
+	if p.Resolve != "" {
+		base = append(base, "--resolve "+shQuote(p.Resolve))
+	}
+	attempt := func(ca string) string {
+		parts := append([]string(nil), base...)
+		if ca != "" {
+			parts = append(parts, "--cacert "+shQuote(ca))
+		}
+		return strings.Join(append(parts, shQuote(p.URL)), " ")
+	}
+	if p.CAFile == "" {
+		return attempt("")
+	}
+	return attempt(p.CAFile) + " || " + attempt("")
+}
+
+// Do runs p on e and returns the response body, whatever the HTTP status
+// (as `curl -s` does). On the local machine the request is made in process,
+// dialled through executor.LocalHost. Anywhere else the curl form runs on the
+// target.
+func (p HTTPProbe) Do(ctx context.Context, e executor.Executor) (string, error) {
+	h, ok := e.(executor.LocalHost)
+	if !ok {
+		res, err := e.Run(ctx, p.CurlCommand(), nil)
+		if err != nil {
+			return "", err
+		}
+		if res.ExitCode != 0 {
+			return "", &ProbeError{Detail: fmt.Sprintf("curl exit %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))}
+		}
+		return res.Stdout, nil
+	}
+	var roots *x509.CertPool
+	if p.CAFile != "" {
+		if pemBytes, err := e.ReadFile(ctx, p.CAFile); err == nil {
+			roots = x509.NewCertPool()
+			if !roots.AppendCertsFromPEM(pemBytes) {
+				roots = nil
+			}
+		}
+	}
+	body, err := p.local(ctx, h, roots)
+	if err != nil && roots != nil {
+		body, err = p.local(ctx, h, nil)
+	}
+	if err != nil {
+		return "", &ProbeError{Detail: err.Error()}
+	}
+	return body, nil
+}
+
+func (p HTTPProbe) local(ctx context.Context, h executor.LocalHost, roots *x509.CertPool) (string, error) {
+	from, to := "", ""
+	if parts := strings.SplitN(p.Resolve, ":", 3); len(parts) == 3 {
+		from = net.JoinHostPort(parts[0], parts[1])
+		to = net.JoinHostPort(strings.Trim(parts[2], "[]"), parts[1])
+	}
+	tr := &http.Transport{
+		// A probe of this machine's own port never goes through a proxy.
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if from != "" && addr == from {
+				addr = to
+			}
+			return h.DialContext(ctx, network, addr)
+		},
+		TLSClientConfig:   &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+		DisableKeepAlives: true,
+	}
+	defer tr.CloseIdleConnections()
+	method, rd := http.MethodGet, io.Reader(nil)
+	if p.Body != "" {
+		method, rd = http.MethodPost, strings.NewReader(p.Body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, p.URL, rd)
+	if err != nil {
+		return "", err
+	}
+	if p.Body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := (&http.Client{Transport: tr, Timeout: p.MaxTime}).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	return string(b), err
+}
+```
+
+Run: `go test ./internal/ops/ && GOOS=windows go vet ./internal/ops/`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add internal/ops
+git commit -m "feat(ops): run docker as argv on the local machine; in-process HTTP probes; --mount file binds; a Windows-container hint per engine
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 9: Write the failing setup tests**
+
+```go
+// internal/setup/shellless_test.go
+package setup
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor/argvfake"
+)
+
+// rpcServer answers eth_chainId with chain and eth_blockNumber with 5.
+func rpcServer(t *testing.T, chain string) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var req struct{ Method string }
+		_ = json.Unmarshal(b, &req)
+		result := chain
+		if req.Method == "eth_blockNumber" {
+			result = "0x5"
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"` + result + `"}`))
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// windowsDesktop is a Windows controller whose Docker Desktop runs Linux
+// containers, and whose container (by name) is already running, so the
+// port checks defer to it the way they do for our own live container.
+func windowsDesktop() *argvfake.Fake {
+	return argvfake.New().
+		Script("docker --version", executor.Result{Stdout: "Docker version 27.4.0, build bde2b89\n"}).
+		Script("docker info --format", executor.Result{Stdout: "27.4.0|linux|x86_64|docker-desktop|Docker Desktop\n"}).
+		Script("docker image inspect", executor.Result{Stdout: "sha256:abc\n"}).
+		Script("docker inspect -f {{.State.Running}}", executor.Result{Stdout: "true\n"})
+}
+
+// The whole devnet plan runs on a machine with no shell at all.
+func TestDevnetPlanNeedsNoShell(t *testing.T) {
+	f := windowsDesktop()
+	d := testDevnet()
+	f.Route("127.0.0.1:"+itoa(d.HTTP()), strings.TrimPrefix(rpcServer(t, "0x539").URL, "http://"))
+	steps, err := PlanDevnet(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RunAll(context.Background(), f, steps, &State{}); err != nil {
+		t.Fatalf("devnet on a shell-less controller: %v", err)
+	}
+	if sh := f.ShellCalls(); len(sh) != 0 {
+		t.Fatalf("the devnet plan used a shell: %q", sh)
+	}
+}
+
+// The whole docker-backend gateway plan, too. The config lands under the
+// Windows home, and docker is given that path in a --mount.
+func TestGatewayPlanNeedsNoShell(t *testing.T) {
+	f := windowsDesktop()
+	g := testGateway()
+	f.Route("127.0.0.1:4100", strings.TrimPrefix(rpcServer(t, "0x171").URL, "http://"))
+	steps := mustPlanGateway(t, g, BackendDocker)
+	if err := RunAll(context.Background(), f, steps, &State{}); err != nil {
+		t.Fatalf("gateway on a shell-less controller: %v", err)
+	}
+	if sh := f.ShellCalls(); len(sh) != 0 {
+		t.Fatalf("the gateway plan used a shell: %q", sh)
+	}
+	cfg := filepath.Join(f.Home, ".valve-node-app", "erpc.yaml")
+	if _, ok := f.Files[cfg]; !ok {
+		t.Fatalf("erpc.yaml not written at %s; files: %v", cfg, keys(f.Files))
+	}
+	var run []string
+	for _, a := range f.Argvs() {
+		if len(a) > 1 && a[0] == "docker" && a[1] == "run" {
+			run = a
+		}
+	}
+	if !strings.Contains(strings.Join(run, " "), "--mount type=bind,source="+cfg+",target=/erpc.yaml,readonly") {
+		t.Fatalf("docker run %q does not bind %s", run, cfg)
+	}
+}
+
+// The message the gap analysis found unreachable now reaches a Windows user.
+func TestPreflight_WindowsContainerModeReachesAShellLessController(t *testing.T) {
+	f := argvfake.New().
+		Script("docker --version", executor.Result{Stdout: "Docker version 27.4.0\n"}).
+		Script("docker info --format", executor.Result{Stdout: "27.4.0|windows|x86_64|WIN-RUNNER|Microsoft Windows Server 2022 Datacenter\n"})
+	for name, step := range map[string]Step{
+		"gateway": stepByID(t, mustPlanGateway(t, testGateway(), BackendDocker), "preflight"),
+		"devnet":  stepByID(t, mustPlanDevnet(t, testDevnet()), "preflight"),
+	} {
+		err := step.Verify(context.Background(), f, &State{})
+		// "Linux containers" is in both hints; which one is ops' concern
+		// (TestWindowsContainersHintNamesTheRightFix), and it depends on
+		// whether Docker Desktop is installed on the machine running this.
+		if err == nil || !strings.Contains(err.Error(), "Linux containers") {
+			t.Errorf("%s: %v, want the Windows-container hint", name, err)
+		}
+	}
+	if sh := f.ShellCalls(); len(sh) != 0 {
+		t.Fatalf("preflight used a shell: %q", sh)
+	}
+}
+
+func TestGatewayPreflight_SystemdOnAShellLessControllerNamesTheDockerBackend(t *testing.T) {
+	step := stepByID(t, mustPlanGateway(t, testGateway(), BackendSystemd), "preflight")
+	err := step.Verify(context.Background(), argvfake.New(), &State{})
+	if err == nil || !strings.Contains(err.Error(), `"docker" backend`) {
+		t.Fatalf("got %v, want a refusal naming the docker backend", err)
+	}
+}
+
+// D34: the TLS front would mount a certificate file at its own host path
+// inside a Linux container, and a Windows path cannot be one.
+func TestGatewayPreflight_RefusesCertFilesOnWindows(t *testing.T) {
+	g := testGateway()
+	g.TLS = &catalog.GatewayTLS{Enabled: true, Hostname: "rpc.lan", CertSource: catalog.CertFiles, CertFile: `C:\certs\rpc.pem`, KeyFile: `C:\certs\rpc.key`}
+	step := stepByID(t, mustPlanGateway(t, g, BackendDocker), "preflight")
+	err := step.Verify(context.Background(), windowsDesktop(), &State{})
+	if err == nil || !strings.Contains(err.Error(), "certificate files") {
+		t.Fatalf("got %v, want the cert-files refusal", err)
+	}
+}
+```
+
+Add the two small helpers this file uses to it, importing `strconv` and `sort`: `func itoa(n int) string { return strconv.Itoa(n) }` and `func keys(m map[string][]byte) []string` (the sorted keys). `testDevnet`, `mustPlanDevnet`, `mustPlanGateway`, `stepByID` and `testGateway` already exist in `devnet_test.go` and `gateway_test.go`. `testDevnet()` is chain 1337 on 18545 and 18546, so the routed RPC answers `0x539`.
+
+```go
+// internal/setup/listeners_test.go
+package setup
+
+import (
+	"context"
+	"net"
+	"strings"
+	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/executor/argvfake"
+)
+
+func TestProbeListeners_LocalDialsInsteadOfAShell(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	f := argvfake.New().Route("127.0.0.1:4000", ln.Addr().String())
+	found, err := probeListeners(context.Background(), f, 4000)
+	if err != nil || !strings.Contains(found, "127.0.0.1:4000") {
+		t.Fatalf("busy port: %q, %v", found, err)
+	}
+	if found, err := probeListeners(context.Background(), f, 4001); err != nil || found != "" {
+		t.Fatalf("free port: %q, %v", found, err)
+	}
+	if len(f.ShellCalls()) != 0 {
+		t.Fatalf("shell used: %q", f.ShellCalls())
+	}
+}
+```
+
+```go
+// internal/setup/targetpath_test.go
+package setup
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor/argvfake"
+)
+
+// Local paths follow this machine's rules (C:\Users\… on Windows); remote
+// ones stay POSIX.
+func TestPathsFollowTheMachineActedOn(t *testing.T) {
+	f := argvfake.New()
+	home, err := homeOn(context.Background(), f)
+	if err != nil || home != f.Home {
+		t.Fatalf("homeOn = %q, %v", home, err)
+	}
+	if got := joinOn(f, home, ".valve-node-app", "erpc.yaml"); got != filepath.Join(f.Home, ".valve-node-app", "erpc.yaml") {
+		t.Fatalf("joinOn(local) = %q", got)
+	}
+	remote := newFakeExecutor().script(`printf '%s\n' "$HOME"`, executor.Result{Stdout: "/home/o\n"})
+	if home, err := homeOn(context.Background(), remote); err != nil || home != "/home/o" {
+		t.Fatalf("homeOn(remote) = %q, %v", home, err)
+	}
+	if got := joinOn(remote, "/home/o", ".valve-node-app", "erpc.yaml"); got != "/home/o/.valve-node-app/erpc.yaml" {
+		t.Fatalf("joinOn(remote) = %q", got)
+	}
+}
+```
+
+```go
+// internal/setup/docker_live_test.go
+package setup
+
+import (
+	"context"
+	"net"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/ops"
+)
+
+// TestLocalDockerLive runs the devnet plan through the real local executor
+// against this machine's real engine: RunArgv, the in-process probes, the
+// whole path a Windows controller takes. With a Windows-container engine
+// (GitHub's Windows runners, a Windows Server VM) it asserts the message
+// that user sees instead. Set JUMPGATE_DOCKER_LIVE=1 to run it.
+func TestLocalDockerLive(t *testing.T) {
+	if os.Getenv("JUMPGATE_DOCKER_LIVE") != "1" {
+		t.Skip("set JUMPGATE_DOCKER_LIVE=1 to run against this machine's Docker engine")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	e := executor.NewLocal()
+	info, err := ops.ProbeDocker(ctx, e)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if !info.DaemonReachable {
+		t.Fatalf("no engine answered: %s", info.DaemonError)
+	}
+	d := catalog.DevnetConfig{ContainerName: "jumpgate-live-devnet", HTTPPort: freePort(t), WSPort: freePort(t)}
+	steps, err := PlanDevnet(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.WindowsContainers() {
+		err := RunAll(ctx, e, steps, &State{})
+		if err == nil || !strings.Contains(err.Error(), "Linux containers") {
+			t.Fatalf("a Windows-container engine: %v, want the switch-to-Linux-containers refusal", err)
+		}
+		t.Logf("refused as a Windows user will see it: %v", err)
+		return
+	}
+	t.Cleanup(func() { _ = ops.RemoveContainer(context.Background(), e, d.Name()) })
+	if err := RunAll(ctx, e, steps, &State{}); err != nil {
+		t.Fatalf("devnet through the local executor: %v", err)
+	}
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+```
+
+Run: `go test ./internal/setup/`
+Expected: FAIL: `undefined: probeListeners`, `homeOn`, `joinOn`. `TestGatewayPlanNeedsNoShell` and `TestDevnetPlanNeedsNoShell` fail with the shell calls listed (`printf`, `listenerProbe`, `curl`).
+
+- [ ] **Step 10: Implement the setup side**
+
+```go
+// internal/setup/targetpath.go
+package setup
+
+import (
+	"context"
+	"fmt"
+	"path"
+	"path/filepath"
+	"strings"
+
+	"github.com/valve-tech/jumpgate/internal/executor"
+)
+
+// homeOn is the home directory of the user jumpgate acts as on the target:
+// read from this process on the local machine (no shell needed), and from
+// the target's shell anywhere else.
+func homeOn(ctx context.Context, e executor.Executor) (string, error) {
+	if h, ok := e.(executor.LocalHost); ok {
+		return h.HomeDir()
+	}
+	res, err := e.Run(ctx, `printf '%s\n' "$HOME"`, nil)
+	if err != nil {
+		return "", err
+	}
+	home := strings.TrimSpace(res.Stdout)
+	if res.ExitCode != 0 || home == "" {
+		return "", fmt.Errorf("$HOME is empty on the target (exit %d)", res.ExitCode)
+	}
+	return home, nil
+}
+
+// joinOn and dirOn apply the path rules of the machine e acts on: this
+// machine's (filepath, so C:\Users\… on Windows) for the local executor;
+// POSIX for a remote one, whose paths always are (executor/remotepath.go).
+func joinOn(e executor.Executor, elem ...string) string {
+	if _, ok := e.(executor.LocalHost); ok {
+		return filepath.Join(elem...)
+	}
+	return path.Join(elem...)
+}
+
+func dirOn(e executor.Executor, p string) string {
+	if _, ok := e.(executor.LocalHost); ok {
+		return filepath.Dir(p)
+	}
+	return path.Dir(p)
+}
+```
+
+```go
+// internal/setup/listeners.go
+package setup
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/valve-tech/jumpgate/internal/executor"
+)
+
+// localDialTimeout bounds one loopback connect in probeListeners.
+var localDialTimeout = 500 * time.Millisecond
+
+// probeListeners reports what already listens on port on the target, or ""
+// when nothing does. On the local machine it connects to the loopback
+// addresses directly (spec D32), because ss, netstat and lsof sit behind a
+// shell. A listener on a wildcard or loopback address accepts that connect,
+// and those are the only listeners a 127.0.0.1 publish collides with. For a
+// wildcard publish, docker still fails loudly on a real collision.
+// Anywhere else it runs listenerProbe as before.
+func probeListeners(ctx context.Context, e executor.Executor, port int) (string, error) {
+	h, ok := e.(executor.LocalHost)
+	if !ok {
+		res, err := e.Run(ctx, fmt.Sprintf(listenerProbe, port), nil)
+		if err != nil {
+			return "", err
+		}
+		if res.ExitCode == 0 {
+			return strings.TrimSpace(res.Stdout), nil
+		}
+		return "", nil
+	}
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		addr := net.JoinHostPort(host, strconv.Itoa(port))
+		dctx, cancel := context.WithTimeout(ctx, localDialTimeout)
+		c, err := h.DialContext(dctx, "tcp", addr)
+		cancel()
+		if err == nil {
+			c.Close()
+			return "something accepts connections on " + addr, nil
+		}
+	}
+	return "", nil
+}
+```
+
+`gateway.go`:
+- `configPath`'s docker branch:
+
+```go
+	home, err := homeOn(ctx, e)
+	if err != nil {
+		return "", fmt.Errorf("gateway: could not resolve the home directory on the target: %w — the docker backend keeps erpc.yaml there because it must be a path the engine can bind-mount", err)
+	}
+	p.dockerConfigPath = joinOn(e, home, gatewayHomeDir, p.configFileName())
+```
+
+- `siblingPath` returns `joinOn(e, dirOn(e, cfg), name)`. The systemd branch of `configPath` keeps `path.Join`, because systemd is always a Linux target.
+- `probePort`: replace the `e.Run(ctx, fmt.Sprintf(listenerProbe, port), nil)` block with `found, err := probeListeners(ctx, e, port)`, then branch on `found != ""`. The error and event wording is unchanged.
+- In `preflight`'s `BackendDocker` case:
+
+```go
+		if info.WindowsContainers() {
+			return fmt.Errorf("preflight: this docker engine is in Windows-container mode, and the eRPC image is a Linux image — %s", info.WindowsContainersHint())
+		}
+		...
+		// D34: the TLS front mounts a certificate file at its own host path
+		// inside a Linux container, and a Windows path (C:\…) cannot be one.
+		if h, ok := e.(executor.LocalHost); ok && h.HostGOOS() == "windows" && p.fronted() && p.gw.TLS.CertSourceOrDefault() == catalog.CertFiles {
+			return fmt.Errorf("preflight: a gateway on this Windows computer cannot use certificate files yet (%s): choose the internal or ACME certificate source, or host the gateway on a Linux machine", p.gw.TLS.CertFile)
+		}
+```
+
+- `requireLinuxRoot`: before running `uname`, refuse a shell-less executor:
+
+```go
+	if err := executor.RequireShell(e); err != nil {
+		return fmt.Errorf("preflight: a systemd gateway runs on a Linux host, and this computer has no POSIX shell (%v) — use the %q backend here, or a Linux machine added with --ssh", err, BackendDocker)
+	}
+```
+
+- `gatewayCheck` and `probeCommand`: `probeCommand` becomes `probe(ctx, e, chainID) (string, ops.HTTPProbe, error)`. It returns an `ops.HTTPProbe{URL: url, Body: gatewayChainIDCall, MaxTime: 10 * time.Second}`. When fronted, it adds `Resolve: fmt.Sprintf("%s:%d:%s", tls.Hostname, tls.HTTPS(), probeHost(tls.Bind()))` and `CAFile: ca`, only when the cert source is not ACME, exactly as today. `gatewayCheck` then does:
+
+```go
+	raw, err := pr.Do(ctx, e)
+	var pe *ops.ProbeError
+	switch {
+	case errors.As(err, &pe):
+		return fmt.Errorf("gateway: eth_chainId at %s failed (%s)", url, pe.Detail)
+	case err != nil:
+		return fmt.Errorf("gateway: eth_chainId probe: %w", err)
+	}
+	raw = strings.TrimSpace(raw)
+```
+
+  The JSON handling below that is unchanged.
+
+`devnet.go`:
+- The Windows-container message becomes `"preflight: this docker engine is in Windows-container mode, and the reth image is a Linux image — " + info.WindowsContainersHint()`.
+- `checkPortsFree` uses `probeListeners`.
+- `rpcCall` builds `ops.HTTPProbe{URL: url, Body: body}` and maps a `*ops.ProbeError` to `fmt.Errorf("devnet: rpc at %s failed (%s)", url, pe.Detail)`.
+
+`traffic.go`:
+- `ReadGatewaySamples` builds `ops.HTTPProbe{URL: url, MaxTime: trafficScrapeTimeout * time.Second}`, as a GET. Convert the constant if it is an untyped int.
+- It maps a `*ops.ProbeError` to `fmt.Errorf("traffic: %s did not answer (%s) — the gateway publishes its counters on loopback only, so this is read on the machine it runs on", url, pe.Detail)`.
+
+`tls.go` needs no change: `exportRootCA` already uses `ops.DockerRun` and `e.WriteFile`.
+
+Existing tests that assert `curl exit N` still pass: over a shell fake, `ProbeError.Detail` starts with `curl exit N:`.
+
+Run: `go test ./internal/setup/ ./internal/ops/ ./internal/executor/...`
+Expected: PASS.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add internal/setup
+git commit -m "feat(setup): gateway and devnet run on a controller with no shell; Windows-container mode reaches the user
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 12: Write the failing server tests**
+
+Append to `internal/server/docker_test.go`:
+
+```go
+// A Windows controller can now probe its engine (it used to answer 500).
+// An engine in Windows-container mode is up but unusable: not running, and
+// with the hint, so the panel's "not running" path shows it and does not
+// start provisioning (spec D35).
+func TestDockerStatusWindowsContainers(t *testing.T) {
+	f := argvfake.New().
+		Script("docker --version", executor.Result{Stdout: "Docker version 27.4.0\n"}).
+		Script("docker info --format", executor.Result{Stdout: "27.4.0|windows|x86_64|WIN-RUNNER|Microsoft Windows Server 2022 Datacenter\n"})
+	a := newDockerTestServer(t, f)
+	got := decodeJSON[dockerStatusResponse](t, a.do(t, "GET", "/api/docker", nil))
+	if !got.Present || got.Running || !got.WindowsContainers || got.CanStart || !strings.Contains(got.Hint, "Linux containers") {
+		t.Fatalf("got %+v, want present, not running, windowsContainers, the hint, no auto-start", got)
+	}
+}
+
+// "This computer" can be added on any OS. On Windows it has no shell, and
+// RequireShell is what the shell routes check (Task 13).
+func TestDefaultExecutorBuildsALocalTargetEverywhere(t *testing.T) {
+	ex, err := defaultNewExecutor(config.Target{ID: "me", Mode: "local"})
+	if err != nil {
+		t.Fatalf("local target refused on %s: %v", runtime.GOOS, err)
+	}
+	shellErr := executor.RequireShell(ex)
+	if (runtime.GOOS == "windows") != errors.Is(shellErr, executor.ErrNoPOSIXShell) {
+		t.Fatalf("RequireShell on %s = %v", runtime.GOOS, shellErr)
+	}
+}
+```
+
+Append to `internal/server/containers_test.go`:
+
+```go
+func TestContainerListShowsTheWindowsContainerHint(t *testing.T) {
+	f := argvfake.New().
+		Script("docker --version", executor.Result{Stdout: "Docker version 27.4.0\n"}).
+		Script("docker info --format", executor.Result{Stdout: "27.4.0|windows|x86_64|WIN-RUNNER|Microsoft Windows Server 2022 Datacenter\n"})
+	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) { return f, nil })
+	if res := a.do(t, "POST", "/api/targets", map[string]any{"id": "me", "mode": "local"}); res.StatusCode != http.StatusCreated {
+		t.Fatalf("add: %d", res.StatusCode)
+	}
+	got := decodeJSON[containersResponse](t, a.do(t, "GET", "/api/targets/me/containers", nil))
+	if !strings.Contains(got.Docker.Hint, "Linux containers") {
+		t.Fatalf("docker view %+v, want the Windows-container hint", got.Docker)
+	}
+}
+```
+
+Append to `internal/server/gateways_test.go` (create the file if it does not exist):
+
+```go
+// Windows: the trust-store command needs an elevated prompt, not sudo.
+func TestTrustNeedsRootMessageOnWindows(t *testing.T) {
+	if got := trustNeedsRootMessage("windows", "me"); !strings.Contains(got, "Run as administrator") {
+		t.Fatalf("got %q", got)
+	}
+	if got := trustNeedsRootMessage("linux", "box"); !strings.Contains(got, "sudo") {
+		t.Fatalf("got %q", got)
+	}
+}
+```
+
+Run: `go test ./internal/server/`
+Expected: FAIL: `got.WindowsContainers undefined`; `defaultNewExecutor` refuses on Windows CI; `undefined: trustNeedsRootMessage`.
+
+- [ ] **Step 13: Implement the server side**
+
+`api.go`, in the `"local"` case of `defaultNewExecutor`:
+
+```go
+	case "local":
+		// "This computer" exists on every OS. On one with no POSIX shell
+		// (Windows) it runs the Docker gateway and devnet through RunArgv
+		// (spec D29). The routes that need a shell refuse it through
+		// getShellExecutor (Task 13), so it is not refused here any more.
+		return executor.NewLocal(), nil
+```
+
+`docker.go`:
+
+```go
+	// WindowsContainers is true when an engine answered but runs Windows
+	// containers, which cannot run jumpgate's Linux images. Running is then
+	// false: the engine is up but unusable, and the UI's not-running path
+	// shows Hint without trying to start or provision anything (spec D35).
+	WindowsContainers bool `json:"windowsContainers,omitempty"`
+```
+
+and in `handleDockerStatus`'s `default:` branch:
+
+```go
+		resp.Present = info.Present
+		resp.WindowsContainers = info.WindowsContainers()
+		resp.Running = info.DaemonReachable && !resp.WindowsContainers
+		switch {
+		case resp.WindowsContainers:
+			resp.Hint = info.WindowsContainersHint()
+		case resp.Present && !resp.Running:
+			resp.Hint = dockerStartHint
+		}
+	}
+	resp.CanStart = runtime.GOOS == "darwin" && resp.Present && !resp.Running && !resp.WindowsContainers
+```
+
+`containers.go` `probeDockerView`: `v.Hint = info.WindowsContainersHint()` in the Windows-container case.
+
+`gateways.go`: factor the needs-root message into a helper, and use it where `install.NeedsRoot && !targetIsRoot(…)` is handled:
+
+```go
+// trustNeedsRootMessage is what a person is told when installing the root
+// needs privileges jumpgate does not have. Windows has no sudo: certutil
+// -addstore ROOT needs a prompt opened with "Run as administrator".
+func trustNeedsRootMessage(goos, hostID string) string {
+	if goos == "windows" {
+		return fmt.Sprintf("installing a root certificate needs an administrator on machine %q. Open a Command Prompt with \"Run as administrator\" and run:", hostID)
+	}
+	return fmt.Sprintf("installing a root certificate needs root on machine %q. Run this on it (e.g. with sudo):", hostID)
+}
+```
+
+Run: `go test ./... && GOOS=windows go vet ./... && GOOS=linux GOARCH=arm64 go vet ./...`
+Expected: PASS.
+
+- [ ] **Step 14: Commit**
+
+```bash
+git add internal/server
+git commit -m "feat(server): add this computer on Windows for Docker features; report Windows-container mode as not ready, with the fix
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 15: Live check on this Mac (colima)**
+
+The macOS and Linux local executors now take the argv path too. That is deliberate (D29): the code a Windows controller runs is exercised daily on the machines developers use.
+
+```bash
+colima status
+JUMPGATE_DOCKER_LIVE=1 go test -v -count=1 -run '^TestLocalDockerLive$' ./internal/setup/
+```
+
+Expected: PASS. The log shows the devnet plan's steps, and `docker ps -a | grep jumpgate-live-devnet` is empty afterwards.
+
+- [ ] **Step 16: CI jobs and the Windows smoke script**
+
+Add to `.github/workflows/ci.yml`, after the `e2e` job:
+
+```yaml
+  # The shell-free Docker path (Task 15) against a real engine. Ubuntu's
+  # runner has Docker with Linux containers, so the devnet runs end to end
+  # through RunArgv and the in-process probes.
+  docker-live:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: devnet through the local executor
+        env:
+          JUMPGATE_DOCKER_LIVE: "1"
+        run: go test -v -count=1 -run '^TestLocalDockerLive$' ./internal/setup/
+
+  # GitHub's Windows runners have Docker Engine in Windows-container mode
+  # only. That is exactly the state whose message a Windows user must see,
+  # so this job proves the message reaches them: through the plan, through
+  # the API, and through a real jumpgate.exe.
+  windows-docker:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: the engine is in Windows-container mode
+        run: |
+          $os = docker info --format '{{.OSType}}'
+          if ($os -ne 'windows') { throw "expected a Windows-container engine on this runner, got '$os'; the runner image changed, so revisit this job" }
+      - name: the plan refuses with the hint
+        env:
+          JUMPGATE_DOCKER_LIVE: "1"
+        run: go test -v -count=1 -run '^TestLocalDockerLive$' ./internal/setup/
+      - name: a real jumpgate.exe reports it
+        run: ./scripts/windows-docker-smoke.ps1 -Expect windows-containers
+```
+
+Create `scripts/windows-docker-smoke.ps1`:
+
+```powershell
+# Drives a real jumpgate.exe through the local Docker features (plan Task 15).
+#
+#   -Expect windows-containers  The engine runs Windows containers: GitHub's
+#                               runners, or a Windows Server VM with Moby.
+#                               /api/docker and the containers view must both
+#                               carry the Linux-containers hint.
+#   -Expect linux-containers    Docker Desktop in Linux mode, on a real
+#                               Windows desktop. /api/docker must say running,
+#                               with no hint. Provisioning itself is covered by
+#                               TestLocalDockerLive, run on the same machine.
+#
+#   -Exe C:\path\jumpgate.exe   Use this binary instead of building one, for a
+#                               machine without Go (the QEMU VM).
+param(
+  [Parameter(Mandatory)][ValidateSet('windows-containers', 'linux-containers')][string]$Expect,
+  [string]$Exe
+)
+$ErrorActionPreference = 'Stop'
+$tmp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
+$work = Join-Path $tmp ("jg-docker-smoke-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$home_ = Join-Path $work 'home'
+New-Item -ItemType Directory -Force -Path $home_ | Out-Null
+if (-not $Exe) {
+  $Exe = Join-Path $work 'jumpgate.exe'
+  go build -o $Exe ./cmd/jumpgate
+  if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
+}
+$env:USERPROFILE = $home_
+$env:HOME = $home_
+$port = 18799
+$srv = Start-Process -FilePath $Exe -ArgumentList 'serve', '--bind', "127.0.0.1:$port" -PassThru -NoNewWindow `
+  -RedirectStandardError (Join-Path $work 'serve.err') -RedirectStandardOutput (Join-Path $work 'serve.out')
+try {
+  $infoFile = Join-Path $home_ '.jumpgate\run\server.json'
+  $info = $null
+  for ($i = 0; $i -lt 60 -and -not $info; $i++) {
+    Start-Sleep -Seconds 1
+    if (Test-Path $infoFile) { $info = Get-Content $infoFile -Raw | ConvertFrom-Json }
+  }
+  if (-not $info) { throw "server.json never appeared: $(Get-Content (Join-Path $work 'serve.err') -Raw)" }
+  $h = @{ Authorization = "Bearer $($info.token)" }
+  $base = "http://127.0.0.1:$port"
+
+  $docker = Invoke-RestMethod "$base/api/docker" -Headers $h
+  Invoke-RestMethod "$base/api/targets" -Method Post -Headers $h -ContentType 'application/json' `
+    -Body '{"id":"me","mode":"local"}' | Out-Null
+  $list = Invoke-RestMethod "$base/api/targets/me/containers" -Headers $h
+
+  if ($Expect -eq 'windows-containers') {
+    if (-not $docker.windowsContainers -or $docker.running -or $docker.hint -notmatch 'Linux containers') {
+      throw "GET /api/docker: $($docker | ConvertTo-Json -Compress)"
+    }
+    if ($list.docker.hint -notmatch 'Linux containers') {
+      throw "containers view: $($list.docker | ConvertTo-Json -Compress)"
+    }
+    Write-Output "windows-container mode reaches the user: $($docker.hint)"
+  } else {
+    if (-not $docker.running -or $docker.hint) { throw "GET /api/docker: $($docker | ConvertTo-Json -Compress)" }
+    if ($list.docker.hint) { throw "containers view has a hint: $($list.docker.hint)" }
+    Write-Output 'Linux containers: ready'
+  }
+} finally {
+  Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+}
+```
+
+```bash
+git add .github/workflows/ci.yml scripts/windows-docker-smoke.ps1
+git commit -m "ci: run the shell-free Docker path live on Linux, and assert the Windows-container message on Windows
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git push && gh pr checks --watch
+```
+
+Expected: `docker-live` and `windows-docker` are green, alongside every existing job. `windows-docker` needs Task 6's Windows server fixes on the branch. If Task 6 has not merged yet, the third step fails at `server.json`: wait for Task 6, then re-run.
+
+- [ ] **Step 17: Manual checks (record each result in the PR description)**
+
+1. **QEMU Windows Server VM.** It has no nested virtualisation, so it can run Windows containers with process isolation, but not Linux containers. Cross-build on the Mac:
+
+   ```bash
+   GOOS=windows go build -o /tmp/jg/jumpgate.exe ./cmd/jumpgate
+   GOOS=windows go test -c -o /tmp/jg/setup.test.exe ./internal/setup/
+   ```
+
+   Copy both files to `C:\jg`, then:
+   - **Moby running:** run `scripts\windows-docker-smoke.ps1 -Expect windows-containers -Exe C:\jg\jumpgate.exe`. Then set `$env:JUMPGATE_DOCKER_LIVE=1` and run `C:\jg\setup.test.exe -test.run TestLocalDockerLive -test.v`. Both pass.
+   - **`Stop-Service docker`:** `GET /api/docker` says present, not running, with the start hint.
+   - **docker.exe renamed away:** it says not present, with the install hint.
+2. **A physical Windows 11 machine with Docker Desktop (WSL 2).** A cloud VM with nested virtualisation also works.
+   - **Linux mode:** `-Expect linux-containers`, and `setup.test.exe -test.run TestLocalDockerLive` provisions the devnet end to end. In the app, provision the devnet and a gateway in front of it. Check that `curl.exe -s -X POST -H "Content-Type: application/json" --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_chainId\",\"params\":[]}" http://127.0.0.1:4000/main/evm/1337` answers `0x539`.
+   - **"Switch to Windows containers…":** `-Expect windows-containers` passes, and the hint names Docker Desktop's switch menu, because Desktop is recognised by its installed exe.
+
+---
+
+### Task 16: A prebuilt, pinned, multi-arch eRPC image
+
+Covers gap W2. Also covers W1's misleading build error: BuildKit is detected before building, and the last lines of output are shown. Decisions: D37–D40.
+
+**Files:**
+- Create: `internal/catalog/erpc.go`, `internal/catalog/erpc_test.go`, `.github/workflows/erpc-image.yml`, `scripts/erpc-pin.sh`, `scripts/erpc-verify.sh`
+- Modify: `internal/ops/docker.go` (pin constants become aliases; `PullImage`, `ImageLabel`, `BuildKitAvailable`, `lastLines`; `ImageBuildArgs` labels; `BuildImage` error detail), `internal/ops/docker_test.go`, `internal/setup/gateway.go` (`ensureImage`, `runDocker`), `internal/setup/gateway_test.go`, `internal/setup/docker_live_test.go`, `.github/workflows/release.yml`, `README.md`
+
+**Interfaces:**
+- Consumes (Task 15): `ops.DockerRun`, `executor.Exec`, `argvfake`, `TestLocalDockerLive`, the `docker-live` CI job.
+- Produces (package `catalog`):
+  - `const ERPCSourceRepo`, `ERPCSourceRef`, `ERPCImageRepo`, `ERPCImageDigest`
+  - `func ERPCImageRef() string` returns `ERPCImageRepo + "@" + ERPCImageDigest`
+  - `func ERPCImageSourceTag() string` returns `ERPCImageRepo + ":src-" + ERPCSourceRef`
+- Produces (package `ops`):
+  - `const LabelRevision = "org.opencontainers.image.revision"`
+  - `func PullImage(ctx context.Context, e executor.Executor, ref, platform string) error`
+  - `func ImageLabel(ctx context.Context, e executor.Executor, ref, label string) (string, bool)`
+  - `func BuildKitAvailable(ctx context.Context, e executor.Executor) bool`
+- Produces (package `setup`): `(*gatewayPlan).ensureImage(ctx, e, st, platform) (string, error)`, which returns the image reference to run.
+- Produces (scripts): `scripts/erpc-pin.sh` prints `ref=`, `short=`, `repo=` and `digest=` lines. `scripts/erpc-verify.sh` exits 0 only when the pin matches the published, signed, two-platform image.
+
+- [ ] **Step 1: Pin file, pin script and publishing workflow; publish the first image**
+
+```go
+// internal/catalog/erpc.go
+package catalog
+
+// The eRPC gateway image (spec D37). The fork's source is pinned by commit,
+// and the image built from it is pinned by the digest of its multi-arch
+// index, so every controller of a release runs byte-identical gateway code.
+// The digest is compiled in, and the binary carrying it is itself covered by
+// the release's checksums.txt (D38).
+//
+// To move to a new eRPC commit:
+//  1. set ERPCSourceRef;
+//  2. push: .github/workflows/erpc-image.yml publishes
+//     ERPCImageRepo:src-<ref>, signs it, and fails, printing the digest;
+//  3. set ERPCImageDigest to that digest and push again: the same workflow
+//     verifies it and goes green.
+//
+// scripts/erpc-pin.sh reads these four lines with sed: keep each a one-line
+// `Name = "value"`.
+const (
+	ERPCSourceRepo  = "https://github.com/valve-tech/erpc.git"
+	ERPCSourceRef   = "a7a53ec21a7922c4c6d8582e3466331b1a7cc622"
+	ERPCImageRepo   = "ghcr.io/jumpgate-tech/erpc"
+	ERPCImageDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+)
+
+// ERPCImageRef is the image a gateway runs: pulled and run by digest.
+func ERPCImageRef() string { return ERPCImageRepo + "@" + ERPCImageDigest }
+
+// ERPCImageSourceTag is the published tag for ERPCSourceRef. jumpgate accepts
+// it, after a failed pull, only when its revision label names
+// ERPCSourceRef; it is how an air-gapped machine is given the image (D39).
+func ERPCImageSourceTag() string { return ERPCImageRepo + ":src-" + ERPCSourceRef }
+```
+
+In `internal/ops/docker.go`, `ERPCSourceRepo` and `ERPCSourceRef` become `= catalog.ERPCSourceRepo` and `= catalog.ERPCSourceRef`. Their doc comments point at `catalog/erpc.go`. `ERPCImageTag()` stays: it is now the local-build tag, `valve-node-app/erpc:<ref8>`.
+
+```bash
+# scripts/erpc-pin.sh
+#!/usr/bin/env bash
+# Prints the eRPC image pin from internal/catalog/erpc.go as key=value lines,
+# for $GITHUB_OUTPUT and for eval. TestERPCPinScriptReadsTheCatalog keeps this
+# parser and the Go constants in step.
+set -euo pipefail
+f="$(cd "$(dirname "$0")/.." && pwd)/internal/catalog/erpc.go"
+get() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$f"; }
+ref="$(get ERPCSourceRef)"; repo="$(get ERPCImageRepo)"; digest="$(get ERPCImageDigest)"
+if [ -z "$ref" ] || [ -z "$repo" ] || [ -z "$digest" ]; then
+  echo "erpc-pin: could not read the pin from $f" >&2
+  exit 1
+fi
+printf 'ref=%s\nshort=%s\nrepo=%s\ndigest=%s\n' "$ref" "${ref:0:8}" "$repo" "$digest"
+```
+
+```bash
+# scripts/erpc-verify.sh
+#!/usr/bin/env bash
+# Checks the published eRPC image against the catalog's pin: both platforms,
+# the revision label, a keyless signature from this repo's erpc-image
+# workflow, and finally that the pinned digest is the published one. The
+# last check runs last, so a fresh publish fails here with the digest to
+# commit. Needs docker (buildx), jq and cosign.
+set -euo pipefail
+eval "$("$(dirname "$0")/erpc-pin.sh")"
+tag="$repo:src-$ref"
+manifest="$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}')"
+published="$(jq -r .digest <<<"$manifest")"
+platforms="$(jq -r '[.manifests[].platform | select(.os != "unknown") | "\(.os)/\(.architecture)"] | sort | join(",")' <<<"$manifest")"
+if [ "$platforms" != "linux/amd64,linux/arm64" ]; then
+  echo "erpc-verify: $tag has platforms '$platforms', want linux/amd64,linux/arm64" >&2; exit 1
+fi
+for p in linux/amd64 linux/arm64; do
+  rev="$(docker buildx imagetools inspect "$tag" --format '{{json .Image}}' | jq -r --arg p "$p" '.[$p].config.Labels["org.opencontainers.image.revision"] // empty')"
+  if [ "$rev" != "$ref" ]; then
+    echo "erpc-verify: $tag ($p) is labelled revision '$rev', want $ref" >&2; exit 1
+  fi
+done
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/jumpgate-tech/jumpgate-app/\.github/workflows/erpc-image\.yml@' \
+  "$repo@$published" >/dev/null
+if [ "$digest" != "$published" ]; then
+  echo "::error file=internal/catalog/erpc.go::ERPCImageDigest is $digest, but $tag is $published. Set ERPCImageDigest = \"$published\"."
+  exit 1
+fi
+echo "erpc-verify: $repo@$published is $tag, signed, linux/amd64 + linux/arm64"
+```
+
+```yaml
+# .github/workflows/erpc-image.yml
+# Publishes the eRPC gateway image jumpgate pins (spec D37–D40), and verifies
+# the pin against it.
+#
+# For the commit in internal/catalog/erpc.go: if ghcr.io/jumpgate-tech/erpc:
+# src-<ref> does not exist yet (or `force` is set), build it natively for
+# amd64 and arm64, merge the two into one index, tag it src-<ref> and <ref8>,
+# and sign the index keylessly. Then verify (scripts/erpc-verify.sh), which
+# fails with the digest to commit when the catalog does not pin it yet.
+name: eRPC image
+
+on:
+  push:
+    branches: [main, 'feat/**']
+    paths:
+      - internal/catalog/erpc.go
+      - .github/workflows/erpc-image.yml
+      - scripts/erpc-pin.sh
+      - scripts/erpc-verify.sh
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild and re-tag although src-<ref> exists (the catalog digest must then be updated)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: erpc-image
+  cancel-in-progress: false
+
+jobs:
+  pin:
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.pin.outputs.ref }}
+      short: ${{ steps.pin.outputs.short }}
+      repo: ${{ steps.pin.outputs.repo }}
+      publish: ${{ steps.exists.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        run: scripts/erpc-pin.sh >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: exists
+        run: |
+          # Never overwrite a published source tag by accident: controllers
+          # already pin its digest. `force` is the deliberate override.
+          if docker buildx imagetools inspect "${{ steps.pin.outputs.repo }}:src-${{ steps.pin.outputs.ref }}" >/dev/null 2>&1 \
+             && [ "${{ inputs.force }}" != "true" ]; then
+            echo publish=false >> "$GITHUB_OUTPUT"
+          else
+            echo publish=true >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: pin
+    if: needs.pin.outputs.publish == 'true'
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            os: ubuntu-24.04
+          - arch: arm64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: build and push by digest
+        run: |
+          docker buildx build \
+            --platform linux/${{ matrix.arch }} \
+            --label org.opencontainers.image.revision=${{ needs.pin.outputs.ref }} \
+            --label org.opencontainers.image.source=https://github.com/valve-tech/erpc \
+            --provenance=false \
+            --output type=image,name=${{ needs.pin.outputs.repo }},push-by-digest=true,name-canonical=true,push=true \
+            --metadata-file meta.json \
+            "https://github.com/valve-tech/erpc.git#${{ needs.pin.outputs.ref }}"
+          mkdir -p digests
+          jq -r '."containerimage.digest"' meta.json > "digests/${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erpc-digest-${{ matrix.arch }}
+          path: digests/${{ matrix.arch }}
+
+  merge:
+    needs: [pin, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: erpc-digest-*
+          merge-multiple: true
+          path: digests
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@v3
+      - name: one index, two tags, signed
+        run: |
+          repo='${{ needs.pin.outputs.repo }}'
+          docker buildx imagetools create \
+            -t "$repo:src-${{ needs.pin.outputs.ref }}" -t "$repo:${{ needs.pin.outputs.short }}" \
+            "$repo@$(cat digests/amd64)" "$repo@$(cat digests/arm64)"
+          index="$(docker buildx imagetools inspect "$repo:src-${{ needs.pin.outputs.ref }}" --format '{{json .Manifest}}' | jq -r .digest)"
+          cosign sign --yes "$repo@$index"
+          echo "Published \`$repo@$index\` for ${{ needs.pin.outputs.ref }}." >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    needs: [pin, build, merge]
+    if: always() && needs.pin.result == 'success' && needs.merge.result != 'failure' && needs.build.result != 'failure'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@v3
+      - run: scripts/erpc-verify.sh
+```
+
+```bash
+chmod +x scripts/erpc-pin.sh scripts/erpc-verify.sh
+scripts/erpc-pin.sh
+git add internal/catalog/erpc.go internal/ops/docker.go scripts/erpc-pin.sh scripts/erpc-verify.sh .github/workflows/erpc-image.yml
+git commit -m "ci: publish and sign a multi-arch eRPC image for the pinned source commit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git push
+gh run watch "$(gh run list --workflow erpc-image.yml --branch "$(git branch --show-current)" --limit 1 --json databaseId -q '.[0].databaseId')"
+```
+
+Expected:
+- `erpc-pin.sh` prints four lines, with `short=a7a53ec2`.
+- The `build` jobs and `merge` succeed. `verify` fails with `ERPCImageDigest is sha256:000…, but ghcr.io/jumpgate-tech/erpc:src-a7a53ec2… is sha256:<64 hex>. Set ERPCImageDigest = "sha256:<64 hex>".`
+
+Copy that digest. Then ask the user to set the package to Public (precondition 2), and confirm the image is public:
+
+```bash
+docker logout ghcr.io; docker buildx imagetools inspect ghcr.io/jumpgate-tech/erpc:src-a7a53ec21a7922c4c6d8582e3466331b1a7cc622
+```
+
+- [ ] **Step 2: Write the failing pin tests**
+
+```go
+// internal/catalog/erpc_test.go
+package catalog
+
+import (
+	"os/exec"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
+)
+
+// A malformed pin would only fail at a user's first gateway provision; catch
+// it here. The all-zero digest is the "not published yet" value Step 1
+// commits, and must never reach a release.
+func TestERPCPinIsWellFormed(t *testing.T) {
+	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(ERPCSourceRef) {
+		t.Errorf("ERPCSourceRef %q is not a full commit hash", ERPCSourceRef)
+	}
+	if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(ERPCImageDigest) || strings.Trim(ERPCImageDigest[7:], "0") == "" {
+		t.Errorf("ERPCImageDigest %q is not a published digest; see the comment in erpc.go", ERPCImageDigest)
+	}
+	if ERPCImageRef() != ERPCImageRepo+"@"+ERPCImageDigest || !strings.HasPrefix(ERPCImageRepo, "ghcr.io/") {
+		t.Errorf("ERPCImageRef %q", ERPCImageRef())
+	}
+}
+
+// CI reads the pin with scripts/erpc-pin.sh; it must read what Go compiles.
+func TestERPCPinScriptReadsTheCatalog(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
+	out, err := exec.Command("bash", "../../scripts/erpc-pin.sh").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "ref=" + ERPCSourceRef + "\nshort=" + ERPCSourceRef[:8] + "\nrepo=" + ERPCImageRepo + "\ndigest=" + ERPCImageDigest + "\n"
+	if string(out) != want {
+		t.Fatalf("erpc-pin.sh printed\n%s\nwant\n%s", out, want)
+	}
+}
+```
+
+Run: `go test ./internal/catalog/ -run ERPCPin`
+Expected: FAIL. `ERPCImageDigest "sha256:000…" is not a published digest`.
+
+- [ ] **Step 3: Pin the digest**
+
+Set `ERPCImageDigest` in `internal/catalog/erpc.go` to the digest Step 1 printed.
+
+Run: `go test ./internal/catalog/ -run ERPCPin && scripts/erpc-verify.sh`
+Expected: PASS, then `erpc-verify: ghcr.io/jumpgate-tech/erpc@sha256:… is …, signed, linux/amd64 + linux/arm64`. This needs `cosign`, which you can get with `brew install cosign`. Without it, push and let the workflow's `verify` job run it.
+
+```bash
+git add internal/catalog
+git commit -m "feat(catalog): pin the published eRPC image by digest
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git push
+```
+
+Expected: the `eRPC image` workflow skips `build` and `merge` (the tag exists), and `verify` is green.
+
+- [ ] **Step 4: Write the failing ensureImage tests**
+
+Append to `internal/setup/gateway_test.go`:
+
+```go
+// The ensureImage cases run on argvfake: they read the argv docker got.
+func pullFake() *argvfake.Fake {
+	return argvfake.New().
+		Script("docker image inspect "+catalog.ERPCImageRef(), executor.Result{ExitCode: 1, Stderr: "Error: No such image\n"}).
+		Script("docker image inspect "+catalog.ERPCImageSourceTag(), executor.Result{ExitCode: 1}).
+		Script("docker image inspect "+ops.ERPCImageTag(), executor.Result{ExitCode: 1})
+}
+
+func argvStarting(f *argvfake.Fake, prefix string) []string {
+	for _, a := range f.Argvs() {
+		if strings.HasPrefix(strings.Join(a, " "), prefix) {
+			return a
+		}
+	}
+	return nil
+}
+
+func ensure(t *testing.T, f *argvfake.Fake) (string, error) {
+	t.Helper()
+	p := &gatewayPlan{id: "default", gw: testGateway(), backend: BackendDocker}
+	return p.ensureImage(context.Background(), f, &State{}, "linux/amd64")
+}
+
+func TestEnsureImage_PinnedPresentSkipsThePull(t *testing.T) {
+	f := pullFake().Script("docker image inspect "+catalog.ERPCImageRef(), executor.Result{Stdout: "sha256:abc\n"})
+	ref, err := ensure(t, f)
+	if err != nil || ref != catalog.ERPCImageRef() || argvStarting(f, "docker pull") != nil {
+		t.Fatalf("ref %q, err %v, argvs %q", ref, err, f.Argvs())
+	}
+}
+
+func TestEnsureImage_PullsByDigestForThePlatform(t *testing.T) {
+	f := pullFake()
+	ref, err := ensure(t, f)
+	pull := argvStarting(f, "docker pull")
+	if err != nil || ref != catalog.ERPCImageRef() || strings.Join(pull, " ") != "docker pull --platform linux/amd64 "+catalog.ERPCImageRef() {
+		t.Fatalf("ref %q, err %v, pull %q", ref, err, pull)
+	}
+	if argvStarting(f, "docker build") != nil {
+		t.Fatal("built although the pull succeeded")
+	}
+}
+
+func TestEnsureImage_PullFailsUsesALabelledSourceTag(t *testing.T) {
+	f := pullFake().
+		Script("docker pull", executor.Result{ExitCode: 1, Stderr: "dial tcp: lookup ghcr.io: no such host\n"}).
+		Script("docker image inspect --format {{ index .Config.Labels \"org.opencontainers.image.revision\" }} "+catalog.ERPCImageSourceTag(),
+			executor.Result{Stdout: catalog.ERPCSourceRef + "\n"})
+	ref, err := ensure(t, f)
+	if err != nil || ref != catalog.ERPCImageSourceTag() {
+		t.Fatalf("ref %q, err %v", ref, err)
+	}
+}
+
+func TestEnsureImage_RefusesASourceTagBuiltFromAnotherRef(t *testing.T) {
+	f := pullFake().
+		Script("docker pull", executor.Result{ExitCode: 1, Stderr: "no such host\n"}).
+		Script("docker image inspect --format {{ index .Config.Labels \"org.opencontainers.image.revision\" }} "+catalog.ERPCImageSourceTag(),
+			executor.Result{Stdout: "1111111111111111111111111111111111111111\n"}).
+		Script("docker buildx version", executor.Result{ExitCode: 1})
+	ref, err := ensure(t, f)
+	if err == nil || ref == catalog.ERPCImageSourceTag() {
+		t.Fatalf("ref %q, err %v; want the mislabelled image refused", ref, err)
+	}
+}
+
+func TestEnsureImage_PullFailsBuildsWhenBuildKitIsThere(t *testing.T) {
+	f := pullFake().
+		Script("docker pull", executor.Result{ExitCode: 1, Stderr: "no such host\n"}).
+		Script("docker buildx version", executor.Result{Stdout: "github.com/docker/buildx v0.19.0\n"})
+	ref, err := ensure(t, f)
+	build := strings.Join(argvStarting(f, "docker build"), " ")
+	if err != nil || ref != ops.ERPCImageTag() || !strings.Contains(build, "--label "+ops.LabelRevision+"="+catalog.ERPCSourceRef) {
+		t.Fatalf("ref %q, err %v, build %q", ref, err, build)
+	}
+}
+
+// No network, no BuildKit: one message naming every way out, quickly.
+func TestEnsureImage_OfflineWithoutBuildKitNamesEveryFix(t *testing.T) {
+	f := pullFake().
+		Script("docker pull", executor.Result{ExitCode: 1, Stderr: "Error response from daemon: Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host\n"}).
+		Script("docker buildx version", executor.Result{ExitCode: 1, Stderr: "docker: 'buildx' is not a docker command.\n"})
+	_, err := ensure(t, f)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{"no such host", "docker load", catalog.ERPCImageSourceTag(), "buildx"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q:\n%v", want, err)
+		}
+	}
+	if argvStarting(f, "docker build") != nil {
+		t.Fatal("ran the legacy builder, whose error hides the cause")
+	}
+}
+
+func TestEnsureImage_LocalBuildEnvSkipsThePull(t *testing.T) {
+	t.Setenv("JUMPGATE_ERPC_LOCAL_BUILD", "1")
+	f := pullFake().Script("docker buildx version", executor.Result{Stdout: "v0.19.0\n"})
+	ref, err := ensure(t, f)
+	if err != nil || ref != ops.ERPCImageTag() || argvStarting(f, "docker pull") != nil {
+		t.Fatalf("ref %q, err %v, argvs %q", ref, err, f.Argvs())
+	}
+}
+```
+
+Append to `internal/ops/docker_test.go`:
+
+```go
+// The first stderr line of a failed build is usually "DEPRECATED: The legacy
+// builder…" or a progress line; the cause is at the end.
+func TestPullImageReportsTheLastLines(t *testing.T) {
+	f := argvfake.New().Script("docker pull", executor.Result{ExitCode: 1, Stderr: "Pulling…\nwaiting\nError: denied: permission_denied\n"})
+	err := PullImage(context.Background(), f, "ghcr.io/x/y@sha256:ab", "linux/amd64")
+	if err == nil || !strings.Contains(err.Error(), "permission_denied") {
+		t.Fatalf("got %v", err)
+	}
+}
+```
+
+Also update the existing `ImageBuildArgs` expectations in `docker_test.go`. The argv now carries `"--label", LabelRevision + "=" + ERPCSourceRef` between the platform and `-t`.
+
+Run: `go test ./internal/setup/ ./internal/ops/`
+Expected: FAIL. `ensureImage` returns one value, and `PullImage`, `LabelRevision`, `ImageLabel` and `BuildKitAvailable` are undefined.
+
+- [ ] **Step 5: Implement**
+
+In `internal/ops/docker.go`:
+
+```go
+// LabelRevision is the OCI label naming the source commit an image was built
+// from. Published and locally built eRPC images both carry it, which is how
+// ensureImage tells an image built from ERPCSourceRef from one that only
+// carries the right tag (spec D39).
+const LabelRevision = "org.opencontainers.image.revision"
+
+// PullImage pulls ref for platform. A failure carries the last lines of
+// docker's output, where the cause is; the first lines are progress.
+func PullImage(ctx context.Context, e executor.Executor, ref, platform string) error {
+	res, err := DockerRun(ctx, e, "pull", "--platform", resolveRunPlatform(platform), ref)
+	if err != nil {
+		return err
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("docker pull %s failed (exit %d): %s", ref, res.ExitCode, lastLines(res.Stderr+res.Stdout, 5))
+	}
+	return nil
+}
+
+// ImageLabel reads one label of a local image; ok is false when the image is
+// absent or has no such label.
+func ImageLabel(ctx context.Context, e executor.Executor, ref, label string) (string, bool) {
+	res, err := DockerRun(ctx, e, "image", "inspect", "--format", `{{ index .Config.Labels "`+label+`" }}`, ref)
+	if err != nil || res.ExitCode != 0 {
+		return "", false
+	}
+	v := strings.TrimSpace(res.Stdout)
+	return v, v != "" && v != "<no value>"
+}
+
+// BuildKitAvailable reports whether the engine's CLI has buildx. The eRPC
+// Dockerfile uses RUN --mount=type=cache, which the legacy builder rejects
+// with a first line ("DEPRECATED: The legacy builder…") that hides the
+// cause (gap W1). Checking first lets the error say what to install.
+func BuildKitAvailable(ctx context.Context, e executor.Executor) bool {
+	res, err := DockerRun(ctx, e, "buildx", "version")
+	return err == nil && res.ExitCode == 0
+}
+
+// lastLines is the last n non-empty lines of s, joined with " | ".
+func lastLines(s string, n int) string {
+	var lines []string
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, " | ")
+}
+```
+
+Changes to existing functions:
+- `ImageBuildArgs`: insert `"--label", LabelRevision + "=" + ERPCSourceRef` after `--platform`.
+- `BuildImage`'s failure: replace `firstNonEmptyLine(res.Stderr, res.Stdout)` with `lastLines(res.Stderr+res.Stdout, 5)`.
+
+In `internal/setup/gateway.go`:
+
+```go
+// erpcPullTimeout/erpcBuildTimeout bound ensureImage's two slow paths, so a
+// machine with no network fails with a message rather than hanging. Package
+// vars so tests can shrink them.
+var (
+	erpcPullTimeout  = 10 * time.Minute
+	erpcBuildTimeout = 30 * time.Minute
+)
+
+// ensureImage makes the eRPC image present on the target and returns the
+// reference to run (spec D37–D39). In order:
+//  1. the pinned image (repo@digest) is already here: run it;
+//  2. pull it by digest (skipped when JUMPGATE_ERPC_LOCAL_BUILD=1, for
+//     working on the eRPC fork itself);
+//  3. the pull failed: run an image already here that was built from
+//     ERPCSourceRef. That is either the published source tag, loaded by hand
+//     on an air-gapped machine and checked by its revision label, or an
+//     earlier local build;
+//  4. build from source, when the engine has BuildKit;
+//  5. otherwise fail, naming every way out.
+func (p *gatewayPlan) ensureImage(ctx context.Context, e executor.Executor, st *State, platform string) (string, error) {
+	pinned := catalog.ERPCImageRef()
+	if ok, err := ops.ImageExists(ctx, e, pinned); err != nil {
+		return "", fmt.Errorf("run: %w", err)
+	} else if ok {
+		_ = emit(ctx, st, Event{StepID: "run", Line: "image " + pinned + " already present"})
+		return pinned, nil
+	}
+
+	var pullErr error
+	if os.Getenv("JUMPGATE_ERPC_LOCAL_BUILD") == "1" {
+		pullErr = errors.New("JUMPGATE_ERPC_LOCAL_BUILD=1 is set, so the published image was not pulled")
+	} else {
+		_ = emit(ctx, st, Event{StepID: "run", Line: "pulling " + pinned})
+		pctx, cancel := context.WithTimeout(ctx, erpcPullTimeout)
+		pullErr = ops.PullImage(pctx, e, pinned, platform)
+		cancel()
+		if pullErr == nil {
+			return pinned, nil
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+	}
+
+	src := catalog.ERPCImageSourceTag()
+	if rev, ok := ops.ImageLabel(ctx, e, src, ops.LabelRevision); ok {
+		if rev == catalog.ERPCSourceRef {
+			_ = emit(ctx, st, Event{StepID: "run", Line: fmt.Sprintf("%v; using %s, already on this machine", pullErr, src)})
+			return src, nil
+		}
+		_ = emit(ctx, st, Event{StepID: "run", Line: fmt.Sprintf("ignoring %s: it was built from %s, not %s", src, rev, catalog.ERPCSourceRef)})
+	}
+	if ok, err := ops.ImageExists(ctx, e, ops.ERPCImageTag()); err == nil && ok {
+		_ = emit(ctx, st, Event{StepID: "run", Line: fmt.Sprintf("%v; using the earlier local build %s", pullErr, ops.ERPCImageTag())})
+		return ops.ERPCImageTag(), nil
+	}
+
+	if !ops.BuildKitAvailable(ctx, e) {
+		return "", fmt.Errorf("run: the eRPC image is not on this machine and could not be pulled: %v. Any one of these fixes it: "+
+			"connect this machine to the network and retry; "+
+			"or, on a connected machine, `docker pull %s`, `docker save -o erpc.tar %s`, copy erpc.tar here and `docker load -i erpc.tar`; "+
+			"or install BuildKit (the docker-buildx or docker-buildx-plugin package; `brew install docker-buildx` with colima) so jumpgate can build it here",
+			pullErr, src, src)
+	}
+	tag := ops.ERPCImageTag()
+	_ = emit(ctx, st, Event{StepID: "run", Line: fmt.Sprintf("%v; building %s from %s (several minutes)", pullErr, tag, ops.ERPCBuildContext())})
+	bctx, cancel := context.WithTimeout(ctx, erpcBuildTimeout)
+	defer cancel()
+	if _, err := ops.BuildImage(bctx, e, ops.ImageBuildArgs(ops.ImageBuildSpec{Tag: tag, Platform: platform})...); err != nil {
+		return "", fmt.Errorf("run: %w", err)
+	}
+	return tag, nil
+}
+```
+
+In `runDocker`, replace the `ensureImage` call with `image, err := p.ensureImage(ctx, e, st, platform)`, and pass `Image: image` in the `ops.ERPCRunSpec`. Delete the old body. Its comment ("builds the gateway image on the target unless it is already…") is replaced by the one above.
+
+Run: `go test ./internal/setup/ ./internal/ops/ ./internal/catalog/`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add internal/ops internal/setup
+git commit -m "feat(gateway): pull the pinned eRPC image by digest; build only as a fallback, and say what is missing when neither works
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 7: Extend the live test to the gateway**
+
+In `TestLocalDockerLive`, after the devnet's `RunAll` succeeds, add:
+
+```go
+	// The gateway, in front of the devnet, through the pulled image. Both
+	// containers join ops.NetworkName, so the upstream is the devnet's
+	// container name on that network, which resolves the same way on every
+	// engine (no host.docker.internal needed).
+	g := catalog.GatewayConfig{
+		Port:       freePort(t),
+		MetricsOff: true, // the runner's 4001 may be taken; metrics are not under test
+		Networks: []catalog.GatewayNetwork{{ChainID: catalog.DevnetChainID, Upstreams: []catalog.GatewayUpstream{
+			{ID: "devnet", Endpoint: fmt.Sprintf("http://%s:%d", d.Name(), catalog.DevnetContainerHTTPPort)},
+		}}},
+	}
+	gsteps, err := PlanGateway("live", g, BackendDocker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ops.RemoveContainer(context.Background(), e, ops.ERPCContainerNameFor("live")) })
+	if err := RunAll(ctx, e, gsteps, &State{}); err != nil {
+		t.Fatalf("gateway through the pulled image: %v", err)
+	}
+	if ok, _ := ops.ImageExists(ctx, e, catalog.ERPCImageRef()); !ok {
+		t.Fatalf("%s is not present after provisioning; the gateway ran something else", catalog.ERPCImageRef())
+	}
+```
+
+(Add `fmt` to the imports.)
+
+Run: `JUMPGATE_DOCKER_LIVE=1 go test -v -count=1 -run '^TestLocalDockerLive$' ./internal/setup/`
+Expected: PASS on this Mac (colima), and the log shows `pulling ghcr.io/jumpgate-tech/erpc@sha256:…`. On an Intel Mac this takes seconds rather than the 12 minutes the gap analysis measured. Afterwards, `docker ps -a` shows neither live container.
+
+- [ ] **Step 8: Release workflow and README**
+
+In `.github/workflows/release.yml`:
+
+```yaml
+  # The eRPC image every controller of this release pins must exist, be
+  # signed and match the catalog before anything ships (spec D40). On a
+  # release the source tag already exists, so this only verifies.
+  erpc-image:
+    uses: ./.github/workflows/erpc-image.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+```
+
+Add `needs: [erpc-image]` to the `binaries` job. The `desktop` job keeps `needs: [binaries]`, so the gate covers it too. Add the line "eRPC image: verified against `internal/catalog/erpc.go` by the erpc-image job" to the header comment.
+
+In `README.md`, under the gateway section, add:
+
+```markdown
+### The gateway image
+
+The RPC gateway runs eRPC from a prebuilt image, `ghcr.io/jumpgate-tech/erpc`, for amd64 and arm64. Each jumpgate release pins one image by its digest, and that image is signed by this repository's release workflow. Check it with:
+
+    cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      --certificate-identity-regexp '^https://github.com/jumpgate-tech/jumpgate-app/\.github/workflows/erpc-image\.yml@' \
+      ghcr.io/jumpgate-tech/erpc@<digest>
+
+**No network on the gateway machine?** On a connected machine, run `docker pull ghcr.io/jumpgate-tech/erpc:src-<ref>` and `docker save -o erpc.tar ghcr.io/jumpgate-tech/erpc:src-<ref>`. Copy `erpc.tar` across and run `docker load -i erpc.tar`. jumpgate uses the loaded image once its revision label matches. The ref and digest for your version are in `internal/catalog/erpc.go` at that version's tag.
+
+**Working on the eRPC fork?** `JUMPGATE_ERPC_LOCAL_BUILD=1` builds the image from source instead. This needs Docker BuildKit (`docker buildx`).
+```
+
+```bash
+git add .github/workflows/release.yml README.md
+git commit -m "ci(release): verify the pinned eRPC image before releasing; document offline use
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git push && gh pr checks --watch
+```
+
+Expected: every job is green, including `docker-live`, which now pulls the image and runs the gateway on ubuntu-24.04.
+
+- [ ] **Step 9: Run the release workflow without publishing**
+
+```bash
+gh workflow run release.yml --ref "$(git branch --show-current)"
+gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId -q '.[0].databaseId')"
+```
+
+Expected: `erpc-image / pin` sees the tag, `build` and `merge` are skipped, and `verify` is green. Then the existing jobs run as in Task 14 Step 3.
+
+- [ ] **Step 10: Manual checks (record each in the PR description)**
+
+1. **No network, on this Mac.** Remove the image with `docker rmi ghcr.io/jumpgate-tech/erpc@<digest>`, then turn Wi-Fi off and provision a gateway in the app. Expected: within seconds, the error from `TestEnsureImage_OfflineWithoutBuildKitNamesEveryFix` (this Mac's colima has no buildx). Turn Wi-Fi on and retry: the image pulls and the gateway answers.
+2. **The air-gapped path.** On this Mac, run `docker save` on the `src-<ref>` tag. Then `docker rmi` both references, turn Wi-Fi off, run `docker load`, and provision. Expected: the stream says `using ghcr.io/jumpgate-tech/erpc:src-… already on this machine`.
+3. **Windows 11 with Docker Desktop**, the machine from Task 15 Step 17. A gateway provisions by pulling, without buildx and without a 12-minute build.
+

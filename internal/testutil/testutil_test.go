@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // A unix socket path must fit in sun_path: 104 bytes on macOS, 108 on Linux
@@ -36,6 +38,11 @@ func TestHomeSetsHomeAndUserProfile(t *testing.T) {
 func TestAssertPrivateAcceptsAnOwnerOnlyFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "secret")
 	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// On Windows the new file inherits the temp dir's DACL; restrict it the
+	// way every secret write does.
+	if err := fsperm.MakePrivate(p); err != nil {
 		t.Fatal(err)
 	}
 	AssertPrivate(t, p)
@@ -73,14 +80,14 @@ func (f *failRecorder) Fatal(...any) {
 }
 
 func TestAssertPrivateRejectsAWorldReadableFile(t *testing.T) {
-	RequireUnix(t)
 	p := filepath.Join(t.TempDir(), "open")
 	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(p, 0o644); err != nil {
+	if err := fsperm.MakePrivate(p); err != nil {
 		t.Fatal(err)
 	}
+	Loosen(t, p)
 	rec := &failRecorder{TB: t}
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -90,6 +97,6 @@ func TestAssertPrivateRejectsAWorldReadableFile(t *testing.T) {
 	}()
 	wg.Wait()
 	if !rec.failed {
-		t.Fatal("AssertPrivate accepted a 0644 file")
+		t.Fatal("AssertPrivate accepted a file other users can read")
 	}
 }

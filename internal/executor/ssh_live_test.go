@@ -203,11 +203,11 @@ func (s *sshServer) dial(t *testing.T, keyPath string) Executor {
 	}
 
 	e, err := NewSSH(SSHConfig{
-		Host:        host,
-		Port:        port,
-		User:        "root",
-		KeyPath:     keyPath,
-		HostKeyFile: filepath.Join(t.TempDir(), "known_hosts"),
+		Host:    host,
+		Port:    port,
+		User:    "root",
+		KeyPath: keyPath,
+		HostKey: TOFUHostKeyCallback(filepath.Join(t.TempDir(), "known_hosts")),
 	})
 	if err != nil {
 		t.Fatalf("NewSSH: %v", err)
@@ -433,6 +433,7 @@ func TestNewSSH_RefusesAKeyItCannotUse(t *testing.T) {
 				Host: "127.0.0.1", Port: 1, User: "root",
 				KeyPath:     tc.keyPath,
 				HostKeyFile: filepath.Join(dir, "known_hosts"),
+				HostKey:     TOFUHostKeyCallback(filepath.Join(dir, "known_hosts")),
 			})
 			if err == nil {
 				t.Fatal("an unusable key was accepted")
@@ -461,8 +462,8 @@ func TestNewSSH_DefaultsToPort22(t *testing.T) {
 
 	_, err := NewSSH(SSHConfig{
 		Host: "127.0.0.1", Port: 0, User: "root",
-		KeyPath:     key,
-		HostKeyFile: filepath.Join(t.TempDir(), "known_hosts"),
+		KeyPath: key,
+		HostKey: TOFUHostKeyCallback(filepath.Join(t.TempDir(), "known_hosts")),
 	})
 	if err == nil {
 		// An sshd that accepted this key: it was reached on 22, since 0 is
@@ -496,8 +497,8 @@ func TestNewSSH_ReportsAnUnreachableHost(t *testing.T) {
 	go func() {
 		_, err := NewSSH(SSHConfig{
 			Host: "127.0.0.1", Port: addr.Port, User: "root",
-			KeyPath:     keyPath,
-			HostKeyFile: filepath.Join(t.TempDir(), "known_hosts"),
+			KeyPath: keyPath,
+			HostKey: TOFUHostKeyCallback(filepath.Join(t.TempDir(), "known_hosts")),
 		})
 		done <- err
 	}()

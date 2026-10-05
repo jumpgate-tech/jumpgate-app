@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -17,8 +18,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/filelock"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // ErrAlreadyRunning means another server holds the lock.
@@ -36,16 +39,33 @@ type Info struct {
 	Token     string    `json:"token"`
 	Version   string    `json:"version"`
 	StartedAt time.Time `json:"startedAt"`
+	// Shape is what the server was built with, so a launch that attaches to it
+	// can tell the operator which of its own options are not in effect. Nil
+	// from a server older than the field.
+	Shape *Shape `json:"shape,omitempty"`
 }
 
-// RunDir is ~/.jumpgate/run, created 0700.
+// Shape records the options that shape a running server. It carries no
+// credential: server.json is 0600, but the tokens never need to leave the
+// process that holds them.
+type Shape struct {
+	RelayBind     string `json:"relayBind,omitempty"`
+	BillingSocket string `json:"billingSocket,omitempty"`
+	ERPCURL       string `json:"erpcUrl,omitempty"`
+	ERPCProject   string `json:"erpcProject,omitempty"`
+	Meter         bool   `json:"meter,omitempty"`
+	KeyAdmin      bool   `json:"keyAdmin,omitempty"`
+}
+
+// RunDir is ~/.jumpgate/run, owner-only (it holds the session token and the
+// server socket).
 func RunDir() (string, error) {
 	base, err := config.Dir()
 	if err != nil {
 		return "", err
 	}
 	dir := filepath.Join(base, "run")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsperm.MkdirPrivate(dir); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -88,18 +108,14 @@ func alreadyRunning(dir string) error {
 	return fmt.Errorf("%w, pid %d", ErrAlreadyRunning, info.PID)
 }
 
-// Publish writes server.json (0600: it carries the session token) once the
-// listeners are up.
+// Publish writes server.json (owner-only: it carries the session token) once
+// the listeners are up.
 func (h *Holder) Publish(info Info) error {
 	b, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(h.dir, "server.json.tmp")
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(h.dir, "server.json"))
+	return fsperm.WriteFilePrivate(filepath.Join(h.dir, "server.json"), b)
 }
 
 // Release removes server.json and drops the lock.
@@ -156,28 +172,55 @@ func Find(ctx context.Context) (Info, bool, error) {
 	return info, res.StatusCode == http.StatusOK, nil
 }
 
+var startServer = startDetached // a seam for tests
+
+// SkewWarning is the note for an operator whose running server is a different
+// jumpgate build than this one, or "" when the versions agree. A CLI upgraded
+// under a running server would otherwise meet routes the old server lacks as
+// bare 404s.
+func SkewWarning(info Info) string {
+	cur := buildinfo.Version()
+	if info.Version == cur {
+		return ""
+	}
+	v := info.Version
+	if v == "" {
+		v = "unknown"
+	}
+	return fmt.Sprintf("jumpgate: a different jumpgate version (%s) is running; restart it with `jumpgate stop` (this is %s)", v, cur)
+}
+
 // EnsureRunning returns the running server, starting `exe serve` detached if
-// there is none.
-func EnsureRunning(ctx context.Context, exe string) (Info, error) {
+// there is none. When the running server is another version, it says so on
+// warn (nil for silence) and still returns it: the caller decides whether its
+// command can be trusted to it.
+func EnsureRunning(ctx context.Context, exe string, warn io.Writer) (Info, error) {
 	if info, ok, err := Find(ctx); err != nil || ok {
+		if ok && warn != nil {
+			if s := SkewWarning(info); s != "" {
+				fmt.Fprintln(warn, s)
+			}
+		}
 		return info, err
 	}
 	dir, err := RunDir()
 	if err != nil {
 		return Info{}, err
 	}
-	logf, err := os.OpenFile(filepath.Join(dir, "server.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	logf, err := fsperm.OpenAppendPrivate(filepath.Join(dir, "server.log"))
 	if err != nil {
 		return Info{}, err
 	}
 	defer logf.Close()
 	cmd := exec.Command(exe, "serve", "--no-open")
 	cmd.Stdout, cmd.Stderr = logf, logf
-	detach(cmd)
-	if err := cmd.Start(); err != nil {
+	// The server never pins the directory the CLI happened to start in.
+	cmd.Dir = dir
+	started, err := startServer(cmd)
+	if err != nil {
 		return Info{}, fmt.Errorf("daemon: start server: %w", err)
 	}
-	_ = cmd.Process.Release()
+	_ = started.Process.Release()
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {

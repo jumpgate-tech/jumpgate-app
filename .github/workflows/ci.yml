@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'feat/**']
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -54,6 +54,14 @@ jobs:
           go-version: "1.25"
       - name: go vet
         run: go vet ./...
+      # Verbose on Windows, before the full run, so the log shows whether the
+      # symlink tests ran or skipped (making a symlink needs a privilege) and
+      # every DACL test that passed.
+      - name: go test fsperm and key file (verbose)
+        if: runner.os == 'Windows'
+        run: |
+          go test -v ./internal/fsperm/
+          go test -v -run 'KeyFile|Symlink|OnePasswordTemplate' ./internal/signer/
       - name: go test
         run: go test ./...
       - name: go build (headless, no cgo)
@@ -122,6 +130,17 @@ jobs:
         env:
           BASE: ${{ matrix.base }}
         run: scripts/e2e-local.sh
+
+  windows-daemon:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: server lifecycle smoke
+        shell: pwsh
+        run: scripts/windows-smoke.ps1
 
   # The Rust billing service. It is a standalone crate under services/billing,
   # invisible to the Go tooling above, so it needs its own gate.

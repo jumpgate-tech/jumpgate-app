@@ -174,6 +174,18 @@ func Build(opt BuildOptions) (http.Handler, Runtime, error) {
 	return handler, Runtime{Credits: cfg.Credits, Beacon: pool}, nil
 }
 
+// UnmeteredWarning is the line to log at startup when the relay will serve
+// without billing, or "" when it will not. Metering is off by default on
+// purpose, but a relay that gives every valid key free service must say so
+// where the operator looks, not only in a flag's default.
+func UnmeteredWarning(opt BuildOptions) string {
+	if opt.RelayBind == "" || opt.EnableMetering || opt.Credits != nil {
+		return ""
+	}
+	return "WARNING: the relay on " + opt.RelayBind + " runs without --meter: every valid key is served free and nothing is charged. " +
+		"Pass --meter (or JUMPGATE_METER=true) to charge credits"
+}
+
 // defaultTrustedProxies trusts loopback when the relay is bound to loopback,
 // and nobody otherwise.
 //

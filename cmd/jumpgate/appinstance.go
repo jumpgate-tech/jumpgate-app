@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -58,7 +59,7 @@ func appURL(info daemon.Info) string {
 // serveAndPublish runs s on bind and on ~/.jumpgate/run/server.sock until ctx
 // ends, and publishes server.json once both answer, so every jumpgate command
 // finds this server whichever entry point started it.
-func serveAndPublish(ctx context.Context, stop context.CancelFunc, s *server.Server, holder *daemon.Holder, bind, token string) error {
+func serveAndPublish(ctx context.Context, stop context.CancelFunc, s *server.Server, holder *daemon.Holder, bind, token string, shape *daemon.Shape) error {
 	dir, err := daemon.RunDir()
 	if err != nil {
 		return err
@@ -67,7 +68,7 @@ func serveAndPublish(ctx context.Context, stop context.CancelFunc, s *server.Ser
 	return serveBoth(ctx, stop, s.ListenAndServe, func(ctx context.Context) error { return s.ServeUnix(ctx, sock) },
 		func() error { return waitForSocket(ctx, sock, 2*time.Second) },
 		func() error {
-			if err := holder.Publish(daemon.Info{PID: os.Getpid(), Socket: sock, HTTPAddr: bind, Token: token, Version: buildinfo.Version(), StartedAt: time.Now().UTC()}); err != nil {
+			if err := holder.Publish(daemon.Info{PID: os.Getpid(), Socket: sock, HTTPAddr: bind, Token: token, Version: buildinfo.Version(), StartedAt: time.Now().UTC(), Shape: shape}); err != nil {
 				return fmt.Errorf("publish: %w", err)
 			}
 			fmt.Fprintf(os.Stderr, "jumpgate server on %s and %s\n", bind, sock)
@@ -75,12 +76,45 @@ func serveAndPublish(ctx context.Context, stop context.CancelFunc, s *server.Ser
 		})
 }
 
+// loadServerConfig is the start of serve and of the app, once the server
+// lock is held: it loads the config, then restricts the state directory and
+// every secret already in it to this user (ruling P29). A file it cannot
+// restrict is reported and the server still comes up, except a signing key
+// (the controller key file, the transport key): that stops startup.
+func loadServerConfig(stderr io.Writer) (config.Config, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return cfg, fmt.Errorf("load config: %w", err)
+	}
+	keyFile := ""
+	if cfg.Controller != nil && signer.Store(cfg.Controller.KeyStore) == signer.StoreFile {
+		keyFile = cfg.Controller.KeyRef
+	}
+	tightened, warnings, err := config.TightenState(keyFile)
+	for _, p := range tightened {
+		fmt.Fprintf(stderr, "jumpgate: other users could read or change %s; it is now restricted to you (if it holds a key, treat that key as exposed)\n", p)
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(stderr, "jumpgate: %v\n", w)
+	}
+	return cfg, err
+}
+
 // openControllerKey opens the controller key named in the config, or returns
 // nil when none has been made yet (the intent and pair routes then answer 503
-// no_controller_key).
+// no_controller_key). The key must be the identity config.json recorded: a
+// key with another address (a replaced keychain or 1Password item) is
+// signer.ErrAddressMismatch, never silently used.
 func openControllerKey(cfg config.Config) (signer.Signer, error) {
 	if cfg.Controller == nil {
 		return nil, nil
 	}
-	return signer.Open(context.Background(), signer.Store(cfg.Controller.KeyStore), cfg.Controller.KeyRef)
+	k, err := signer.Open(context.Background(), signer.Store(cfg.Controller.KeyStore), cfg.Controller.KeyRef)
+	if err != nil {
+		return nil, err
+	}
+	if err := signer.CheckAddress(k, cfg.Controller.Address); err != nil {
+		return nil, err
+	}
+	return k, nil
 }

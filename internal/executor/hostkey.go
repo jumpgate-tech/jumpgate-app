@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // Trust-on-first-use host key storage. Everything in this file touches the
@@ -71,7 +73,7 @@ func lookupHostKey(hostKeyFile, hostname string) (ssh.PublicKey, error) {
 }
 
 // RecordHostKey records key for hostname in hostKeyFile, creating the file
-// with mode 0600 if it doesn't already exist. Trust-on-first-use uses it for
+// owner-only if it doesn't already exist (and restricting it if it does). Trust-on-first-use uses it for
 // HostKeyFile; the CLI also calls it, after an explicit human confirmation,
 // on the confirmed-hosts file Strict reads. Those two files must stay apart.
 func RecordHostKey(hostKeyFile, hostname string, key ssh.PublicKey) error {
@@ -82,7 +84,10 @@ func RecordHostKey(hostKeyFile, hostname string, key ssh.PublicKey) error {
 		}
 	}
 
-	f, err := os.OpenFile(hostKeyFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	// Owner-only on every OS, from creation; the confirmed store decides
+	// which hosts this controller trusts, so another user must not be able to
+	// append to it.
+	f, err := fsperm.OpenAppendPrivate(hostKeyFile)
 	if err != nil {
 		return fmt.Errorf("open host key file %s: %w", hostKeyFile, err)
 	}
@@ -95,9 +100,11 @@ func RecordHostKey(hostKeyFile, hostname string, key ssh.PublicKey) error {
 	return nil
 }
 
-// TOFUHostKeyCallback is the exported form of the trust-on-first-use policy
-// NewSSH applies, so callers (and tests of the config migration) can check a
-// known_hosts file against a presented key without dialling.
+// TOFUHostKeyCallback is the trust-on-first-use policy: an unknown host's key
+// is appended to hostKeyFile (created 0600), and a known host presenting a
+// different key is rejected. It is never a default; only the legacy web-UI
+// path asks for it, for boxes nobody confirmed or paired, until sub-project 6
+// retires that path.
 func TOFUHostKeyCallback(hostKeyFile string) ssh.HostKeyCallback {
 	return tofuHostKeyCallback(hostKeyFile)
 }
