@@ -79,6 +79,22 @@ type agentFailed struct{ msg string }
 
 func (e *agentFailed) Error() string { return e.msg }
 
+// localError is a failure on this machine while sending an intent (signing,
+// the sequence store, a pairing record that does not resolve): the server's
+// own fault, not the box's, so 500 internal.
+type localError struct{ err error }
+
+func (e *localError) Error() string { return e.err.Error() }
+func (e *localError) Unwrap() error { return e.err }
+
+// isAgentErr reports whether err is one of agentclient's transport,
+// verification or host-key errors, as opposed to a local failure.
+func isAgentErr(err error) bool {
+	return errors.Is(err, agentclient.ErrUnreachable) || errors.Is(err, agentclient.ErrAgentHTTP) ||
+		errors.Is(err, agentclient.ErrBadReceipt) || errors.Is(err, executor.ErrUnknownHost) ||
+		errors.Is(err, executor.ErrHostKeyMismatch)
+}
+
 // dialError marks a failure to open a legacy executor, so a refused
 // connection reads "unreachable" while an operation's own failure does not.
 type dialError struct{ err error }
@@ -95,7 +111,7 @@ func (s *Server) sendIntent(ctx context.Context, cfg config.Config, t config.Tar
 	}
 	at, err := agentTarget(t)
 	if err != nil {
-		return agentclient.Response{}, err
+		return agentclient.Response{}, &localError{err}
 	}
 	entry := s.reg.get(t.ID)
 	entry.intentMu.Lock()
@@ -104,13 +120,17 @@ func (s *Server) sendIntent(ctx context.Context, cfg config.Config, t config.Tar
 	if err != nil {
 		// A host-key failure keeps its type; every other dial failure is an
 		// outage of the transport, never a reason to try another one.
-		if !errors.Is(err, executor.ErrUnknownHost) && !errors.Is(err, executor.ErrHostKeyMismatch) && !errors.Is(err, agentclient.ErrUnreachable) {
+		if !isAgentErr(err) {
 			err = fmt.Errorf("%w: %v", agentclient.ErrUnreachable, err)
 		}
 		return agentclient.Response{}, err
 	}
 	defer client.Close()
-	return client.Do(ctx, kind, payload)
+	res, err := client.Do(ctx, kind, payload)
+	if err != nil && !isAgentErr(err) {
+		err = &localError{err}
+	}
+	return res, err
 }
 
 // agentResult is sendIntent's result, with a rejection or failure as an error.
@@ -291,6 +311,7 @@ func classifyNodeError(err error) (int, api.Error) {
 		rej     *agentRejected
 		fail    *agentFailed
 		nokey   *noControllerKey
+		local   *localError
 		dial    *dialError
 		unknown *executor.UnknownHostError
 		op      *net.OpError
@@ -317,6 +338,8 @@ func classifyNodeError(err error) (int, api.Error) {
 		return http.StatusBadGateway, api.Error{Message: msg, Code: api.CodeAgentHTTP}
 	case errors.Is(err, agentclient.ErrUnreachable):
 		return http.StatusGatewayTimeout, api.Error{Message: msg, Code: api.CodeUnreachable}
+	case errors.As(err, &local):
+		return http.StatusInternalServerError, api.Error{Message: msg, Code: api.CodeInternal}
 	case errors.Is(err, executor.ErrNoPOSIXShell):
 		return http.StatusConflict, api.Error{Message: msg, Code: api.CodeLocalUnsupported}
 	case errors.As(err, &dial) && (errors.As(err, &op) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded)):
@@ -350,26 +373,70 @@ func (s *Server) nodeTarget(w http.ResponseWriter, id string) (config.Config, co
 var (
 	agentStatusInterval       = 5 * time.Second
 	agentLogsSnapshotInterval = 10 * time.Second
+	// agentPollTimeout bounds one poll, well inside apiclient's 45 s idle
+	// timeout, so a slow agent is an error event, not a dead stream.
+	agentPollTimeout = 25 * time.Second
 )
 
 // writeSSENote sends a notice about the stream itself (apiclient: Update.Note).
 func writeSSENote(w http.ResponseWriter, text string) { writeSSENamed(w, "note", text) }
 
-// pollAgentStream runs a paired box's stream: send now, then again every
-// interval, pinging on Task 3's cadence in between. An error is sent as an
-// "error" event and the stream continues, so a box that comes back is picked
-// up again. Only this goroutine writes to the stream.
-func pollAgentStream(r *http.Request, conn *sseConn, interval time.Duration, send func() error) {
+// agentPoll is one poll's outcome: the event to send (name "" is a default
+// event) or the error to report.
+type agentPoll struct {
+	name string
+	v    any
+	err  error
+}
+
+// pollAgentStream runs a paired box's stream: poll now, then again every
+// interval. The poll runs in its own goroutine under agentPollTimeout, so the
+// handler keeps pinging (Task 3's cadence) while an agent is slow, and a poll
+// that runs out of time is an "unreachable" error event, well before the
+// client's idle timeout. Any error is sent as an "error" event and the stream
+// continues, so a box that comes back is picked up again. Only the handler
+// goroutine writes to the stream; the poll goroutine only returns a value, and
+// the handler waits for it before returning or polling again.
+func pollAgentStream(r *http.Request, conn *sseConn, interval time.Duration, poll func(ctx context.Context) agentPoll) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
-		err := send()
-		if r.Context().Err() != nil {
-			return
+		ctx, cancel := context.WithTimeout(r.Context(), agentPollTimeout)
+		done := make(chan agentPoll, 1)
+		go func() { done <- poll(ctx) }()
+		res, timedOut := agentPoll{}, false
+		for waiting := true; waiting; {
+			select {
+			case res = <-done:
+				waiting = false
+			case <-ctx.Done():
+				if r.Context().Err() != nil {
+					cancel()
+					<-done
+					return
+				}
+				if !timedOut {
+					// The poll may still be waiting on something that does
+					// not watch ctx (the target's intent lock); say so now
+					// and drop whatever it answers later.
+					timedOut = true
+					_, e := apiErrorFor(fmt.Errorf("%w: the agent did not answer within %s", agentclient.ErrUnreachable, agentPollTimeout))
+					conn.SendNamed("error", e)
+				}
+			case <-conn.Pings():
+				conn.Ping()
+			}
 		}
-		if err != nil {
-			_, e := apiErrorFor(err)
+		cancel()
+		switch {
+		case timedOut:
+		case res.err != nil:
+			_, e := apiErrorFor(res.err)
 			conn.SendNamed("error", e)
+		case res.name == "":
+			conn.Send(res.v)
+		default:
+			conn.SendNamed(res.name, res.v)
 		}
 		for waiting := true; waiting; {
 			select {
@@ -393,12 +460,9 @@ func (s *Server) streamAgentStatus(w http.ResponseWriter, r *http.Request, cfg c
 		return
 	}
 	defer conn.Close()
-	pollAgentStream(r, conn, agentStatusInterval, func() error {
-		snap, _, err := s.nodeStatus(r.Context(), cfg, t)
-		if err == nil {
-			conn.Send(snap)
-		}
-		return err
+	pollAgentStream(r, conn, agentStatusInterval, func(ctx context.Context) agentPoll {
+		snap, _, err := s.nodeStatus(ctx, cfg, t)
+		return agentPoll{v: snap, err: err}
 	})
 }
 
@@ -419,14 +483,11 @@ func (s *Server) streamAgentLogSnapshots(w http.ResponseWriter, r *http.Request,
 	if n <= 0 {
 		n = defaultRecentLogs
 	}
-	pollAgentStream(r, conn, agentLogsSnapshotInterval, func() error {
-		hits, _, err := s.nodeLogs(r.Context(), cfg, t, n)
-		if err == nil {
-			if hits == nil {
-				hits = []logwatch.Hit{}
-			}
-			conn.SendNamed("reset", hits)
+	pollAgentStream(r, conn, agentLogsSnapshotInterval, func(ctx context.Context) agentPoll {
+		hits, _, err := s.nodeLogs(ctx, cfg, t, n)
+		if hits == nil {
+			hits = []logwatch.Hit{}
 		}
-		return err
+		return agentPoll{name: "reset", v: hits, err: err}
 	})
 }

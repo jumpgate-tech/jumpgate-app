@@ -729,14 +729,18 @@ func (s *Server) handleListTargets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
-	var t config.Target
-	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+	var in config.Target
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	// Wire is only ever set by the setup wizard (POST .../setup), never
-	// accepted directly from a client here.
-	t.Wire = nil
+	// A client names the machine and how to reach it; nothing else. Every
+	// other field is the server's: Wire is set by the setup wizard, Devnet by
+	// its container route, Agent only by pairing (an agent block here would
+	// make the server trust receipts from a client-chosen address over a
+	// client-chosen socket), and a "gateway" block would be migrated into
+	// Config.Gateways on the next load.
+	t := config.Target{ID: in.ID, Mode: in.Mode, SSH: in.SSH}
 
 	if t.ID == "" {
 		writeError(w, http.StatusBadRequest, "id is required")

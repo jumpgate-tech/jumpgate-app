@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/signer"
@@ -52,17 +54,7 @@ func pairedBox(t *testing.T, ex executor.Executor, setUp bool) (*httptest.Server
 
 func pairedBoxWith(t *testing.T, ex executor.Executor, o pairedOpts) (*httptest.Server, string) {
 	t.Helper()
-	// A short directory keeps the agent's socket path under the Unix
-	// sun_path limit (104 bytes on macOS); Windows has no /tmp.
-	base := "/tmp"
-	if runtime.GOOS == "windows" {
-		base = ""
-	}
-	home, err := os.MkdirTemp(base, "jgn")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(home) })
+	home := shortTempDir(t, "jgn")
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	if o.setUp {
@@ -192,39 +184,190 @@ func (c *countingExec) newExecutor(config.Target) (executor.Executor, error) {
 	return &autoSucceedExecutor{}, nil
 }
 
-// A paired box whose agent cannot be reached answers "unreachable" on every
-// node route and never opens the legacy executor, even with a wire on record.
-func TestUnreachableAgentNeverFallsBackToSSH(t *testing.T) {
+// shortTempDir is a temp directory whose paths fit a Unix socket's sun_path
+// limit (104 bytes on macOS); Windows has no /tmp.
+func shortTempDir(t *testing.T, prefix string) string {
+	t.Helper()
+	base := "/tmp"
+	if runtime.GOOS == "windows" {
+		base = ""
+	}
+	dir, err := os.MkdirTemp(base, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
+// fakeAgentSocket serves h on a Unix socket in place of an agent, for answers
+// a real agent never gives (an HTTP error, silence). Register it before the
+// server so its cleanup runs after the server has closed.
+func fakeAgentSocket(t *testing.T, h http.HandlerFunc) string {
+	t.Helper()
+	sock := filepath.Join(shortTempDir(t, "jgf"), "f.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: h}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	return sock
+}
+
+var wiredForLegacy = &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/mnt/reth"}
+
+// A paired box answers every node route with the agent's own error, whatever
+// went wrong with the agent, and never opens the legacy executor, even with a
+// wire on record that the executor could use.
+func TestPairedFailuresNeverFallBackToSSH(t *testing.T) {
 	old := agentStatusInterval
 	agentStatusInterval = time.Hour
 	t.Cleanup(func() { agentStatusInterval = old })
-	var legacy countingExec
-	ts, token := pairedBoxWith(t, nopExec{}, pairedOpts{setUp: true,
-		server: func(c *Config) { c.NewExecutor = legacy.newExecutor },
-		target: func(tg *config.Target) {
-			tg.Agent.Socket = filepath.Join(filepath.Dir(tg.Agent.Socket), "gone.sock")
-			tg.Wire = &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/mnt/reth"}
-		}})
+	other, _ := signer.GenerateKey()
+	cases := []struct {
+		name      string
+		needsPeer bool // the real agent must answer
+		setUp     bool
+		target    func(t *testing.T, tg *config.Target)
+		status    int
+		code      api.Code
+	}{
+		{name: "unreachable", setUp: true, status: http.StatusGatewayTimeout, code: api.CodeUnreachable,
+			target: func(t *testing.T, tg *config.Target) {
+				tg.Agent.Socket = filepath.Join(filepath.Dir(tg.Agent.Socket), "gone.sock")
+			}},
+		{name: "agent_http", setUp: true, status: http.StatusBadGateway, code: api.CodeAgentHTTP,
+			target: func(t *testing.T, tg *config.Target) {
+				tg.Agent.Socket = fakeAgentSocket(t, func(w http.ResponseWriter, r *http.Request) {
+					http.Error(w, "peer refused", http.StatusForbidden)
+				})
+			}},
+		{name: "rejected", needsPeer: true, setUp: false, status: http.StatusConflict, code: api.CodeRejected},
+		{name: "bad_receipt", needsPeer: true, setUp: true, status: http.StatusBadGateway, code: api.CodeBadReceipt,
+			target: func(t *testing.T, tg *config.Target) { tg.Agent.Address = other.Address().Hex() }},
+	}
 	routes := []struct{ method, path string }{
 		{"GET", "/du"}, {"GET", "/endpoints"}, {"GET", "/firewall"}, {"GET", "/logs"},
 		{"POST", "/services/exec/restart"},
 	}
-	for _, r := range routes {
-		res, e := do(t, ts, token, r.method, "/api/targets/box"+r.path, "")
-		if res.StatusCode != http.StatusGatewayTimeout || e.Code != api.CodeUnreachable || res.Header.Get("X-Jumpgate-Via") != "agent" {
-			t.Errorf("%s %s: got %d %+v via %q", r.method, r.path, res.StatusCode, e, res.Header.Get("X-Jumpgate-Via"))
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.needsPeer {
+				requireAgentPeer(t)
+			}
+			var legacy countingExec
+			ts, token := pairedBoxWith(t, nopExec{}, pairedOpts{setUp: c.setUp,
+				server: func(cfg *Config) { cfg.NewExecutor = legacy.newExecutor },
+				target: func(tg *config.Target) {
+					tg.Wire = wiredForLegacy
+					if c.target != nil {
+						c.target(t, tg)
+					}
+				}})
+			for _, r := range routes {
+				res, e := do(t, ts, token, r.method, "/api/targets/box"+r.path, "")
+				if res.StatusCode != c.status || e.Code != c.code || res.Header.Get("X-Jumpgate-Via") != "agent" {
+					t.Errorf("%s %s: got %d %+v via %q", r.method, r.path, res.StatusCode, e, res.Header.Get("X-Jumpgate-Via"))
+				}
+			}
+			// The logs stream opens with its snapshot-mode note, then the error.
+			for path, n := range map[string]int{"/monitor/stream": 1, "/logs/stream?backlog=10": 2} {
+				frames, h := readFrames(t, ts, token, "/api/targets/box"+path, n)
+				last := frames[len(frames)-1]
+				if h.Get("X-Jumpgate-Via") != "agent" || !strings.HasPrefix(last, "event: error\n") || !strings.Contains(last, `"code":"`+string(c.code)+`"`) {
+					t.Errorf("%s: via %q frames %q", path, h.Get("X-Jumpgate-Via"), frames)
+				}
+			}
+			if n := legacy.n.Load(); n != 0 {
+				t.Fatalf("the legacy executor was opened %d times for a paired box", n)
+			}
+		})
+	}
+}
+
+// A slow agent cannot hold a stream silent past the client's 45 s idle
+// timeout: the stream keeps pinging while the poll waits, and a poll that
+// outlives agentPollTimeout is reported as an "unreachable" error event.
+func TestSlowAgentStreamStillPingsAndReportsTheTimeout(t *testing.T) {
+	oldStatus, oldLogs, oldPing, oldPoll := agentStatusInterval, agentLogsSnapshotInterval, ssePingInterval, agentPollTimeout
+	agentStatusInterval, agentLogsSnapshotInterval, ssePingInterval, agentPollTimeout = time.Hour, time.Hour, 20*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() {
+		agentStatusInterval, agentLogsSnapshotInterval, ssePingInterval, agentPollTimeout = oldStatus, oldLogs, oldPing, oldPoll
+	})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	sock := fakeAgentSocket(t, func(w http.ResponseWriter, r *http.Request) {
+		select { // never answers on its own
+		case <-r.Context().Done():
+		case <-release:
+		}
+	})
+	ts, token := pairedBoxWith(t, nopExec{}, pairedOpts{setUp: true,
+		target: func(tg *config.Target) { tg.Agent.Socket = sock }})
+	for _, path := range []string{"/api/targets/box/monitor/stream", "/api/targets/box/logs/stream?backlog=5"} {
+		r, stop := openSSE(t, &apiTestServer{ts: ts, token: token}, path)
+		pinged := false
+		ok := readLines(r, 5*time.Second, func(l string) bool {
+			if l == ": ping\n" {
+				pinged = true
+			}
+			return pinged && strings.HasPrefix(l, "data: ") && strings.Contains(l, `"code":"unreachable"`)
+		})
+		stop()
+		if !ok {
+			t.Errorf("%s: want pings and then an unreachable error event (pinged %v)", path, pinged)
 		}
 	}
-	// The logs stream opens with its snapshot-mode note, then the error.
-	for path, n := range map[string]int{"/monitor/stream": 1, "/logs/stream?backlog=10": 2} {
-		frames, h := readFrames(t, ts, token, "/api/targets/box"+path, n)
-		last := frames[len(frames)-1]
-		if h.Get("X-Jumpgate-Via") != "agent" || !strings.HasPrefix(last, "event: error\n") || !strings.Contains(last, string(api.CodeUnreachable)) {
-			t.Errorf("%s: via %q frames %q", path, h.Get("X-Jumpgate-Via"), frames)
+}
+
+// failSigner holds the controller's address but cannot sign, a local failure.
+type failSigner struct{ signer.Signer }
+
+func (failSigner) SignTypedData(context.Context, eip712.TypedData) (signer.Signature, error) {
+	return signer.Signature{}, errors.New("keychain locked mid-request")
+}
+
+// A failure on this machine (signing, the sequence store) is the server's
+// own, 500 internal, not the box's.
+func TestLocalIntentFailureIsInternal(t *testing.T) {
+	ts, token := pairedBoxWith(t, nopExec{}, pairedOpts{setUp: true,
+		server: func(c *Config) { c.Signer = failSigner{c.Signer} }})
+	for _, r := range []struct{ method, path string }{{"GET", "/api/targets/box/du"}, {"POST", "/api/targets/box/intent/status.read"}} {
+		res, e := do(t, ts, token, r.method, r.path, "")
+		if res.StatusCode != http.StatusInternalServerError || e.Code != api.CodeInternal || !strings.Contains(e.Message, "keychain locked") {
+			t.Errorf("%s: got %d %+v", r.path, res.StatusCode, e)
 		}
 	}
-	if n := legacy.n.Load(); n != 0 {
-		t.Fatalf("the legacy executor was opened %d times for a paired box", n)
+}
+
+// Only pairing records an agent: a POST /api/targets carrying an agent block
+// saves an unpaired target, whose node operations go to the legacy executor.
+func TestAddTargetIgnoresAClientAgentBlock(t *testing.T) {
+	a := newAPITestServer(t)
+	evil, _ := signer.GenerateKey()
+	body := map[string]any{"id": "box", "mode": "local",
+		"agent":   map[string]any{"address": evil.Address().Hex(), "transport": "local", "socket": "/tmp/evil.sock", "nextSeq": 7},
+		"gateway": map[string]any{"BindAddr": "0.0.0.0", "Port": 4000},
+		"devnet":  map[string]any{"chainId": 1337},
+	}
+	res := a.do(t, "POST", "/api/targets", body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("add: %d", res.StatusCode)
+	}
+	c, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg, _ := findTarget(c, "box")
+	if tg.Agent != nil || tg.Devnet != nil || tg.LegacyGateway != nil || tg.Wire != nil || len(c.Gateways) != 0 {
+		t.Fatalf("server-owned fields taken from the client: %+v (gateways %d)", tg, len(c.Gateways))
+	}
+	res2, e := do(t, a.ts, a.token, "GET", "/api/targets/box/du", "")
+	if res2.Header.Get("X-Jumpgate-Via") != "ssh" || e.Code != api.CodeTargetNotSetUp {
+		t.Fatalf("node op on the added target: %d %+v via %q", res2.StatusCode, e, res2.Header.Get("X-Jumpgate-Via"))
 	}
 }
 
@@ -241,27 +384,6 @@ func TestAgentFailureIsAgentFailed(t *testing.T) {
 	res, e := do(t, ts, token, "GET", "/api/targets/box/du", "")
 	if res.StatusCode != http.StatusBadGateway || e.Code != api.CodeAgentFailed || !strings.Contains(e.Message, "cannot access") {
 		t.Fatalf("got %d %+v", res.StatusCode, e)
-	}
-}
-
-// An answer not signed by the paired agent is a security error, and the
-// legacy executor is not tried instead.
-func TestForeignReceiptIsBadReceiptWithoutFallback(t *testing.T) {
-	requireAgentPeer(t)
-	var legacy countingExec
-	other, _ := signer.GenerateKey()
-	ts, token := pairedBoxWith(t, nopExec{}, pairedOpts{setUp: true,
-		server: func(c *Config) { c.NewExecutor = legacy.newExecutor },
-		target: func(tg *config.Target) {
-			tg.Agent.Address = other.Address().Hex()
-			tg.Wire = &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/mnt/reth"}
-		}})
-	res, e := do(t, ts, token, "GET", "/api/targets/box/firewall", "")
-	if res.StatusCode != http.StatusBadGateway || e.Code != api.CodeBadReceipt {
-		t.Fatalf("got %d %+v", res.StatusCode, e)
-	}
-	if n := legacy.n.Load(); n != 0 {
-		t.Fatalf("the legacy executor was opened %d times for a paired box", n)
 	}
 }
 
