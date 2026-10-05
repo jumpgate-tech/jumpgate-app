@@ -227,3 +227,21 @@ jobs:
         env:
           JUMPGATE_TEST_WIN_AGENT: "1"
         run: go test -count=1 -timeout 120s -run TestOpenSSHAgentPipe -v ./internal/executor/
+
+  desktop-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: tools
+        run: brew install librsvg
+      - name: vet and test the tray build
+        run: |
+          go vet -tags tray ./cmd/jumpgate
+          go test -tags tray ./cmd/jumpgate
+      - name: build and check both apps
+        run: scripts/test-macos-bundle.sh

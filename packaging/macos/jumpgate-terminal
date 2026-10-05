@@ -1,0 +1,8 @@
+#!/bin/sh
+# packaging/macos/jumpgate-terminal — the executable of Jumpgate Terminal.app.
+# It opens the bundled jumpgate.command with whatever app handles .command
+# files (Terminal.app unless the user chose another), so jumpgate runs in a
+# real terminal. `open` needs no Apple Events permission, unlike scripting
+# Terminal with osascript (spec D24). JUMPGATE_OPEN replaces open in tests.
+here="$(cd "$(dirname "$0")/../Resources" && pwd)"
+exec "${JUMPGATE_OPEN:-/usr/bin/open}" "$here/jumpgate.command"
