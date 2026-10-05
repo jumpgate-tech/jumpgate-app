@@ -156,6 +156,25 @@ func TestRunPairsAFreshBox(t *testing.T) {
 	}
 }
 
+// OpenSSH gates direct-streamlocal on the same local-forward permission set as
+// TCP: `AllowTcpForwarding no` refuses the agent socket too. The drop-in must
+// allow local forwarding and pin it to the agent socket alone.
+func TestDropInAdmitsOnlyTheAgentSocket(t *testing.T) {
+	box := freshBox()
+	if _, err := Run(context.Background(), opts(t, box)); err != nil {
+		t.Fatal(err)
+	}
+	d := box.files[DropInPath]
+	if strings.Contains(d, "AllowTcpForwarding no") {
+		t.Errorf("AllowTcpForwarding no also refuses direct-streamlocal: %q", d)
+	}
+	for _, want := range []string{"AllowTcpForwarding local", "PermitOpen [/run/jumpgate/agent.sock]:*"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("drop-in lacks %q: %q", want, d)
+		}
+	}
+}
+
 // Review Focus 4: re-pairing or pairing a second controller appends; it never
 // drops an existing key.
 func TestRunKeepsExistingAuthorizedKeys(t *testing.T) {

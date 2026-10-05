@@ -123,6 +123,11 @@ func TestE2EPairAndRoundTrip(t *testing.T) {
 		conn.Close()
 		t.Fatal("the tunnel user can forward TCP")
 	}
+	// PermitOpen pins streamlocal to the agent's socket; systemd's is refused.
+	if conn, err := tun.Dial("unix", "/run/systemd/private"); err == nil {
+		conn.Close()
+		t.Fatal("the tunnel user can reach a socket other than the agent's")
+	}
 	tun.Close()
 
 	// Re-running bootstrap keeps the agent's identity.
