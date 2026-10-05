@@ -293,8 +293,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// code is touched, so it cannot burn the code either. root is let in: it
 	// can read the session token anyway. Readable socket tables that do not
 	// list the client are refused too (fail closed: another user can provoke
-	// a torn read); only tables that cannot be read at all let the login
-	// through, with a warning.
+	// a torn read); only tables that cannot be read at all, or that list no
+	// connections whatsoever (WSL1, gVisor), let the login through, with a
+	// warning.
 	if s.peerUID != nil {
 		switch uid, v := s.peerUID(r); v {
 		case peerFound:
@@ -307,6 +308,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			log.Printf("jumpgate: WARNING: refused a login link whose client socket /proc/net/tcp does not list (from %s); run `jumpgate open` again", r.RemoteAddr)
 			http.Error(w, "jumpgate could not confirm this login link comes from you; run `jumpgate open` again", http.StatusForbidden)
 			return
+		case peerNotReported:
+			log.Printf("jumpgate: WARNING: /proc/net/tcp and tcp6 list no connections at all (as under WSL1 or gVisor), so the owner of a login link's connection is unknown; allowing it, and on this system the login link relies on its owner-only file alone")
 		default:
 			log.Printf("jumpgate: WARNING: /proc/net/tcp cannot be read, so the owner of a login link's connection is unknown; allowing it, and on this system the login link relies on its owner-only file alone")
 		}

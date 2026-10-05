@@ -74,6 +74,12 @@ const (
 	// listed, so this is a torn or incomplete read, which another local user
 	// can provoke by churning connections, and the login is refused.
 	peerMissing
+	// peerNotReported: both tables were read and neither has a single data
+	// row. A real kernel lists an established connection, and a torn read of
+	// a populated table still yields rows, so an attacker cannot force this:
+	// the environment does not report connections (WSL1, gVisor). The login
+	// is allowed with a warning (ruling P37).
+	peerNotReported
 )
 
 // procTable is the contents of /proc/net/tcp (v6 false) or tcp6 (v6 true).
@@ -90,7 +96,8 @@ type procTable struct {
 // in tcp6, v4-mapped), so every table is searched.
 //
 // read returns nil only when the tables genuinely cannot be read; that, on
-// the first read, is the one case that is not refused. A readable snapshot
+// the first read, is one case that is not refused; a first snapshot whose
+// two tables are both header-only (peerNotReported) is the other. A readable snapshot
 // that lacks the client's row is read once more, then refused; so is a
 // re-read that finds the tables gone, since the first read proved this
 // system lists its sockets. Nothing is remembered between calls.
@@ -108,8 +115,21 @@ func peerFromTables(read func() []procTable, client, local netip.AddrPort) (int,
 				return uid, peerFound
 			}
 		}
+		// Only a first snapshot of both tables, each header-only, says the
+		// environment lists no connections. One table alone, or emptiness
+		// that appears on the re-read after rows, is refused.
+		if attempt == 0 && len(tables) == 2 && !hasDataRows(tables[0].data) && !hasDataRows(tables[1].data) {
+			return 0, peerNotReported
+		}
 	}
 	return 0, peerMissing
+}
+
+// hasDataRows reports whether a /proc/net/tcp{,6} table has any non-blank
+// line after its header.
+func hasDataRows(table []byte) bool {
+	_, rest, _ := bytes.Cut(table, []byte("\n"))
+	return len(bytes.TrimSpace(rest)) > 0
 }
 
 // requestAddrs is a request's client address (RemoteAddr) and the server's

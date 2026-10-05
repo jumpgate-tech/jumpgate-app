@@ -70,6 +70,15 @@ func TestPeerFromTables(t *testing.T) {
 			{procTableOf(false, serverV4, clientV4), procTableOf(true)},
 		}, v4c, v4s, 1001, peerFound, 2},
 		{"tables unreadable", [][]procTable{nil}, v4c, v4s, 0, peerUnknown, 1},
+		// Both tables readable and header-only: the environment does not
+		// report connections (WSL1, gVisor). No torn read empties both.
+		{"both tables header-only", [][]procTable{{procTableOf(false), procTableOf(true)}}, v4c, v4s, 0, peerNotReported, 1},
+		{"one table has rows, client missing: refused", [][]procTable{{procTableOf(false), procTableOf(true, serverV6)}}, v4c, v4s, 0, peerMissing, 2},
+		{"only tcp read, header-only: refused", [][]procTable{{procTableOf(false)}}, v4c, v4s, 0, peerMissing, 2},
+		{"rows, then both header-only on the re-read: refused", [][]procTable{
+			{procTableOf(false, noise), procTableOf(true)},
+			{procTableOf(false), procTableOf(true)},
+		}, v4c, v4s, 0, peerMissing, 2},
 		// Readable tables that lack both rows are torn too: refused.
 		{"server row missing too: refused", [][]procTable{{procTableOf(false, noise), procTableOf(true)}}, v4c, v4s, 0, peerMissing, 2},
 		{"only tcp readable, neither row: refused", [][]procTable{{procTableOf(false, noise)}}, v4c, v4s, 0, peerMissing, 2},
@@ -145,8 +154,9 @@ func fakeTables(s *Server, snap func(client, local netip.AddrPort) []procTable) 
 // the connection are refused, and the code is not spent.
 func TestLoginRefusesWhenReadableTablesLackBothRows(t *testing.T) {
 	s, ts, _ := loginServer(t)
+	other := netip.MustParseAddrPort("127.0.0.1:1111")
 	fakeTables(s, func(client, local netip.AddrPort) []procTable {
-		return []procTable{procTableOf(false), procTableOf(true)}
+		return []procTable{procTableOf(false, procRow(false, other, local, 1003)), procTableOf(true)}
 	})
 	code := s.NewLoginCode()
 	if res, _ := login(t, ts, code); res.StatusCode != http.StatusForbidden {
@@ -177,8 +187,52 @@ func TestLoginAllowsUnreadableTablesWithAWarningAndRemembersNothing(t *testing.T
 	if !strings.Contains(buf.String(), "WARNING") {
 		t.Fatalf("log %q: want a WARNING", buf.String())
 	}
-	fakeTables(s, func(netip.AddrPort, netip.AddrPort) []procTable { return []procTable{procTableOf(false)} })
+	other := netip.MustParseAddrPort("127.0.0.1:1111")
+	fakeTables(s, func(_, local netip.AddrPort) []procTable {
+		return []procTable{procTableOf(false, procRow(false, other, local, 1003))}
+	})
 	if res, _ := login(t, ts, s.NewLoginCode()); res.StatusCode != http.StatusForbidden {
 		t.Fatalf("readable tables after an unreadable request: %d, want 403", res.StatusCode)
+	}
+}
+
+// Ruling P37: both tables readable and header-only means the environment
+// does not report connections (WSL1, gVisor); a real kernel lists an
+// established connection, and a torn read of a populated table still has
+// rows. The login is allowed, with a warning naming those environments.
+func TestLoginAllowsHeaderOnlyTablesWithAWarning(t *testing.T) {
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(old) })
+
+	s, ts, _ := loginServer(t)
+	fakeTables(s, func(netip.AddrPort, netip.AddrPort) []procTable {
+		return []procTable{procTableOf(false), procTableOf(true)}
+	})
+	if res, _ := login(t, ts, s.NewLoginCode()); res.StatusCode != http.StatusOK {
+		t.Fatalf("header-only tables: %d, want 200", res.StatusCode)
+	}
+	if !strings.Contains(buf.String(), "WARNING") || !strings.Contains(buf.String(), "WSL1") || !strings.Contains(buf.String(), "gVisor") {
+		t.Fatalf("log %q: want a WARNING naming WSL1 and gVisor", buf.String())
+	}
+}
+
+// One table with rows but none for this client: refused, code not spent.
+func TestLoginRefusesWhenOneTableHasRowsButNotTheClient(t *testing.T) {
+	s, ts, _ := loginServer(t)
+	other := netip.MustParseAddrPort("[::1]:1111")
+	fakeTables(s, func(client, local netip.AddrPort) []procTable {
+		return []procTable{procTableOf(false), procTableOf(true, procRow(true, other, netip.MustParseAddrPort("[::1]:8791"), 1003))}
+	})
+	code := s.NewLoginCode()
+	if res, _ := login(t, ts, code); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("one populated table without the client: %d, want 403", res.StatusCode)
+	}
+	fakeTables(s, func(client, local netip.AddrPort) []procTable {
+		return []procTable{procTableOf(false, procRow(false, client, local, s.selfUID)), procTableOf(true)}
+	})
+	if res, _ := login(t, ts, code); res.StatusCode != http.StatusOK {
+		t.Fatalf("the refused attempt burned the code: %d, want 200", res.StatusCode)
 	}
 }
