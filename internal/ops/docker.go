@@ -1392,6 +1392,35 @@ func ImageExists(ctx context.Context, e executor.Executor, tag string) (bool, er
 	return res.ExitCode == 0 && strings.TrimSpace(res.Stdout) != "", nil
 }
 
+// BuildxMissingError is returned by CheckBuildx when the docker CLI has no
+// buildx plugin. The eRPC fork's Dockerfile needs BuildKit (`RUN --mount`), and
+// without buildx docker falls back to the legacy builder, whose only visible
+// output is a "legacy builder is deprecated" line that hides the real cause.
+type BuildxMissingError struct{ Detail string }
+
+func (e *BuildxMissingError) Error() string {
+	msg := "docker buildx is not installed, and building the eRPC image needs BuildKit (without it docker falls back to the deprecated legacy builder and fails). Install it: " +
+		"Homebrew/colima: `brew install docker-buildx`, then `mkdir -p ~/.docker/cli-plugins && ln -sfn $(brew --prefix)/opt/docker-buildx/bin/docker-buildx ~/.docker/cli-plugins/docker-buildx`; " +
+		"Debian/Ubuntu: `apt install docker-buildx` (or `docker-buildx-plugin` from Docker's apt repo); " +
+		"Docker Desktop: buildx is bundled, so update or reinstall Docker Desktop"
+	if e.Detail != "" {
+		msg += " (docker said: " + e.Detail + ")"
+	}
+	return msg
+}
+
+// CheckBuildx verifies `docker buildx version` succeeds on the target.
+func CheckBuildx(ctx context.Context, e executor.Executor) error {
+	res, err := e.Run(ctx, "docker buildx version", nil)
+	if err != nil {
+		return fmt.Errorf("ops: docker buildx version: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return &BuildxMissingError{Detail: firstNonEmptyLine(res.Stderr, res.Stdout)}
+	}
+	return nil
+}
+
 // BuildImage runs a docker build on the target. Each argv element is quoted at
 // the sh -c boundary, matching DockerRun.
 func BuildImage(ctx context.Context, e executor.Executor, args ...string) (executor.Result, error) {

@@ -75,10 +75,15 @@ func Plan(w catalog.WireConfig) ([]Step, error) {
 // fails, RunAll calls Verify again (there being no Run) and surfaces the
 // same failure as the step's terminal error.
 func preflightStep() Step {
+	warned := false // RunAll may call Verify twice; warn once
 	return Step{
 		ID:    "preflight",
 		Title: "Preflight checks",
 		Verify: func(ctx context.Context, e executor.Executor, st *State) error {
+			if !warned {
+				warned = true
+				warnIfDesktopVM(ctx, e, st)
+			}
 			return preflightCheck(ctx, e, st.Wire)
 		},
 	}

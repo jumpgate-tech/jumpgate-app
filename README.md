@@ -177,6 +177,10 @@ without opening the key, so it never prompts the keychain or 1Password.
 
 **Windows:** the background server needs Windows 10 version 1803 or Windows Server 2019 or later (for its local socket).
 
+Real nodes are not supported directly on macOS or Windows. To run one on a
+desktop anyway, use a WSL2 or Lima VM as an ordinary Linux box; see
+[Running a node on your desktop](docs/run-a-node-on-your-desktop.md).
+
 ## Requirements
 
 - The **target** being set up (the box that will run the execution + beacon

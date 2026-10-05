@@ -816,3 +816,85 @@ func TestRunDocker_SkipsTheBuildWhenTheImageIsPresent(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayPreflight_MissingBuildxNamesTheFixPerPlatform(t *testing.T) {
+	e := dockerReady().
+		script("docker buildx version", executor.Result{ExitCode: 1, Stderr: "docker: 'buildx' is not a docker command.\n"})
+	step := stepByID(t, mustPlanGateway(t, testGateway(), BackendDocker), "preflight")
+
+	err := step.Verify(context.Background(), e, &State{})
+	if err == nil {
+		t.Fatal("want a buildx preflight failure")
+	}
+	for _, want := range []string{"buildx", "brew install docker-buildx", "cli-plugins", "apt install docker-buildx", "docker-buildx-plugin", "Docker Desktop"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q, got: %v", want, err)
+		}
+	}
+}
+
+func TestGatewayPreflight_BuildxPresentPasses(t *testing.T) {
+	e := dockerReady().script("docker buildx version", executor.Result{Stdout: "github.com/docker/buildx v0.17.1\n"})
+	step := stepByID(t, mustPlanGateway(t, testGateway(), BackendDocker), "preflight")
+	if err := step.Verify(context.Background(), e, &State{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGatewayCheck_ReportsCrashLoopInsteadOfCurlExit(t *testing.T) {
+	e := dockerReady().
+		script("eth_chainId", executor.Result{ExitCode: 7, Stderr: "curl: (7) Failed to connect"}).
+		script("docker 'inspect'", executor.Result{Stdout: "restarting|5\n"}).
+		script("docker 'logs'", executor.Result{Stdout: "read /erpc.yaml: is a directory\n"})
+	p := &gatewayPlan{id: testGatewayID, gw: testGateway(), backend: BackendDocker}
+
+	err := p.gatewayCheck(context.Background(), e)
+	if err == nil {
+		t.Fatal("want error")
+	}
+	for _, want := range []string{"restarting", "(5 restarts)", "read /erpc.yaml: is a directory"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("want %q in error, got: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "curl exit") {
+		t.Errorf("crash loop must replace the bare curl exit: %v", err)
+	}
+}
+
+func TestGatewayCheck_RunningContainerKeepsCurlExitError(t *testing.T) {
+	e := dockerReady().
+		script("eth_chainId", executor.Result{ExitCode: 7}).
+		script("docker 'inspect'", executor.Result{Stdout: "running|0\n"})
+	p := &gatewayPlan{id: testGatewayID, gw: testGateway(), backend: BackendDocker}
+	err := p.gatewayCheck(context.Background(), e)
+	if err == nil || !strings.Contains(err.Error(), "curl exit 7") {
+		t.Fatalf("want the plain curl error while the container is running, got %v", err)
+	}
+}
+
+func TestSanitizeLogs(t *testing.T) {
+	in := "dial https://user:hunter2@rpc.example.com/x failed\n" +
+		"api_key=abc123 token: tok-999 \"password\":\"p@ss\" SECRET=s3\n" +
+		"normal line"
+	out := sanitizeLogs(in)
+	for _, leak := range []string{"hunter2", "abc123", "tok-999", "p@ss", "s3\n"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("leaked %q in %q", leak, out)
+		}
+	}
+	if !strings.Contains(out, "rpc.example.com") || !strings.Contains(out, "normal line") {
+		t.Errorf("over-redacted: %q", out)
+	}
+
+	long := strings.Repeat("x", 500) + "\n" + strings.Repeat("line of logs\n", 400)
+	out = sanitizeLogs(long)
+	if len(out) > 2200 {
+		t.Errorf("not capped: %d bytes", len(out))
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if len(l) > 200 {
+			t.Errorf("line not wrapped: %d chars", len(l))
+		}
+	}
+}
