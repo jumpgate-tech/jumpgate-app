@@ -53,6 +53,11 @@ func ensureTransportKey() (string, error) {
 		return "", err
 	}
 	if fi, lerr := os.Lstat(path); lerr == nil {
+		// A concurrent first use may have linked its key in after the read
+		// above; that key is the one to use.
+		if line, rerr := readTransportKey(path); rerr == nil {
+			return line, nil
+		}
 		what := "it cannot be read"
 		if fi.Mode()&os.ModeSymlink != 0 {
 			what = "it is a symlink to a file that does not exist"
