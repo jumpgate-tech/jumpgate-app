@@ -24,6 +24,7 @@ package setup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -161,7 +162,7 @@ func (p *devnetPlan) preflight(ctx context.Context, e executor.Executor) error {
 		return fmt.Errorf("preflight: %w", err)
 	}
 	if info.WindowsContainers() {
-		return fmt.Errorf("preflight: this docker engine is in Windows-container mode, and the reth image is a Linux image — switch Docker to Linux containers and retry")
+		return fmt.Errorf("preflight: this docker engine is in Windows-container mode, and the reth image is a Linux image — %s", info.WindowsContainersHint())
 	}
 	if !info.DaemonReachable {
 		return fmt.Errorf("preflight: the docker CLI is installed but no engine answered — start Docker Desktop / OrbStack / colima (or `systemctl start docker`) and retry: %s", info.DaemonError)
@@ -188,12 +189,12 @@ func (p *devnetPlan) checkPortsFree(ctx context.Context, e executor.Executor) er
 		return nil
 	}
 	for _, port := range []int{p.dev.HTTP(), p.dev.WS()} {
-		res, err := e.Run(ctx, fmt.Sprintf(listenerProbe, port), nil)
+		found, err := probeListeners(ctx, e, port)
 		if err != nil {
 			return fmt.Errorf("preflight: probe listeners on port %d: %w", port, err)
 		}
-		if res.ExitCode == 0 && strings.TrimSpace(res.Stdout) != "" {
-			return fmt.Errorf("preflight: port %d is already in use by something other than jumpgate's devnet:\n%s", port, strings.TrimSpace(res.Stdout))
+		if found != "" {
+			return fmt.Errorf("preflight: port %d is already in use by something other than jumpgate's devnet:\n%s", port, found)
 		}
 	}
 	return nil
@@ -345,18 +346,18 @@ func (p *devnetPlan) devnetCheck(ctx context.Context, e executor.Executor) error
 
 // rpcCall posts one JSON-RPC body to the devnet and returns its result field.
 //
-// curl over the executor rather than a Go HTTP client, matching
-// gatewayCheck: the target may be an SSH host, and there the only thing that
-// can reach a loopback-bound port is a process ON that host.
+// An ops.HTTPProbe, matching gatewayCheck: the target may be an SSH host,
+// and there the only thing that can reach a loopback-bound port is a process
+// ON that host (curl); on the local machine the request is made in process.
 func (p *devnetPlan) rpcCall(ctx context.Context, e executor.Executor, body string) (string, error) {
 	url := p.dev.HTTPEndpoint()
-	cmd := fmt.Sprintf("curl -s -X POST -H 'Content-Type: application/json' --data %s %s", shQuote(body), shQuote(url))
-	res, err := e.Run(ctx, cmd, nil)
-	if err != nil {
+	out, err := ops.HTTPProbe{URL: url, Body: body}.Do(ctx, e)
+	var pe *ops.ProbeError
+	switch {
+	case errors.As(err, &pe):
+		return "", fmt.Errorf("devnet: rpc at %s failed (%s)", url, pe.Detail)
+	case err != nil:
 		return "", fmt.Errorf("devnet: rpc probe: %w", err)
-	}
-	if res.ExitCode != 0 {
-		return "", fmt.Errorf("devnet: rpc at %s failed (curl exit %d): %s", url, res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 
 	var answer struct {
@@ -365,7 +366,7 @@ func (p *devnetPlan) rpcCall(ctx context.Context, e executor.Executor, body stri
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	raw := strings.TrimSpace(res.Stdout)
+	raw := strings.TrimSpace(out)
 	if err := json.Unmarshal([]byte(raw), &answer); err != nil {
 		// Not JSON at all is the normal shape of "nothing is listening yet"
 		// (empty body) — report the raw answer, which is what tells that apart

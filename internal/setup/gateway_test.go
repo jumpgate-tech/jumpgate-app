@@ -516,7 +516,7 @@ func TestGatewayRun_DockerRemovesStaleThenRunsWithPlatform(t *testing.T) {
 	if !strings.Contains(run, "'-p' '127.0.0.1:4100:4000'") {
 		t.Fatalf("want the operator's host port published onto the fixed container port, got %q", run)
 	}
-	if !strings.Contains(run, "'/Users/dev/.valve-node-app/erpc.yaml:/erpc.yaml:ro'") {
+	if !strings.Contains(run, "'type=bind,source=/Users/dev/.valve-node-app/erpc.yaml,target=/erpc.yaml,readonly'") {
 		t.Fatalf("want the resolved config path mounted read-only, got %q", run)
 	}
 	// A VM-backed engine already provides the host alias.
