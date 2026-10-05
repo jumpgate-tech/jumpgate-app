@@ -47,7 +47,7 @@ func cmdServe(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	token := server.NewSessionToken()
-	s := server.New(server.Config{Bind: *bind, Token: token, UI: ui, Signer: sgn, Shutdown: stop})
+	s := server.New(server.Config{Bind: *bind, Token: token, UI: ui, Signer: sgn, Shutdown: stop, LoginDir: loginDir()})
 
 	err = serveAndPublish(ctx, stop, s, holder, *bind, token)
 	if err != nil {

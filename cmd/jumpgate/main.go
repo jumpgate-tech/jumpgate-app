@@ -148,6 +148,7 @@ func runApp() {
 		RelayBind: *relayBind,
 		Signer:    sgn,
 		Shutdown:  stop,
+		LoginDir:  loginDir(),
 	})
 
 	// The address only: a URL carrying the token would put the long-lived
@@ -217,14 +218,19 @@ func runApp() {
 		return
 	}
 
-	// Once the listener accepts, open the browser with a one-time login
-	// link, or with --no-open print one: the token itself never reaches an
-	// opener's command line (spec D4).
+	// Once the listener accepts, open the browser on a one-time login
+	// link's owner-only redirect file, or with --no-open print the link:
+	// neither the token nor a code reaches an opener's command line (D4).
 	go func() {
 		if waitReady(ctx, *bind) != nil {
 			return
 		}
-		handOffLogin(os.Stdout, *bind, s.NewLoginCode(), !*noOpen)
+		link, err := s.NewLoginLink()
+		if err != nil {
+			log.Printf("jumpgate: %v; run `jumpgate open`", err)
+			return
+		}
+		handOffLogin(os.Stdout, *bind, link, !*noOpen)
 	}()
 
 	if err := serveAndPublish(ctx, stop, s, holder, *bind, token); err != nil {
@@ -247,12 +253,12 @@ func openRunningServer(ctx context.Context, info daemon.Info, windowed, noOpen b
 		runWindow(ctx, appURL(info))
 		return
 	}
-	code, err := requestLoginCode(ctx, info)
+	link, err := requestLoginLink(ctx, info)
 	if err != nil {
 		log.Printf("jumpgate: %v; run `jumpgate open`", err)
 		return
 	}
-	handOffLogin(out, info.HTTPAddr, code, !noOpen)
+	handOffLogin(out, info.HTTPAddr, link, !noOpen)
 }
 
 // shutdownContext returns a context canceled by the first SIGINT or SIGTERM.

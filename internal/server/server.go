@@ -115,6 +115,11 @@ type Config struct {
 	// this server process ever holds it. Nil means those routes answer 503
 	// with code "no_controller_key".
 	Signer signer.Signer
+
+	// LoginDir is the owner-only directory login-link redirect files are
+	// written to (login.go), normally ~/.jumpgate/run/login. Empty means the
+	// mint API returns codes without a file, and callers only print them.
+	LoginDir string
 }
 
 // Server is the jumpgate local HTTP server.
@@ -194,6 +199,10 @@ type Server struct {
 
 	// codes are the outstanding one-time browser login codes (login.go).
 	codes loginCodes
+	// peerUID reports the uid owning a request's client socket, where the
+	// OS lets us read it (Linux); nil elsewhere. selfUID is this process's.
+	peerUID func(*http.Request) (int, bool)
+	selfUID int
 }
 
 // New constructs a Server from the given Config.
@@ -224,6 +233,11 @@ func New(cfg Config) *Server {
 		s.newLocalExecutor = executor.NewLocal
 	}
 	s.goos = runtime.GOOS
+	s.peerUID = defaultPeerUID
+	s.selfUID = os.Getuid()
+	if cfg.LoginDir != "" {
+		sweepLoginFiles(cfg.LoginDir)
+	}
 	s.geteuid = cfg.Geteuid
 	if s.geteuid == nil {
 		s.geteuid = os.Geteuid
@@ -269,7 +283,12 @@ func (s *Server) Handler() http.Handler {
 	// authenticated socket; the code, not the token, goes to the browser.
 	mux.HandleFunc("POST /api/login-code", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, http.StatusOK, map[string]string{"code": s.NewLoginCode()})
+		link, err := s.NewLoginLink()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, link)
 	})
 
 	s.registerAPIRoutes(mux)

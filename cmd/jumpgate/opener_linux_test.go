@@ -11,9 +11,9 @@ import (
 )
 
 // The real opener path on Linux: a stand-in xdg-open on PATH records the
-// argv it was given, which must be exactly the login link. Linux-only, so
+// argv it was given, which must be exactly the redirect file's path. Linux-only, so
 // the freshly written script is never exec'd on macOS (Ruling P11).
-func TestOpenBrowserHandsXdgOpenOnlyTheLink(t *testing.T) {
+func TestOpenBrowserHandsXdgOpenOnlyTheFile(t *testing.T) {
 	dir := t.TempDir()
 	rec := filepath.Join(dir, "argv")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + rec + "\n"
@@ -25,7 +25,7 @@ func TestOpenBrowserHandsXdgOpenOnlyTheLink(t *testing.T) {
 	hostGOOS = "linux"
 	t.Cleanup(func() { hostGOOS = old })
 
-	link := loginURL("127.0.0.1:8799", "0123456789abcdef0123456789abcdef")
+	link := filepath.Join(dir, "open-0123456789abcdef.html")
 	if err := openBrowser(link); err != nil {
 		t.Fatal(err)
 	}

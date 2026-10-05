@@ -2,9 +2,16 @@ package server
 
 import (
 	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"html"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -17,72 +24,259 @@ const loginCodeTTL = 60 * time.Second
 // cap the oldest code is retired, so a fresh `jumpgate open` always works.
 const maxLoginCodes = 16
 
-// loginCodes are one-time, short-lived stand-ins for the session token in
-// URLs handed to a browser opener. An opener's command line (xdg-open, open,
-// rundll32, and the browser it starts) is readable by every local user
-// through /proc or ps, so the long-lived token never goes there (I-6).
+// loginCodes are one-time, short-lived stand-ins for the session token, used
+// to sign a browser in (I-6, D4).
+//
+// A code must never reach a process's command line either: every local user
+// reads argv through /proc or ps, every local user is a loopback peer, and
+// one who redeems the code before the browser does gets the session cookie.
+// So the code goes into an owner-only redirect file (see NewLoginLink) and
+// the browser opener is handed only that file's path, the way Jupyter does.
 //
 // The codes live in a short slice, oldest first, rather than a map: redeeming
 // compares the candidate against every entry in constant time, so neither a
 // map's hashing nor an early exit says anything about how close a guess was.
+// spent remembers redeemed codes until they would have expired, so a second
+// presentation, the sign of a lost race, can be reported.
 type loginCodes struct {
-	mu   sync.Mutex
-	list []loginCode
+	mu    sync.Mutex
+	list  []loginCode
+	spent []loginCode
 }
 
 type loginCode struct {
 	code    string
 	expires time.Time
+	// file is the redirect file that carries the code, removed with it; ""
+	// for a code minted without one.
+	file string
+}
+
+// LoginLink is a minted login code, its URL, and the owner-only redirect
+// file that leads a browser to that URL. File is "" when the server has no
+// LoginDir or could not write the file; the caller must then not open a
+// browser on the URL (its argv would carry the code), only show it.
+type LoginLink struct {
+	Code string `json:"code"`
+	URL  string `json:"-"`
+	File string `json:"file,omitempty"`
 }
 
 // NewLoginCode mints a code that signs one browser in, once, within
 // loginCodeTTL. It is 128 bits from crypto/rand, hex-encoded.
-func (s *Server) NewLoginCode() string {
+func (s *Server) NewLoginCode() string { return s.addLoginCode("") }
+
+func (s *Server) addLoginCode(file string) string {
 	code := NewSessionToken()
 	now := s.clock()
 	s.codes.mu.Lock()
 	defer s.codes.mu.Unlock()
+	s.pruneLocked(now)
+	if n := len(s.codes.list); n >= maxLoginCodes {
+		for _, c := range s.codes.list[:n-maxLoginCodes+1] {
+			removeLoginFile(c.file)
+		}
+		s.codes.list = append(s.codes.list[:0], s.codes.list[n-maxLoginCodes+1:]...)
+	}
+	s.codes.list = append(s.codes.list, loginCode{code: code, expires: now.Add(loginCodeTTL), file: file})
+	return code
+}
+
+// NewLoginLink mints a login code and writes the owner-only redirect file
+// that carries it. The file is removed when the code is redeemed, expires or
+// is retired, and stale ones are swept when a server starts.
+func (s *Server) NewLoginLink() (LoginLink, error) {
+	if s.cfg.LoginDir == "" {
+		code := s.NewLoginCode()
+		return LoginLink{Code: code, URL: LoginURL(s.cfg.Bind, code)}, nil
+	}
+	if s.cfg.Bind == "" {
+		return LoginLink{}, errors.New("login link file: the server has no HTTP address")
+	}
+	file, f, err := createLoginFile(s.cfg.LoginDir)
+	if err != nil {
+		return LoginLink{}, fmt.Errorf("login link file: %w", err)
+	}
+	code := s.addLoginCode(file)
+	link := LoginLink{Code: code, URL: LoginURL(s.cfg.Bind, code), File: file}
+	_, werr := io.WriteString(f, redirectPage(link.URL))
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		s.redeemLoginCode(code) // retire the code with its unusable file
+		return LoginLink{}, fmt.Errorf("login link file: %w", werr)
+	}
+	// Remove the file promptly once the code is dead, not just on the next
+	// mint or redemption.
+	time.AfterFunc(loginCodeTTL+time.Second, s.pruneLoginCodes)
+	return link, nil
+}
+
+// LoginURL is the one-time login link for a server listening on addr. Codes
+// are redeemed only from loopback, so a wildcard bind becomes its loopback
+// address, the one a local browser can reach.
+func LoginURL(addr, code string) string {
+	if host, port, err := net.SplitHostPort(addr); err == nil {
+		switch host {
+		case "", "0.0.0.0":
+			addr = net.JoinHostPort("127.0.0.1", port)
+		case "::":
+			addr = net.JoinHostPort("::1", port)
+		}
+	}
+	return "http://" + addr + "/login?code=" + code
+}
+
+// redirectPage sends a browser that opens it on to url at once. The meta
+// refresh covers a browser with scripts off; no-referrer keeps the file's
+// path out of the request.
+func redirectPage(url string) string {
+	js, _ := json.Marshal(url) // escapes <, > and & as \u00XX
+	h := html.EscapeString(url)
+	return `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">
+<meta http-equiv="refresh" content="0;url=` + h + `">
+<title>jumpgate</title>
+<script>location.replace(` + string(js) + `)</script>
+</head><body><a href="` + h + `">Open jumpgate</a></body></html>
+`
+}
+
+// Redirect files are named open-<random>.html; the random part is not the code.
+const loginFilePrefix, loginFileSuffix = "open-", ".html"
+
+// createPrivateFile creates path for writing, owner-only from creation, and
+// fails if anything (a link included) is already there. A seam for tests.
+//
+// TODO(T2): this is fsperm.CreatePrivate once Task 2 merges into
+// feat/platform-support; that also gives the file the owner-only DACL on
+// Windows, where today it inherits the ~/.jumpgate directory's.
+var createPrivateFile = func(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+}
+
+// createLoginFile makes dir owner-only and creates a fresh redirect file in
+// it. A symlinked dir is refused: the file must land where its owner-only
+// parent is.
+func createLoginFile(dir string) (string, *os.File, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", nil, err
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return "", nil, err
+	}
+	if !fi.IsDir() {
+		return "", nil, fmt.Errorf("%s is not a directory", dir)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", nil, err
+	}
+	for try := 0; try < 10; try++ {
+		path := filepath.Join(dir, loginFilePrefix+NewSessionToken()[:16]+loginFileSuffix)
+		f, err := createPrivateFile(path)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		return path, f, err
+	}
+	return "", nil, fmt.Errorf("no free file name in %s", dir)
+}
+
+// sweepLoginFiles removes redirect files a previous server left behind. Only
+// one server runs per user, so none of them belongs to a live code.
+func sweepLoginFiles(dir string) {
+	matches, _ := filepath.Glob(filepath.Join(dir, loginFilePrefix+"*"+loginFileSuffix))
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
+}
+
+func removeLoginFile(path string) {
+	if path != "" {
+		_ = os.Remove(path)
+	}
+}
+
+// pruneLoginCodes drops expired codes and their files.
+func (s *Server) pruneLoginCodes() {
+	now := s.clock()
+	s.codes.mu.Lock()
+	defer s.codes.mu.Unlock()
+	s.pruneLocked(now)
+}
+
+func (s *Server) pruneLocked(now time.Time) {
 	live := s.codes.list[:0]
 	for _, c := range s.codes.list {
 		if now.Before(c.expires) {
 			live = append(live, c)
+		} else {
+			removeLoginFile(c.file)
 		}
 	}
-	if len(live) >= maxLoginCodes {
-		live = append(live[:0], live[len(live)-maxLoginCodes+1:]...)
+	s.codes.list = live
+	spent := s.codes.spent[:0]
+	for _, c := range s.codes.spent {
+		if now.Before(c.expires) {
+			spent = append(spent, c)
+		}
 	}
-	s.codes.list = append(live, loginCode{code: code, expires: now.Add(loginCodeTTL)})
-	return code
+	s.codes.spent = spent
 }
 
 // redeemLoginCode consumes code. It is true only for a code that exists and
-// has not expired; either way a matching code is gone afterwards. The lock
-// makes the check-and-delete atomic, so of any number of concurrent
-// redemptions of one code exactly one succeeds.
+// has not expired; either way a matching code and its file are gone
+// afterwards. The lock makes the check-and-delete atomic, so of any number of
+// concurrent redemptions of one code exactly one succeeds.
 func (s *Server) redeemLoginCode(code string) bool {
+	ok, _ := s.redeem(code)
+	return ok
+}
+
+// redeem is redeemLoginCode that also reports whether code was one already
+// redeemed (and not yet expired).
+func (s *Server) redeem(code string) (ok, reused bool) {
 	if code == "" {
-		return false
+		return false, false
 	}
 	now := s.clock()
 	s.codes.mu.Lock()
 	defer s.codes.mu.Unlock()
+	found := matchCode(s.codes.list, code)
+	if found < 0 {
+		i := matchCode(s.codes.spent, code)
+		return false, i >= 0 && now.Before(s.codes.spent[i].expires)
+	}
+	c := s.codes.list[found]
+	s.codes.list = append(s.codes.list[:found], s.codes.list[found+1:]...)
+	removeLoginFile(c.file)
+	if !now.Before(c.expires) {
+		return false, false
+	}
+	s.codes.spent = append(s.codes.spent, loginCode{code: c.code, expires: c.expires})
+	if n := len(s.codes.spent); n > maxLoginCodes {
+		s.codes.spent = append(s.codes.spent[:0], s.codes.spent[n-maxLoginCodes:]...)
+	}
+	return true, false
+}
+
+// matchCode is the index of code in list, compared against every entry in
+// constant time, or -1.
+func matchCode(list []loginCode, code string) int {
 	found := -1
-	for i, c := range s.codes.list {
+	for i, c := range list {
 		if subtle.ConstantTimeCompare([]byte(c.code), []byte(code)) == 1 {
 			found = i
 		}
 	}
-	if found < 0 {
-		return false
-	}
-	ok := now.Before(s.codes.list[found].expires)
-	s.codes.list = append(s.codes.list[:found], s.codes.list[found+1:]...)
-	return ok
+	return found
 }
 
 // handleLogin exchanges a login code for the session cookie, then redirects
-// to the app root so the code leaves the address bar. Nothing here logs: the
-// code is a credential for its lifetime.
+// to the app root so the code leaves the address bar. The code is never
+// logged: it is a credential for its lifetime.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// The URL is a credential until redeemed: keep it out of caches and out
 	// of any Referer the next page sends.
@@ -96,7 +290,22 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "jumpgate login links work only from this computer", http.StatusForbidden)
 		return
 	}
-	if !s.redeemLoginCode(r.URL.Query().Get("code")) {
+	// Every local user is a loopback peer. Where the peer's owner can be
+	// read (Linux), a different user's connection is refused before the
+	// code is touched, so it cannot burn the code either. root is let in: it
+	// can read the session token anyway.
+	if s.peerUID != nil {
+		if uid, ok := s.peerUID(r); ok && uid != s.selfUID && uid != 0 {
+			log.Printf("jumpgate: WARNING: refused a login link from another local user (uid %d)", uid)
+			http.Error(w, "this jumpgate login link belongs to another user", http.StatusForbidden)
+			return
+		}
+	}
+	ok, reused := s.redeem(r.URL.Query().Get("code"))
+	if !ok {
+		if reused {
+			log.Printf("jumpgate: WARNING: a login link was used twice (from %s); if you did not open it twice, another local program may have signed in before your browser, so restart jumpgate to replace the session token", r.RemoteAddr)
+		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = io.WriteString(w, "This jumpgate login link has expired or was already used.\nRun `jumpgate open` for a new one.\n")
