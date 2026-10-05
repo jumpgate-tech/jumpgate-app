@@ -248,3 +248,26 @@ func writeControllerConfig(t *testing.T, store, ref, addr string) {
 		t.Fatal(err)
 	}
 }
+
+// D/F: a relay without --meter serves every valid key free. That is allowed,
+// but it is said out loud at startup.
+func TestBuildServerWarnsOfAnUnmeteredRelay(t *testing.T) {
+	shortHome(t)
+	opts := serverOptions{Bind: freeAddr(t), RelayBind: freeAddr(t), BillingSocket: "/tmp/jg-no-such.sock",
+		ERPCURL: "http://127.0.0.1:4000", RelayToken: "rt", AdminToken: "at"}
+	var log strings.Builder
+	if _, err := buildServer(opts, func() {}, &log); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(log.String(), "WARNING") || !strings.Contains(log.String(), "--meter") {
+		t.Fatalf("no unmetered warning: %q", log.String())
+	}
+	opts.Meter = true
+	log.Reset()
+	if _, err := buildServer(opts, func() {}, &log); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(log.String(), "WARNING") {
+		t.Fatalf("warned with metering on: %q", log.String())
+	}
+}

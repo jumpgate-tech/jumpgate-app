@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -223,7 +224,13 @@ func (h *Handler) charge(ctx context.Context, rec KeyRecord, chainID int, method
 	for _, method := range methods {
 		cost += h.priceOf(method, chainID)
 	}
-	return h.cfg.Credits.Spend(ctx, rec.AccountAddress, cost)
+	err := h.cfg.Credits.Spend(ctx, rec.AccountAddress, cost)
+	if errors.Is(err, ErrNoAccount) {
+		// Name the account so the operator knows what to provision. It is an
+		// address, never the key.
+		return fmt.Errorf("account %s: %w", rec.AccountAddress, err)
+	}
+	return err
 }
 
 // admit applies the key's rate limits to n calls, and answers 429 when they do
@@ -263,12 +270,31 @@ func (h *Handler) priceOf(method string, chainID int) int64 {
 // writeChargeError separates "cannot pay" from "cannot tell". Reporting a ledger
 // outage as a payment problem would send a funded customer to buy credits they
 // already own.
+//
+// A key bound to an account the ledger has never seen is a third case: the
+// operator must provision the account. It is a 403 rather than a 503, so the
+// operator chases an unbound account instead of a broken socket, and rather
+// than a 402, because paying cannot fix it until the account exists.
 func writeChargeError(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrInsufficientCredits) {
 		writeError(w, http.StatusPaymentRequired, "account is out of credits")
 		return
 	}
+	if errors.Is(err, ErrNoAccount) {
+		logNoAccount(err)
+		writeError(w, http.StatusForbidden, msgNotProvisioned)
+		return
+	}
 	writeError(w, http.StatusServiceUnavailable, "the credit ledger did not answer")
+}
+
+// msgNotProvisioned is the fixed customer-facing answer for ErrNoAccount.
+const msgNotProvisioned = "account not provisioned"
+
+// logNoAccount tells the operator which account to provision. The error names
+// the account (an address, never the key).
+func logNoAccount(err error) {
+	log.Printf("relay: refused a call: %v; the account is not provisioned in the billing store", err)
 }
 
 // serveBeacon proxies to the beacon client. Beacon is a different protocol on a

@@ -28,6 +28,9 @@ const (
 	// codeOutOfCredits and codeLedgerUnavailable mirror HTTP's 402 and 503.
 	codeOutOfCredits      = -32003
 	codeLedgerUnavailable = -32004
+	// codeAccountNotProvisioned mirrors HTTP's 403 for a key whose funding
+	// account the ledger has never seen.
+	codeAccountNotProvisioned = -32006
 	// codeRateLimited mirrors HTTP's 429. -32005 is the code EIP-1474 reserves
 	// for "limit exceeded", so client libraries already recognise it.
 	codeRateLimited = -32005
@@ -343,8 +346,13 @@ func (s *WSSession) deliver(ctx context.Context, subID string, payload json.RawM
 		return
 	}
 	if err := s.charge(ctx, "eth_subscribe"); err != nil {
-		if errors.Is(err, ErrInsufficientCredits) {
+		switch {
+		case errors.Is(err, ErrInsufficientCredits):
 			s.end(closePolicyViolation, "account is out of credits")
+		case errors.Is(err, ErrNoAccount):
+			// Not fixed mid-session either: the operator must provision it.
+			logNoAccount(err)
+			s.end(closePolicyViolation, msgNotProvisioned)
 		}
 		return
 	}
@@ -386,6 +394,11 @@ func (s *WSSession) end(code uint16, reason string) {
 func (s *WSSession) writeChargeError(id json.RawMessage, err error) {
 	if errors.Is(err, ErrInsufficientCredits) {
 		s.writeError(id, codeOutOfCredits, "account is out of credits")
+		return
+	}
+	if errors.Is(err, ErrNoAccount) {
+		logNoAccount(err)
+		s.writeError(id, codeAccountNotProvisioned, msgNotProvisioned)
 		return
 	}
 	s.writeError(id, codeLedgerUnavailable, "the credit ledger did not answer")

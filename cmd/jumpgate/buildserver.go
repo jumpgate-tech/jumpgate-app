@@ -155,19 +155,23 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 		return nil, fmt.Errorf("embedded UI: %w", err)
 	}
 
-	relayHandler, relayRuntime, err := relay.Build(relay.BuildOptions{
+	relayOpts := relay.BuildOptions{
 		RelayBind:      opts.RelayBind,
 		BillingSocket:  opts.BillingSocket,
 		RelayToken:     opts.RelayToken,
 		ERPCURL:        opts.ERPCURL,
 		ProjectID:      opts.ERPCProject,
 		EnableMetering: opts.Meter,
-	})
+	}
+	relayHandler, relayRuntime, err := relay.Build(relayOpts)
 	if err != nil {
 		// A half-configured relay is fatal rather than quietly off. Serving
 		// unmetered traffic is worse than serving none: the operator sells
 		// access and would be giving it away with nothing to report it.
 		return nil, fmt.Errorf("relay: %w", err)
+	}
+	if w := relay.UnmeteredWarning(relayOpts); w != "" {
+		logf("%s", w)
 	}
 
 	// Key management is the operator's surface and uses the ADMIN credential,

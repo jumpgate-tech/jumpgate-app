@@ -97,6 +97,17 @@ launch again to apply them. The same applies after an upgrade. If the server
 still running is a different jumpgate version, commands warn you, and you run
 `jumpgate stop` to replace it with the new version.
 
+When metering is on, the metered relay can refuse a call in three ways:
+
+- `402 account is out of credits`: the customer has to top up.
+- `403 account not provisioned`: the key's funding account does not exist in
+  the billing store yet. The server log names the account to create.
+- `503`: the credit ledger did not answer.
+
+On a WebSocket these are JSON-RPC errors -32003, -32006 and -32004. A relay
+started without `--meter` serves every valid key for free, and it logs a
+warning at startup to say so.
+
 If the controller key will not open, the server still starts. This can happen
 when the keychain is locked or the key file is missing. The web UI keeps
 working, and box commands fail with `no_controller_key` and the reason. Fix the
