@@ -37,11 +37,10 @@ func onePasswordCreate(ctx context.Context, ref string) (*Key, error) {
 	// Any other failure could hide an existing item, and creating then would
 	// leave a duplicate that makes `op read` ambiguous.
 	_, getErr := runCmd(ctx, "", "op", "item", "get", item, "--vault", vault)
-	var ce *cmdError
 	switch {
 	case getErr == nil:
 		return nil, fmt.Errorf("%w: 1Password item %q in vault %q", ErrKeyExists, item, vault)
-	case errors.As(getErr, &ce) && strings.Contains(ce.Stderr, "isn't an item"):
+	case opItemAbsent(getErr):
 	default:
 		return nil, fmt.Errorf("signer: 1Password existence check failed: %w", getErr)
 	}
@@ -95,6 +94,12 @@ func onePasswordCreate(ctx context.Context, ref string) (*Key, error) {
 		return nil, fmt.Errorf("signer: 1Password item %s could not be verified and was removed: %w", created.ID, err)
 	}
 	return k2, nil
+}
+
+// opItemAbsent reports op's "X isn't an item in the Y vault" failure (exit 1).
+func opItemAbsent(err error) bool {
+	var ce *cmdError
+	return errors.As(err, &ce) && strings.Contains(ce.Stderr, "isn't an item")
 }
 
 func onePasswordRead(ctx context.Context, ref string) (*Key, error) {
