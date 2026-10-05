@@ -17,6 +17,7 @@ import (
 	gliderssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/sys/windows"
 )
 
 // I-5, end to end: a key loaded into the Windows OpenSSH agent service
@@ -27,6 +28,9 @@ func TestOpenSSHAgentPipe(t *testing.T) {
 		t.Skip("set JUMPGATE_TEST_WIN_AGENT=1 with the ssh-agent service running")
 	}
 	t.Setenv("SSH_AUTH_SOCK", "")
+	// Git for Windows puts its own ssh-add first on PATH; it talks to an MSYS
+	// agent, not the service's pipe.
+	sshAdd := `C:\Windows\System32\OpenSSH\ssh-add.exe`
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	block, err := ssh.MarshalPrivateKey(priv, "")
 	if err != nil {
@@ -36,10 +40,10 @@ func TestOpenSSHAgentPipe(t *testing.T) {
 	if err := os.WriteFile(keyFile, pem.EncodeToMemory(block), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("ssh-add", keyFile).CombinedOutput(); err != nil {
+	if out, err := exec.Command(sshAdd, keyFile).CombinedOutput(); err != nil {
 		t.Fatalf("ssh-add: %v: %s", err, out)
 	}
-	t.Cleanup(func() { _ = exec.Command("ssh-add", "-d", keyFile).Run() })
+	t.Cleanup(func() { _ = exec.Command(sshAdd, "-d", keyFile).Run() })
 	sshPub, _ := ssh.NewPublicKey(pub)
 
 	c := dialAgent(time.Now().Add(5 * time.Second))
@@ -90,5 +94,37 @@ func TestOpenSSHAgentPipe(t *testing.T) {
 	out, err := sess.Output("anything")
 	if err != nil || string(out) != "ok" {
 		t.Fatalf("session = %q, %v", out, err)
+	}
+}
+
+// The pipe-server check accepts SYSTEM and this user and refuses anyone else.
+func TestCheckAgentOwner(t *testing.T) {
+	me, err := currentUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	system, _ := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	everyone, _ := windows.CreateWellKnownSid(windows.WinWorldSid)
+	admins, _ := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	for sid, ok := range map[*windows.SID]bool{me: true, system: true, everyone: false, admins: me.String() == admins.String()} {
+		if err := checkAgentOwner(sid); (err == nil) != ok {
+			t.Errorf("checkAgentOwner(%s) = %v, want ok=%v", sid, err, ok)
+		}
+	}
+}
+
+// A squatted pipe is closed and reported as no agent.
+func TestDialAgentRefusesAForeignPipeServer(t *testing.T) {
+	if os.Getenv("JUMPGATE_TEST_WIN_AGENT") != "1" {
+		t.Skip("needs the ssh-agent service's pipe")
+	}
+	t.Setenv("SSH_AUTH_SOCK", "")
+	old := pipeServerSID
+	t.Cleanup(func() { pipeServerSID = old })
+	everyone, _ := windows.CreateWellKnownSid(windows.WinWorldSid)
+	pipeServerSID = func(*os.File) (*windows.SID, error) { return everyone, nil }
+	if c := dialAgent(time.Now().Add(5 * time.Second)); c != nil {
+		c.Close()
+		t.Fatal("dialAgent accepted a pipe served by Everyone")
 	}
 }

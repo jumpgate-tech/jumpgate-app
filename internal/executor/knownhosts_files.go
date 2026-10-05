@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,6 +10,10 @@ import (
 // systemKnownHosts is OpenSSH's system-wide known_hosts on this OS; a var so
 // tests can point it elsewhere.
 var systemKnownHosts = defaultSystemKnownHosts()
+
+// knownHostsTrusted decides whether a known_hosts file may vouch for a host.
+// A var so tests can inject the verdict.
+var knownHostsTrusted = checkKnownHostsFile
 
 func defaultSystemKnownHosts() string {
 	if runtime.GOOS == "windows" {
@@ -23,11 +28,18 @@ func defaultSystemKnownHosts() string {
 
 // OpenSSHKnownHosts lists the OpenSSH known_hosts files strict checking
 // consults besides jumpgate's confirmed store: the user's, and the
-// system-wide one when it exists (M-10).
+// system-wide one when it exists and only trusted accounts can write it or
+// its directory (M-10). Anyone who could write the system file could vouch
+// for a host key, so an untrusted one is skipped with a warning rather than
+// failing the dial: the confirmed store still applies.
 func OpenSSHKnownHosts(home string) []string {
 	files := []string{filepath.Join(home, ".ssh", "known_hosts")}
 	if _, err := os.Stat(systemKnownHosts); err == nil {
-		files = append(files, systemKnownHosts)
+		if err := knownHostsTrusted(systemKnownHosts); err != nil {
+			log.Printf("jumpgate: ignoring %s: %v", systemKnownHosts, err)
+		} else {
+			files = append(files, systemKnownHosts)
+		}
 	}
 	return files
 }
