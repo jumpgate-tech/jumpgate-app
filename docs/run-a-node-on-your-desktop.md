@@ -38,24 +38,27 @@ Be honest with yourself about three things first.
    user's) `authorized_keys`.
 5. Find the address: from Windows, `localhost` forwards to WSL2 only in some
    modes, so use the VM address from `wsl hostname -I`, or enable mirrored
-   networking (`networkingMode=mirrored` in `.wslconfig`).
+   networking (`networkingMode=mirrored` in `.wslconfig`; it needs Windows 11
+   22H2 or later).
 
 ## Lima Ubuntu VM on macOS
 
 1. `brew install lima`, then
    `limactl start --name=node template://ubuntu --disk=<size>GiB`
    (set the disk location with `LIMA_HOME` on the external drive).
-2. Lima's Ubuntu has systemd and passwordless sudo. Find the SSH port with
-   `limactl list` (the SSH column), or use `limactl show-ssh node`.
+2. Lima's Ubuntu has systemd and passwordless sudo. Lima creates a guest user
+   with your macOS username. Find the SSH port and key with `limactl ls` (the
+   SSH column) or in `~/.lima/node/ssh.config`.
 
 ## Pair it
 
 From the controller, using the forwarded SSH address and port:
 
 ```bash
-jumpgate hosts add desk-node --ssh root@127.0.0.1:60022 --key ~/.ssh/id_ed25519
-# or, for a non-root sudo user:
-jumpgate hosts add desk-node --ssh ubuntu@127.0.0.1:60022 --sudo
+# Lima: your macOS username, the port from `limactl ls`, Lima's key
+jumpgate hosts add desk-node --ssh "$USER"@127.0.0.1:60022 --key ~/.lima/_config/user --sudo
+# WSL2: the Linux user you created, with sudo
+jumpgate hosts add desk-node --ssh myuser@<wsl-address> --sudo
 ```
 
 Confirm the host-key fingerprint when asked. After that, set up the node from the

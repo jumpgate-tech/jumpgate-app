@@ -872,3 +872,29 @@ func TestGatewayCheck_RunningContainerKeepsCurlExitError(t *testing.T) {
 		t.Fatalf("want the plain curl error while the container is running, got %v", err)
 	}
 }
+
+func TestSanitizeLogs(t *testing.T) {
+	in := "dial https://user:hunter2@rpc.example.com/x failed\n" +
+		"api_key=abc123 token: tok-999 \"password\":\"p@ss\" SECRET=s3\n" +
+		"normal line"
+	out := sanitizeLogs(in)
+	for _, leak := range []string{"hunter2", "abc123", "tok-999", "p@ss", "s3\n"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("leaked %q in %q", leak, out)
+		}
+	}
+	if !strings.Contains(out, "rpc.example.com") || !strings.Contains(out, "normal line") {
+		t.Errorf("over-redacted: %q", out)
+	}
+
+	long := strings.Repeat("x", 500) + "\n" + strings.Repeat("line of logs\n", 400)
+	out = sanitizeLogs(long)
+	if len(out) > 2200 {
+		t.Errorf("not capped: %d bytes", len(out))
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if len(l) > 200 {
+			t.Errorf("line not wrapped: %d chars", len(l))
+		}
+	}
+}

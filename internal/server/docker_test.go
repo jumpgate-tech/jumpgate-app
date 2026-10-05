@@ -97,36 +97,28 @@ func TestDockerStart(t *testing.T) {
 	}
 }
 
-func TestMacStartCommand_PrefersTheRuntimeTheContextPointsAt(t *testing.T) {
+func TestMacStartPlan(t *testing.T) {
 	cases := []struct {
-		ctx   string
-		first string
+		ctx        string
+		openCmd    string
+		colima     bool // colima may be started at all
+		colimaOnly bool // colima is the only thing to try
 	}{
-		{"colima", "colima start"},
-		{"colima-dev", "colima start"},
-		{"orbstack", "open -a OrbStack"},
-		{"desktop-linux", "open -a Docker"},
-		{"", "open -a Docker"},
+		{"colima", "", true, true},
+		{"colima-dev", "", true, true},
+		{"orbstack", "open -a OrbStack || open -a Docker", false, false},
+		{"desktop-linux", "open -a Docker || open -a OrbStack", false, false},
+		{"something-else", "open -a Docker || open -a OrbStack", false, false},
+		{"default", "open -a Docker || open -a OrbStack", true, false},
+		{"", "open -a Docker || open -a OrbStack", true, false},
 	}
 	for _, c := range cases {
-		cmd := macStartCommand(c.ctx)
-		fi := strings.Index(cmd, c.first)
-		for _, other := range []string{"open -a Docker", "open -a OrbStack", "colima start"} {
-			if other == c.first {
-				continue
-			}
-			if oi := strings.Index(cmd, other); fi < 0 || oi < fi {
-				t.Errorf("context %q: want %q before %q in %q", c.ctx, c.first, other, cmd)
-			}
-		}
-		// Every runtime stays reachable as a fallback.
-		for _, want := range []string{"open -a Docker", "open -a OrbStack", "colima start"} {
-			if !strings.Contains(cmd, want) {
-				t.Errorf("context %q: command %q lacks fallback %q", c.ctx, cmd, want)
-			}
+		p := macStartPlan(c.ctx)
+		if p.openCmd != c.openCmd || p.colima != c.colima || p.colimaOnly != c.colimaOnly {
+			t.Errorf("context %q: got %+v", c.ctx, p)
 		}
 	}
-	if !strings.Contains(macStartCommand(""), "command -v colima") {
+	if !strings.Contains(colimaStartCommand, "command -v colima") {
 		t.Error("colima must only be tried when it is on PATH")
 	}
 }

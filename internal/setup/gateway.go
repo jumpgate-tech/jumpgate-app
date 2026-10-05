@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -1288,5 +1289,38 @@ func (p *gatewayPlan) diagnoseContainer(ctx context.Context, e executor.Executor
 		// a crash message is usually there rather than on stdout.
 		logs = strings.TrimSpace(strings.TrimSpace(lr.Stdout) + "\n" + strings.TrimSpace(lr.Stderr))
 	}
-	return fmt.Errorf("gateway container %s is %s (%s restarts); last log lines:\n%s", name, state, strings.TrimSpace(restarts), logs)
+	return fmt.Errorf("gateway container %s is %s (%s restarts); last log lines:\n%s", name, state, strings.TrimSpace(restarts), sanitizeLogs(logs))
+}
+
+var (
+	logUserinfoRE = regexp.MustCompile(`(://)[^/\s:@]+:[^/\s@]*@`)
+	logSecretRE   = regexp.MustCompile(`(?i)((?:[\w.-]*(?:key|token|secret|passw(?:or)?d|authorization))["']?\s*[=:]\s*["']?)[^\s"',;&]+`)
+)
+
+const (
+	logMaxBytes = 2048
+	logMaxLine  = 200
+)
+
+// sanitizeLogs prepares container log lines for an error message: it redacts
+// URL userinfo and key/token/secret/password values, wraps long lines, and
+// keeps only the last ~2 KB.
+func sanitizeLogs(s string) string {
+	s = logUserinfoRE.ReplaceAllString(s, "${1}[redacted]@")
+	s = logSecretRE.ReplaceAllString(s, "${1}[redacted]")
+	var b strings.Builder
+	for _, line := range strings.Split(s, "\n") {
+		for len(line) > logMaxLine {
+			b.WriteString(line[:logMaxLine])
+			b.WriteByte('\n')
+			line = line[logMaxLine:]
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	out := strings.TrimRight(b.String(), "\n")
+	if len(out) > logMaxBytes {
+		out = "...\n" + out[len(out)-logMaxBytes:]
+	}
+	return out
 }

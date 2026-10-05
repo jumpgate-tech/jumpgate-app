@@ -9,7 +9,7 @@ import (
 
 // desktopVMKind classifies a Linux target that is really a desktop VM: WSL2
 // (/proc/version mentions "microsoft") or a Lima VM (hostname lima-*, or an
-// /etc/lima directory). It returns "" for anything else. Pure, so detection is
+// /mnt/lima-cidata directory). It returns "" for anything else. Pure, so detection is
 // testable with injected file contents.
 func desktopVMKind(procVersion, hostname string, limaDir bool) string {
 	if strings.Contains(strings.ToLower(procVersion), "microsoft") {
@@ -43,7 +43,7 @@ func warnIfDesktopVM(ctx context.Context, e executor.Executor, st *State) {
 	kind := desktopVMKind(
 		out("cat /proc/version"),
 		out("hostname"),
-		strings.TrimSpace(out("[ -d /etc/lima ] && echo lima")) == "lima",
+		strings.TrimSpace(out("[ -d /mnt/lima-cidata ] && echo lima")) == "lima",
 	)
 	if kind != "" {
 		_ = emit(ctx, st, Event{StepID: "preflight", Line: desktopVMWarning(kind)})
