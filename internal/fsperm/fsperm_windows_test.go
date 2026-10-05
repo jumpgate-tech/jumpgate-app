@@ -190,3 +190,33 @@ func TestMakePrivateMakesTheUserTheOwner(t *testing.T) {
 		t.Fatalf("owner = %s, want the current user %s", accountName(owner), accountName(user))
 	}
 }
+
+// A secret created in a directory that hands Everyone read access is private
+// from the moment it exists, before anything is written to it: there is no
+// window in which another user can open a handle and keep it.
+func TestSecretsArePrivateFromCreationUnderALooseParent(t *testing.T) {
+	dir := looseDir(t)
+	check := func(what string, f *os.File, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		defer f.Close()
+		if err := checkPrivateFile(f); err != nil {
+			t.Fatalf("%s is not private at creation: %v", what, err)
+		}
+	}
+	f, err := CreatePrivate(filepath.Join(dir, "key"))
+	check("CreatePrivate", f, err)
+	f, err = CreateTempPrivate(dir, ".t-*")
+	check("CreateTempPrivate", f, err)
+	f, err = OpenAppendPrivate(filepath.Join(dir, "log"))
+	check("OpenAppendPrivate", f, err)
+	p := filepath.Join(dir, "server.json")
+	if err := WriteFilePrivate(p, []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckPrivate(p); err != nil {
+		t.Fatalf("WriteFilePrivate under a loose parent: %v", err)
+	}
+}

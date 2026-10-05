@@ -74,16 +74,12 @@ func ensureTransportKey() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	tmp, err := os.CreateTemp(dir, ".jumpgate_ed25519.tmp-*")
+	tmp, err := fsperm.CreateTempPrivate(dir, ".jumpgate_ed25519.tmp-*")
 	if err != nil {
 		return "", err
 	}
 	defer os.Remove(tmp.Name())
-	// Restrict before the key is written.
-	werr := fsperm.MakePrivate(tmp.Name())
-	if werr == nil {
-		_, werr = tmp.Write(pem.EncodeToMemory(block))
-	}
+	_, werr := tmp.Write(pem.EncodeToMemory(block))
 	if werr == nil {
 		werr = tmp.Sync()
 	}

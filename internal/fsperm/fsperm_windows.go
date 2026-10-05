@@ -103,6 +103,44 @@ func makePrivate(path string) error {
 	return nil
 }
 
+// The append flag needs no access change on Windows; see below.
+func createPrivate(path string, _ bool) (*os.File, error) {
+	sd, err := privateSD(false)
+	if err != nil {
+		return nil, err
+	}
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	sa := &windows.SecurityAttributes{SecurityDescriptor: sd}
+	sa.Length = uint32(unsafe.Sizeof(*sa))
+	// CREATE_NEW fails on anything already at path, a link included. The
+	// descriptor is applied as the file is created; its DACL is protected,
+	// so nothing is inherited from the directory. A new file is empty, so
+	// plain write access appends as well as append access would.
+	h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, sa, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return os.NewFile(uintptr(h), path), nil
+}
+
+func openAppendExisting(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return nil, err
+	}
+	// The handle has no WRITE_DAC, so the file is restricted by name;
+	// makePrivate refuses a link, which os.OpenFile would have followed.
+	if err := makePrivate(path); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
 func setSecurity(path string, access uint32, info windows.SECURITY_INFORMATION, owner *windows.SID, dacl *windows.ACL) error {
 	h, err := openForSecurity(path, windows.READ_CONTROL|access)
 	if err != nil {

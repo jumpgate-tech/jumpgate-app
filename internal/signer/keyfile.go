@@ -69,15 +69,10 @@ func GenerateKeyFile(path string) (*Key, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	// Private from creation, never replacing anything already at path: the
+	// directory may be one the operator chose and other users can read.
+	f, err := fsperm.CreatePrivate(path)
 	if err != nil {
-		return nil, fmt.Errorf("signer: %w", err)
-	}
-	// Restrict before the key is written: on Windows the new file inherits
-	// its directory's DACL until this runs.
-	if err := fsperm.MakePrivate(path); err != nil {
-		f.Close()
-		os.Remove(path)
 		return nil, fmt.Errorf("signer: %w", err)
 	}
 	if _, err := f.WriteString(hex.EncodeToString(k.Bytes()) + "\n"); err != nil {

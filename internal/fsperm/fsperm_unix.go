@@ -73,4 +73,41 @@ func privateMode(m os.FileMode) os.FileMode {
 	return 0o600
 }
 
+func createPrivate(path string, appendOnly bool) (*os.File, error) {
+	flag := os.O_RDWR
+	if appendOnly {
+		flag = os.O_WRONLY | os.O_APPEND
+	}
+	// O_EXCL also refuses a link at path. The mode is set again on the
+	// descriptor because a umask may have taken owner bits away.
+	f, err := os.OpenFile(path, flag|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+func openAppendExisting(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err == nil && !fi.Mode().IsRegular() {
+		err = fmt.Errorf("fsperm: %s is not a regular file", path)
+	}
+	if err == nil {
+		err = f.Chmod(0o600)
+	}
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
 func rename(oldpath, newpath string) error { return os.Rename(oldpath, newpath) }

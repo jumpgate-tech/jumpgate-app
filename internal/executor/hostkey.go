@@ -84,15 +84,12 @@ func RecordHostKey(hostKeyFile, hostname string, key ssh.PublicKey) error {
 		}
 	}
 
-	f, err := os.OpenFile(hostKeyFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	// Owner-only on every OS, from creation; the confirmed store decides
+	// which hosts this controller trusts, so another user must not be able to
+	// append to it.
+	f, err := fsperm.OpenAppendPrivate(hostKeyFile)
 	if err != nil {
 		return fmt.Errorf("open host key file %s: %w", hostKeyFile, err)
-	}
-	// Owner-only on every OS; the confirmed store decides which hosts this
-	// controller trusts, so another user must not be able to append to it.
-	if err := fsperm.MakePrivate(hostKeyFile); err != nil {
-		f.Close()
-		return fmt.Errorf("restrict host key file %s: %w", hostKeyFile, err)
 	}
 	defer f.Close()
 

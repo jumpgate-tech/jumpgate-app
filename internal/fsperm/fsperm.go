@@ -12,9 +12,12 @@ package fsperm
 
 import (
 	"errors"
-	"fmt"
+	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 // ErrNotPrivate means someone other than the owner can read or change a file.
@@ -43,13 +46,53 @@ func CheckPrivate(path string) error { return checkPrivate(path) }
 // the file read.
 func CheckPrivateFile(f *os.File) error { return checkPrivateFile(f) }
 
+// CreatePrivate creates path as a new owner-only file, open for reading and
+// writing. It fails with an error matching fs.ErrExist when anything, a link
+// included, is already at path. The file is private from the moment it
+// exists: on Windows it is created with the owner-only descriptor instead of
+// first inheriting its directory's DACL, so no other user can open a handle
+// to it before it is restricted and keep that handle once a secret is in it.
+func CreatePrivate(path string) (*os.File, error) { return createPrivate(path, false) }
+
+// CreateTempPrivate is os.CreateTemp for an owner-only file: a new file in
+// dir (os.TempDir() when empty) whose name is pattern with its last "*"
+// replaced by a random string, created the way CreatePrivate creates one.
+func CreateTempPrivate(dir, pattern string) (*os.File, error) {
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	prefix, suffix := pattern, ""
+	if i := strings.LastIndex(pattern, "*"); i >= 0 {
+		prefix, suffix = pattern[:i], pattern[i+1:]
+	}
+	for try := 0; try < 10000; try++ {
+		f, err := createPrivate(filepath.Join(dir, prefix+strconv.FormatUint(uint64(rand.Uint32()), 10)+suffix), false)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		return f, err
+	}
+	return nil, &os.PathError{Op: "createtemp", Path: filepath.Join(dir, pattern), Err: fs.ErrExist}
+}
+
+// OpenAppendPrivate opens path for appending, creating it as CreatePrivate
+// does when it is missing. An existing file is restricted to its owner before
+// it is returned. A link at path is refused.
+func OpenAppendPrivate(path string) (*os.File, error) {
+	f, err := createPrivate(path, true)
+	if !errors.Is(err, fs.ErrExist) {
+		return f, err
+	}
+	return openAppendExisting(path)
+}
+
 // WriteFilePrivate replaces path with data as an owner-only file. The data
-// goes to a restricted temp file in the same directory, is synced, then
-// renamed over path, so a reader sees the old file or the new one, never a
-// half-written or briefly readable one.
+// goes to a temp file in the same directory that is private from creation
+// (CreateTempPrivate), is synced, then renamed over path, so a reader sees the
+// old file or the new one, never a half-written or briefly readable one.
 func WriteFilePrivate(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	tmp, err := CreateTempPrivate(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
@@ -61,10 +104,6 @@ func WriteFilePrivate(path string, data []byte) error {
 			os.Remove(name)
 		}
 	}()
-	// Restrict before writing: the temp file is empty until this succeeds.
-	if err := MakePrivate(name); err != nil {
-		return fmt.Errorf("fsperm: restrict %s: %w", name, err)
-	}
 	if _, err := tmp.Write(data); err != nil {
 		return err
 	}

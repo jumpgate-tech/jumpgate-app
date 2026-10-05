@@ -164,12 +164,8 @@ func EnsureRunning(ctx context.Context, exe string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	logf, err := os.OpenFile(filepath.Join(dir, "server.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	logf, err := fsperm.OpenAppendPrivate(filepath.Join(dir, "server.log"))
 	if err != nil {
-		return Info{}, err
-	}
-	if err := fsperm.MakePrivate(logf.Name()); err != nil {
-		logf.Close()
 		return Info{}, err
 	}
 	defer logf.Close()
