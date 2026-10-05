@@ -525,6 +525,52 @@ func sseHeaders(w http.ResponseWriter) {
 	}
 }
 
+// sseConn is one open event stream: it writes and flushes frames, and owns
+// the ping ticker. The handler's own loop selects on Pings and calls Ping, so
+// only the handler goroutine ever writes to the ResponseWriter.
+type sseConn struct {
+	w    http.ResponseWriter
+	f    http.Flusher
+	ping *time.Ticker
+}
+
+// startSSE opens an event stream (sseHeaders) and starts its ping ticker
+// (ssePingInterval). It answers 500 and returns false when w cannot stream.
+// The caller defers Close.
+func startSSE(w http.ResponseWriter) (*sseConn, bool) {
+	f, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return nil, false
+	}
+	sseHeaders(w)
+	return &sseConn{w: w, f: f, ping: time.NewTicker(ssePingInterval)}, true
+}
+
+// Close stops the ping ticker.
+func (c *sseConn) Close() { c.ping.Stop() }
+
+// Pings fires every ssePingInterval; the handler answers it with Ping.
+func (c *sseConn) Pings() <-chan time.Time { return c.ping.C }
+
+// Ping writes a ": ping" comment and flushes.
+func (c *sseConn) Ping() {
+	writeSSEComment(c.w, "ping")
+	c.f.Flush()
+}
+
+// Send writes v as one default event and flushes.
+func (c *sseConn) Send(v any) {
+	writeSSEEvent(c.w, v)
+	c.f.Flush()
+}
+
+// SendNamed writes v as one named event and flushes.
+func (c *sseConn) SendNamed(name string, v any) {
+	writeSSENamed(c.w, name, v)
+	c.f.Flush()
+}
+
 // ---------------------------------------------------------------------
 // routes
 // ---------------------------------------------------------------------
@@ -1101,13 +1147,11 @@ func (s *Server) handleSetupStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
+	conn, ok := startSSE(w)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
-
-	sseHeaders(w)
+	defer conn.Close()
 
 	snapshot, ch, unsub := run.subscribe()
 	defer unsub()
@@ -1115,19 +1159,20 @@ func (s *Server) handleSetupStream(w http.ResponseWriter, r *http.Request) {
 	for _, ev := range snapshot {
 		writeSSEEvent(w, ev)
 	}
-	flusher.Flush()
+	conn.f.Flush()
 
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-conn.Pings():
+			conn.Ping()
 		case ev, ok := <-ch:
 			if !ok {
 				return
 			}
-			writeSSEEvent(w, ev)
-			flusher.Flush()
+			conn.Send(ev)
 		}
 	}
 }
@@ -1160,21 +1205,16 @@ func (s *Server) handleTargetMonitorStream(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
+	conn, ok := startSSE(w)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
-
-	sseHeaders(w)
-	ping := time.NewTicker(ssePingInterval)
-	defer ping.Stop()
+	defer conn.Close()
 
 	ch, unsub := mon.Subscribe()
 	defer unsub()
 
-	writeSSEEvent(w, mon.Latest())
-	flusher.Flush()
+	conn.Send(mon.Latest())
 
 	ctx := r.Context()
 	for {
@@ -1185,15 +1225,13 @@ func (s *Server) handleTargetMonitorStream(w http.ResponseWriter, r *http.Reques
 			// Setup was re-run. Ending the stream makes the EventSource
 			// reconnect, and the reconnect gets the rebuilt monitor.
 			return
-		case <-ping.C:
-			writeSSEComment(w, "ping")
-			flusher.Flush()
+		case <-conn.Pings():
+			conn.Ping()
 		case snap, ok := <-ch:
 			if !ok {
 				return
 			}
-			writeSSEEvent(w, snap)
-			flusher.Flush()
+			conn.Send(snap)
 		}
 	}
 }
@@ -1240,20 +1278,14 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, hits)
 }
 
-// logBacklog is the reset frame's lines for ?backlog=raw: the newest n, n
-// capped at maxLogBacklog. A zero, negative or unreadable n is an empty
-// backlog: logwatch.Recent reads n <= 0 as the whole ring, which is not what
-// a client asking for none means.
-func logBacklog(watch *logwatch.Watcher, raw string) []logwatch.Hit {
+// backlogParam reads ?backlog=raw as a line count in [0, maxLogBacklog]; a
+// negative or unreadable value is 0 (an empty reset, not the whole ring).
+func backlogParam(raw string) int {
 	n, err := strconv.Atoi(raw)
 	if err != nil || n <= 0 {
-		return []logwatch.Hit{}
+		return 0
 	}
-	hits := watch.Recent(min(n, maxLogBacklog))
-	if hits == nil {
-		hits = []logwatch.Hit{}
-	}
-	return hits
+	return min(n, maxLogBacklog)
 }
 
 func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
@@ -1280,25 +1312,30 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
+	conn, ok := startSSE(w)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
+	defer conn.Close()
 
-	sseHeaders(w)
-	ping := time.NewTicker(ssePingInterval)
-	defer ping.Stop()
-
-	// Subscribe before reading the backlog, so a line that arrives between
-	// the two is delivered (at worst twice), never lost.
-	ch, unsub := watch.Subscribe()
-	defer unsub()
-
-	if raw := r.URL.Query().Get("backlog"); raw != "" {
-		writeSSENamed(w, "reset", logBacklog(watch, raw))
-		flusher.Flush()
+	// With ?backlog= the stream opens on a reset frame, taken atomically
+	// with the subscription (no line twice, none lost), and a reset is sent
+	// again whenever this subscriber fell behind and lost lines (spec A4).
+	// Without it the stream behaves as it always has, for the web UI: live
+	// lines only, a slow reader silently misses some.
+	raw := r.URL.Query().Get("backlog")
+	resets := raw != ""
+	backlog := backlogParam(raw)
+	var ch <-chan logwatch.Hit
+	var unsub func()
+	if resets {
+		var hits []logwatch.Hit
+		hits, ch, unsub = watch.SubscribeRecent(backlog)
+		conn.SendNamed("reset", hits)
+	} else {
+		ch, unsub = watch.Subscribe()
 	}
+	defer unsub()
 
 	ctx := r.Context()
 	for {
@@ -1308,15 +1345,19 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		case <-retired:
 			// Setup was re-run; see handleTargetMonitorStream.
 			return
-		case <-ping.C:
-			writeSSEComment(w, "ping")
-			flusher.Flush()
+		case <-conn.Pings():
+			conn.Ping()
 		case hit, ok := <-ch:
 			if !ok {
 				return
 			}
-			writeSSEEvent(w, hit)
-			flusher.Flush()
+			if resets {
+				if hits, dropped := watch.Resync(ch, backlog); dropped {
+					conn.SendNamed("reset", hits)
+					continue
+				}
+			}
+			conn.Send(hit)
 		}
 	}
 }

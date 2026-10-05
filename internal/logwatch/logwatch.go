@@ -49,8 +49,18 @@ type Watcher struct {
 	ring []Hit
 	next int // index of the oldest hit (the next slot to overwrite) once full
 
+	// subs is guarded by subsMu. Lock order: mu, then subsMu. publish runs
+	// under both, so a backlog read under mu and a subscription made under
+	// the same hold see every hit exactly once.
 	subsMu sync.Mutex
-	subs   map[chan Hit]struct{}
+	subs   map[<-chan Hit]*subscriber
+}
+
+// subscriber is one Subscribe channel and how many hits it has lost to a
+// full buffer since it last resynced.
+type subscriber struct {
+	ch      chan Hit
+	dropped int
 }
 
 // New constructs a Watcher over units. It does not start tailing — call
@@ -59,7 +69,7 @@ func New(e executor.Executor, units []string) *Watcher {
 	return &Watcher{
 		exec:  e,
 		units: units,
-		subs:  map[chan Hit]struct{}{},
+		subs:  map[<-chan Hit]*subscriber{},
 	}
 }
 
@@ -131,14 +141,15 @@ func (w *Watcher) handleLine(unit, line string) {
 	}
 
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	if len(w.ring) < ringSize {
 		w.ring = append(w.ring, hit)
 	} else {
 		w.ring[w.next] = hit
 		w.next = (w.next + 1) % ringSize
 	}
-	w.mu.Unlock()
-
+	// Publish under mu (its sends never block), so a subscriber that takes
+	// its backlog under mu cannot also receive the same hit live.
 	w.publish(hit)
 }
 
@@ -146,6 +157,11 @@ func (w *Watcher) handleLine(unit, line string) {
 func (w *Watcher) Recent(n int) []Hit {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.recentLocked(n)
+}
+
+// recentLocked is Recent with w.mu held; n <= 0 means the whole ring.
+func (w *Watcher) recentLocked(n int) []Hit {
 	if n <= 0 || n > len(w.ring) {
 		n = len(w.ring)
 	}
@@ -166,29 +182,75 @@ func (w *Watcher) Recent(n int) []Hit {
 // never blocks tailing or other subscribers. Callers must call the
 // returned func when done to avoid leaking the subscription.
 func (w *Watcher) Subscribe() (<-chan Hit, func()) {
-	ch := make(chan Hit, 32)
-
 	w.subsMu.Lock()
-	w.subs[ch] = struct{}{}
-	w.subsMu.Unlock()
-
-	unsub := func() {
-		w.subsMu.Lock()
-		delete(w.subs, ch)
-		w.subsMu.Unlock()
-	}
-	return ch, unsub
+	defer w.subsMu.Unlock()
+	return w.subscribeLocked()
 }
 
+// subscribeLocked is Subscribe with w.subsMu held.
+func (w *Watcher) subscribeLocked() (<-chan Hit, func()) {
+	s := &subscriber{ch: make(chan Hit, 32)}
+	w.subs[s.ch] = s
+	unsub := func() {
+		w.subsMu.Lock()
+		delete(w.subs, s.ch)
+		w.subsMu.Unlock()
+	}
+	return s.ch, unsub
+}
+
+// SubscribeRecent is Subscribe plus the newest n hits (oldest first), taken
+// atomically: every hit is either in the backlog or arrives on the channel,
+// never both and never neither. n <= 0 is an empty backlog (unlike Recent,
+// where it means the whole ring).
+func (w *Watcher) SubscribeRecent(n int) ([]Hit, <-chan Hit, func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	backlog := []Hit{}
+	if n > 0 {
+		backlog = w.recentLocked(n)
+	}
+	w.subsMu.Lock()
+	defer w.subsMu.Unlock()
+	ch, unsub := w.subscribeLocked()
+	return backlog, ch, unsub
+}
+
+// Resync reports whether the subscriber ch has lost hits to a full buffer
+// since it subscribed or last resynced. If it has, Resync empties ch and
+// returns the newest n hits (n <= 0: none) atomically, the way SubscribeRecent
+// does, so the subscriber can replace what it holds instead of silently
+// skipping lines.
+func (w *Watcher) Resync(ch <-chan Hit, n int) ([]Hit, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.subsMu.Lock()
+	defer w.subsMu.Unlock()
+	s := w.subs[ch]
+	if s == nil || s.dropped == 0 {
+		return nil, false
+	}
+	s.dropped = 0
+	for len(s.ch) > 0 {
+		<-s.ch
+	}
+	if n <= 0 {
+		return []Hit{}, true
+	}
+	return w.recentLocked(n), true
+}
+
+// publish fans hit out to every subscriber; the caller holds w.mu.
 func (w *Watcher) publish(hit Hit) {
 	w.subsMu.Lock()
 	defer w.subsMu.Unlock()
-	for ch := range w.subs {
+	for _, s := range w.subs {
 		select {
-		case ch <- hit:
+		case s.ch <- hit:
 		default:
-			// Slow consumer — drop this hit rather than block tailing or
-			// other subscribers.
+			// Slow consumer: drop this hit rather than block tailing or
+			// other subscribers, and count it so Resync can say so.
+			s.dropped++
 		}
 	}
 }

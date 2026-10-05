@@ -77,7 +77,15 @@ func TestStreamsPingWhileQuiet(t *testing.T) {
 	t.Cleanup(func() { ssePingInterval = old })
 	a := newAPITestServer(t)
 	seedWired(t, "box")
-	for _, path := range []string{"/api/targets/box/logs/stream", "/api/targets/box/monitor/stream"} {
+	// A setup run that is still going, so its stream stays open; closing
+	// done lets the server's cleanup stop waiting for it.
+	run := newSetupRun(nil)
+	t.Cleanup(func() { close(run.done) })
+	entry := a.srv.reg.get("box")
+	entry.mu.Lock()
+	entry.setup = run
+	entry.mu.Unlock()
+	for _, path := range []string{"/api/targets/box/logs/stream", "/api/targets/box/monitor/stream", "/api/targets/box/setup/stream"} {
 		r, stop := openSSE(t, a, path)
 		found := readLines(r, 2*time.Second, func(line string) bool { return line == ": ping\n" })
 		stop()
@@ -120,7 +128,8 @@ func TestLogsStreamSendsTheBacklogFirst(t *testing.T) {
 }
 
 // The backlog carries the recent lines, newest last and at most N of them;
-// a zero or nonsense N is an empty reset, not the whole ring.
+// a zero or nonsense N is an empty reset, not the whole ring. (The cap is
+// TestBacklogParamClamps: the ring holds fewer lines than maxLogBacklog.)
 func TestLogsStreamBacklogCarriesTheRecentLines(t *testing.T) {
 	j := newJournalExecutor()
 	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) { return j, nil })
@@ -138,7 +147,7 @@ func TestLogsStreamBacklogCarriesTheRecentLines(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 
-	for backlog, want := range map[string]int{"1": 1, "5": 2, "0": 0, "-3": 0, "abc": 0, "999999": 2} {
+	for backlog, want := range map[string]int{"1": 1, "5": 2, "0": 0, "-3": 0, "abc": 0} {
 		r, stop := openSSE(t, a, "/api/targets/local/logs/stream?backlog="+backlog)
 		first, data := readFrame(t, r)
 		stop()
@@ -149,6 +158,17 @@ func TestLogsStreamBacklogCarriesTheRecentLines(t *testing.T) {
 		}
 		if want > 0 && hits[len(hits)-1]["line"] != errorLine+" again" {
 			t.Errorf("backlog=%s: the newest line is not last: %v", backlog, hits)
+		}
+	}
+}
+
+func TestBacklogParamClamps(t *testing.T) {
+	for raw, want := range map[string]int{
+		"1": 1, "2000": maxLogBacklog, "2001": maxLogBacklog, "999999": maxLogBacklog,
+		"0": 0, "-3": 0, "abc": 0, "1e9": 0,
+	} {
+		if got := backlogParam(raw); got != want {
+			t.Errorf("backlogParam(%q) = %d, want %d", raw, got, want)
 		}
 	}
 }
