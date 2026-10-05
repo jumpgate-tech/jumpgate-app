@@ -303,7 +303,11 @@ func (s *Server) handleVPNServerProvision(w http.ResponseWriter, r *http.Request
 		return nil
 	})
 	if taken != nil || moved != "" {
-		writeError(w, http.StatusConflict, err.Error())
+		// This refusal comes from the re-check under the lock, AFTER
+		// ProvisionServer ran: the host already has the new conf even though
+		// the record was not changed. Say so. (A per-server mutex held across
+		// the host call would close this window; that is a follow-up.)
+		writeError(w, http.StatusConflict, err.Error()+" — "+vpnLateRefusalNote)
 		return
 	}
 	if err != nil {
@@ -768,6 +772,10 @@ func vpnServerMoveWithPeers(existing config.VPNServer, targetID, iface, address 
 	return fmt.Sprintf("server %q has %d enrolled device(s); re-provisioning would change its %s and strand every config already handed out. "+
 		"wipe or migrate first: revoke the devices (or wipe the server), then provision it again", existing.ID, len(existing.Peers), strings.Join(moves, ", "))
 }
+
+// vpnLateRefusalNote is appended to a provision refused after the host was
+// already provisioned.
+const vpnLateRefusalNote = "the host may already have been changed; re-run provision to reconcile"
 
 // sameSubnet reports whether two CIDRs name the same network.
 func sameSubnet(a, b string) bool {

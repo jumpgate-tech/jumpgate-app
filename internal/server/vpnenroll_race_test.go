@@ -186,3 +186,58 @@ func TestVPNServerReprovisionInPlaceWithPeersIsFine(t *testing.T) {
 		t.Fatalf("moving a server with no peers: %d", res.StatusCode)
 	}
 }
+
+// rootGatedWGHost holds the first `id -u` (ProvisionServer's root check, which
+// enroll never runs) once armed, so a test can land an enroll between the
+// re-provision's pre-check and its locked re-check.
+type rootGatedWGHost struct {
+	*wgHostFake
+	armed   chan struct{} // closed once the gated call is waiting
+	release chan struct{}
+	once    sync.Once
+	on      bool
+}
+
+func (g *rootGatedWGHost) Run(ctx context.Context, cmd string, o *executor.RunOpts) (executor.Result, error) {
+	if g.on && strings.Contains(cmd, "id -u") {
+		g.once.Do(func() {
+			close(g.armed)
+			<-g.release
+		})
+	}
+	return g.wgHostFake.Run(ctx, cmd, o)
+}
+
+// Fix round 1: when the locked re-check refuses a re-provision, the host has
+// already been provisioned. The 409 says so and how to reconcile.
+func TestVPNServerLateRefusalSaysTheHostMayHaveChanged(t *testing.T) {
+	host := &rootGatedWGHost{wgHostFake: newWGHost(), armed: make(chan struct{}), release: make(chan struct{})}
+	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) { return host, nil })
+	provision(t, a, map[string]any{"id": "home", "endpointHost": "vpn.example.com"})
+
+	host.on = true
+	type answer struct {
+		code int
+		body string
+	}
+	done := make(chan answer, 1)
+	go func() {
+		// No peers yet, so the pre-check lets this move through.
+		res := a.do(t, "POST", "/api/vpn-servers", map[string]any{"id": "home", "interface": "jumpgate1"})
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		done <- answer{res.StatusCode, string(b)}
+	}()
+	<-host.armed
+	if res := a.do(t, "POST", "/api/vpn-servers/home/peers", map[string]any{"name": "laptop"}); res.StatusCode != http.StatusCreated {
+		t.Fatalf("enroll: %d", res.StatusCode)
+	}
+	close(host.release)
+	got := <-done
+	if got.code != http.StatusConflict {
+		t.Fatalf("got %d, want 409: %s", got.code, got.body)
+	}
+	if !strings.Contains(got.body, "the host may already have been changed; re-run provision to reconcile") {
+		t.Fatalf("late refusal does not warn about the host: %s", got.body)
+	}
+}
