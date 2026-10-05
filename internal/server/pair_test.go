@@ -2,11 +2,13 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"encoding/pem"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -339,5 +341,136 @@ func TestEnsureTransportKeyKeepsAnExistingKey(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(path); string(got) != string(want) {
 		t.Fatal("the key file was rewritten")
+	}
+}
+
+// localPairServer saves a local target and starts a server whose OS, euid
+// and local executor the test chooses.
+func localPairServer(t *testing.T, goos string, euid int, local executor.Executor) (*httptest.Server, string) {
+	t.Helper()
+	testutil.Home(t)
+	if _, err := config.Update(func(c *config.Config) error {
+		c.Targets = append(c.Targets, config.Target{ID: "box", Mode: "local"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctrl, _ := signer.GenerateKey()
+	token := NewSessionToken()
+	s := New(Config{Token: token, UI: fstest.MapFS{}, Signer: ctrl,
+		NewLocalExecutor: func() executor.Executor { return local },
+		Geteuid:          func() int { return euid }})
+	s.goos = goos
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	return ts, token
+}
+
+// recordingExec answers every command with "Darwin", so bootstrap stops at
+// its Linux preflight, and records what it was asked to run.
+type recordingExec struct {
+	mu   sync.Mutex
+	cmds []string
+}
+
+func (r *recordingExec) Run(_ context.Context, cmd string, _ *executor.RunOpts) (executor.Result, error) {
+	r.mu.Lock()
+	r.cmds = append(r.cmds, cmd)
+	r.mu.Unlock()
+	return executor.Result{Stdout: "Darwin\n"}, nil
+}
+func (r *recordingExec) WriteFile(context.Context, string, []byte, fs.FileMode) error { return nil }
+func (r *recordingExec) ReadFile(context.Context, string) ([]byte, error)             { return nil, nil }
+func (r *recordingExec) Close() error                                                 { return nil }
+
+func (r *recordingExec) commands() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.cmds...)
+}
+
+func readCode(t *testing.T, res *http.Response) (int, string, string) {
+	t.Helper()
+	var e struct{ Code, Hint string }
+	_ = json.NewDecoder(res.Body).Decode(&e)
+	return res.StatusCode, e.Code, e.Hint
+}
+
+func TestPairLocalIsRefusedOffLinux(t *testing.T) {
+	rec := &recordingExec{}
+	ts, token := localPairServer(t, "darwin", 0, rec)
+	status, code, _ := readCode(t, postPair(t, ts, token, `{}`))
+	if status != http.StatusBadRequest || code != "local_unsupported" {
+		t.Fatalf("got %d %q, want 400 local_unsupported", status, code)
+	}
+	if cmds := rec.commands(); len(cmds) != 0 {
+		t.Fatalf("ran commands: %v", cmds)
+	}
+}
+
+// D5: the detached server has no terminal, so it never tries sudo for a
+// non-root local pairing; it says how to do it instead.
+func TestPairLocalNonRootNeedsTheTerminal(t *testing.T) {
+	rec := &recordingExec{}
+	ts, token := localPairServer(t, "linux", 1000, rec)
+	status, code, hint := readCode(t, postPair(t, ts, token, `{}`))
+	if status != http.StatusConflict || code != "local_needs_terminal" || !strings.Contains(hint, "jumpgate hosts add") {
+		t.Fatalf("got %d %q %q, want 409 local_needs_terminal with a hint", status, code, hint)
+	}
+	if cmds := rec.commands(); len(cmds) != 0 {
+		t.Fatalf("ran commands: %v", cmds)
+	}
+}
+
+// B-4: as root, pairing runs the steps directly. Stock Debian with a root
+// password has no sudo at all.
+func TestPairLocalAsRootDoesNotUseSudo(t *testing.T) {
+	rec := &recordingExec{}
+	ts, token := localPairServer(t, "linux", 0, rec)
+	res := postPair(t, ts, token, `{}`)
+	_, _ = io.ReadAll(res.Body)
+	cmds := rec.commands()
+	if len(cmds) == 0 {
+		t.Fatal("no command ran")
+	}
+	for _, c := range cmds {
+		if strings.Contains(c, "sudo") {
+			t.Fatalf("root pairing used sudo: %q", c)
+		}
+	}
+}
+
+// D18: the CLI ran the privileged steps in the foreground; the server runs
+// nothing on the machine and goes straight to verifying the agent it names.
+func TestPairLocalInstalledRunsNothingAndVerifies(t *testing.T) {
+	rec := &recordingExec{}
+	ts, token := localPairServer(t, "linux", 1000, rec)
+	res := postPair(t, ts, token, `{"installed":"0x0000000000000000000000000000000000000001"}`)
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", res.StatusCode, body)
+	}
+	// No agent listens in the test, so verification is where it stops.
+	if !strings.Contains(string(body), "done in the foreground") || !strings.Contains(string(body), `"step":"verify","err"`) {
+		t.Fatalf("stream:\n%s", body)
+	}
+	if cmds := rec.commands(); len(cmds) != 0 {
+		t.Fatalf("ran commands: %v", cmds)
+	}
+}
+
+func TestPairInstalledMustBeAnAddress(t *testing.T) {
+	ts, token := localPairServer(t, "linux", 1000, &recordingExec{})
+	if res := postPair(t, ts, token, `{"installed":"me"}`); res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", res.StatusCode)
+	}
+}
+
+func TestPairInstalledOnlyAppliesToLocalTargets(t *testing.T) {
+	d := startPairTestSSHD(t, nil)
+	ts, token := pairServer(t, d)
+	res := postPair(t, ts, token, `{"installed":"0x0000000000000000000000000000000000000001"}`)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", res.StatusCode)
 	}
 }

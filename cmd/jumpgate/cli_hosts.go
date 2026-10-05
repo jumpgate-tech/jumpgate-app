@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/valve-tech/jumpgate/internal/bootstrap"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -60,6 +61,14 @@ func hostsAdd(args []string) int {
 	local := fset.Bool("local", false, "pair this machine")
 	if err := fset.Parse(args[1:]); err != nil || (*local == (*sshArg != "")) {
 		return usage("give exactly one of --ssh or --local")
+	}
+	if *local {
+		if err := bootstrap.LocalSupported(hostGOOS); err != nil {
+			return failed("%v", err)
+		}
+		if geteuid() != 0 && !stdinIsTerminal() {
+			return failed("pairing this machine as a non-root user runs sudo, which asks for your password on a terminal, and stdin is not one. Run `jumpgate hosts add %s --local` from an interactive shell, or as root", name)
+		}
 	}
 
 	if err := checkExistingTarget(name, *local, *sshArg, *jumpArg); err != nil {
@@ -105,7 +114,7 @@ func hostsAdd(args []string) int {
 	}
 
 	exe, _ := os.Executable()
-	info, err := daemon.EnsureRunning(ctx, exe)
+	info, err := ensureRunning(ctx, exe)
 	if err != nil {
 		return failed("%v", err)
 	}
@@ -117,7 +126,22 @@ func hostsAdd(args []string) int {
 		// re-paired or an interrupted pairing finished.
 		fmt.Printf("target %s already exists; pairing it again\n", name)
 	}
-	return streamPair(info, name, *sudo)
+	if *local && geteuid() != 0 {
+		c, err := config.Load()
+		if err != nil {
+			return failed("%v", err)
+		}
+		t, ok := findTargetByID(c, name)
+		if !ok {
+			return failed("target %s is not in config.json after adding it", name)
+		}
+		addr, code := pairLocalForeground(ctx, os.Stdout, t)
+		if code != 0 {
+			return code
+		}
+		return streamPair(info, name, pairBody{Installed: addr})
+	}
+	return streamPair(info, name, pairBody{Sudo: *sudo})
 }
 
 // errBadAddress marks an --ssh or --jump value that does not parse.
@@ -346,8 +370,8 @@ var pairFailureCodes = map[string]bool{
 }
 
 // streamPair prints each pairing event as it arrives.
-func streamPair(info daemon.Info, name string, sudo bool) int {
-	b, _ := json.Marshal(map[string]bool{"sudo": sudo})
+func streamPair(info daemon.Info, name string, body pairBody) int {
+	b, _ := json.Marshal(body)
 	res, err := info.Client().Do(mustRequest(context.Background(), info, "/api/targets/"+name+"/pair", b))
 	if err != nil {
 		return failed("server: %v", err)

@@ -557,6 +557,21 @@ func TestLocalSkipsSSHDAndEnrollsTheUID(t *testing.T) {
 	}
 }
 
+// A root controller needs no socket grant: the agent's peer gate admits uid
+// 0 already, and enrolling it would open the socket to every local user
+// (SocketMode turns 0666 once any local uid is listed).
+func TestLocalAsRootEnrollsNoUID(t *testing.T) {
+	box := freshBox()
+	o := opts(t, box)
+	o.Local, o.LocalUID, o.TransportKey = true, 0, ""
+	if _, err := Run(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if all := strings.Join(box.cmds, "\n"); strings.Contains(all, "--local-uid") {
+		t.Fatalf("root pairing enrolled a local uid:\n%s", all)
+	}
+}
+
 func TestControllerLabelIsShellQuoted(t *testing.T) {
 	box := freshBox()
 	o := opts(t, box)

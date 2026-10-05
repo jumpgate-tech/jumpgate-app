@@ -1,18 +1,15 @@
 // This file holds what the server needs to act as a controller of paired
-// agents: the SSH transport key, the agent binaries bootstrap uploads, how an
-// agent is reached, and where each target's intent sequence is kept.
+// agents: the SSH transport key, how an agent is reached, and where each
+// target's intent sequence is kept.
 package server
 
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -124,37 +121,6 @@ func readTransportKey(path string) (string, error) {
 		return "", fmt.Errorf("transport key %s: %w", path, err)
 	}
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))) + " jumpgate-controller", nil
-}
-
-// agentBinary finds the Linux agent for arch: this binary when it already is
-// one, otherwise ~/.jumpgate/agents/jumpgate-linux-<arch>, checked against the
-// SHA256SUMS written beside it by scripts/build-agents.sh.
-func agentBinary(arch string) (string, error) {
-	if runtime.GOOS == "linux" && runtime.GOARCH == arch {
-		return os.Executable()
-	}
-	dir := jgPath("agents")
-	name := "jumpgate-linux-" + arch
-	path := filepath.Join(dir, name)
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("no agent binary for linux/%s at %s; run scripts/build-agents.sh", arch, path)
-	}
-	sums, err := os.ReadFile(filepath.Join(dir, "SHA256SUMS"))
-	if err != nil {
-		return "", fmt.Errorf("no SHA256SUMS beside %s", path)
-	}
-	got := sha256.Sum256(content)
-	for _, line := range strings.Split(string(sums), "\n") {
-		f := strings.Fields(line)
-		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == name {
-			if f[0] != hex.EncodeToString(got[:]) {
-				return "", fmt.Errorf("%s does not match its SHA256SUMS entry", path)
-			}
-			return path, nil
-		}
-	}
-	return "", fmt.Errorf("%s is not listed in SHA256SUMS", name)
 }
 
 // strictHostKey checks a host key against keys a person confirmed: the

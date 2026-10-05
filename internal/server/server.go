@@ -16,6 +16,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,6 +107,10 @@ type Config struct {
 	// docker probes); nil selects executor.NewLocal.
 	NewLocalExecutor func() executor.Executor
 
+	// Geteuid reports this process's effective uid; injectable for tests.
+	// Nil selects os.Geteuid. Pairing this machine as root needs no sudo.
+	Geteuid func() int
+
 	// Signer is the controller key the intent and pair routes sign with. Only
 	// this server process ever holds it. Nil means those routes answer 503
 	// with code "no_controller_key".
@@ -167,7 +172,10 @@ type Server struct {
 	newAIProvider    func(id, apiKey, baseURL string) (ai.Provider, error)
 	newChainlist     func() *chainlist.Discoverer
 	newLocalExecutor func() executor.Executor
-	verifyTLS        func(ctx context.Context, e executor.Executor, gatewayID string, g catalog.GatewayConfig, dialHost string) (setup.TLSVerification, error)
+	// goos is runtime.GOOS; a field so tests can stand in for another OS.
+	goos      string
+	geteuid   func() int
+	verifyTLS func(ctx context.Context, e executor.Executor, gatewayID string, g catalog.GatewayConfig, dialHost string) (setup.TLSVerification, error)
 
 	// Update-check state, guarded by updMu. updCache is the last release read
 	// from GitHub, updAt when it was read, updErr the last check's error text,
@@ -211,6 +219,11 @@ func New(cfg Config) *Server {
 	s.newLocalExecutor = cfg.NewLocalExecutor
 	if s.newLocalExecutor == nil {
 		s.newLocalExecutor = executor.NewLocal
+	}
+	s.goos = runtime.GOOS
+	s.geteuid = cfg.Geteuid
+	if s.geteuid == nil {
+		s.geteuid = os.Geteuid
 	}
 	return s
 }
