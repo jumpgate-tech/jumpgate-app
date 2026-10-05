@@ -182,3 +182,30 @@ jobs:
 
       - name: cargo test
         run: cargo test --locked
+
+  # Release builds embed both agents (spec D1). Build them the way the release
+  # does and prove extraction and verification work on every controller OS.
+  agents:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: build the embedded agents
+        run: GZIP=1 scripts/build-agents.sh internal/agentbin/embedded
+      - name: test the embedded build
+        run: go test -tags embedagents ./internal/agentbin/
+      - name: a release-style controller builds
+        env:
+          CGO_ENABLED: "0"
+        run: go build -tags embedagents -o "$RUNNER_TEMP/jg" ./cmd/jumpgate

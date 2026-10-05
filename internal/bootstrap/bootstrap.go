@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -35,10 +34,10 @@ const (
 
 // Options configures one pairing.
 type Options struct {
-	Exec            executor.Executor // privileged: root, or executor.Sudo(...)
-	Local           bool              // pairing the machine the controller runs on
-	LocalUID        int               // with Local: the controller's uid (0 enrolls none)
-	AgentBinary     func(arch string) (string, error)
+	Exec            executor.Executor                 // privileged: root, or executor.Sudo(...)
+	Local           bool                              // pairing the machine the controller runs on
+	LocalUID        int                               // with Local: the controller's uid (0 enrolls none)
+	AgentBinary     func(arch string) ([]byte, error) // the verified agent's bytes, so what was checked is what is uploaded
 	Controller      eip712.Address
 	ControllerLabel string
 	TransportKey    string // "ssh-ed25519 AAAA… comment"; empty with Local
@@ -213,11 +212,7 @@ func (r runner) preflight() (string, error) {
 }
 
 func (r runner) upload(arch string) error {
-	path, err := r.o.AgentBinary(arch)
-	if err != nil {
-		return &StepError{Step: "upload", Err: err}
-	}
-	content, err := os.ReadFile(path)
+	content, err := r.o.AgentBinary(arch)
 	if err != nil {
 		return &StepError{Step: "upload", Err: err}
 	}

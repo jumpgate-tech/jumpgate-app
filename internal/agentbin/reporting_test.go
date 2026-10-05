@@ -1,58 +1,78 @@
 package agentbin
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"os"
+	"bytes"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
-// otherArch is an agent arch this test binary is not, so Path never answers
-// with "this binary" and the developer directory is what gets read.
-func otherArch() string {
-	if runtime.GOARCH == "arm64" {
-		return "amd64"
-	}
-	return "arm64"
-}
-
 func TestReportingNamesTheSource(t *testing.T) {
+	errOut := withSeams(t)
 	home := testutil.Home(t)
-	arch := otherArch()
-	dir := filepath.Join(home, ".jumpgate", "agents")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	body := []byte("agent")
-	sum := sha256.Sum256(body)
-	name := "jumpgate-linux-" + arch
-	if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(hex.EncodeToString(sum[:])+"  "+name+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeDevDir(t, home, "arm64", body, sumLine("jumpgate-linux-arm64", body))
 
 	var lines []string
-	p, err := Reporting(func(l string) { lines = append(lines, l) })(arch)
-	if err != nil || p != filepath.Join(dir, name) {
-		t.Fatalf("got %q, %v", p, err)
+	got, err := Reporting(func(l string) { lines = append(lines, l) })("arm64")
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("got %q, %v; want %q", got, err, body)
 	}
-	want := "agent binary for linux/" + arch + ": " + string(SourceDevDir)
-	if len(lines) != 1 || lines[0] != want {
-		t.Fatalf("reported %q, want [%q]", lines, want)
+	if line := "agent binary for linux/arm64: " + string(SourceDevDir); len(lines) != 1 || lines[0] != line {
+		t.Fatalf("reported %q, want [%q]", lines, line)
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("a dev build's own dev dir printed %q on stderr", errOut)
+	}
+}
+
+// A release build says its agent came from the build itself, so the person
+// pairing can tell it from a developer override.
+func TestReportingNamesTheEmbeddedSource(t *testing.T) {
+	withSeams(t)
+	testutil.Home(t)
+	body := []byte("embedded agent")
+	embeddedFS = embeddedWith(t, "amd64", body, sumLine("jumpgate-linux-amd64", body))
+
+	var lines []string
+	if _, err := Reporting(func(l string) { lines = append(lines, l) })("amd64"); err != nil {
+		t.Fatal(err)
+	}
+	if line := "agent binary for linux/amd64: " + string(SourceEmbedded); len(lines) != 1 || lines[0] != line {
+		t.Fatalf("reported %q, want [%q]", lines, line)
+	}
+}
+
+// P35: a release build using development agents says so loudly, on the
+// pairing stream and on stderr.
+func TestReportingWarnsWhenDevAgentsReplaceTheEmbeddedOnes(t *testing.T) {
+	errOut := withSeams(t)
+	home := testutil.Home(t)
+	t.Setenv(DevAgentsEnv, "1")
+	dev, emb := []byte("dev agent"), []byte("embedded agent")
+	writeDevDir(t, home, "amd64", dev, sumLine("jumpgate-linux-amd64", dev))
+	embeddedFS = embeddedWith(t, "amd64", emb, sumLine("jumpgate-linux-amd64", emb))
+
+	var lines []string
+	if _, err := Reporting(func(l string) { lines = append(lines, l) })("amd64"); err != nil {
+		t.Fatal(err)
+	}
+	warning := "WARNING: using development agents from " + filepath.Join(home, ".jumpgate", "agents") + ", not the agents built into this jumpgate"
+	if len(lines) != 2 || lines[0] != warning || lines[1] != "agent binary for linux/amd64: "+string(SourceDevDir) {
+		t.Fatalf("reported %q, want the warning then the source", lines)
+	}
+	if strings.TrimSpace(errOut.String()) != warning {
+		t.Fatalf("stderr %q, want %q", errOut, warning)
 	}
 }
 
 func TestReportingReportsNothingWithoutAnAgent(t *testing.T) {
+	withSeams(t)
 	testutil.Home(t)
 	var lines []string
-	_, err := Reporting(func(l string) { lines = append(lines, l) })(otherArch())
+	_, err := Reporting(func(l string) { lines = append(lines, l) })("arm64")
 	if err == nil || !strings.Contains(err.Error(), "build-agents.sh") {
 		t.Fatalf("err = %v, want one naming scripts/build-agents.sh", err)
 	}

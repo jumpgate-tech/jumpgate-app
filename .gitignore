@@ -47,3 +47,7 @@ progress.txt
 *.sqlite
 *.sqlite3
 /--db*
+
+# Agents embedded by release builds (scripts/build-agents.sh with GZIP=1).
+/internal/agentbin/embedded/*
+!/internal/agentbin/embedded/.gitkeep

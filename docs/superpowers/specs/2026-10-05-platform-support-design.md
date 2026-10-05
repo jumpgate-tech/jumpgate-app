@@ -108,7 +108,7 @@ Each line: the decision, why, and what it costs if it is wrong.
 | D11 | The Linux desktop build links WebKitGTK 4.1 through a pkg-config shim (`webkit2gtk-4.0.pc` that `Requires: webkit2gtk-4.1`), built on ubuntu-24.04. No fork of `webview_go`. | `webview_go` hardcodes `pkg-config: webkit2gtk-4.0`, which Ubuntu 24.04 and Debian 13 dropped; 4.1 is API-compatible for what webview uses. | If 4.1 breaks a symbol webview needs, we vendor a patched `webview_go` (one `#cgo` line). The CI build catches it on the first run. |
 | D12 | Linux gets no notification-area icon in this sub-project; the window is the surface. | A StatusNotifierItem needs D-Bus code (~500 lines) or a new dependency, and D2/D3 set a no-new-dependency bar. B-3 and I-8's blocking parts are fixed by the `.desktop` entry. | Linux users close the window to quit, as today. Revisit with the TUI work. |
 | D13 | Embedded agents are gzip-compressed (`.gz`) and extracted on first use to `~/.jumpgate/agents-cache/<version>/`, verified against the embedded `SHA256SUMS` on every use. | Two static agents are ~2×25 MB raw, ~2×10 MB compressed; every release controller carries them. | ~0.3 s of decompression on the first pairing per version; a cache dir to clean up by hand after upgrades. |
-| D14 | `~/.jumpgate/agents` wins over the embedded agents when it holds a binary for the arch, and the pairing stream says which source it used. | D1 calls it the developer override; an override that loses to the embedded copy is not one. | A forgotten dev dir on a release install uploads a stale agent; mitigated by the pairing line naming the source. |
+| D14 | `~/.jumpgate/agents` is the agent source in a build without embedded agents. In a build with them it is used only when `JUMPGATE_DEV_AGENTS=1` is set, and then a `WARNING: using development agents from <dir>, not the agents built into this jumpgate` line goes on the pairing stream and stderr. In every build the directory, the binary and `SHA256SUMS` must be the user's own and private (`fsperm.CheckPrivate`), or they are refused. The pairing stream always names the source. (Amended by ruling P35.) | D1 calls it the developer override; an override that loses to the embedded copy is not one, but a forgotten or writable dev dir must not silently replace a release's agents. | A developer testing agents with a release build must set the variable. |
 | D15 | Every build injects the git tag (`v`-prefixed, e.g. `v0.9.0`) as the version, for controller and agent alike. goreleaser switches from `{{.Version}}` to `{{.Tag}}`. | The desktop builds already use `git describe`; one format makes "versions always match" checkable by string equality. `updatecheck` already strips a leading `v`. | None known; the update check normalises both forms. |
 | D16 | On Windows, `MakePrivate` grants only the owner and SYSTEM; `CheckPrivate` accepts ACEs for the owner, SYSTEM and BUILTIN\Administrators, and ignores inherit-only ACEs. | Administrators can take ownership of any file anyway, and default profile ACLs include them; refusing them would refuse every pre-existing key file. | An admin on a shared machine can read the key, as they always could. |
 | D17 | Key-store tools (`security`, `secret-tool`, `op`) get a 2-minute timeout; the Secret Service liveness probe gets 3 seconds. | macOS and 1Password may show a GUI prompt a person must answer; 15 s would cut them off. The probe never prompts. | A wedged keyring delays server start by up to 2 minutes before a clear error, instead of forever. |
@@ -203,26 +203,35 @@ New package `internal/agentbin`:
 
 ```go
 type Source string // "dev override ~/.jumpgate/agents", "embedded in this build", "this binary"
-func Path(arch string) (path string, src Source, err error)
+func Load(arch string) (content []byte, src Source, err error)
 ```
+
+`Load` returns the verified bytes, never a path, and bootstrap uploads exactly
+those bytes (`bootstrap.Options.AgentBinary` is `func(arch) ([]byte, error)`),
+so nothing re-reads a file between the check and the upload.
 
 Resolution order, per arch (`amd64`, `arm64`; anything else is an error naming
 the two supported arches):
 
 1. `~/.jumpgate/agents/jumpgate-linux-<arch>` if it exists, checked against
-   `SHA256SUMS` beside it (D14). A present binary with no or wrong sums is an
-   error, never a fall-through.
+   `SHA256SUMS` beside it (D14). A present binary with no or wrong sums, or a
+   directory or file that is not the user's own and private, is an error,
+   never a fall-through. In a build with embedded agents this step runs only
+   with `JUMPGATE_DEV_AGENTS=1`, and warns (ruling P35).
 2. The embedded copy (build tag `embedagents`): `embedded/jumpgate-linux-<arch>.gz`
    and `embedded/SHA256SUMS`, decompressed and checked against the sum, cached at
    `~/.jumpgate/agents-cache/<version>/jumpgate-linux-<arch>` (D13).
-3. `os.Executable()` only if `buildinfo.SelfIsStaticLinux()` (Linux and built
-   without cgo) and `runtime.GOARCH == arch`.
+3. `os.Executable()`, read once, only if `buildinfo.SelfIsStaticLinux()`
+   (Linux, built without cgo, and the running executable is an `ET_EXEC` ELF
+   with no `PT_INTERP`) and `runtime.GOARCH == arch`. The bytes read are
+   checked again with `buildinfo.IsStaticELF`.
 4. Otherwise an error: this build carries no agent; use a release build, or
    run `scripts/build-agents.sh` for development.
 
 `internal/buildinfo` gains `SelfIsStaticLinux()`, set by a `cgo`/`!cgo` file
 pair (a tray build always uses cgo). The bootstrap upload step logs the source.
-`server.agentBinary` delegates to `agentbin.Path`.
+The server's pair handler and the CLI use `agentbin.Reporting`, which wraps
+`agentbin.Load` (ruling P8).
 
 Build: `scripts/build-agents.sh [OUT]` builds both agents with
 `CGO_ENABLED=0 -trimpath`, the version from `$VERSION` (D15), writes
@@ -259,7 +268,7 @@ Build: `scripts/build-agents.sh [OUT]` builds both agents with
 - Non-root: the CLI requires a terminal on stdin (else it fails at once,
   naming the fix), checks `sudo -n true`, and if that fails runs `sudo -v`
   attached to the terminal; then runs `bootstrap.Run` itself (agent from
-  `agentbin.Path`, controller address from `config.json`), and finally posts
+  `agentbin.Reporting`, controller address from `config.json`), and finally posts
   `{"installed": "<agent address>"}` to the pair endpoint, which verifies with
   a signed `agent.info` round trip and records the pairing (D18).
 - The server, asked for a non-root local pair without `installed` (the web UI,

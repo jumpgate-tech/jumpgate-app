@@ -4,6 +4,9 @@
 package testutil
 
 import (
+	"bytes"
+	"debug/elf"
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"runtime"
@@ -84,4 +87,32 @@ func AssertPrivate(t testing.TB, path string) {
 	if perm&0o077 != 0 || perm&0o600 != 0o600 {
 		t.Fatalf("%s has mode %o; want owner read/write and nothing for group or others", path, perm)
 	}
+}
+
+// ELF returns a minimal 64-bit little-endian ELF image for machine: a header
+// of type typ and one program header, PT_INTERP when interp is set (a
+// dynamically linked binary) and PT_LOAD otherwise. Tests that decide
+// whether a binary is static parse it without anything being built or run.
+func ELF(t testing.TB, typ elf.Type, machine elf.Machine, interp bool) []byte {
+	t.Helper()
+	prog := elf.Prog64{Type: uint32(elf.PT_LOAD)}
+	if interp {
+		prog.Type = uint32(elf.PT_INTERP)
+	}
+	hdr := elf.Header64{
+		Type: uint16(typ), Machine: uint16(machine), Version: uint32(elf.EV_CURRENT),
+		Phoff: 64, Ehsize: 64, Phentsize: 56, Phnum: 1, Shentsize: 64,
+	}
+	copy(hdr.Ident[:], elf.ELFMAG)
+	hdr.Ident[elf.EI_CLASS] = byte(elf.ELFCLASS64)
+	hdr.Ident[elf.EI_DATA] = byte(elf.ELFDATA2LSB)
+	hdr.Ident[elf.EI_VERSION] = byte(elf.EV_CURRENT)
+	var buf bytes.Buffer
+	if err := binary.Write(&buf, binary.LittleEndian, hdr); err != nil {
+		t.Fatal(err)
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, prog); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }

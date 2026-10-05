@@ -9,7 +9,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -122,16 +121,14 @@ func opts(t *testing.T, box *fakeBox) Options {
 
 func optsWithKey(t *testing.T, box *fakeBox, key string) Options {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "jumpgate-linux-amd64")
-	_ = os.WriteFile(bin, []byte("binary"), 0o755)
 	var ctrl eip712.Address
 	ctrl[19] = 0xC
 	return Options{
-		Exec: box, AgentBinary: func(arch string) (string, error) {
+		Exec: box, AgentBinary: func(arch string) ([]byte, error) {
 			if arch != "amd64" {
-				return "", errors.New("wrong arch " + arch)
+				return nil, errors.New("wrong arch " + arch)
 			}
-			return bin, nil
+			return []byte("binary"), nil
 		},
 		Controller: ctrl, ControllerLabel: "laptop", TransportKey: key,
 	}
