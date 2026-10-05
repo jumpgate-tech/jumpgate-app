@@ -177,11 +177,17 @@ func failed(format string, a ...any) int {
 	return exitCode("failed")
 }
 
-// jgFile is a path inside ~/.jumpgate.
+// exit is os.Exit; a seam for tests.
+var exit = os.Exit
+
+// jgFile is a path inside ~/.jumpgate. With no home directory there is no
+// safe place for jumpgate's files, so it stops instead of writing keys into
+// the working directory (M-12).
 func jgFile(parts ...string) string {
 	dir, err := config.Dir()
 	if err != nil {
-		dir = "."
+		fmt.Fprintln(os.Stderr, "jumpgate:", err)
+		exit(1)
 	}
 	return filepath.Join(append([]string{dir}, parts...)...)
 }

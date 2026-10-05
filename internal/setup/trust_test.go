@@ -75,7 +75,7 @@ func TestTrustStoreCommand_PerOS(t *testing.T) {
 	if !windows.NeedsRoot {
 		t.Error("windows certutil -addstore ROOT needs an elevated shell")
 	}
-	if !strings.Contains(windows.Command, "certutil -addstore -f ROOT '"+path+"'") {
+	if !strings.Contains(windows.Command, `certutil -addstore -f ROOT "`+path+`"`) {
 		t.Errorf("windows command wrong:\n%s", windows.Command)
 	}
 }
@@ -160,5 +160,23 @@ func TestTrustStoreCommand_RejectsUnsafePaths(t *testing.T) {
 				t.Errorf("%s: unsafe path %q was accepted", goos, bad)
 			}
 		}
+	}
+}
+
+// I-12 (Linux): Fedora and Arch have update-ca-trust, not
+// update-ca-certificates; the command handles both, and the manual form is a
+// sudo command a person can paste.
+func TestTrustStoreCommandLinuxHandlesBothTools(t *testing.T) {
+	got, err := TrustStoreCommand("linux", "/var/lib/x/caddy-root.crt", "edge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"update-ca-certificates", "update-ca-trust extract", "/etc/pki/ca-trust/source/anchors", "/usr/local/share/ca-certificates/valve-node-app-edge.crt"} {
+		if !strings.Contains(got.Command, want) {
+			t.Errorf("command lacks %q:\n%s", want, got.Command)
+		}
+	}
+	if !strings.HasPrefix(got.ManualCommand, "sudo sh -c ") {
+		t.Errorf("ManualCommand %q, want a sudo sh -c form", got.ManualCommand)
 	}
 }

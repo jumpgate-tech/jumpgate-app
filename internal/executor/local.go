@@ -65,6 +65,9 @@ func NewLocal() Executor {
 	return &local{unsupported: LocalAvailable()}
 }
 
+// ShellError is nil when Run works here; see RequireShell.
+func (l *local) ShellError() error { return l.unsupported }
+
 func (l *local) Run(ctx context.Context, cmd string, opts *RunOpts) (Result, error) {
 	if l.unsupported != nil {
 		return Result{}, l.unsupported
