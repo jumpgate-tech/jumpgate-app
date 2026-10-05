@@ -100,6 +100,10 @@ missing prerequisite (no controller key yet, box not paired); 3 box unreachable;
 was confirmed, or a reply not signed by the paired agent), whether it is found
 while pairing or by any later box command.
 
+Real nodes are not supported directly on macOS or Windows. To run one on a
+desktop anyway, use a WSL2 or Lima VM as an ordinary Linux box; see
+[Running a node on your desktop](docs/run-a-node-on-your-desktop.md).
+
 ## Requirements
 
 - The **target** being set up (the box that will run the execution + beacon
