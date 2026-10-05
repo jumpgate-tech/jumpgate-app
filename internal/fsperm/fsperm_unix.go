@@ -166,25 +166,54 @@ func checkAncestors(path string) error {
 
 func rename(oldpath, newpath string) error { return os.Rename(oldpath, newpath) }
 
-func checkTrustedWritable(path string) error {
+func openTrustedWritable(path string) (*os.File, error) {
 	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(real, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			f.Close()
+		}
+	}()
+	if err := checkTrustedFD(f, real); err != nil {
+		return nil, err
+	}
+	d, err := os.OpenFile(filepath.Dir(real), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	err = checkTrustedFD(d, filepath.Dir(real))
+	d.Close()
+	if err != nil {
+		return nil, err
+	}
+	if err := checkAncestors(real); err != nil {
+		return nil, err
+	}
+	if trustedCheckHook != nil {
+		trustedCheckHook()
+	}
+	ok = true
+	return f, nil
+}
+
+// checkTrustedFD judges an open file or directory from its own descriptor.
+func checkTrustedFD(f *os.File, name string) error {
+	fi, err := f.Stat()
 	if err != nil {
 		return err
 	}
-	for _, p := range []string{real, filepath.Dir(real)} {
-		fi, err := os.Stat(p)
-		if err != nil {
-			return err
-		}
-		st, ok := fi.Sys().(*syscall.Stat_t)
-		if !ok {
-			return fmt.Errorf("no owner information for %s", p)
-		}
-		if err := trustedWritableMode(p, fi.Mode(), st.Uid, uint32(os.Geteuid())); err != nil {
-			return err
-		}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("no owner information for %s", name)
 	}
-	return checkAncestors(real)
+	return trustedWritableMode(name, fi.Mode(), st.Uid, uint32(os.Geteuid()))
 }
 
 // trustedWritableMode is the decision for one path: owned by root or euid, and

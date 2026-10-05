@@ -21,6 +21,7 @@ type pipeConn struct {
 	mu       sync.Mutex
 	deadline time.Time
 	closed   bool
+	inflight int // operations between begin and end; Close waits for them
 }
 
 // openPipe opens the named pipe for overlapped reading and writing.
@@ -69,11 +70,35 @@ func (p *pipeConn) Write(b []byte) (int, error) {
 		if err != nil {
 			return total, err
 		}
+		if n == 0 {
+			return total, io.ErrShortWrite
+		}
 	}
 	return total, nil
 }
 
-// Close cancels any I/O in flight, then closes the handle.
+// begin registers an operation that is about to use the handle. The handle
+// stays open until the matching end, which is what keeps a closed handle
+// number, which Windows may hand to an unrelated object, from ever being used
+// (the role of reference counting in Go's internal/poll.FD).
+func (p *pipeConn) begin() (time.Time, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return time.Time{}, false
+	}
+	p.inflight++
+	return p.deadline, true
+}
+
+func (p *pipeConn) end() {
+	p.mu.Lock()
+	p.inflight--
+	p.mu.Unlock()
+}
+
+// Close stops new operations, cancels those in flight, waits for them to
+// leave, and only then closes the handle.
 func (p *pipeConn) Close() error {
 	p.mu.Lock()
 	if p.closed {
@@ -82,21 +107,34 @@ func (p *pipeConn) Close() error {
 	}
 	p.closed = true
 	p.mu.Unlock()
-	_ = windows.CancelIoEx(p.h, nil)
+	for {
+		// Repeated: an operation that began just before closed was set may not
+		// have issued its I/O yet, and a cancel sent earlier would miss it.
+		_ = windows.CancelIoEx(p.h, nil)
+		p.mu.Lock()
+		n := p.inflight
+		p.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	return windows.CloseHandle(p.h)
 }
+
+// maxWaitMillis is under INFINITE (0xFFFFFFFF), about 24 days.
+const maxWaitMillis = 0x7fffffff
 
 var errPipeTimeout = os.ErrDeadlineExceeded
 
 // do runs one overlapped operation and waits for it, up to the deadline; on
 // timeout the operation is cancelled.
 func (p *pipeConn) do(start func(ov *windows.Overlapped, n *uint32) error) (int, error) {
-	p.mu.Lock()
-	deadline, closed := p.deadline, p.closed
-	p.mu.Unlock()
-	if closed {
+	deadline, ok := p.begin()
+	if !ok {
 		return 0, os.ErrClosed
 	}
+	defer p.end()
 	ev, err := windows.CreateEvent(nil, 1, 0, nil)
 	if err != nil {
 		return 0, err
@@ -117,7 +155,11 @@ func (p *pipeConn) do(start func(ov *windows.Overlapped, n *uint32) error) (int,
 		if d < 0 {
 			d = 0
 		}
-		wait = uint32(d / time.Millisecond)
+		ms := int64(d / time.Millisecond)
+		if ms > maxWaitMillis {
+			ms = maxWaitMillis // a far deadline must not overflow the uint32 (INFINITE)
+		}
+		wait = uint32(ms)
 	}
 	ev2, err := windows.WaitForSingleObject(ev, wait)
 	if err != nil {

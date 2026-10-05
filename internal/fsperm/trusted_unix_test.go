@@ -55,3 +55,49 @@ func TestCheckTrustedWritableJudgesTheSymlinkTarget(t *testing.T) {
 		t.Fatal("a link into a world-writable directory was trusted")
 	}
 }
+
+// The file returned is the file checked: swapping the path afterwards, between
+// the check and the caller's read, changes nothing.
+func TestOpenTrustedWritableReturnsTheCheckedFile(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "known_hosts")
+	if err := os.WriteFile(p, []byte("checked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	trustedCheckHook = func() {
+		_ = os.Remove(p)
+		if err := os.WriteFile(p, []byte("swapped"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { trustedCheckHook = nil })
+	f, err := OpenTrustedWritable(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	b := make([]byte, 16)
+	n, _ := f.Read(b)
+	if string(b[:n]) != "checked" {
+		t.Fatalf("read %q from the returned file, want the checked content", b[:n])
+	}
+}
+
+// A symlink is resolved once; the resolved file is then opened with O_NOFOLLOW.
+func TestOpenTrustedWritableResolvesALinkOnce(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.WriteFile(real, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	// EvalSymlinks resolves it; the open of the result is O_NOFOLLOW and works.
+	f, err := OpenTrustedWritable(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+}

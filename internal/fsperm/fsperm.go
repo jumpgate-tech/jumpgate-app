@@ -155,11 +155,31 @@ func WriteFilePrivate(path string, data []byte) error {
 // target open, which makes MoveFileEx fail with a sharing violation.
 func Rename(oldpath, newpath string) error { return rename(oldpath, newpath) }
 
-// CheckTrustedWritable returns an error unless path, a file other people may
-// read (a system-wide known_hosts, say), can be changed or replaced only by
-// this user, administrators and the system: the file and its directory are
+// OpenTrustedWritable opens path for reading, provided the file, which other
+// people may read (a system-wide known_hosts, say), can be changed or replaced
+// only by this user, administrators and the system: it and its directory are
 // owned and writable only by them, and nobody untrusted can move either
-// through a directory above. A symlink is followed first, so the real file and
-// its real directory are the ones checked. Unlike CheckPrivate it does not
-// mind who can read path.
-func CheckTrustedWritable(path string) error { return checkTrustedWritable(path) }
+// through a directory above. Unlike CheckPrivate it does not mind who can read
+// path.
+//
+// Checking a path and then opening it by name would let the path be swapped in
+// between, so the check and the open are one operation: a symlink is resolved
+// once, the real file is opened without following a link or reparse point, and
+// the permissions are read from that open file. Read from the returned file,
+// never from path again.
+func OpenTrustedWritable(path string) (*os.File, error) { return openTrustedWritable(path) }
+
+// CheckTrustedWritable is OpenTrustedWritable for a caller that needs only the
+// verdict (a test, or a file it will not read).
+func CheckTrustedWritable(path string) error {
+	f, err := openTrustedWritable(path)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// trustedCheckHook runs after the checks and before the file is returned. A
+// seam for tests, which swap the path here to show the file read is the one
+// checked.
+var trustedCheckHook func()

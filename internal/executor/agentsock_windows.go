@@ -3,6 +3,7 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -63,10 +64,8 @@ func dialAgentSocket(sock string, deadline time.Time) io.ReadWriteCloser {
 }
 
 // pipeOwnerSID is the owner of the pipe object, which needs only READ_CONTROL
-// (part of GENERIC_READ): a non-admin can read it. Only SYSTEM,
-// Administrators or the creating user can be recorded as owner, and the
-// ssh-agent service's pipe is owned by SYSTEM or Administrators. A var so
-// tests can inject it.
+// (part of GENERIC_READ): a non-admin can read it. The ssh-agent service runs
+// as SYSTEM, so its pipe is owned by SYSTEM. A var so tests can inject it.
 var pipeOwnerSID = func(h windows.Handle) (*windows.SID, error) {
 	sd, err := windows.GetSecurityInfo(h, windows.SE_KERNEL_OBJECT, windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
@@ -107,14 +106,42 @@ func processUserSID(pid uint32) (*windows.SID, error) {
 	return u.User.Sid, nil
 }
 
+// verifyPipeServer decides whether the pipe behind h is the user's agent
+// (ruling P36). Its owner must be SYSTEM (the Windows ssh-agent service) or
+// the current user (a user-run agent). BUILTIN\Administrators is not enough:
+// anything running elevated can create a pipe with that name, and Windows
+// often records an elevated creator's owner as Administrators. So an
+// Administrators-owned pipe, or one whose owner cannot be read, is accepted
+// only if the process serving it runs as SYSTEM or the current user.
 func verifyPipeServer(h windows.Handle) error {
-	sid, err := pipeOwnerSID(h)
-	if err != nil {
-		if sid, err = pipeServerSID(h); err != nil {
-			return fmt.Errorf("pipe owner unknown (%v); refusing", err)
-		}
+	owner, err := pipeOwnerSID(h)
+	if err == nil && (owner == nil || !owner.IsValid()) {
+		err = errors.New("no valid owner SID")
 	}
-	return checkAgentOwner(sid)
+	if err == nil && checkAgentOwner(owner) == nil {
+		return nil
+	}
+	if err == nil && !owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+		return fmt.Errorf("pipe is owned by %s, not SYSTEM or you; refusing", owner)
+	}
+	server, serr := pipeServerSID(h)
+	if serr == nil && (server == nil || !server.IsValid()) {
+		serr = errors.New("no valid server SID")
+	}
+	if serr != nil {
+		return fmt.Errorf("pipe owner is %s and its server is unknown (%v); refusing", ownerText(owner, err), serr)
+	}
+	if cerr := checkAgentOwner(server); cerr != nil {
+		return fmt.Errorf("pipe owner is %s and %v", ownerText(owner, err), cerr)
+	}
+	return nil
+}
+
+func ownerText(owner *windows.SID, err error) string {
+	if err != nil {
+		return fmt.Sprintf("unreadable (%v)", err)
+	}
+	return owner.String()
 }
 
 // siocAfUnixGetPeerPid is SIO_AF_UNIX_GETPEERPID, _WSAIOR(IOC_VENDOR, 256)
@@ -156,16 +183,19 @@ func verifySocketPeer(c net.Conn) error {
 	return checkAgentOwner(sid)
 }
 
-// checkAgentOwner accepts LocalSystem and Administrators (the Windows
-// ssh-agent service) and the current user (a user-run agent such as
-// 1Password's or Pageant's).
+// checkAgentOwner accepts LocalSystem (the Windows ssh-agent service) and the
+// current user (a user-run agent such as 1Password's or Pageant's), nobody
+// else: not Administrators, which any elevated process can claim.
 func checkAgentOwner(sid *windows.SID) error {
+	if sid == nil || !sid.IsValid() {
+		return fmt.Errorf("no valid owner; refusing")
+	}
 	me, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return err
 	}
-	if sid.Equals(me.User.Sid) || sid.IsWellKnown(windows.WinLocalSystemSid) || sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+	if sid.Equals(me.User.Sid) || sid.IsWellKnown(windows.WinLocalSystemSid) {
 		return nil
 	}
-	return fmt.Errorf("pipe or socket is owned by %s; refusing", sid)
+	return fmt.Errorf("%s is not SYSTEM or you; refusing", sid)
 }
