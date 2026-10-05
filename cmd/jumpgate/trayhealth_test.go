@@ -25,3 +25,20 @@ func TestOverallHealth(t *testing.T) {
 		}
 	}
 }
+
+func TestHealthTooltip(t *testing.T) {
+	for k, want := range map[healthKind]string{
+		healthOff: "Jumpgate — idle", healthOK: "Jumpgate — serving",
+		healthWarn: "Jumpgate — degraded", healthDown: "Jumpgate — a gateway is unavailable",
+	} {
+		if got := healthTooltip(k); got != want {
+			t.Errorf("healthTooltip(%d) = %q, want %q", k, got, want)
+		}
+	}
+}
+
+func TestTrayActionFor(t *testing.T) {
+	if trayActionFor(1) != trayOpen || trayActionFor(2) != trayQuit || trayActionFor(0) != trayNone || trayActionFor(99) != trayNone {
+		t.Fatal("tray menu ids map wrongly")
+	}
+}
