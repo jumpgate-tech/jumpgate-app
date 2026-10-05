@@ -42,8 +42,16 @@ var frozenTargetRoutes = []string{
 }
 
 func TestLegacyTargetRoutesAreFrozen(t *testing.T) {
-	re := regexp.MustCompile(`HandleFunc\("([A-Z]+ /api/targets/\{id\}[^"]*)"`)
-	files, _ := filepath.Glob("*.go")
+	// Handle and HandleFunc both register a route, with or without a method,
+	// and any wildcard name counts: /api/targets/{name}/x is still per-target.
+	re := regexp.MustCompile(`\.Handle(?:Func)?\(\s*"((?:[A-Z]+ )?/api/targets/[^"]*)"`)
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no Go files found; the test must run in internal/server")
+	}
 	var got []string
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
@@ -56,6 +64,9 @@ func TestLegacyTargetRoutesAreFrozen(t *testing.T) {
 		for _, m := range re.FindAllStringSubmatch(string(b), -1) {
 			got = append(got, m[1])
 		}
+	}
+	if len(got) == 0 {
+		t.Fatal("found no per-target routes; the scan no longer matches how routes are registered")
 	}
 	sort.Strings(got)
 	want := append([]string(nil), frozenTargetRoutes...)

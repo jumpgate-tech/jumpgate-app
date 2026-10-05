@@ -2,9 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
@@ -64,16 +68,34 @@ func TestListTargetsShowsAgentAndLink(t *testing.T) {
 }
 
 // TestSSHConfigRoundTrip checks sshConfig undoes sshView through the whole
-// jump chain, so a request that carries an address stores what was shown.
+// jump chain, so a request that carries an address stores what was shown, and
+// that the caller's host-key policy reaches every hop (Ruling T4b).
 func TestSSHConfigRoundTrip(t *testing.T) {
 	c := &executor.SSHConfig{Host: "10.0.0.5", User: "root", KeyPath: "/k", HostKeyFile: "/kh", Port: 2222,
-		Jump: &executor.SSHConfig{Host: "bastion", User: "ops", Port: 22}}
-	back := sshConfig(sshView(c))
+		Jump: &executor.SSHConfig{Host: "bastion", User: "ops", Port: 22, Jump: &executor.SSHConfig{Host: "edge", User: "e"}}}
+	var checked []string
+	policy := func(hostname string, _ net.Addr, _ ssh.PublicKey) error {
+		checked = append(checked, hostname)
+		return nil
+	}
+	back := sshConfig(sshView(c), policy)
 	if back.Host != c.Host || back.User != c.User || back.KeyPath != c.KeyPath || back.HostKeyFile != c.HostKeyFile || back.Port != c.Port ||
-		back.Jump == nil || back.Jump.Host != "bastion" || back.Jump.User != "ops" || back.Jump.Port != 22 || back.Jump.Jump != nil {
+		back.Jump == nil || back.Jump.Host != "bastion" || back.Jump.User != "ops" || back.Jump.Port != 22 ||
+		back.Jump.Jump == nil || back.Jump.Jump.Host != "edge" || back.Jump.Jump.Jump != nil {
 		t.Fatalf("round trip = %+v (jump %+v)", back, back.Jump)
 	}
-	if back.HostKey != nil || sshView(nil) != nil || sshConfig(nil) != nil {
-		t.Fatal("a view carries no host-key policy, and nil stays nil")
+	hops := 0
+	for h := back; h != nil; h = h.Jump {
+		if h.HostKey == nil {
+			t.Fatalf("hop %s has no host-key policy", h.Host)
+		}
+		_ = h.HostKey(h.Host, nil, nil)
+		hops++
+	}
+	if hops != 3 || strings.Join(checked, ",") != "10.0.0.5,bastion,edge" {
+		t.Fatalf("policy reached %v over %d hops, want every hop to carry the caller's policy", checked, hops)
+	}
+	if sshView(nil) != nil || sshConfig(nil, policy) != nil {
+		t.Fatal("nil stays nil")
 	}
 }
