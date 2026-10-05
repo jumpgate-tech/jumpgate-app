@@ -108,7 +108,7 @@ func (e *targetEntry) latestDiag() *DiagReport {
 // runDiagnostics runs the ops ladder for t and packages the result. It
 // does NOT touch the gate — callers own tryBeginDiag/endDiag.
 func (s *Server) runDiagnostics(ctx context.Context, t config.Target, trigger string) (*DiagReport, error) {
-	ex, err := s.getExecutor(t)
+	ex, err := s.getShellExecutor(t)
 	if err != nil {
 		return nil, err
 	}

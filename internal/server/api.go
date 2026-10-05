@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -367,6 +368,23 @@ func (s *Server) getExecutorLocked(entry *targetEntry, t config.Target) (executo
 	return ex, nil
 }
 
+// getShellExecutor is getExecutor for the routes whose work is shell
+// commands: node setup, services, disk, endpoints, firewall, diagnostics,
+// logs, the monitor and the VPN. A target whose executor cannot run a shell
+// (this computer, on Windows) is refused here with ErrNoPOSIXShell, which
+// writeExecutorError turns into 409 local_unsupported. Docker routes use
+// getExecutor: they run through RunArgv and need no shell.
+func (s *Server) getShellExecutor(t config.Target) (executor.Executor, error) {
+	ex, err := s.getExecutor(t)
+	if err != nil {
+		return nil, err
+	}
+	if err := executor.RequireShell(ex); err != nil {
+		return nil, fmt.Errorf("target %q: %w", t.ID, err)
+	}
+	return ex, nil
+}
+
 // getMonitor returns t's monitor.Monitor, lazily creating and starting one
 // on first use. It polls until the target is deleted or setup is re-run (see
 // retireObserversLocked). retired is closed at that point: the monitor stops
@@ -382,6 +400,9 @@ func (s *Server) getMonitor(t config.Target, refRPCBase string) (mon *monitor.Mo
 	ex, err := s.getExecutorLocked(entry, t)
 	if err != nil {
 		return nil, nil, err
+	}
+	if err := executor.RequireShell(ex); err != nil {
+		return nil, nil, fmt.Errorf("target %q: %w", t.ID, err)
 	}
 	refRPC := ""
 	if refRPCBase != "" {
@@ -412,6 +433,9 @@ func (s *Server) getWatcher(t config.Target) (watch *logwatch.Watcher, retired <
 	ex, err := s.getExecutorLocked(entry, t)
 	if err != nil {
 		return nil, nil, err
+	}
+	if err := executor.RequireShell(ex); err != nil {
+		return nil, nil, fmt.Errorf("target %q: %w", t.ID, err)
 	}
 	watch = logwatch.New(ex, logUnits)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -471,6 +495,20 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+const hintLocalUnsupported = "node setup, services, logs, diagnostics and the VPN need a POSIX shell, which this computer does not have; add a Linux machine with `jumpgate hosts add NAME --ssh` for those. The Docker gateway and devnet do run here."
+
+// writeExecutorError reports a failure to get an executor. A machine with no
+// POSIX shell (a Windows controller asked to act on "this host") is a clear
+// refusal the UI can explain, not a server error (I-12). Any other failure
+// keeps the status the route already answered with, otherwise.
+func writeExecutorError(w http.ResponseWriter, err error, otherwise int) {
+	if errors.Is(err, executor.ErrNoPOSIXShell) {
+		writeErrorDetail(w, http.StatusConflict, err.Error(), hintLocalUnsupported, "local_unsupported")
+		return
+	}
+	writeError(w, otherwise, err.Error())
 }
 
 // writeSSEEvent marshals v and writes it as one `data: <json>\n\n` SSE
@@ -894,9 +932,9 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ex, err := s.getExecutor(target)
+	ex, err := s.getShellExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeExecutorError(w, err, http.StatusBadGateway)
 		return
 	}
 
@@ -1125,7 +1163,7 @@ func (s *Server) handleTargetMonitorStream(w http.ResponseWriter, r *http.Reques
 
 	mon, retired, err := s.getMonitor(target, cfg.RefRPCBase)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeExecutorError(w, err, http.StatusBadGateway)
 		return
 	}
 
@@ -1186,7 +1224,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 	watch, _, err := s.getWatcher(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeExecutorError(w, err, http.StatusBadGateway)
 		return
 	}
 
@@ -1224,7 +1262,7 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 
 	watch, retired, err := s.getWatcher(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeExecutorError(w, err, http.StatusBadGateway)
 		return
 	}
 
@@ -1396,9 +1434,9 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ex, err := s.getExecutor(target)
+	ex, err := s.getShellExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeExecutorError(w, err, http.StatusBadGateway)
 		return
 	}
 
@@ -1435,9 +1473,9 @@ func (s *Server) handleServiceClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ex, err := s.getExecutor(target)
+	ex, err := s.getShellExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeExecutorError(w, err, http.StatusBadGateway)
 		return
 	}
 
@@ -1465,9 +1503,9 @@ func (s *Server) handleDiskUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ex, err := s.getExecutor(target)
+	ex, err := s.getShellExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeExecutorError(w, err, http.StatusBadGateway)
 		return
 	}
 
@@ -1488,9 +1526,9 @@ func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ex, err := s.getExecutor(target)
+	ex, err := s.getShellExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeExecutorError(w, err, http.StatusBadGateway)
 		return
 	}
 
@@ -1517,9 +1555,9 @@ func (s *Server) handleFirewall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ex, err := s.getExecutor(target)
+	ex, err := s.getShellExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeExecutorError(w, err, http.StatusBadGateway)
 		return
 	}
 
@@ -1569,7 +1607,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	report, err := s.runDiagnostics(r.Context(), target, "manual")
 	if err != nil {
 		entry.endDiag(nil)
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeExecutorError(w, err, http.StatusBadGateway)
 		return
 	}
 	entry.endDiag(report)
@@ -1599,9 +1637,9 @@ func (s *Server) handleDiskFree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "target not found")
 		return
 	}
-	ex, err := s.getExecutor(target)
+	ex, err := s.getShellExecutor(target)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeExecutorError(w, err, http.StatusBadGateway)
 		return
 	}
 	free, err := ops.FreeBytesAt(r.Context(), ex, path)

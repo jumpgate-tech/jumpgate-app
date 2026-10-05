@@ -96,8 +96,11 @@ func (s *Server) hostExecutor(w http.ResponseWriter, cfg config.Config, targetID
 		t = ft
 	}
 	ex, err := s.getExecutor(t)
+	if err == nil {
+		err = executor.RequireShell(ex)
+	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeExecutorError(w, err, http.StatusInternalServerError)
 		return nil, false
 	}
 	return ex, true
@@ -423,7 +426,7 @@ func (s *Server) handleVPNServerDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if teardownErr == "" {
-		if ex, err := s.getExecutor(t); err != nil {
+		if ex, err := s.getShellExecutor(t); err != nil {
 			teardownErr = err.Error()
 		} else if err := vpn.DeprovisionServer(r.Context(), ex, sv.Interface); err != nil {
 			teardownErr = err.Error()
