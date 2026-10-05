@@ -21,6 +21,7 @@ var commandHelp = []struct{ name, text string }{
 	{"service HOST exec|beacon start|stop|restart", "control a node service"},
 	{"open", "open the web app in your browser"},
 	{"serve", "run the server in the foreground"},
+	{"relay", "run only the metered RPC data plane, in the foreground"},
 	{"stop", "stop the background server"},
 	{"help", "this list"},
 }

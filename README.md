@@ -79,13 +79,83 @@ jumpgate logs box-a -n 200
 jumpgate service box-a beacon restart   # exec|beacon, start|stop|restart
 jumpgate serve                          # run the controller server (the other commands start it for you)
 jumpgate stop                           # stop it, via its local API
+jumpgate relay --relay-bind 127.0.0.1:8545 --billing-socket /run/jumpgate-billing/billing.sock --meter
+                                        # run the metered RPC data plane on its own (token via JUMPGATE_RELAY_TOKEN_FILE)
 ```
+
+### Selling RPC access: run `jumpgate relay`
+
+`jumpgate relay` is the recommended way to serve keyed, metered RPC. It runs
+the metered data plane as a process of its own, separate from the controller.
+It never opens `config.json`, the controller key or an SSH executor. It also
+never takes the controller server's lock or migrates its state. That keeps the
+internet-facing proxy away from the key that controls your fleet.
+
+The relay takes its settings only from flags and the environment:
+`--relay-bind`, `--billing-socket`, `--erpc-url`, `--erpc-project` and
+`--meter`, or the matching `JUMPGATE_*` variables. The relay token comes from
+`JUMPGATE_RELAY_TOKEN_FILE` (preferred) or `JUMPGATE_RELAY_TOKEN`; see below.
+Point Caddy at `--relay-bind`, and bind the relay to
+loopback or the interface Caddy reaches, never to `0.0.0.0`.
+
+For now, the controller (`jumpgate --relay-bind …` or `jumpgate serve
+--relay-bind …`) can still serve the relay in-process. That mode is kept for
+existing setups, but new deployments should use `jumpgate relay`.
+
+The web app and `jumpgate serve` build the server the same way and take the
+same server flags: `--bind`, `--relay-bind`, `--billing-socket`, `--erpc-url`,
+`--erpc-project` and `--meter`. Each of these flags also reads an environment
+variable (`JUMPGATE_RELAY_BIND`, `JUMPGATE_BILLING_SOCKET`, `JUMPGATE_ERPC_URL`,
+`JUMPGATE_ERPC_PROJECT`, `JUMPGATE_METER`), and a flag on the command line wins
+over its variable. A server that a CLI command starts for you inherits that
+command's environment. So set these variables once, in your shell profile or
+service unit, and every entry point builds the same relay and key admin.
+
+The two credentials, the relay token and the admin token, never come from a
+flag. Put each one in its own file, readable only by you (`chmod 600`), and
+point to the file with `JUMPGATE_RELAY_TOKEN_FILE` and
+`JUMPGATE_ADMIN_TOKEN_FILE`. The server reads the file once and keeps the token
+in memory. On Linux and macOS it refuses, with a message naming the file and
+the `chmod 600` that fixes it, a token file that:
+
+- is a symlink, or is not a regular file;
+- grants any permission to group or others;
+- is owned by another user (unless the server runs as root). `JUMPGATE_RELAY_TOKEN` and `JUMPGATE_ADMIN_TOKEN` also work, but
+don't put the token values themselves in a shell profile. Every program you
+start from that shell would see them. Setting a token both ways is an error.
+After reading them, the server removes these variables from its own
+environment. Nothing it starts inherits them, including commands on a local
+target and the keychain and 1Password helpers. If the app finds a server already running with different
+options, it prints which options are not in effect. Run `jumpgate stop` and
+launch again to apply them. The same applies after an upgrade. If the server
+still running is a different jumpgate version, commands warn you, and you run
+`jumpgate stop` to replace it with the new version.
+
+When metering is on, the metered relay can refuse a call in three ways:
+
+- `402 account is out of credits`: the customer has to top up.
+- `403 account not provisioned`: the key's funding account does not exist in
+  the billing store yet. The server log names the account to create.
+- `503`: the credit ledger did not answer.
+
+On a WebSocket these are JSON-RPC errors -32003, -32006 and -32004. A relay
+started without `--meter` serves every valid key for free, and it logs a
+warning at startup to say so.
+
+If the controller key will not open, the server still starts. This can happen
+when the keychain is locked or the key file is missing. The web UI keeps
+working, and box commands fail with `no_controller_key` and the reason. Fix the
+key store, then run `jumpgate stop` so the server restarts with the key.
 
 `jumpgate hosts add` installs a small agent (`jumpgate-agent.service`) on the
 box, a restricted `jumpgate` tunnel user, and an sshd drop-in that confines that
 user to the agent's unix socket. Every command is a signed intent that the agent
 checks against its policy and answers with a signed receipt. Host keys are
 confirmed by you, by fingerprint, and remembered in `~/.jumpgate/confirmed_hosts`.
+The web UI also checks a box strictly when it is paired, confirmed, or listed in
+your `~/.ssh/known_hosts`: a changed key is refused, never re-learned. Only
+boxes on no such record are still trusted on first use, in
+`~/.jumpgate/known_hosts`.
 Running `hosts add` again on an existing name re-pairs the address on record
 (to finish an interrupted pairing or upgrade the agent); it refuses a different
 `--ssh` address, so remove the host first to re-point it. Once pairing
@@ -96,8 +166,12 @@ agent.
 Exit codes: 0 success; 1 the operation failed or was refused; 2 bad usage, or a
 missing prerequisite (no controller key yet, box not paired); 3 box unreachable;
 4 security failure (a host key nobody confirmed, a host key that changed since it
-was confirmed, or a reply not signed by the paired agent), whether it is found
-while pairing or by any later box command.
+was confirmed, a reply not signed by the paired agent, or a controller key whose
+address is not the one `config.json` records), whether it is found while pairing
+or by any later box command. `jumpgate keys show` prints the address of the key
+actually in the key store, and flags it if that address differs from the
+recorded one. `jumpgate keys show --recorded` prints only the recorded address,
+without opening the key, so it never prompts the keychain or 1Password.
 
 **Linux over SSH:** the server jumpgate starts in the background survives closing the terminal. On distributions where systemd-logind kills a user's processes at logout (`KillUserProcesses=yes`), run `loginctl enable-linger $USER` once so it also survives the SSH session ending.
 

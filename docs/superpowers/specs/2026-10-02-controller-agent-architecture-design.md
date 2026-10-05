@@ -173,9 +173,34 @@ All signers implement one `Signer` interface (`Address()`,
 - Discovery file (pid, socket, token, version) under the config directory,
   guarded by a lock held for the server's lifetime, so there is only ever one
   server per user. The existing web-app binary takes the same lock and writes the
-  same file, so the TUI attaches to it too.
+  same file, so the TUI attaches to it too. Discovery compares the recorded
+  version with its own build. A CLI command or app launch that finds a
+  different version running says so: "a different jumpgate version (X) is
+  running; restart it with `jumpgate stop`". A 404 from that server is
+  reported the same way, so an operator never sees a bare "404 Not Found".
 - `config.json` gets a file lock as a safety net; the single-server rule is the
   real guarantee of one writer.
+- One composition root (`buildServer` in `cmd/jumpgate`) builds the server for
+  both entry points. `serve` takes the app's relay, meter and key-admin flags,
+  and each flag also reads a `JUMPGATE_*` environment variable, so an
+  auto-started `serve` inherits the operator's relay through the environment.
+  The discovery file also records the server's shape: the relay bind, the
+  billing socket, metering and key admin. An app launch that attaches to a
+  server with a different shape warns and names each difference. A recorded
+  controller key that will not open is tolerated by both entry points: the box
+  routes answer 503 `no_controller_key` with the reason.
+
+## The metered relay is its own process
+
+`jumpgate relay` runs the metered RPC data plane alone, and it is the
+recommended deployment. It never opens `config.json`, the controller key or an
+executor. It takes no lock, and it does not migrate or publish controller
+state. Its billing and eRPC settings come from flags or the `JUMPGATE_*`
+environment. The process that holds authority over the fleet is therefore not
+the internet-facing proxy. The in-process relay in the controller
+(`--relay-bind` on the app or on `serve`) still works for existing setups.
+Both paths build the relay with the same `relay.Build`. Both log a warning
+when the relay runs without `--meter`.
 
 ## The TUI
 
@@ -238,10 +263,13 @@ once built, the rules in `docs/design/validator-capability.md`:
 | 3 | TUI core + browser approvals | Fleet, host detail, jobs inbox, hosts, signers, toggles, `/api/fleet`, browser signing page | 1, 2 |
 | 4 | Native hardware signers | Ledger, Trezor, Keystone, Lattice | 1 (3 for UI) |
 | 5 | Setup wizard over intents | `Setup` as a durable job | 2, 3 |
-| 6 | Full web-UI parity | Gateways, VPN (fixes the re-provision peer loss), customer keys; web UI moves onto agents; legacy SSH-executor path retired | 3, 5 |
+| 6 | Full web-UI parity | Gateways, VPN (port to agent intents), customer keys; web UI moves onto agents; legacy SSH-executor path retired. Several VPN bugs are already fixed. a154306 fixed the peer loss on an in-place re-provision. The review hotfixes refuse with 409 a re-provision that would move a server with peers to another machine, interface or subnet, and they allocate enroll addresses under the config lock | 3, 5 |
 | 7 | Validators | Per the constraints above | 4, 6 |
 
 **Migration:** until sub-project 6 the web UI keeps using today's SSH executor.
+That executor passes its host-key policy explicitly. Boxes that are confirmed or
+paired use Strict, and only boxes that nobody has confirmed use TOFU. So
+retiring TOFU means deleting the call sites that pass `TOFUHostKeyCallback`.
 Unpaired boxes show as `SSH-only` in the fleet, so both front ends migrate
 gradually.
 

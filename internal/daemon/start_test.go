@@ -20,7 +20,7 @@ func TestEnsureRunningStartsTheServerInTheRunDir(t *testing.T) {
 	startServer = func(cmd *exec.Cmd) (*exec.Cmd, error) { got = cmd; return nil, errors.New("test: not starting") }
 	t.Cleanup(func() { startServer = old })
 
-	if _, err := EnsureRunning(context.Background(), "/path/to/jumpgate"); err == nil {
+	if _, err := EnsureRunning(context.Background(), "/path/to/jumpgate", nil); err == nil {
 		t.Fatal("EnsureRunning succeeded with a start that failed")
 	}
 	dir, _ := RunDir()

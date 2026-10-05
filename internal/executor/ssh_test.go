@@ -153,11 +153,13 @@ func startTestSSHDWithForwarding(t *testing.T) (testSSHD, string) {
 
 func newSSHConfig(t *testing.T, d testSSHD, keyPath string) SSHConfig {
 	t.Helper()
+	file := filepath.Join(t.TempDir(), "known_hosts")
 	return SSHConfig{
 		Host:        d.host,
 		User:        "testuser",
 		KeyPath:     keyPath,
-		HostKeyFile: filepath.Join(t.TempDir(), "known_hosts"),
+		HostKeyFile: file,
+		HostKey:     TOFUHostKeyCallback(file), // the legacy policy, chosen explicitly
 		Port:        d.port,
 	}
 }

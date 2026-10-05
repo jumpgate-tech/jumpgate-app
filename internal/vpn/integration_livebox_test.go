@@ -69,11 +69,11 @@ func liveExecutor(t *testing.T) executor.Executor {
 		port = n
 	}
 	ex, err := executor.NewSSH(executor.SSHConfig{
-		Host:        host,
-		User:        user,
-		KeyPath:     key,
-		HostKeyFile: filepath.Join(t.TempDir(), "known_hosts"),
-		Port:        port,
+		Host:    host,
+		User:    user,
+		KeyPath: key,
+		HostKey: executor.TOFUHostKeyCallback(filepath.Join(t.TempDir(), "known_hosts")),
+		Port:    port,
 	})
 	if err != nil {
 		t.Fatalf("dial live box %s@%s:%d: %v", user, host, port, err)

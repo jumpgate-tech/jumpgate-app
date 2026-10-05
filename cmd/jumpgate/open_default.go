@@ -25,7 +25,7 @@ var openWebApp = func(ctx context.Context, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	info, err := daemon.EnsureRunning(ctx, exe)
+	info, err := daemon.EnsureRunning(ctx, exe, os.Stderr)
 	if err != nil {
 		return err
 	}

@@ -7,7 +7,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io/fs"
 	"log"
 	"net"
 	"os"
@@ -18,11 +17,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/valve-tech/jumpgate/cmd/jumpgate/web"
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/daemon"
-	"github.com/valve-tech/jumpgate/internal/relay"
-	"github.com/valve-tech/jumpgate/internal/server"
+	"github.com/valve-tech/jumpgate/internal/secretenv"
 )
 
 // bindFlagUsage is --bind's help text. Called out here (rather than inline
@@ -31,32 +28,24 @@ const bindFlagUsage = "address to bind the local server to. " +
 	"WARNING: binding beyond 127.0.0.1 exposes full control of your servers over plain HTTP"
 
 func runApp() {
-	bind := flag.String("bind", "127.0.0.1:8799", bindFlagUsage)
-	// The data plane is off unless an operator asks for it. It is a separate
-	// listener from --bind on purpose: --bind carries the session token that
-	// controls the operator's servers, and this one carries customer traffic
-	// authenticated by key. Bind it to the interface Caddy reaches, never to
-	// 0.0.0.0 — Caddy is the public door and the TLS terminator, and a
-	// plaintext keyed URL would expose the key on the wire.
-	relayBind := flag.String("relay-bind", "", "address to serve the metered RPC data plane on (empty disables it)")
-	billingSocket := flag.String("billing-socket", "", "unix socket of the billing key store")
-	erpcURL := flag.String("erpc-url", "http://127.0.0.1:4000", "base URL of the keyless eRPC the relay forwards to")
-	projectID := flag.String("erpc-project", "", "eRPC project segment (empty means main)")
-	// Metering is off by default. Serving unmetered is the status quo, so
-	// charging customers is a deliberate act rather than a side effect of
-	// pointing the relay at a key store.
-	metering := flag.Bool("meter", false, "charge credits for metered RPC (off means serve without billing)")
+	opts, err := addServerFlags(flag.CommandLine, os.Getenv)
+	if err != nil {
+		log.Fatalf("jumpgate: %v", err)
+	}
 	noOpen := flag.Bool("no-open", false, "do not open a browser window automatically")
 	tray := flag.Bool("tray", false, "open the UI in a native desktop window (tiny-app mode) instead of a browser tab; requires a build made with -tags tray")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	// opts holds the tokens now. The attach path below launches a browser
+	// without going through buildServer, so drop them here too.
+	secretenv.Unset(secretEnvNames...)
 
 	if *showVersion {
 		fmt.Println(buildinfo.Version())
 		return
 	}
 
-	if warning := bindWarningLine(*bind); warning != "" {
+	if warning := bindWarningLine(opts.Bind); warning != "" {
 		fmt.Fprintln(os.Stderr, warning)
 	}
 
@@ -68,127 +57,35 @@ func runApp() {
 
 	// One server per user (R25): the app takes the same lock as `jumpgate
 	// serve`. If a server is already up — another app launch, or one a CLI
-	// command started — open it instead of failing to bind a second one.
+	// command started — open it instead of failing to bind a second one, and
+	// say plainly which of this launch's options it was not built with.
 	holder, running, err := claimAppInstance(ctx, 10*time.Second)
 	if err != nil {
 		log.Fatalf("jumpgate: %v", err)
 	}
 	if running != nil {
-		if *relayBind != "" || *bind != running.HTTPAddr {
-			fmt.Fprintln(os.Stderr, "jumpgate: this launch's --bind/--relay-bind flags are ignored; stop the running server first to apply them")
+		if skew := daemon.SkewWarning(*running); skew != "" {
+			fmt.Fprintln(os.Stderr, skew)
+		}
+		if warning := attachWarning(*opts, *running); warning != "" {
+			fmt.Fprintln(os.Stderr, warning)
 		}
 		openRunningServer(ctx, *running, windowed, *noOpen)
 		return
 	}
 	defer holder.Release()
 
-	// Load (or lazily create on first Save) jumpgate's local state —
-	// known targets, AI provider settings — from ~/.jumpgate/config.json.
-	// The server re-reads it per-request rather than holding this value, so
-	// it's only loaded here to fail fast on a corrupt file before the
-	// server starts serving.
-	cfg, err := loadServerConfig(os.Stderr)
+	// The same composition root as `jumpgate serve`: see buildServer.
+	b, err := buildServer(*opts, stop, os.Stderr)
 	if err != nil {
+		holder.Release()
 		log.Fatalf("jumpgate: %v", err)
 	}
-	// The CLI finds this server through server.json and sends it box
-	// commands, so it holds the controller key as serve does. A key that
-	// will not open (a locked keychain, say) must not keep the UI down: those
-	// routes answer 503 until the app is restarted.
-	sgn, err := openControllerKey(cfg)
-	if err != nil {
-		log.Printf("jumpgate: controller key not loaded, box commands are unavailable: %v", err)
-		sgn = nil
-	}
+	s, token, bind := b.srv, b.token, opts.Bind
 
-	uiFS, err := fs.Sub(web.FS, "dist")
-	if err != nil {
-		log.Fatalf("jumpgate: embedded UI: %v", err)
-	}
-
-	// The relay's credential never arrives as a flag. A flag lands in the
-	// process listing, where any local user reads it.
-	relayHandler, relayRuntime, err := relay.Build(relay.BuildOptions{
-		RelayBind:      *relayBind,
-		BillingSocket:  *billingSocket,
-		RelayToken:     os.Getenv("JUMPGATE_RELAY_TOKEN"),
-		ERPCURL:        *erpcURL,
-		ProjectID:      *projectID,
-		EnableMetering: *metering,
-	})
-	if err != nil {
-		// A half-configured relay is fatal rather than quietly off. Serving
-		// unmetered traffic is worse than serving none: the operator sells
-		// access and would be giving it away with nothing to report it.
-		log.Fatalf("jumpgate: relay: %v", err)
-	}
-
-	// Key management is the operator's surface and uses the ADMIN credential,
-	// which mints and revokes keys. The relay's credential cannot do either.
-	adminClient, err := relay.BuildAdmin(*billingSocket, os.Getenv("JUMPGATE_ADMIN_TOKEN"))
-	if err != nil {
-		log.Fatalf("jumpgate: key store: %v", err)
-	}
-	// Assign only when non-nil. A nil *AdminClient inside a non-nil interface
-	// would pass every nil check and then panic on the first click, instead of
-	// answering the clean 501 a gateway with no key store should give.
-	var keyAdmin server.KeyAdmin
-	if adminClient != nil {
-		keyAdmin = adminClient
-	}
-
-	token := server.NewSessionToken()
-	s := server.New(server.Config{
-		Bind:      *bind,
-		Token:     token,
-		UI:        uiFS,
-		Relay:     relayHandler,
-		Keys:      keyAdmin,
-		RelayBind: *relayBind,
-		Signer:    sgn,
-		Shutdown:  stop,
-	})
-
-	url := appURL(daemon.Info{HTTPAddr: *bind, Token: token})
+	url := appURL(daemon.Info{HTTPAddr: bind, Token: token})
 	fmt.Println(url)
-
-	// Warm the update check in the background so the first UI poll is instant.
-	// It respects the disabled setting and reports failures through the API,
-	// so nothing here needs its result.
-	go s.PrimeUpdateCheck(ctx)
-
-	// Bring up any overlays the operator marked "start with the app". Runs off
-	// the serving path in its own goroutine: an autostart overlay on an
-	// unreachable box must never delay the UI coming up, and one overlay failing
-	// must not stop the others — AutostartOverlays returns per-overlay results,
-	// which we log and otherwise let be.
-	go func() {
-		for _, r := range s.AutostartOverlays(ctx) {
-			if r.Err != nil {
-				log.Printf("jumpgate: autostart overlay %q: %v", r.ID, r.Err)
-			} else {
-				log.Printf("jumpgate: autostart overlay %q is up", r.ID)
-			}
-		}
-	}()
-
-	// The data plane runs beside the control plane on its own listener. A
-	// failure here is the relay's failure and must not be mistaken for the UI
-	// failing to come up, so it is logged rather than folded into the main
-	// server's error.
-	if relayHandler != nil {
-		go func() {
-			if err := s.ListenAndServeRelay(ctx); err != nil {
-				log.Printf("jumpgate: relay data plane: %v", err)
-			}
-		}()
-		// The background loops are not optional. Without them leased credits are
-		// never settled back and the beacon pool never re-probes, so a customer's
-		// balance would sit stranded and a recovered node would stay out of
-		// rotation for the life of the process.
-		go relayRuntime.Run(ctx)
-		fmt.Printf("metered RPC data plane on %s\n", *relayBind)
-	}
+	b.start(ctx, os.Stdout)
 
 	// Launched by double-clicking the macOS .app bundle, the OS passes no
 	// flags — so a bundled build enters tray mode on its own. An explicit
@@ -202,8 +99,8 @@ func runApp() {
 		// server goes to a background goroutine. Closing the window returns from
 		// runWindow; we then cancel ctx to shut the server down cleanly.
 		srvErr := make(chan error, 1)
-		go func() { srvErr <- serveAndPublish(ctx, stop, s, holder, *bind, token) }()
-		if err := waitReady(ctx, *bind); err != nil {
+		go func() { srvErr <- serveAndPublish(ctx, stop, s, holder, bind, token, &b.shape) }()
+		if err := waitReady(ctx, bind); err != nil {
 			log.Fatalf("jumpgate: server did not come up: %v", err)
 		}
 		runWindow(ctx, url)
@@ -216,7 +113,7 @@ func runApp() {
 		openBrowser(url)
 	}
 
-	if err := serveAndPublish(ctx, stop, s, holder, *bind, token); err != nil {
+	if err := serveAndPublish(ctx, stop, s, holder, bind, token, &b.shape); err != nil {
 		holder.Release()
 		log.Fatalf("jumpgate: server: %v", err)
 	}

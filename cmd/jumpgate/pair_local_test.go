@@ -30,7 +30,7 @@ func localSeams(t *testing.T, goos string, euid int, terminal bool) *bool {
 	oldGOOS, oldEuid, oldEnsure, oldTerm := hostGOOS, geteuid, ensureRunning, stdinIsTerminal
 	hostGOOS, geteuid = goos, func() int { return euid }
 	stdinIsTerminal = func() bool { return terminal }
-	ensureRunning = func(context.Context, string) (daemon.Info, error) {
+	ensureRunning = func(context.Context, string, io.Writer) (daemon.Info, error) {
 		started = true
 		return daemon.Info{}, errors.New("test: no server")
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -139,6 +140,36 @@ func TestIntentEndpointRefusesUnpairedAndKeylessServers(t *testing.T) {
 	defer keyless.Close()
 	if res, out := postIntent(t, keyless, token, "/api/targets/box/intent/agent.info", `{}`); res.StatusCode != http.StatusServiceUnavailable || out["code"] != "no_controller_key" {
 		t.Fatalf("keyless: %d %v", res.StatusCode, out)
+	}
+}
+
+// A key that would not open is reported with its reason, so an operator with a
+// locked keychain is not told to run `keys init` over a key that exists.
+func TestIntentEndpointReportsWhyTheKeyIsMissing(t *testing.T) {
+	ts, token := pairedLocal(t)
+	ts.Close()
+	broken := httptest.NewServer(New(Config{Token: token, UI: fstest.MapFS{}, SignerErr: errors.New("keychain is locked")}).Handler())
+	defer broken.Close()
+	res, out := postIntent(t, broken, token, "/api/targets/box/intent/agent.info", `{}`)
+	if res.StatusCode != http.StatusServiceUnavailable || out["code"] != "no_controller_key" {
+		t.Fatalf("got %d %v", res.StatusCode, out)
+	}
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "keychain is locked") {
+		t.Fatalf("error %q does not say why the key is missing", out["error"])
+	}
+}
+
+// A controller key that is not the recorded identity has its own code, so the
+// operator is not sent to re-pair boxes that are fine.
+func TestIntentEndpointReportsAControllerKeyMismatch(t *testing.T) {
+	ts, token := pairedLocal(t)
+	ts.Close()
+	mismatch := fmt.Errorf("open controller key: %w", signer.ErrAddressMismatch)
+	broken := httptest.NewServer(New(Config{Token: token, UI: fstest.MapFS{}, SignerErr: mismatch}).Handler())
+	defer broken.Close()
+	res, out := postIntent(t, broken, token, "/api/targets/box/intent/agent.info", `{}`)
+	if res.StatusCode != http.StatusServiceUnavailable || out["code"] != "controller_key_mismatch" || out["hint"] == "" {
+		t.Fatalf("got %d %v", res.StatusCode, out)
 	}
 }
 
