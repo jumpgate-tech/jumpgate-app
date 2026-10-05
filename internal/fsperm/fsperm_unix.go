@@ -110,4 +110,16 @@ func openAppendExisting(path string) (*os.File, error) {
 	return f, nil
 }
 
+func ownedByCurrentUser(path string) (bool, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return false, err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false, fmt.Errorf("no owner information for %s", path)
+	}
+	return int(st.Uid) == os.Geteuid(), nil
+}
+
 func rename(oldpath, newpath string) error { return os.Rename(oldpath, newpath) }

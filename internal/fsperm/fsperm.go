@@ -12,6 +12,7 @@ package fsperm
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"math/rand/v2"
 	"os"
@@ -27,11 +28,35 @@ var ErrNotPrivate = errors.New("fsperm: other users can read or change this")
 // to its owner. An existing dir is tightened too: an older release or a loose
 // umask may have left ~/.jumpgate open, and existing is not the same as safe.
 // Parents are created with the default mode and left alone.
+//
+// dir may be a symlink to a directory (a ~/.jumpgate kept on another disk,
+// say). The real directory is then tightened, but only if the current user
+// owns it; one that belongs to someone else is refused, since its owner could
+// read everything jumpgate puts there. Secret files themselves are never
+// followed through a link (MakePrivate refuses one).
 func MkdirPrivate(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return MakePrivate(dir)
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return MakePrivate(dir)
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return err
+	}
+	mine, err := ownedByCurrentUser(real)
+	if err != nil {
+		return fmt.Errorf("fsperm: find the owner of %s: %w", real, err)
+	}
+	if !mine {
+		return fmt.Errorf("fsperm: %s is a symlink to %s, which another user owns; jumpgate keeps secrets only in a directory you own", dir, real)
+	}
+	return MakePrivate(real)
 }
 
 // MakePrivate restricts an existing file, directory or socket to its owner.

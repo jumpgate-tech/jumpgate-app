@@ -242,3 +242,27 @@ func TestOpenAppendPrivateCreatesOrTightensAndAppends(t *testing.T) {
 		t.Fatalf("content = %q, %v; want both lines", got, err)
 	}
 }
+
+// P28: a ~/.jumpgate (or run/, ssh/) that is a symlink to a directory the
+// user owns keeps working, and the real directory is tightened.
+func TestMkdirPrivateFollowsASymlinkToAnOwnedDir(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "elsewhere")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Loosen(t, real)
+	link := filepath.Join(base, ".jumpgate")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	if err := fsperm.MkdirPrivate(link); err != nil {
+		t.Fatalf("MkdirPrivate(symlink to an owned dir): %v", err)
+	}
+	if err := fsperm.CheckPrivate(real); err != nil {
+		t.Fatalf("the real directory was not tightened: %v", err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the symlink was replaced: %v, %v", fi, err)
+	}
+}

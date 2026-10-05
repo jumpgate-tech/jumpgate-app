@@ -172,6 +172,36 @@ func ownerTrusted(path string) (bool, error) {
 	return trusted(owner, user), nil
 }
 
+// ownedByCurrentUser reports whether this user owns path. An elevated
+// administrator's files are owned by Administrators, so that owner counts
+// when this process is acting as a member of it.
+func ownedByCurrentUser(path string) (bool, error) {
+	h, err := openForSecurity(path, windows.READ_CONTROL)
+	if err != nil {
+		return false, err
+	}
+	defer windows.CloseHandle(h)
+	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return false, err
+	}
+	owner, _, err := sd.Owner()
+	if err != nil || owner == nil {
+		return false, err
+	}
+	user, err := currentUser()
+	if err != nil {
+		return false, err
+	}
+	if owner.Equals(user) {
+		return true, nil
+	}
+	if owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+		return windows.Token(0).IsMember(owner)
+	}
+	return false, nil
+}
+
 // trusted is the set of SIDs a private file may grant access to or be owned
 // by (spec D16): the user, SYSTEM, and Administrators, who can take
 // ownership of any file anyway.
