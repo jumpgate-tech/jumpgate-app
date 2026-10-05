@@ -5,48 +5,88 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  # The embedded web UI must be committed and reproducible. It is checked once,
+  # on Linux; the Go jobs below use the committed dist.
+  web:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25"
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: cmd/jumpgate/web/package-lock.json
-
       - name: Build web UI
         run: |
           cd cmd/jumpgate/web
           npm ci
           npm run build
-
       - name: Verify web/dist is committed and reproducible
         run: git diff --exit-code cmd/jumpgate/web/dist
 
+  # The controller is supported on all three desktop OSes, so its tests run on
+  # all three. bash on Windows is Git Bash, present on every hosted image.
+  go:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
       - name: go vet
         run: go vet ./...
-
       - name: go test
         run: go test ./...
+      - name: go build (headless, no cgo)
+        env:
+          CGO_ENABLED: "0"
+        run: go build -o "$RUNNER_TEMP/jumpgate-ci" ./cmd/jumpgate
 
-      - name: go build (headless)
-        run: go build ./cmd/jumpgate
-
-      - name: cross-compile check (windows, darwin — headless)
+  # Cheap guard for targets no runner tests natively, including the linux/arm64
+  # build the agent ships as.
+  cross:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: vet, compile tests and build for every target
         run: |
-          GOOS=windows go build ./...
-          GOOS=darwin go build ./...
+          set -euo pipefail
+          for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64; do
+            echo "== $target"
+            export GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0
+            go vet ./...
+            go test -c -o "$(mktemp -d)/" ./...
+            go build ./...
+          done
+      # Tag-gated test files that only the e2e and real-store scripts compile
+      # would otherwise rot unnoticed between runs of those scripts.
+      - name: vet the tag-gated tests
+        run: |
+          set -euo pipefail
+          go vet -tags e2e ./internal/bootstrap/
+          GOOS=linux go vet -tags realsecret ./internal/signer/
+      - name: build the linux/arm64 controller and agent
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+        run: go build -o /dev/null ./cmd/jumpgate
 
   # The Rust billing service. It is a standalone crate under services/billing,
   # invisible to the Go tooling above, so it needs its own gate.
