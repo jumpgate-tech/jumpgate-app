@@ -112,6 +112,7 @@ func TestServerErrorExit(t *testing.T) {
 
 // agent init is idempotent: the box keeps its identity across re-pairing.
 func TestAgentInitKeepsItsIdentity(t *testing.T) {
+	testutil.RequireUnix(t) // agent-side code, Linux-only; it fsyncs directories
 	state, conf := t.TempDir(), t.TempDir()
 	var out1, out2 strings.Builder
 	if err := agentInit(&out1, state, conf, false); err != nil {
@@ -137,6 +138,7 @@ func TestAgentInitKeepsItsIdentity(t *testing.T) {
 // running agent deliberately fails closed on (replay_state). Only an explicit
 // --reset-replay starts one.
 func TestAgentInitRefusesToRecreateALostReplayRecord(t *testing.T) {
+	testutil.RequireUnix(t) // agent-side code, Linux-only; it fsyncs directories
 	state, conf := t.TempDir(), t.TempDir()
 	var first strings.Builder
 	if err := agentInit(&first, state, conf, false); err != nil {
@@ -208,6 +210,7 @@ func TestAgentInitNeverReplacesAnUnreadableKey(t *testing.T) {
 }
 
 func TestAgentEnrollIsIdempotent(t *testing.T) {
+	testutil.RequireUnix(t) // agent-side code, Linux-only; it fsyncs directories
 	conf := t.TempDir()
 	for i := 0; i < 2; i++ {
 		if err := agentEnroll(conf, "", "0x00000000000000000000000000000000000000cc", "routine", "laptop", 501); err != nil {
@@ -250,6 +253,7 @@ func TestAgentEnrollLocalUIDOpensTheSocket(t *testing.T) {
 // Enrolling a second controller appends; it never drops the first, and the
 // same address in another case is the same controller.
 func TestAgentEnrollAppends(t *testing.T) {
+	testutil.RequireUnix(t) // agent-side code, Linux-only; it fsyncs directories
 	conf := t.TempDir()
 	steps := []string{
 		"0x00000000000000000000000000000000000000cc",
@@ -659,8 +663,7 @@ func TestConfirmHostKeysBoundsTheAnswer(t *testing.T) {
 // and must not fail on it.
 func TestMigrateOnStartup(t *testing.T) {
 	setup := func(t *testing.T) string {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
+		home := testutil.Home(t)
 		legacy := filepath.Join(home, ".valve-node-app")
 		if err := os.MkdirAll(legacy, 0o700); err != nil {
 			t.Fatal(err)

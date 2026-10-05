@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -74,6 +75,10 @@ func TestMigrateLegacyDirRefusesWhenBothExist(t *testing.T) {
 	}
 }
 
+// jsonPath escapes a path for embedding in a hand-written JSON string: a
+// Windows path's backslashes would otherwise read as escape sequences.
+func jsonPath(p string) string { return strings.ReplaceAll(p, `\`, `\\`) }
+
 func writeConfigJSON(t *testing.T, dir, body string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -91,8 +96,8 @@ func TestLoadRepointsPathsInsideTheLegacyDir(t *testing.T) {
 	home := testutil.Home(t)
 	legacy := filepath.Join(home, ".valve-node-app")
 	body := `{"targets":[{"id":"box","mode":"ssh","ssh":{"Host":"h","User":"root",` +
-		`"KeyPath":"` + filepath.Join(legacy, "keys", "id") + `",` +
-		`"HostKeyFile":"` + filepath.Join(legacy, "known_hosts") + `"}},` +
+		`"KeyPath":"` + jsonPath(filepath.Join(legacy, "keys", "id")) + `",` +
+		`"HostKeyFile":"` + jsonPath(filepath.Join(legacy, "known_hosts")) + `"}},` +
 		`{"id":"other","mode":"ssh","ssh":{"Host":"o","User":"root","KeyPath":"/keys/elsewhere","HostKeyFile":"/var/lib/valve-node-app/known_hosts"}}]}`
 	writeConfigJSON(t, legacy, body)
 
@@ -125,7 +130,7 @@ func TestPinnedHostKeySurvivesMigration(t *testing.T) {
 	home := testutil.Home(t)
 	legacy := filepath.Join(home, ".valve-node-app")
 	writeConfigJSON(t, legacy, `{"targets":[{"id":"box","mode":"ssh","ssh":{"Host":"h","User":"root","KeyPath":"/k","HostKeyFile":"`+
-		filepath.Join(legacy, "known_hosts")+`"}}]}`)
+		jsonPath(filepath.Join(legacy, "known_hosts"))+`"}}]}`)
 
 	newKey := func() ssh.PublicKey {
 		pub, _, err := ed25519.GenerateKey(rand.Reader)
@@ -275,7 +280,7 @@ func TestMigrateLegacyDirMergeKeepsBothCopiesOnACollision(t *testing.T) {
 	home := testutil.Home(t)
 	legacy := filepath.Join(home, ".valve-node-app")
 	writeConfigJSON(t, legacy, `{"targets":[{"id":"box","mode":"ssh","ssh":{"Host":"h","User":"root","KeyPath":"/k","HostKeyFile":"`+
-		filepath.Join(legacy, "known_hosts")+`"}}]}`)
+		jsonPath(filepath.Join(legacy, "known_hosts"))+`"}}]}`)
 	if err := os.WriteFile(filepath.Join(legacy, "known_hosts"), []byte("pinned\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
