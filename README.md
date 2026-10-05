@@ -125,12 +125,13 @@ tar xzf jumpgate_<os>_<arch>.tar.gz   # the Windows archive is a .zip
 ./jumpgate
 ```
 
-This prints a local URL with a one-time session token and opens it in your
-browser:
+In a terminal, bare `jumpgate` opens the terminal home: status and a menu, where `o` opens the web app in your browser. `jumpgate serve` runs the server in the foreground and prints a local URL with a one-time session token:
 
 ```
 http://127.0.0.1:8799/?token=<token>
 ```
+
+Without a terminal (a pipe, the app bundle) or with flags such as `--bind`, the app behaves as before: it starts the server and opens it in your browser.
 
 Pass `--bind` to change the listen address, or `--no-open` to skip opening a
 browser automatically.

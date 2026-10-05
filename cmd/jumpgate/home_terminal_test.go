@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -132,5 +133,26 @@ func TestPauseIfStandaloneWaitsForEnter(t *testing.T) {
 	pauseIfStandalone(strings.NewReader(""), &out)
 	if out.Len() != 0 {
 		t.Fatalf("prompted though not standalone: %q", out.String())
+	}
+}
+
+func TestTerminalHomeTruncatesLongErrors(t *testing.T) {
+	long := errors.New(strings.Repeat("/very/long/path", 20))
+	old := termHome
+	termHome = homeDeps{
+		find: func(context.Context) (daemon.Info, bool, error) { return daemon.Info{}, false, long },
+		load: func() (config.Config, error) { return config.Config{}, long },
+		open: func(context.Context, io.Writer) error { return nil },
+	}
+	t.Cleanup(func() { termHome = old })
+	var out strings.Builder
+	runTerminalHome(context.Background(), strings.NewReader(""), &out)
+	for _, l := range strings.Split(out.String(), "\n") {
+		if len(l) > 80 {
+			t.Errorf("line over 80 columns (%d): %q", len(l), l)
+		}
+	}
+	if !strings.Contains(out.String(), "...") {
+		t.Fatal("long error was not truncated visibly")
 	}
 }

@@ -86,7 +86,7 @@ func printOverview(ctx context.Context, out io.Writer) {
 	fmt.Fprintf(out, "jumpgate %s\n", buildinfo.Version())
 	switch info, ok, err := termHome.find(ctx); {
 	case err != nil:
-		fmt.Fprintf(out, "  server:   unknown (%v)\n", err)
+		fmt.Fprintln(out, fitLine("  server:   unknown ", err))
 	case ok:
 		fmt.Fprintf(out, "  server:   running, pid %d, http://%s/\n", info.PID, info.HTTPAddr)
 	default:
@@ -94,7 +94,7 @@ func printOverview(ctx context.Context, out io.Writer) {
 	}
 	c, err := termHome.load()
 	if err != nil {
-		fmt.Fprintf(out, "  config:   %v\n", err)
+		fmt.Fprintln(out, fitLine("  config:   ", err))
 		return
 	}
 	if c.Controller == nil {
@@ -122,4 +122,20 @@ func pauseIfStandalone(in io.Reader, out io.Writer) {
 	}
 	fmt.Fprint(out, "press Enter to close this window")
 	_, _ = bufio.NewReader(in).ReadString('\n')
+}
+
+// fitLine joins a label and an error message, cutting the message with "..."
+// so the line fits an 80-column window; a long path in an error must not wrap
+// the overview. Newlines in the message are flattened first.
+func fitLine(label string, err error) string {
+	msg := strings.Join(strings.Fields(err.Error()), " ")
+	const width = 80
+	if r := []rune(label + msg); len(r) > width {
+		keep := width - len([]rune(label)) - 3
+		if keep < 0 {
+			keep = 0
+		}
+		msg = string([]rune(msg)[:keep]) + "..."
+	}
+	return label + msg
 }
