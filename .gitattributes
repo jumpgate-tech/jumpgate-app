@@ -1,0 +1,6 @@
+# .gitattributes — LF everywhere, so Windows checkouts (core.autocrlf=true on
+# the runners) compare byte-for-byte with golden strings and testdata.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.gz binary
