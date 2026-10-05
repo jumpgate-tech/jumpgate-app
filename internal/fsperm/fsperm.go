@@ -154,3 +154,12 @@ func WriteFilePrivate(path string, data []byte) error {
 // another process (an indexer, antivirus, a concurrent reader) holds the
 // target open, which makes MoveFileEx fail with a sharing violation.
 func Rename(oldpath, newpath string) error { return rename(oldpath, newpath) }
+
+// CheckTrustedWritable returns an error unless path, a file other people may
+// read (a system-wide known_hosts, say), can be changed or replaced only by
+// this user, administrators and the system: the file and its directory are
+// owned and writable only by them, and nobody untrusted can move either
+// through a directory above. A symlink is followed first, so the real file and
+// its real directory are the ones checked. Unlike CheckPrivate it does not
+// mind who can read path.
+func CheckTrustedWritable(path string) error { return checkTrustedWritable(path) }

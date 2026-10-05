@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // systemKnownHosts is OpenSSH's system-wide known_hosts on this OS; a var so
@@ -13,7 +15,7 @@ var systemKnownHosts = defaultSystemKnownHosts()
 
 // knownHostsTrusted decides whether a known_hosts file may vouch for a host.
 // A var so tests can inject the verdict.
-var knownHostsTrusted = checkKnownHostsFile
+var knownHostsTrusted = fsperm.CheckTrustedWritable
 
 func defaultSystemKnownHosts() string {
 	if runtime.GOOS == "windows" {

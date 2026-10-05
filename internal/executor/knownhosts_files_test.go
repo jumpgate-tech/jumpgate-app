@@ -2,6 +2,7 @@ package executor
 
 import (
 	"errors"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 	"os"
 	"path/filepath"
 	"slices"
@@ -59,11 +60,11 @@ func TestCheckKnownHostsFileRefusesAWorldWritableFile(t *testing.T) {
 	if err := os.WriteFile(f, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkKnownHostsFile(f); err != nil {
+	if err := fsperm.CheckTrustedWritable(f); err != nil {
 		t.Fatalf("owner-writable file refused: %v", err)
 	}
 	makeWorldWritable(t, f)
-	if err := checkKnownHostsFile(f); err == nil {
+	if err := fsperm.CheckTrustedWritable(f); err == nil {
 		t.Fatal("a world-writable file was trusted")
 	}
 }

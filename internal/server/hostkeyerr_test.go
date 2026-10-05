@@ -20,7 +20,7 @@ import (
 // transport key in place so the dial reaches the host-key check.
 func remotePaired(t *testing.T) config.Target {
 	t.Helper()
-	t.Setenv("SSH_AUTH_SOCK", "")
+	noAgent(t)
 	if _, err := ensureTransportKey(); err != nil {
 		t.Fatal(err)
 	}

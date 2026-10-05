@@ -189,6 +189,11 @@ without opening the key, so it never prompts the keychain or 1Password.
 - Node services (the execution and beacon clients) run as the dedicated
   unprivileged `valve-node-app` system user, which setup creates. (In v0.1–v0.2
   they ran as root; re-running setup migrates an existing install.)
+- **ssh-agent:** jumpgate uses an agent only when it is run by you (on Windows,
+  also by SYSTEM or Administrators: the OpenSSH agent service). Under `sudo`
+  your agent is refused with "running under sudo? the agent belongs to <user>";
+  pass `--key` or run jumpgate as yourself. A system-wide `ssh_known_hosts` is
+  read only when just trusted accounts can write it and its directory.
 
 ## Quickstart
 

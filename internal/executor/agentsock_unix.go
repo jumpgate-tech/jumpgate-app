@@ -9,6 +9,8 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/user"
+	"strconv"
 	"time"
 )
 
@@ -40,16 +42,29 @@ func dialAgent(deadline time.Time) io.ReadWriteCloser {
 var peerUID = peerUIDOf
 
 // checkAgentPeer accepts c only when its peer runs as euid. Root counts only
-// when jumpgate itself is root: a root-run agent is not trusted by a user.
+// when jumpgate itself is root: a root-run agent is not trusted by a user, and
+// under sudo the user's agent is refused (use the key file, or run as the user).
 func checkAgentPeer(c net.Conn, euid uint32) error {
 	uid, err := peerUID(c)
 	if err != nil {
 		return fmt.Errorf("cannot identify the agent (%v); refusing", err)
 	}
 	if uid != euid {
-		return fmt.Errorf("is run by uid %d, not you; refusing", uid)
+		if euid == 0 {
+			// sudo keeps the invoking user's SSH_AUTH_SOCK, but root does not
+			// trust an agent a user runs: a user could point it anywhere.
+			return fmt.Errorf("is run by %s, not root; running under sudo? the agent belongs to %s; refusing", uidName(uid), uidName(uid))
+		}
+		return fmt.Errorf("is run by %s, not you; refusing", uidName(uid))
 	}
 	return nil
+}
+
+func uidName(uid uint32) string {
+	if u, err := user.LookupId(strconv.Itoa(int(uid))); err == nil {
+		return fmt.Sprintf("%s (uid %d)", u.Username, uid)
+	}
+	return fmt.Sprintf("uid %d", uid)
 }
 
 var errNotUnixConn = errors.New("not a unix socket")

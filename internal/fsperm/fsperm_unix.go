@@ -165,3 +165,36 @@ func checkAncestors(path string) error {
 }
 
 func rename(oldpath, newpath string) error { return os.Rename(oldpath, newpath) }
+
+func checkTrustedWritable(path string) error {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	for _, p := range []string{real, filepath.Dir(real)} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			return err
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("no owner information for %s", p)
+		}
+		if err := trustedWritableMode(p, fi.Mode(), st.Uid, uint32(os.Geteuid())); err != nil {
+			return err
+		}
+	}
+	return checkAncestors(real)
+}
+
+// trustedWritableMode is the decision for one path: owned by root or euid, and
+// writable by neither group nor others.
+func trustedWritableMode(p string, mode os.FileMode, uid, euid uint32) error {
+	if uid != 0 && uid != euid {
+		return fmt.Errorf("%s belongs to uid %d, not root or you", p, uid)
+	}
+	if mode.Perm()&0o022 != 0 {
+		return fmt.Errorf("%s is writable by other users (mode %o)", p, mode.Perm())
+	}
+	return nil
+}

@@ -166,10 +166,16 @@ func TestAddTarget_RefusesAWireSuppliedByTheCaller(t *testing.T) {
 	}
 }
 
-func TestAddTarget_RejectsWhatCannotBeATarget(t *testing.T) {
-	// No agent (a missing socket: on Windows an empty value falls back to the
-	// OpenSSH pipe), so "ssh with no key" has no way in.
+// noAgent points SSH_AUTH_SOCK at a socket nobody listens on. An empty value
+// is not "no agent" on Windows: it falls back to the OpenSSH agent pipe, which
+// a developer machine (or CI) may well be serving.
+func noAgent(t *testing.T) {
+	t.Helper()
 	t.Setenv("SSH_AUTH_SOCK", filepath.Join(testutil.ShortTempDir(t), "none.sock"))
+}
+
+func TestAddTarget_RejectsWhatCannotBeATarget(t *testing.T) {
+	noAgent(t) // so "ssh with no key" has no way in
 	f := newFleet()
 	a := newAPITestServerWithExecutor(t, f.factory)
 
@@ -207,7 +213,8 @@ func TestAddTarget_AcceptsAnSSHAgentInPlaceOfAKeyPath(t *testing.T) {
 			if err != nil {
 				return
 			}
-			c.Close()
+			// Held open: the peer's identity is read from a live connection.
+			t.Cleanup(func() { c.Close() })
 		}
 	}()
 	t.Setenv("SSH_AUTH_SOCK", sock)

@@ -22,9 +22,9 @@ func TestCheckAgentPeerDecision(t *testing.T) {
 		wantRefus string
 	}{
 		{"same uid", 1000, 1000, ""},
-		{"other uid", 1001, 1000, "uid 1001, not you"},
-		{"root peer, non-root me", 0, 1000, "uid 0, not you"},
-		{"root me, user peer", 1000, 0, "uid 1000, not you"},
+		{"other uid", 1001, 1000, "uid 1001"},
+		{"root peer, non-root me", 0, 1000, "uid 0"},
+		{"root me, user peer", 1000, 0, "running under sudo? the agent belongs to"},
 		{"root both", 0, 0, ""},
 	} {
 		peerUID = func(net.Conn) (uint32, error) { return c.peer, nil }

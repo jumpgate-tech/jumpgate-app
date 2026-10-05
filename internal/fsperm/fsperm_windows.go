@@ -399,3 +399,56 @@ func rename(oldpath, newpath string) error {
 	}
 	return err
 }
+
+// writeRights let a SID change the content of a file, add to a directory, or
+// change who may.
+const writeRights = windows.GENERIC_ALL | windows.GENERIC_WRITE |
+	0x2 /* FILE_WRITE_DATA, FILE_ADD_FILE */ | 0x4 /* FILE_APPEND_DATA, FILE_ADD_SUBDIRECTORY */ |
+	0x10 /* FILE_WRITE_EA */ | 0x100 /* FILE_WRITE_ATTRIBUTES */ |
+	0x40 /* FILE_DELETE_CHILD */ | windows.DELETE | windows.WRITE_DAC | windows.WRITE_OWNER
+
+func checkTrustedWritable(path string) error {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	user, err := currentUser()
+	if err != nil {
+		return err
+	}
+	for i, p := range []string{real, filepath.Dir(real)} {
+		owner, dacl, err := readSecurityAt(p)
+		if err != nil {
+			return err
+		}
+		r := ownerOfSecret
+		if i == 1 {
+			r = ownerOfParent
+		}
+		if err := trustedWritableProblem(p, owner, dacl, user, r); err != nil {
+			return err
+		}
+	}
+	return checkAncestors(real)
+}
+
+// trustedWritableProblem is the decision for the file or its directory: an
+// authorised owner, and no allow entry granting write rights to anyone not
+// authorised as a trustee (TrustedInstaller may own a directory, but is not a
+// trustee: it never writes here). Entry types it cannot reason about fail.
+func trustedWritableProblem(p string, owner *windows.SID, dacl *windows.ACL, user *windows.SID, r role) error {
+	if !authorised(owner, user, r) {
+		return fmt.Errorf("%s belongs to %s, not a trusted account", p, accountName(owner))
+	}
+	if dacl == nil {
+		return fmt.Errorf("%s has no DACL, so anyone may write it", p)
+	}
+	return allows(dacl, func(sid *windows.SID, mask uint32) error {
+		if mask&writeRights != 0 && !authorised(sid, user, trustee) {
+			return fmt.Errorf("%s is writable by %s", p, accountName(sid))
+		}
+		return nil
+	}, func(aceType byte) error {
+		return fmt.Errorf("%s has an access entry of type %d that jumpgate cannot verify", p, aceType)
+	})
+}

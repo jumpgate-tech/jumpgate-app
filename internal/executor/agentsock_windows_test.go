@@ -59,10 +59,30 @@ func TestOpenSSHAgentPipe(t *testing.T) {
 	go func() { keys, err = agent.NewClient(c).List(); close(listed) }()
 	select {
 	case <-listed:
-	case <-time.After(20 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("agent List hung on the pipe")
 	}
 	c.Close()
+	// Sign directly, timed, to tell the agent apart from the SSH handshake.
+	sc := dialAgent(time.Now().Add(8 * time.Second))
+	if sc == nil {
+		t.Fatal("dialAgent for Sign: no agent")
+	}
+	signed := make(chan error, 1)
+	go func() {
+		_, err := agent.NewClient(sc).Sign(sshPub, []byte("data"))
+		signed <- err
+	}()
+	select {
+	case err := <-signed:
+		if err != nil {
+			t.Fatalf("agent.Sign: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		sc.Close()
+		t.Fatal("agent.Sign hung on the pipe")
+	}
+	sc.Close()
 	found := false
 	for _, k := range keys {
 		found = found || string(k.Blob) == string(sshPub.Marshal())
@@ -109,16 +129,17 @@ func TestOpenSSHAgentPipe(t *testing.T) {
 	}
 }
 
-// The pipe-server check accepts SYSTEM and this user and refuses anyone else.
+// The pipe-owner check accepts SYSTEM, Administrators and this user and refuses anyone else.
 func TestCheckAgentOwner(t *testing.T) {
-	me, err := currentUserSID()
+	u, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
 	}
+	me := u.User.Sid
 	system, _ := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
 	everyone, _ := windows.CreateWellKnownSid(windows.WinWorldSid)
 	admins, _ := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
-	for sid, ok := range map[*windows.SID]bool{me: true, system: true, everyone: false, admins: me.String() == admins.String()} {
+	for sid, ok := range map[*windows.SID]bool{me: true, system: true, admins: true, everyone: false} {
 		if err := checkAgentOwner(sid); (err == nil) != ok {
 			t.Errorf("checkAgentOwner(%s) = %v, want ok=%v", sid, err, ok)
 		}
@@ -131,10 +152,10 @@ func TestDialAgentRefusesAForeignPipeServer(t *testing.T) {
 		t.Skip("needs the ssh-agent service's pipe")
 	}
 	t.Setenv("SSH_AUTH_SOCK", "")
-	old := pipeServerSID
-	t.Cleanup(func() { pipeServerSID = old })
+	old := pipeOwnerSID
+	t.Cleanup(func() { pipeOwnerSID = old })
 	everyone, _ := windows.CreateWellKnownSid(windows.WinWorldSid)
-	pipeServerSID = func(*os.File) (*windows.SID, error) { return everyone, nil }
+	pipeOwnerSID = func(windows.Handle) (*windows.SID, error) { return everyone, nil }
 	if c := dialAgent(time.Now().Add(5 * time.Second)); c != nil {
 		c.Close()
 		t.Fatal("dialAgent accepted a pipe served by Everyone")
