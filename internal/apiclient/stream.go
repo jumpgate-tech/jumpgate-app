@@ -122,8 +122,15 @@ func final(err error) bool {
 	return errors.As(err, &e) && e.Status >= 400 && e.Status < 500 && e.Status != http.StatusRequestTimeout && e.Status != http.StatusTooManyRequests
 }
 
+// unauthorized reports a 401: after a server restart, the old token.
+func unauthorized(err error) bool {
+	var e *api.Error
+	return errors.As(err, &e) && e.Status == http.StatusUnauthorized
+}
+
 // Stream keeps path open as an SSE stream until ctx ends, reconnecting with
-// backoff. Every state change and every event is delivered; the channel
+// backoff. A 401 makes it re-read server.json once, since a restarted server
+// has a new token. Every state change and every event is delivered; the channel
 // closes when ctx ends or the stream fails for good. There is no
 // Last-Event-ID resume: state streams resend their whole value on connect and
 // the logs stream starts with a reset frame (spec A4), so a reconnect needs no
@@ -140,17 +147,27 @@ func (c *Client) Stream(ctx context.Context, path string) <-chan StreamMsg {
 				return false
 			}
 		}
+		refreshed := false // since the last connection that went live
 		for attempt := 0; ; attempt++ {
 			if !send(StreamMsg{State: Connecting, Attempt: attempt}) {
 				return
 			}
 			started := time.Now()
-			err := c.streamOnce(ctx, path, func() bool { return send(StreamMsg{State: Live}) }, func(ev Event) bool {
+			err := c.streamOnce(ctx, path, func() bool {
+				refreshed = false
+				return send(StreamMsg{State: Live})
+			}, func(ev Event) bool {
 				return send(StreamMsg{Event: &ev, State: Live})
 			})
 			switch {
 			case ctx.Err() != nil:
 				return
+			case unauthorized(err) && !refreshed && c.refresh(ctx):
+				// The server restarted with a new token; reconnect with it
+				// now, once. A second 401 in a row is final.
+				refreshed = true
+				attempt--
+				continue
 			case final(err):
 				send(StreamMsg{State: Failed, Err: err})
 				return

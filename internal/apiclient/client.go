@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/api"
@@ -39,12 +40,19 @@ var (
 
 // Client talks to one local server.
 type Client struct {
+	// mu guards the connection fields below: a stream swaps them when the
+	// server restarts (refresh) while other requests may be in flight.
+	mu    sync.Mutex
 	base  string
 	token string
 	info  daemon.Info  // what server.json said; its Version is the server's
 	hc    *http.Client // requests
 	sc    *http.Client // streams: no overall timeout
-	opts  Options
+
+	// rediscover builds a client for the server that runs now, from a fresh
+	// server.json; nil when there is none to read (test clients).
+	rediscover func(context.Context) (*Client, error)
+	opts       Options
 }
 
 // Options says how Connect finds the server.
@@ -81,9 +89,43 @@ func New(info daemon.Info) *Client {
 	tr := info.Client().Transport
 	return &Client{
 		base: daemon.BaseURL, token: info.Token, info: info,
-		hc: &http.Client{Transport: tr, Timeout: requestTimeout},
-		sc: &http.Client{Transport: tr},
+		hc:         &http.Client{Transport: tr, Timeout: requestTimeout},
+		sc:         &http.Client{Transport: tr},
+		rediscover: findServer,
 	}
+}
+
+// findServer is a client for the server server.json describes now.
+func findServer(ctx context.Context) (*Client, error) {
+	info, ok, err := daemon.Find(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrNoServer
+	}
+	return New(info), nil
+}
+
+// refresh re-reads server.json and, when the server there has another
+// token (it restarted: every start mints a new one), switches this client to
+// it. It reports whether anything changed, so a caller retries a 401 once and
+// not in a loop.
+func (c *Client) refresh(ctx context.Context) bool {
+	if c.rediscover == nil {
+		return false
+	}
+	n, err := c.rediscover(ctx)
+	if err != nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if n.token == c.token {
+		return false
+	}
+	c.base, c.token, c.info, c.hc, c.sc = n.base, n.token, n.info, n.hc, n.sc
+	return true
 }
 
 // newHTTP is a client for a server at a TCP base URL that reports version:
@@ -104,28 +146,39 @@ func init() {
 
 // Info is the server.json the client was built from. The CLI hands it to
 // reportServerErrorFrom, which tells a 404 from another version apart.
-func (c *Client) Info() daemon.Info { return c.info }
+func (c *Client) Info() daemon.Info {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.info
+}
 
 // ServerVersion is the version the server published in server.json.
-func (c *Client) ServerVersion() string { return c.info.Version }
+func (c *Client) ServerVersion() string { return c.Info().Version }
 
 // Skew compares the server's version with this binary's through
 // daemon.SkewWarning, the one comparison: an unknown server version (an older
 // server.json) counts as a skew.
 func (c *Client) Skew() (server, mine string, differs bool) {
-	return c.info.Version, buildinfo.Version(), daemon.SkewWarning(c.info) != ""
+	info := c.Info()
+	return info.Version, buildinfo.Version(), daemon.SkewWarning(info) != ""
 }
 
 // WarnSkew prints daemon.SkewWarning's line when the server is another
 // version: after an upgrade the old detached server keeps answering, and its
 // 404s would otherwise read as plain failures.
 func WarnSkew(w io.Writer, c *Client) {
-	if s := daemon.SkewWarning(c.info); s != "" {
+	if s := daemon.SkewWarning(c.Info()); s != "" {
 		fmt.Fprintln(w, s)
 	}
 }
 
-func (c *Client) send(ctx context.Context, hc *http.Client, method, path string, in any, header http.Header) (*http.Response, error) {
+func (c *Client) send(ctx context.Context, stream bool, method, path string, in any, header http.Header) (*http.Response, error) {
+	c.mu.Lock()
+	base, token, hc := c.base, c.token, c.hc
+	if stream {
+		hc = c.sc
+	}
+	c.mu.Unlock()
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -134,14 +187,14 @@ func (c *Client) send(ctx context.Context, hc *http.Client, method, path string,
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, base+path, body)
 	if err != nil {
 		return nil, err
 	}
 	for k, vs := range header {
 		req.Header[k] = vs
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -163,7 +216,7 @@ func (c *Client) send(ctx context.Context, hc *http.Client, method, path string,
 // Do sends one request and decodes a 2xx JSON answer into out (unless out is
 // nil). Any other status comes back as *api.Error.
 func (c *Client) Do(ctx context.Context, method, path string, in, out any) error {
-	res, err := c.send(ctx, c.hc, method, path, in, nil)
+	res, err := c.send(ctx, false, method, path, in, nil)
 	if err != nil {
 		return err
 	}
@@ -180,5 +233,5 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 
 // Open sends a request whose body the caller reads and closes: a stream.
 func (c *Client) Open(ctx context.Context, method, path string, in any, header http.Header) (*http.Response, error) {
-	return c.send(ctx, c.sc, method, path, in, header)
+	return c.send(ctx, true, method, path, in, header)
 }

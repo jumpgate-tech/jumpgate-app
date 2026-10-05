@@ -133,3 +133,10 @@ func TestPairStreamsEventsUntilDone(t *testing.T) {
 		t.Fatalf("events %+v", evs)
 	}
 }
+
+// A real client re-reads server.json to rediscover a restarted server.
+func TestNewCanRediscover(t *testing.T) {
+	if New(daemon.Info{}).rediscover == nil {
+		t.Fatal("New's client cannot rediscover a restarted server")
+	}
+}

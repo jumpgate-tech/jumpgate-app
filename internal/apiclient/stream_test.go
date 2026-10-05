@@ -345,3 +345,76 @@ func TestWatchLogsResetsThenAppends(t *testing.T) {
 		t.Fatalf("note event became %+v", got[3])
 	}
 }
+
+// rotating is a server whose session token the test can change, the way a
+// restarted jumpgate server mints a new one.
+func rotating(t *testing.T) (*httptest.Server, *atomic.Value, *atomic.Int32) {
+	t.Helper()
+	var token atomic.Value
+	token.Store("old")
+	var n atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token.Load().(string) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":"unauthorized","code":"unauthorized"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %d\n\n", n.Add(1))
+		w.(http.Flusher).Flush()
+	}))
+	t.Cleanup(ts.Close)
+	return ts, &token, &n
+}
+
+// Review fix: a restarted server has a new token. The stream's first 401
+// after a drop makes the client re-read server.json and carry on with the
+// new token, instead of failing for good.
+func TestStreamPicksUpARestartedServersToken(t *testing.T) {
+	fastStreams(t)
+	ts, token, _ := rotating(t)
+	c := newHTTP(ts.URL, "old", buildinfo.Version())
+	var looked atomic.Int32
+	c.rediscover = func(context.Context) (*Client, error) {
+		looked.Add(1)
+		return newHTTP(ts.URL, token.Load().(string), buildinfo.Version()), nil
+	}
+	ch := openStream(t, c, "/s")
+	next(t, ch, func(m StreamMsg) bool { return m.Event != nil })
+	token.Store("new")
+	m := next(t, ch, func(m StreamMsg) bool { return m.Event != nil || m.State == Failed })
+	if m.State == Failed || looked.Load() == 0 {
+		t.Fatalf("after the token rotated: %v %v (looked %d)", m.State, m.Err, looked.Load())
+	}
+	if got := c.Info().Token; got != "new" {
+		t.Fatalf("client token %q", got)
+	}
+	// And it keeps working on later reconnects with the new token.
+	next(t, ch, func(m StreamMsg) bool { return m.Event != nil })
+}
+
+// A 401 that a fresh server.json does not fix (same token, or no way to
+// look) is final, as before: the client looks once, not in a loop.
+func TestStreamFailsOnA401TheTokenDoesNotFix(t *testing.T) {
+	fastStreams(t)
+	ts, token, _ := rotating(t)
+	token.Store("other")
+	c := newHTTP(ts.URL, "old", buildinfo.Version())
+	var looked atomic.Int32
+	c.rediscover = func(context.Context) (*Client, error) {
+		looked.Add(1)
+		return newHTTP(ts.URL, "old", buildinfo.Version()), nil
+	}
+	m := next(t, openStream(t, c, "/s"), func(m StreamMsg) bool { return m.State == Failed })
+	var e *api.Error
+	if !errors.As(m.Err, &e) || e.Status != http.StatusUnauthorized || looked.Load() != 1 {
+		t.Fatalf("failed with %v after %d lookups", m.Err, looked.Load())
+	}
+
+	plain := newHTTP(ts.URL, "old", buildinfo.Version()) // no rediscover
+	m = next(t, openStream(t, plain, "/s"), func(m StreamMsg) bool { return m.State == Failed })
+	if !errors.As(m.Err, &e) || e.Status != http.StatusUnauthorized {
+		t.Fatalf("without rediscover: %v", m.Err)
+	}
+}
