@@ -1,6 +1,7 @@
 package server
 
 import (
+	"sort"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/api"
@@ -68,12 +69,15 @@ func diskView(at time.Time, du ops.DU, history []api.DiskSample) api.DiskView {
 		ExpectedExecBytes: du.ExpectedExecBytes, ExpectedBeaconBytes: du.ExpectedBeaconBytes,
 		ExpectedLabel: "estimate", SyncLabel: du.SyncLabel, History: history,
 	}
-	expected := float64(du.ExpectedExecBytes + du.ExpectedBeaconBytes)
-	room := float64(du.ExecBytes + du.BeaconBytes + du.DiskFreeBytes) // what the clients can grow into
+	expected := du.ExpectedExecBytes + du.ExpectedBeaconBytes
+	room := du.ExecBytes + du.BeaconBytes + du.DiskFreeBytes // what the clients can grow into
+	// The headroom is truncated to whole bytes exactly as setup's preflight
+	// does, so a box that passes preflight never reads "short" here.
+	needed := uint64(float64(expected) * catalog.FitMargin)
 	switch {
-	case expected == 0:
-		v.Fit = api.FitUnknown
-	case room >= expected*catalog.FitMargin:
+	case !du.DiskFreeKnown, expected == 0:
+		v.Fit = api.FitUnknown // an unread disk is not a disk that fits
+	case room >= needed:
 		v.Fit = api.FitOK
 	case room >= expected:
 		v.Fit = api.FitTight
@@ -84,20 +88,45 @@ func diskView(at time.Time, du ops.DU, history []api.DiskSample) api.DiskView {
 	return v
 }
 
-// diskTrend estimates growth per day from the first and last samples, and
-// days until the free space is gone at that rate. Nil when the history spans
-// less than trendMinSpan; no days-to-full when usage is not growing.
+// trendMaxSamples bounds the pairwise work in diskTrend (n^2 pairs).
+const trendMaxSamples = 400
+
+// diskTrend estimates growth per day as the median of the pairwise slopes
+// between samples (Theil-Sen), so one outlier reading, such as a snapshot
+// import or a compaction, cannot swing it. Days-to-full is the last sample's
+// free space over that rate. Nil when the history spans less than
+// trendMinSpan; no days-to-full when usage is not growing.
 func diskTrend(history []api.DiskSample) (*int64, *float64) {
+	if len(history) > trendMaxSamples {
+		history = history[len(history)-trendMaxSamples:]
+	}
 	if len(history) < 2 {
 		return nil, nil
 	}
 	first, last := history[0], history[len(history)-1]
-	span := last.At.Sub(first.At)
-	if span < trendMinSpan {
+	if last.At.Sub(first.At) < trendMinSpan {
 		return nil, nil
 	}
-	days := span.Hours() / 24
-	growth := int64((float64(last.UsedBytes) - float64(first.UsedBytes)) / days)
+	var slopes []float64
+	for i := range history {
+		for j := i + 1; j < len(history); j++ {
+			dt := history[j].At.Sub(history[i].At).Hours() / 24
+			if dt <= 0 {
+				continue
+			}
+			slopes = append(slopes, (float64(history[j].UsedBytes)-float64(history[i].UsedBytes))/dt)
+		}
+	}
+	if len(slopes) == 0 {
+		return nil, nil
+	}
+	sort.Float64s(slopes)
+	m := len(slopes) / 2
+	med := slopes[m]
+	if len(slopes)%2 == 0 {
+		med = (slopes[m-1] + slopes[m]) / 2
+	}
+	growth := int64(med)
 	if growth <= 0 {
 		return &growth, nil
 	}

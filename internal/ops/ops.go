@@ -205,6 +205,10 @@ type DU struct {
 	ExecBytes     uint64
 	BeaconBytes   uint64
 	DiskFreeBytes uint64
+	// DiskFreeKnown is true when DiskFreeBytes is a reading. A failed probe
+	// leaves it 0 and false, which is not the same as a full disk: the fit
+	// verdict is unknown, never ok, without it.
+	DiskFreeKnown bool
 
 	// ExpectedExecBytes/ExpectedBeaconBytes are size ESTIMATES, not live
 	// measurements — they vary by client and pruning, same caveat as
@@ -273,6 +277,7 @@ func DiskUsage(ctx context.Context, e executor.Executor, w catalog.WireConfig) (
 		return du, fmt.Errorf("ops: du: %w", err)
 	}
 	du.DiskFreeBytes = free
+	du.DiskFreeKnown = true
 
 	return du, nil
 }

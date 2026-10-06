@@ -214,6 +214,8 @@ func (s *Server) nodeDisk(ctx context.Context, cfg config.Config, t config.Targe
 		}](s.agentResult(ctx, cfg, t, intent.KindDiskRead, struct{}{}))
 		if r.Usage.DiskFreeBytes == 0 {
 			r.Usage.DiskFreeBytes = r.FreeBytes
+			// An agent that predates DiskFreeKnown still reports freeBytes.
+			r.Usage.DiskFreeKnown = r.Usage.DiskFreeKnown || r.FreeBytes > 0
 		}
 		return r.Usage, viaAgent, err
 	}
