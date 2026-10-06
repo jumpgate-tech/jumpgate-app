@@ -79,6 +79,10 @@ const (
 
 	// Explain has no provider to ask.
 	CodeAIUnconfigured Code = "ai_unconfigured"
+	// CodeTooManyLines: an explain request named more lines than it may.
+	CodeTooManyLines Code = "too_many_lines"
+	// CodeUnknownProvider: settings named an AI provider that does not exist.
+	CodeUnknownProvider Code = "unknown_provider"
 )
 
 // Exit classes: the CLI's process exit statuses, published in the README.
@@ -146,6 +150,8 @@ var registry = map[Code]codeInfo{
 	CodeVPNNotFound:       {"", ExitFailed},
 	CodeVPNServerNotFound: {"", ExitFailed},
 	CodeAIUnconfigured:    {"choose an AI provider in Settings first", ExitFailed},
+	CodeTooManyLines:      {"select fewer log lines; explain takes at most 5000", ExitFailed},
+	CodeUnknownProvider:   {"use one of: gemini, groq, ollama", ExitFailed},
 }
 
 // Known reports whether c is in the registry.

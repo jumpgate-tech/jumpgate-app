@@ -168,15 +168,15 @@ func TestProviders_ReportTheirOwnName(t *testing.T) {
 // now" is served by the most recent lines, and these go to a third party, so
 // sending more than the cap is a leak of volume as well as a cost.
 func TestCapLines_KeepsTheTail(t *testing.T) {
-	lines := make([]string, maxExplainLines+50)
+	lines := make([]string, MaxExplainLines+50)
 	for i := range lines {
 		lines[i] = "line"
 	}
 	lines[len(lines)-1] = "THE MOST RECENT"
 
-	got := capLines(lines)
-	if len(got) > maxExplainLines {
-		t.Fatalf("kept %d lines, want at most %d", len(got), maxExplainLines)
+	got := CapLines(lines)
+	if len(got) > MaxExplainLines {
+		t.Fatalf("kept %d lines, want at most %d", len(got), MaxExplainLines)
 	}
 	if got[len(got)-1] != "THE MOST RECENT" {
 		t.Error("the newest line was dropped, which is the one being asked about")
@@ -185,7 +185,7 @@ func TestCapLines_KeepsTheTail(t *testing.T) {
 
 func TestCapLines_ShortInputIsUntouched(t *testing.T) {
 	in := []string{"a", "b", "c"}
-	got := capLines(in)
+	got := CapLines(in)
 	if len(got) != 3 || got[0] != "a" || got[2] != "c" {
 		t.Errorf("got %v, want it left alone", got)
 	}
@@ -194,14 +194,14 @@ func TestCapLines_ShortInputIsUntouched(t *testing.T) {
 // A single line larger than the byte budget cannot be trimmed into it, and
 // the loop must terminate rather than spin or panic on the empty slice.
 func TestCapLines_ASingleOversizeLineTerminates(t *testing.T) {
-	got := capLines([]string{strings.Repeat("x", maxExplainBytes*2)})
+	got := CapLines([]string{strings.Repeat("x", MaxExplainBytes*2)})
 	if len(got) > 1 {
 		t.Errorf("got %d lines out of one", len(got))
 	}
 }
 
 func TestCapLines_EmptyInput(t *testing.T) {
-	if got := capLines(nil); len(got) != 0 {
+	if got := CapLines(nil); len(got) != 0 {
 		t.Errorf("got %v, want nothing", got)
 	}
 }
@@ -215,14 +215,14 @@ func TestCapLines_EmptyInput(t *testing.T) {
 func TestCapLines_AnOversizeNewestLineIsTruncatedNotDropped(t *testing.T) {
 	head := "2026-07-23T03:00:00Z ERROR rpc: request failed payload="
 	tail := ` error="401 Unauthorized"`
-	huge := head + strings.Repeat("ab", maxExplainBytes) + tail
+	huge := head + strings.Repeat("ab", MaxExplainBytes) + tail
 
-	got := capLines([]string{"older line", huge})
+	got := CapLines([]string{"older line", huge})
 	if len(got) != 1 {
 		t.Fatalf("got %d lines, want exactly the truncated newest one", len(got))
 	}
-	if n := len(got[0]) + 1; n > maxExplainBytes {
-		t.Errorf("truncated line is %d bytes with its newline, want <= %d", n, maxExplainBytes)
+	if n := len(got[0]) + 1; n > MaxExplainBytes {
+		t.Errorf("truncated line is %d bytes with its newline, want <= %d", n, MaxExplainBytes)
 	}
 	if !strings.HasPrefix(got[0], head) {
 		t.Errorf("truncation lost the line's head (level and message): %.80q", got[0])
@@ -238,28 +238,28 @@ func TestCapLines_AnOversizeNewestLineIsTruncatedNotDropped(t *testing.T) {
 // Truncation must not split a multi-byte character, or the prompt carries
 // invalid UTF-8 to the provider.
 func TestCapLines_TruncationKeepsValidUTF8(t *testing.T) {
-	got := capLines([]string{strings.Repeat("é", maxExplainBytes)})
+	got := CapLines([]string{strings.Repeat("é", MaxExplainBytes)})
 	if len(got) != 1 {
 		t.Fatalf("got %d lines, want 1", len(got))
 	}
 	if !utf8.ValidString(got[0]) {
 		t.Error("truncated line is not valid UTF-8")
 	}
-	if n := len(got[0]) + 1; n > maxExplainBytes {
-		t.Errorf("truncated line is %d bytes with its newline, want <= %d", n, maxExplainBytes)
+	if n := len(got[0]) + 1; n > MaxExplainBytes {
+		t.Errorf("truncated line is %d bytes with its newline, want <= %d", n, MaxExplainBytes)
 	}
 }
 
 // A non-empty input never yields an empty batch, whatever its shape.
 func TestCapLines_NonEmptyInputNeverYieldsAnEmptyBatch(t *testing.T) {
 	inputs := [][]string{
-		{strings.Repeat("x", maxExplainBytes)},
-		{strings.Repeat("x", maxExplainBytes-1)},
-		{"short", strings.Repeat("y", 3*maxExplainBytes)},
+		{strings.Repeat("x", MaxExplainBytes)},
+		{strings.Repeat("x", MaxExplainBytes-1)},
+		{"short", strings.Repeat("y", 3*MaxExplainBytes)},
 	}
 	for _, in := range inputs {
-		if got := capLines(in); len(got) == 0 {
-			t.Errorf("capLines(%d lines, newest %d bytes) returned nothing", len(in), len(in[len(in)-1]))
+		if got := CapLines(in); len(got) == 0 {
+			t.Errorf("CapLines(%d lines, newest %d bytes) returned nothing", len(in), len(in[len(in)-1]))
 		}
 	}
 }

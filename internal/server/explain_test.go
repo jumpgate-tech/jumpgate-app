@@ -3,12 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/ai"
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -50,24 +52,95 @@ func TestExplainReportsRedactedOnlyWhenALineChanged(t *testing.T) {
 	}
 }
 
-// Redact caps its output, so it can return fewer lines than it got. The
-// excerpt is what was sent, however many lines that is.
+// The handler owns the excerpt: SentExcerpt is the slice the provider got, and
+// the provider's own cap leaves it unchanged. The tail of the input (where
+// the errors are) is what survives.
 func TestExplainSentExcerptIsWhatTheProviderGot(t *testing.T) {
 	a := newAPITestServer(t)
 	addTarget(t, a)
 	setProvider(t, a, "groq")
 	in := make([]string, 2500)
 	for i := range in {
-		in[i] = "line from 203.0.113.7"
+		in[i] = fmt.Sprintf("line %d from 203.0.113.7", i)
 	}
 	res := a.do(t, "POST", "/api/targets/local/explain", map[string]any{"lines": in})
 	out := decode[api.Explain](t, res)
-	if !out.Redacted || len(out.SentExcerpt) >= len(in) || !slices.Equal(out.SentExcerpt, a.fakeAI.lastReq.Lines) {
-		t.Fatalf("sent %d lines, provider got %d", len(out.SentExcerpt), len(a.fakeAI.lastReq.Lines))
+	got := a.fakeAI.lastReq.Lines
+	if !out.Redacted || len(out.SentExcerpt) == 0 || len(out.SentExcerpt) > ai.MaxExplainLines ||
+		!slices.Equal(out.SentExcerpt, got) || !slices.Equal(ai.CapLines(got), out.SentExcerpt) {
+		t.Fatalf("SentExcerpt has %d lines, provider got %d, prompt would keep %d",
+			len(out.SentExcerpt), len(got), len(ai.CapLines(got)))
 	}
-	for _, l := range a.fakeAI.lastReq.Lines {
+	if last := out.SentExcerpt[len(out.SentExcerpt)-1]; last != "line 2499 from <ip-1>" {
+		t.Fatalf("the newest line did not survive: %q", last)
+	}
+	for _, l := range got {
 		if strings.Contains(l, "203.0.113.7") {
 			t.Fatalf("an address reached the provider: %q", l)
+		}
+	}
+}
+
+func TestExplainBoundsTheRequest(t *testing.T) {
+	a := newAPITestServer(t)
+	addTarget(t, a)
+	setProvider(t, a, "groq")
+
+	many := make([]string, maxExplainClientLines+1)
+	res := a.do(t, "POST", "/api/targets/local/explain", map[string]any{"lines": many})
+	e := decode[api.Error](t, res)
+	if res.StatusCode != http.StatusRequestEntityTooLarge || e.Code != api.CodeTooManyLines {
+		t.Fatalf("too many lines: %d %+v", res.StatusCode, e)
+	}
+
+	big := strings.Repeat("x", maxExplainBody+1)
+	res = a.do(t, "POST", "/api/targets/local/explain", map[string]any{"lines": []string{big}})
+	e = decode[api.Error](t, res)
+	if res.StatusCode != http.StatusRequestEntityTooLarge || e.Code != api.CodeTooLarge {
+		t.Fatalf("big body: %d %+v", res.StatusCode, e)
+	}
+	if a.fakeAI.lastReq.Lines != nil {
+		t.Fatal("a refused request reached the provider")
+	}
+}
+
+func TestSettingsRefuseAnUnknownProvider(t *testing.T) {
+	a := newAPITestServer(t)
+	res := a.do(t, "PUT", "/api/settings", map[string]any{"aiProvider": "skynet"})
+	e := decode[api.Error](t, res)
+	if res.StatusCode != http.StatusBadRequest || e.Code != api.CodeUnknownProvider {
+		t.Fatalf("%d %+v", res.StatusCode, e)
+	}
+	for _, p := range []string{"", "gemini", "groq", "ollama"} {
+		res = a.do(t, "PUT", "/api/settings", map[string]any{"aiProvider": p})
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("%q refused: %d", p, res.StatusCode)
+		}
+	}
+}
+
+// Journal lines are redacted like any others, on every platform (the paired
+// box test below needs an agent peer and skips on some).
+func TestExplainRedactsTheJournalLines(t *testing.T) {
+	j := newJournalExecutor()
+	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) { return j, nil })
+	addTarget(t, a)
+	completeSetup(t, "local")
+	setProvider(t, a, "groq")
+	res := a.do(t, "GET", "/api/targets/local/logs", nil)
+	res.Body.Close()
+	j.emit(t, errorLine+" peer 203.0.113.7 api_key=sk-abcdef0123456789abcdef0123")
+	waitForRecent(t, a)
+
+	res = a.do(t, "POST", "/api/targets/local/explain", nil)
+	out := decode[api.Explain](t, res)
+	if res.StatusCode != http.StatusOK || len(out.SentExcerpt) == 0 || !out.Redacted {
+		t.Fatalf("%d %+v", res.StatusCode, out)
+	}
+	for _, l := range append(slices.Clone(out.SentExcerpt), a.fakeAI.lastReq.Lines...) {
+		if strings.Contains(l, "203.0.113.7") || strings.Contains(l, "sk-abcdef") {
+			t.Fatalf("a secret reached the provider or the excerpt: %q", l)
 		}
 	}
 }

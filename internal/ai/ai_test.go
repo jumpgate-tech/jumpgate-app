@@ -279,15 +279,15 @@ func TestCapLinesCapsCountAndBytes(t *testing.T) {
 	for i := range lines {
 		lines[i] = strings.Repeat("x", 100) // 100 bytes/line, 200 lines = 20KB
 	}
-	capped := capLines(lines)
-	if len(capped) > maxExplainLines {
-		t.Errorf("capLines returned %d lines, want <= %d", len(capped), maxExplainLines)
+	capped := CapLines(lines)
+	if len(capped) > MaxExplainLines {
+		t.Errorf("capLines returned %d lines, want <= %d", len(capped), MaxExplainLines)
 	}
 	total := 0
 	for _, l := range capped {
 		total += len(l) + 1
 	}
-	if total > maxExplainBytes {
-		t.Errorf("capLines returned %d bytes, want <= %d", total, maxExplainBytes)
+	if total > MaxExplainBytes {
+		t.Errorf("capLines returned %d bytes, want <= %d", total, MaxExplainBytes)
 	}
 }

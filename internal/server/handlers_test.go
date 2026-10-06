@@ -39,7 +39,7 @@ func TestExplain_SendsOnlyTheErrorLinesFromTheJournal(t *testing.T) {
 	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) { return j, nil })
 	addTarget(t, a)
 	completeSetup(t, "local")
-	setProvider(t, a, "anthropic")
+	setProvider(t, a, "groq")
 
 	// Start the watcher, then produce one error and one ordinary line.
 	res := a.do(t, "GET", "/api/targets/local/logs", nil)
@@ -82,7 +82,7 @@ func TestExplain_ExplicitLinesAreSentInsteadOfTheJournal(t *testing.T) {
 	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) { return j, nil })
 	addTarget(t, a)
 	completeSetup(t, "local")
-	setProvider(t, a, "anthropic")
+	setProvider(t, a, "groq")
 
 	res := a.do(t, "GET", "/api/targets/local/logs", nil)
 	res.Body.Close()
@@ -109,7 +109,7 @@ func TestExplain_AProviderFailureIsReportedAsUpstream(t *testing.T) {
 	j := newJournalExecutor()
 	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) { return j, nil })
 	addTarget(t, a)
-	setProvider(t, a, "anthropic")
+	setProvider(t, a, "groq")
 	a.fakeAI.err = errors.New("401 invalid x-api-key")
 
 	res := a.do(t, "POST", "/api/targets/local/explain", map[string]any{"lines": []string{"boom"}})
@@ -125,7 +125,7 @@ func TestExplain_AProviderFailureIsReportedAsUpstream(t *testing.T) {
 func TestExplain_RejectsAMalformedBody(t *testing.T) {
 	a := newAPITestServer(t)
 	addTarget(t, a)
-	setProvider(t, a, "anthropic")
+	setProvider(t, a, "groq")
 
 	res := a.doRaw(t, "POST", "/api/targets/local/explain", strings.NewReader("{not json"), true)
 	res.Body.Close()

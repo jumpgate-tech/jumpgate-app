@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -1424,6 +1425,12 @@ const maxDefaultExplainHits = 40
 // explainAgentLines is how far back explain looks on a box.
 const explainAgentLines = 400
 
+// What an explain request may carry.
+const (
+	maxExplainBody        = 1 << 20
+	maxExplainClientLines = 5000
+)
+
 type explainRequest struct {
 	Lines []string `json:"lines,omitempty"`
 }
@@ -1449,10 +1456,21 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 
 	var req explainRequest
 	if r.Body != nil && r.ContentLength != 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, maxExplainBody)
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			var tooBig *http.MaxBytesError
+			if errors.As(err, &tooBig) {
+				writeErrorDetail(w, http.StatusRequestEntityTooLarge, "the explain request is too large", "", api.CodeTooLarge)
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
+	}
+	if len(req.Lines) > maxExplainClientLines {
+		writeErrorDetail(w, http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("%d lines is more than explain accepts (%d)", len(req.Lines), maxExplainClientLines), "", api.CodeTooManyLines)
+		return
 	}
 
 	lines := req.Lines
@@ -1472,14 +1490,21 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Redact here, immediately before the provider call, for every source of
-	// lines. Redact may drop lines (caps), so changed is a comparison of the
-	// whole excerpt, never an index-by-index one.
-	sent := lines
-	if !ai.Local(cfg.AIProvider) {
-		sent = ai.Redact(lines)
+	// The handler owns the excerpt: the last lines (the errors are at the
+	// end), redacted for a remote provider, then trimmed from the front to
+	// the byte budget. The same slice is shown to the caller and sent, and
+	// the provider's own cap leaves it unchanged. Redaction runs here,
+	// immediately before the provider call, for every source of lines.
+	tail := lines
+	if len(tail) > ai.MaxExplainLines {
+		tail = tail[len(tail)-ai.MaxExplainLines:]
 	}
-	redacted := !slices.Equal(sent, lines)
+	sent := tail
+	if !ai.Local(cfg.AIProvider) {
+		sent = ai.Redact(tail)
+	}
+	redacted := !slices.Equal(sent, tail)
+	sent = ai.CapLines(sent)
 
 	provider, err := s.newAIProvider(cfg.AIProvider, cfg.AIKey, "")
 	if err != nil {
@@ -1495,9 +1520,9 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		}
 		execID = target.Wire.ExecID
 		beaconID = target.Wire.BeaconID
-		if mon, _, err := s.getMonitor(target, cfg.RefRPCBase); err == nil {
-			syncing = mon.Latest().ExecSyncing
-		}
+	}
+	if snap, _, err := s.nodeStatus(r.Context(), cfg, target); err == nil {
+		syncing = snap.ExecSyncing
 	}
 
 	text, err := provider.Explain(r.Context(), ai.ExplainRequest{
@@ -1830,6 +1855,11 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 				"%q is not a provider key name — a name matches the ${...} slot the chain feed uses, so it may hold only letters, digits and underscores (for example INFURA_API_KEY)", name))
 			return
 		}
+	}
+
+	if req.AIProvider != nil && *req.AIProvider != "" && !ai.Known(*req.AIProvider) {
+		writeErrorDetail(w, http.StatusBadRequest, fmt.Sprintf("%q is not an AI provider", *req.AIProvider), "", api.CodeUnknownProvider)
+		return
 	}
 
 	cfg, err := s.updateConfig(func(c *config.Config) error {

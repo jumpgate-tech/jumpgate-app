@@ -44,23 +44,32 @@ func New(id, apiKey, baseURL string) (Provider, error) {
 	}
 }
 
+// Known reports whether id names a provider New can build.
+func Known(id string) bool {
+	switch id {
+	case "gemini", "groq", "ollama":
+		return true
+	}
+	return false
+}
+
 func newHTTPClient() *http.Client {
 	return &http.Client{Timeout: httpTimeout}
 }
 
-// maxExplainLines and maxExplainBytes are a defensive second cap on top of
+// MaxExplainLines and MaxExplainBytes are a defensive second cap on top of
 // the one ExplainRequest.Lines documents as the caller's job: callers
 // (logwatch) are expected to already cap to 80 lines / 8KB before calling
 // Explain, but the cap is cheap and the cost of a caller forgetting (an
 // oversized provider request, possibly rejected or expensive) is worse
 // than re-checking it here.
 const (
-	maxExplainLines = 80
-	maxExplainBytes = 8 * 1024
+	MaxExplainLines = 80
+	MaxExplainBytes = 8 * 1024
 )
 
-// capLines trims lines to at most maxExplainLines entries and
-// maxExplainBytes total bytes, keeping the most recent (tail) lines —
+// CapLines trims lines to at most MaxExplainLines entries and
+// MaxExplainBytes total bytes, keeping the most recent (tail) lines —
 // on the assumption that whatever just happened is most relevant to an
 // operator asking "what's wrong right now".
 //
@@ -68,18 +77,18 @@ const (
 // over the budget, dropping whole lines would leave nothing, and a provider
 // asked to explain no lines invents a diagnosis; so that line is returned on
 // its own, cut down by truncateMiddle.
-func capLines(lines []string) []string {
-	if len(lines) > maxExplainLines {
-		lines = lines[len(lines)-maxExplainLines:]
+func CapLines(lines []string) []string {
+	if len(lines) > MaxExplainLines {
+		lines = lines[len(lines)-MaxExplainLines:]
 	}
-	if len(lines) > 0 && len(lines[len(lines)-1])+1 > maxExplainBytes {
-		return []string{truncateMiddle(lines[len(lines)-1], maxExplainBytes-1)}
+	if len(lines) > 0 && len(lines[len(lines)-1])+1 > MaxExplainBytes {
+		return []string{truncateMiddle(lines[len(lines)-1], MaxExplainBytes-1)}
 	}
 	total := 0
 	for _, l := range lines {
 		total += len(l) + 1
 	}
-	for total > maxExplainBytes && len(lines) > 0 {
+	for total > MaxExplainBytes && len(lines) > 0 {
 		total -= len(lines[0]) + 1
 		lines = lines[1:]
 	}
@@ -137,7 +146,7 @@ func buildPrompt(req ExplainRequest) string {
 			"most-likely cause first, then the fix. Keep it under 150 words.\n\n",
 		req.ChainName, req.ExecClient, req.BeaconClient, req.Syncing,
 	)
-	for _, line := range capLines(req.Lines) {
+	for _, line := range CapLines(req.Lines) {
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
