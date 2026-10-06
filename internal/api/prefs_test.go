@@ -34,6 +34,7 @@ func TestPrefsValidate(t *testing.T) {
 		"units":            func(p *UIPrefs) { p.Units = "TB" },
 		"glyphs":           func(p *UIPrefs) { p.Glyphs = "emoji" },
 		"chain":            func(p *UIPrefs) { p.Chains = []int{-1} },
+		"duplicate chain":  func(p *UIPrefs) { p.Chains = []int{369, 1, 369} },
 	} {
 		p := DefaultPrefs()
 		mutate(&p)

@@ -1,9 +1,12 @@
 package server
 
 import (
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
 )
@@ -13,7 +16,7 @@ func sshTarget(host, user string, jump *executor.SSHConfig) config.Target {
 }
 
 func TestSSHArgvShape(t *testing.T) {
-	argv, err := sshArgv(sshTarget("10.0.0.5", "root", &executor.SSHConfig{Host: "bastion", User: "ops"}),
+	argv, err := sshArgv(sshTarget("10.0.0.5", "root", nil),
 		[]string{"/h/confirmed_hosts", "/h/with space/known_hosts"})
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +25,8 @@ func TestSSHArgvShape(t *testing.T) {
 		"-o", "StrictHostKeyChecking=yes",
 		"-o", `UserKnownHostsFile=/h/confirmed_hosts "/h/with space/known_hosts"`,
 		"-o", "GlobalKnownHostsFile=none",
-		"-J", "ops@bastion:22", "-l", "root", "--", "10.0.0.5"}
+		"-o", "ProxyJump=none", "-o", "ProxyCommand=none",
+		"-l", "root", "--", "10.0.0.5"}
 	if strings.Join(argv, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("argv\n got %q\nwant %q", argv, want)
 	}
@@ -37,17 +41,21 @@ func TestSSHArgvShape(t *testing.T) {
 	}
 }
 
-func TestSSHArgvJumpChainAndIPv6(t *testing.T) {
-	inner := &executor.SSHConfig{Host: "edge", User: "a"}
-	mid := &executor.SSHConfig{Host: "fe80::1", Port: 2200, Jump: inner}
-	argv, err := sshArgv(sshTarget("::1", "root", mid), []string{"/h/c"})
+// A target with a jump host cannot get a plain ssh command that verifies the
+// jump host too, so it gets none, and no argv carries a jump.
+func TestSSHArgvRefusesAJumpAndNeverEmitsOne(t *testing.T) {
+	_, err := sshArgv(sshTarget("10.0.0.5", "root", &executor.SSHConfig{Host: "bastion", User: "ops"}), []string{"/h/c"})
+	if !errors.Is(err, errSSHJump) {
+		t.Fatalf("err %v", err)
+	}
+	argv, err := sshArgv(sshTarget("10.0.0.5", "root", nil), []string{"/h/c"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	joined := strings.Join(argv, " ")
-	// Outermost hop first.
-	if !strings.Contains(joined, "-J a@edge:22,[fe80::1]:2200") {
-		t.Fatalf("argv %q", joined)
+	for _, a := range argv {
+		if a == "-J" || (strings.HasPrefix(a, "ProxyJump=") && a != "ProxyJump=none") || (strings.HasPrefix(a, "ProxyCommand=") && a != "ProxyCommand=none") {
+			t.Fatalf("argv carries %q", a)
+		}
 	}
 }
 
@@ -60,16 +68,10 @@ func TestSSHArgvRefusesHostileValues(t *testing.T) {
 		if argv, err := sshArgv(sshTarget(h, "root", nil), []string{"/h/c"}); err == nil {
 			t.Errorf("host %q accepted: %q", h, argv)
 		}
-		if argv, err := sshArgv(sshTarget("10.0.0.5", "root", &executor.SSHConfig{Host: h}), []string{"/h/c"}); err == nil {
-			t.Errorf("jump host %q accepted: %q", h, argv)
-		}
 	}
 	for _, u := range []string{"-oProxyCommand=x", "-l", "a b", "u%u", "a\nb", "a@b", "root;id", "a:b"} {
 		if argv, err := sshArgv(sshTarget("10.0.0.5", u, nil), []string{"/h/c"}); err == nil {
 			t.Errorf("user %q accepted: %q", u, argv)
-		}
-		if argv, err := sshArgv(sshTarget("10.0.0.5", "root", &executor.SSHConfig{Host: "j", User: u}), []string{"/h/c"}); err == nil {
-			t.Errorf("jump user %q accepted: %q", u, argv)
 		}
 	}
 	for _, k := range []string{"/k/%d/id", "/k/a\nb"} {
@@ -118,5 +120,16 @@ func TestSSHCommandRefusesAHostileAddress(t *testing.T) {
 	res, e := do(t, ts, token, "GET", "/api/fleet/evil/ssh", "")
 	if res.StatusCode < 400 || e.Message == "" {
 		t.Fatalf("hostile host answered %d %+v", res.StatusCode, e)
+	}
+}
+
+func TestSSHCommandForAJumpTargetIs422WithItsOwnCode(t *testing.T) {
+	ts, token := contractServer(t, config.Target{ID: "far", Mode: "ssh", SSH: &executor.SSHConfig{Host: "10.0.0.5", User: "root", Jump: &executor.SSHConfig{Host: "bastion", User: "ops"}}})
+	res, e := do(t, ts, token, "GET", "/api/fleet/far/ssh", "")
+	if res.StatusCode != http.StatusUnprocessableEntity || e.Code != api.CodeSSHJumpUnsupported {
+		t.Fatalf("%d %+v", res.StatusCode, e)
+	}
+	if !strings.Contains(api.HintFor(api.CodeSSHJumpUnsupported), "TUI") {
+		t.Fatal("no hint")
 	}
 }

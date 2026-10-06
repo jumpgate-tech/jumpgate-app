@@ -3,22 +3,22 @@ package server
 import (
 	"errors"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 
 	"github.com/valve-tech/jumpgate/internal/config"
 )
 
-// maxJumpHops bounds a ProxyJump chain.
-const maxJumpHops = 4
+// errSSHJump: a jump host's key would be checked by the jump child ssh under
+// the user's ssh_config, not jumpgate's confirmed store, so no command is built.
+var errSSHJump = errors.New("this box is reached through a jump host, which a plain ssh command cannot verify")
 
 // sshArgv is an interactive `ssh` to t under the host keys a person
 // confirmed: strict checking against the confirmed store and known_hosts,
 // never trust-on-first-use.
 //
 // Host, user, port, jump and key values come from config, so they are
-// untrusted. The result is an argv for direct exec, never a shell string:
+// untrusted. A target with a jump host gets no command. The result is an argv for direct exec, never a shell string:
 // every option is its own "-o Key=value" element, the destination follows
 // "--", and a host, user or jump value that is not a plain name (a leading
 // "-", whitespace, a control character, "%" for ssh token expansion, or any
@@ -27,6 +27,9 @@ func sshArgv(t config.Target, knownHosts []string) ([]string, error) {
 	c := t.SSH
 	if c == nil {
 		return nil, errors.New("no ssh address")
+	}
+	if c.Jump != nil {
+		return nil, errSSHJump
 	}
 	if err := checkHost(c.Host); err != nil {
 		return nil, fmt.Errorf("ssh host: %w", err)
@@ -64,32 +67,10 @@ func sshArgv(t config.Target, knownHosts []string) ([]string, error) {
 	argv = append(argv,
 		"-o", "StrictHostKeyChecking=yes",
 		"-o", "UserKnownHostsFile="+strings.Join(files, " "),
-		"-o", "GlobalKnownHostsFile=none")
-	if c.Jump != nil {
-		// ProxyJump lists the outermost hop first.
-		var hops []string
-		for j, n := c.Jump, 0; j != nil; j, n = j.Jump, n+1 {
-			if n >= maxJumpHops {
-				return nil, errors.New("ssh jump: too many hops")
-			}
-			if err := checkHost(j.Host); err != nil {
-				return nil, fmt.Errorf("ssh jump host: %w", err)
-			}
-			jp, err := checkPort(j.Port)
-			if err != nil {
-				return nil, fmt.Errorf("ssh jump: %w", err)
-			}
-			hop := net.JoinHostPort(j.Host, jp)
-			if j.User != "" {
-				if err := checkUser(j.User); err != nil {
-					return nil, fmt.Errorf("ssh jump user: %w", err)
-				}
-				hop = j.User + "@" + hop
-			}
-			hops = append([]string{hop}, hops...)
-		}
-		argv = append(argv, "-J", strings.Join(hops, ","))
-	}
+		"-o", "GlobalKnownHostsFile=none",
+		// A user's ssh_config must not add an unverified hop.
+		"-o", "ProxyJump=none",
+		"-o", "ProxyCommand=none")
 	if c.User != "" {
 		argv = append(argv, "-l", c.User)
 	}

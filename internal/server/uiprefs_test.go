@@ -124,14 +124,13 @@ func TestCheckSendsASignedAgentInfo(t *testing.T) {
 
 func TestSSHCommand(t *testing.T) {
 	ts, token := contractServer(t,
-		config.Target{ID: "far", Mode: "ssh", SSH: &executor.SSHConfig{Host: "10.0.0.5", Port: 2222, User: "root", KeyPath: "/k/id",
-			Jump: &executor.SSHConfig{Host: "bastion", User: "ops"}}},
+		config.Target{ID: "far", Mode: "ssh", SSH: &executor.SSHConfig{Host: "10.0.0.5", Port: 2222, User: "root", KeyPath: "/k/id"}},
 		config.Target{ID: "here", Mode: "local"},
 	)
 	var c api.SSHCommand
 	getJSON(t, ts.URL+"/api/fleet/far/ssh", token, &c)
 	joined := strings.Join(c.Argv, " ")
-	for _, want := range []string{"ssh ", "-p 2222", "-i /k/id", "-l root", "-J ops@bastion:22", "StrictHostKeyChecking=yes", "UserKnownHostsFile=", "confirmed_hosts", " 10.0.0.5"} {
+	for _, want := range []string{"ssh ", "-p 2222", "-i /k/id", "-l root", "ProxyJump=none", "StrictHostKeyChecking=yes", "UserKnownHostsFile=", "confirmed_hosts", " 10.0.0.5"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("argv %q lacks %q", joined, want)
 		}
@@ -232,4 +231,15 @@ func TestPrefsChangeRetimesTheRunningPoller(t *testing.T) {
 	}
 	s.fleet.stop()
 	requireNoFleetGoroutines(t)
+}
+
+// A signer is loaded but the controller was never recorded: not a mismatch.
+func TestControllerViewUnrecorded(t *testing.T) {
+	k, _ := signer.GenerateKey()
+	ts, token := controllerServer(t, "", k)
+	var v api.ControllerView
+	getJSON(t, ts.URL+"/api/controller", token, &v)
+	if v.State != "unrecorded" || v.Address != k.Address().Hex() || v.Recorded != "" || v.Reason == "" {
+		t.Fatalf("%+v", v)
+	}
 }

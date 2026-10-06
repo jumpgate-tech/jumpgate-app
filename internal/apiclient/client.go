@@ -252,19 +252,41 @@ func (c *Client) Open(ctx context.Context, method, path string, in any, header h
 	return c.send(ctx, true, method, path, in, header)
 }
 
+// Seams for Restart's tests.
+var (
+	daemonFind  = daemon.Find
+	daemonStop  = daemon.Stop
+	restartWait = 10 * time.Second
+)
+
 // Restart stops the server c talks to and starts a fresh one from c's
 // executable (spec D30: only ever on a person's request). It returns a client
-// of the new server; c keeps pointing at the old one.
+// of the new server; c keeps pointing at the old one. It refuses when the
+// server on record is not the one c talks to (daemon.Stop acts on whatever
+// server.json names), and when the old server has not exited in time.
 func Restart(ctx context.Context, c *Client) (*Client, error) {
 	if c.opts.Exe == "" {
 		return nil, errors.New("this client was not started with an executable, so it cannot start a server")
 	}
-	if err := daemon.Stop(ctx); err != nil {
+	cur, ok, err := daemonFind(ctx)
+	if err != nil {
 		return nil, err
 	}
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
-		if _, ok, _ := daemon.Find(ctx); !ok {
+	if !ok {
+		return nil, ErrNoServer
+	}
+	if cur.PID != c.info.PID || cur.Socket != c.info.Socket || cur.HTTPAddr != c.info.HTTPAddr {
+		return nil, errors.New("the server on record is not the one this client talks to; not restarting it")
+	}
+	if err := daemonStop(ctx); err != nil {
+		return nil, err
+	}
+	for deadline := time.Now().Add(restartWait); ; time.Sleep(50 * time.Millisecond) {
+		if _, ok, _ := daemonFind(ctx); !ok {
 			break
+		}
+		if !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("the old server did not exit within %s", restartWait)
 		}
 	}
 	return Connect(ctx, Options{Start: true, Exe: c.opts.Exe})

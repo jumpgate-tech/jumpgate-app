@@ -390,3 +390,40 @@ func TestScreenMethods(t *testing.T) {
 		t.Fatal("Restart without an executable must refuse")
 	}
 }
+
+func restartFixture(t *testing.T, onRecord daemon.Info, stopped *bool, stillThere func() bool) *Client {
+	t.Helper()
+	oldF, oldS, oldW := daemonFind, daemonStop, restartWait
+	restartWait = 150 * time.Millisecond
+	daemonFind = func(context.Context) (daemon.Info, bool, error) { return onRecord, stillThere(), nil }
+	daemonStop = func(context.Context) error { *stopped = true; return nil }
+	t.Cleanup(func() { daemonFind, daemonStop, restartWait = oldF, oldS, oldW })
+	c := New(daemon.Info{PID: 10, Socket: "/s/a.sock", HTTPAddr: ""})
+	c.opts = Options{Exe: "/no/such/jumpgate"}
+	return c
+}
+
+func TestRestartRefusesAServerThatIsNotTheClients(t *testing.T) {
+	var stopped bool
+	c := restartFixture(t, daemon.Info{PID: 99, Socket: "/s/other.sock"}, &stopped, func() bool { return true })
+	if _, err := Restart(context.Background(), c); err == nil || stopped {
+		t.Fatalf("err %v, stopped %v", err, stopped)
+	}
+}
+
+func TestRestartFailsWhenTheOldServerStaysUp(t *testing.T) {
+	var stopped bool
+	c := restartFixture(t, daemon.Info{PID: 10, Socket: "/s/a.sock"}, &stopped, func() bool { return true })
+	_, err := Restart(context.Background(), c)
+	if !stopped || err == nil || !strings.Contains(err.Error(), "did not exit") {
+		t.Fatalf("stopped %v err %v", stopped, err)
+	}
+}
+
+func TestRestartWithNoServerOnRecord(t *testing.T) {
+	var stopped bool
+	c := restartFixture(t, daemon.Info{}, &stopped, func() bool { return false })
+	if _, err := Restart(context.Background(), c); !errors.Is(err, ErrNoServer) || stopped {
+		t.Fatalf("err %v stopped %v", err, stopped)
+	}
+}

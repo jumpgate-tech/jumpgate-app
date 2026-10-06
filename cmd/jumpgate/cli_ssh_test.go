@@ -90,3 +90,22 @@ func TestSSHServerErrorsUseTheRegistry(t *testing.T) {
 		t.Fatalf("no registry hint: %q", stderr())
 	}
 }
+
+func TestSSHRefusesAJumpTargetWithTheRegistryHint(t *testing.T) {
+	withServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		fmt.Fprint(w, `{"error":"jump host","code":"ssh_jump_unsupported"}`)
+	})
+	ran := false
+	old := runInteractive
+	runInteractive = func([]string) int { ran = true; return 0 }
+	t.Cleanup(func() { runInteractive = old })
+	_, stderr := captureStdio(t)
+	if code := cmdSSH([]string{"far"}); code != 1 || ran {
+		t.Fatalf("exit %d ran %v", code, ran)
+	}
+	if !strings.Contains(stderr(), "use the TUI") {
+		t.Fatalf("no hint: %q", stderr())
+	}
+}

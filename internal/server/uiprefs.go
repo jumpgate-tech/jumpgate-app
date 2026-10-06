@@ -3,6 +3,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"runtime"
@@ -73,6 +74,10 @@ func (s *Server) handleController(w http.ResponseWriter, r *http.Request) {
 		v.State = "unopened"
 		v.Reason = "the server started without loading the key; run `jumpgate stop` and try again"
 		// Coordination: with the hotfix's Config.SignerErr, use its text here.
+	case cfg.Controller == nil:
+		v.Address = s.cfg.Signer.Address().Hex()
+		v.State = "unrecorded"
+		v.Reason = "a key is loaded but no controller identity was recorded; run `jumpgate keys init` to record it"
 	default:
 		v.Address = s.cfg.Signer.Address().Hex()
 		if strings.EqualFold(v.Address, v.Recorded) {
@@ -125,6 +130,10 @@ func (s *Server) handleFleetSSH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	argv, err := sshArgv(t, append([]string{confirmed}, openssh...))
+	if errors.Is(err, errSSHJump) {
+		writeErrorDetail(w, http.StatusUnprocessableEntity, err.Error(), "", api.CodeSSHJumpUnsupported)
+		return
+	}
 	if err != nil {
 		writeErrorDetail(w, http.StatusUnprocessableEntity, err.Error(), "fix this host's SSH address, user or jump host in the config", api.CodeBadRequest)
 		return

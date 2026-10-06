@@ -138,10 +138,15 @@ func (p UIPrefs) Validate() error {
 	if len(p.Chains) > maxPrefChains {
 		return fmt.Errorf("at most %d chains", maxPrefChains)
 	}
+	chains := map[int]bool{}
 	for _, c := range p.Chains {
 		if c <= 0 || c > maxChainID {
 			return fmt.Errorf("chain id %d", c)
 		}
+		if chains[c] {
+			return fmt.Errorf("chain id %d twice", c)
+		}
+		chains[c] = true
 	}
 	if !slices.Contains(RefreshChoices, p.RefreshSeconds) {
 		return fmt.Errorf("refresh %ds is not one of %v", p.RefreshSeconds, RefreshChoices)

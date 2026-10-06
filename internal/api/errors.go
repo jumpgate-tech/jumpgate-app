@@ -54,6 +54,7 @@ const (
 	CodeLocalNeedsTerminal    Code = "local_needs_terminal"
 	CodeInvalidPrefs          Code = "invalid_prefs"
 	CodeNoSSH                 Code = "no_ssh"
+	CodeSSHJumpUnsupported    Code = "ssh_jump_unsupported"
 
 	// Host-key confirmation (POST /api/hostkeys/confirm).
 	CodeProbeExpired        Code = "probe_expired"
@@ -133,6 +134,7 @@ var registry = map[Code]codeInfo{
 	CodeLocalUnsupported:   {"this computer cannot run node commands itself; run this on a Linux machine you added with --ssh", ExitFailed},
 	CodeInvalidPrefs:       {"", ExitUsage},
 	CodeNoSSH:              {"this target has no SSH address: it is this machine", ExitFailed},
+	CodeSSHJumpUnsupported: {"this box is reached through a jump host. jumpgate verifies jump hosts itself when it connects, but cannot yet hand you a plain ssh command that verifies them too; use the TUI or the agent actions (jumpgate status, logs, service) instead", ExitFailed},
 	CodeLocalNeedsTerminal: {"run `jumpgate hosts add NAME --local` in a terminal (it asks for your sudo password there), or run jumpgate as root", ExitFailed},
 
 	CodeProbeExpired:        {"probe the host again; a probe is good for 5 minutes and one confirmation", ExitFailed},
