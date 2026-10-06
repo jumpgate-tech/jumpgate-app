@@ -35,7 +35,7 @@ func fakeHome(t *testing.T, running bool) *int {
 func TestTerminalHomeShowsTheOverviewAndHelp(t *testing.T) {
 	fakeHome(t, true)
 	var out strings.Builder
-	if code := runTerminalHome(context.Background(), strings.NewReader("h\nq\n"), &out); code != 0 {
+	if code := runPlainHome(context.Background(), strings.NewReader("h\nq\n"), &out); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	for _, want := range []string{"running, pid 42", "0xabc (file)", "2 (1 paired)", "[o] open the web app", "commands", "hosts add"} {
@@ -48,7 +48,7 @@ func TestTerminalHomeShowsTheOverviewAndHelp(t *testing.T) {
 func TestTerminalHomeOpensTheWebApp(t *testing.T) {
 	opened := fakeHome(t, false)
 	var out strings.Builder
-	runTerminalHome(context.Background(), strings.NewReader("o\nq\n"), &out)
+	runPlainHome(context.Background(), strings.NewReader("o\nq\n"), &out)
 	if *opened != 1 {
 		t.Fatalf("open called %d times, want 1", *opened)
 	}
@@ -62,7 +62,7 @@ func TestTerminalHomeOpensTheWebApp(t *testing.T) {
 func TestTerminalHomeEndsOnEOF(t *testing.T) {
 	opened := fakeHome(t, true)
 	var out strings.Builder
-	if code := runTerminalHome(context.Background(), strings.NewReader(""), &out); code != 0 {
+	if code := runPlainHome(context.Background(), strings.NewReader(""), &out); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	if n := strings.Count(out.String(), "server:"); n != 1 {
@@ -76,7 +76,7 @@ func TestTerminalHomeEndsOnEOF(t *testing.T) {
 func TestTerminalHomeStaysOpenUntilQuit(t *testing.T) {
 	fakeHome(t, true)
 	var out strings.Builder
-	runTerminalHome(context.Background(), strings.NewReader("\n\nx\ns\nq\nh\n"), &out)
+	runPlainHome(context.Background(), strings.NewReader("\n\nx\ns\nq\nh\n"), &out)
 	if strings.Count(out.String(), "server:") != 2 {
 		t.Fatalf("want the overview twice (start and s), got:\n%s", out.String())
 	}
@@ -113,7 +113,7 @@ func TestIsTerminalLaunch(t *testing.T) {
 func TestTerminalHomeFitsEightyColumns(t *testing.T) {
 	fakeHome(t, true)
 	var out strings.Builder
-	runTerminalHome(context.Background(), strings.NewReader("h\nq\n"), &out)
+	runPlainHome(context.Background(), strings.NewReader("h\nq\n"), &out)
 	for _, l := range strings.Split(out.String(), "\n") {
 		if len(l) > 80 {
 			t.Errorf("line over 80 columns (%d): %q", len(l), l)
@@ -146,7 +146,7 @@ func TestTerminalHomeTruncatesLongErrors(t *testing.T) {
 	}
 	t.Cleanup(func() { termHome = old })
 	var out strings.Builder
-	runTerminalHome(context.Background(), strings.NewReader(""), &out)
+	runPlainHome(context.Background(), strings.NewReader(""), &out)
 	for _, l := range strings.Split(out.String(), "\n") {
 		if len(l) > 80 {
 			t.Errorf("line over 80 columns (%d): %q", len(l), l)

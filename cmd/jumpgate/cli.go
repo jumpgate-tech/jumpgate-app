@@ -24,7 +24,7 @@ var subcommands = map[string]func(args []string) int{
 	"serve": cmdServe, "relay": cmdRelay, "stop": cmdStop, "keys": cmdKeys, "agent": cmdAgent, "hosts": cmdHosts,
 	"status": cmdIntent("status", intent.KindStatusRead), "disk": cmdIntent("disk", intent.KindDiskRead),
 	"endpoints": cmdIntent("endpoints", intent.KindEndpointsRead), "firewall": cmdIntent("firewall", intent.KindFirewallRead),
-	"logs": cmdLogs, "service": cmdService, "ssh": cmdSSH, "help": cmdHelp, "open": cmdOpen,
+	"logs": cmdLogs, "service": cmdService, "ssh": cmdSSH, "help": cmdHelp, "open": cmdOpen, "home": cmdHome, "tui": cmdTUI,
 }
 
 func main() {

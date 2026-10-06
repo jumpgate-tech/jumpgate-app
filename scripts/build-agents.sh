@@ -23,10 +23,15 @@ sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi
 }
 for arch in amd64 arm64; do
-  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
+  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -tags notui \
     -ldflags "-s -w -X github.com/valve-tech/jumpgate/internal/buildinfo.version=$version" \
     -o "$out/jumpgate-linux-$arch" ./cmd/jumpgate
 done
+# The agent runs as root on every box and must link no terminal UI (D23).
+if go list -tags notui -deps ./cmd/jumpgate | grep -qi charm; then
+  echo "build-agents: the notui build links charmbracelet" >&2
+  exit 1
+fi
 ( cd "$out" && sha256 jumpgate-linux-amd64 jumpgate-linux-arm64 > SHA256SUMS )
 if [ "$compress" = 1 ]; then
   # -n leaves the name and time out of the header, so the .gz is reproducible.

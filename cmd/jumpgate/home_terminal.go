@@ -42,16 +42,10 @@ func isTerminalLaunch(args []string) bool {
 	return len(args) == 1 && stdinIsTerminal() && stdoutIsTerminal() && !inAppBundle()
 }
 
-// runTerminalHome is what a person sees when they start `jumpgate` with no
-// arguments in a terminal, and what every launcher runs: the Windows console
-// exe, Jumpgate Terminal.app, the Linux .desktop entry. It must not depend on
-// how it was started.
-//
-// TUI SEAM: the TUI (sub-project 3) replaces this function's body and keeps
-// its signature; main, the launchers and CI stay as they are. Until then it
-// is a line-based menu (spec D8) that loops until q or end of input, so a
+// runPlainHome is the line-based home: `jumpgate home`, and the fallback when
+// the TUI is not wanted or not built. It loops until q or end of input, so a
 // double-clicked window does not flash and close.
-func runTerminalHome(ctx context.Context, in io.Reader, out io.Writer) int {
+func runPlainHome(ctx context.Context, in io.Reader, out io.Writer) int {
 	r := bufio.NewReader(in)
 	printOverview(ctx, out)
 	for {
@@ -78,6 +72,34 @@ func runTerminalHome(ctx context.Context, in io.Reader, out io.Writer) int {
 			return 0 // end of input
 		}
 	}
+}
+
+// runTerminalHome is what a person sees when they start `jumpgate` with no
+// arguments in a terminal, and what every launcher runs. It keeps the
+// signature platform Task 9 fixed (the TUI seam): the TUI, unless the
+// environment asks for the plain screen or this build has no TUI.
+func runTerminalHome(ctx context.Context, in io.Reader, out io.Writer) int {
+	if !tuiBuilt || plainWanted(os.Getenv) {
+		return runPlainHome(ctx, in, out)
+	}
+	return runTUI(ctx, in, out)
+}
+
+// plainWanted: JUMPGATE_PLAIN=1 (scripts, screen readers, a launcher set up
+// that way) or a terminal that cannot draw (TERM=dumb) gets the plain home.
+func plainWanted(getenv func(string) string) bool {
+	return getenv("JUMPGATE_PLAIN") == "1" || getenv("TERM") == "dumb"
+}
+
+// cmdHome is `jumpgate home`: the plain screen, always (spec D22).
+func cmdHome([]string) int { return runPlainHome(context.Background(), os.Stdin, os.Stdout) }
+
+// cmdTUI is `jumpgate tui`: the TUI, from a script or with arguments later.
+func cmdTUI([]string) int {
+	if !tuiBuilt {
+		return failed("this build has no terminal UI; run `jumpgate home`")
+	}
+	return runTUI(context.Background(), os.Stdin, os.Stdout)
 }
 
 // printOverview is the home's status block: what is running, which key signs,
