@@ -78,7 +78,7 @@ func TestRedactSamples(t *testing.T) {
 		{"token and password", `GET /?token=0123456789abcdef0123456789abcdef&x=1 password=hunter2`,
 			`GET /?token=<secret-1>&x=1 password=<secret-2>`},
 		{"cookie", `Cookie: jumpgate_token=0123456789abcdef0123456789abcdef; theme=dark`,
-			`Cookie: jumpgate_token=<secret-1>; theme=dark`},
+			`Cookie: <secret-1>`},
 		{"json secret", `{"password":"hunter2","user":"bob"}`, `{"password":"<secret-1>","user":"bob"}`},
 		{"api keys", `keys sk-ant-api03-abcdefghijklmnop1234 glpat-abcdefghij1234567890 gsk_abcdefghijklmnop1234`,
 			`keys <secret-1> <secret-2> <secret-3>`},
@@ -111,6 +111,24 @@ func TestRedactSamples(t *testing.T) {
 		{"64 hex kept", `hash ` + strings.Repeat("ab", 32), `hash ` + strings.Repeat("ab", 32)},
 		{"ipv6 zone", `peer fe80::1%eth0`, `peer <ip-1>`},
 		{"ipv6 zone punctuation", `on fe80::1%eth0, ok`, `on <ip-1>, ok`},
+		{"set-cookie", `Set-Cookie: sid=abc123; Path=/; HttpOnly`, `Set-Cookie: <secret-1>`},
+		{"quoted password", `password="correct horse battery staple" next=1`, `password="<secret-1>" next=1`},
+		{"quoted header", `x-api-key: "zzz Secret" ok`, `x-api-key: "<secret-1>" ok`},
+		{"single quoted", `secret : 'my pass phrase' ok`, `secret : '<secret-1>' ok`},
+		{"json escaped quote", `{"password":"a\"bcdefsecretX","u":"bob"}`, `{"password":"<secret-1>","u":"bob"}`},
+		{"unterminated quote", `password="never closed here`, `password="<secret-1>`},
+		{"cli password", `run --password hunter2pass --verbose`, `run --password <secret-1> --verbose`},
+		{"cli token", `--token x`, `--token <secret-1>`},
+		{"cli api-key", `--api-key x`, `--api-key <secret-1>`},
+		{"cli flag without value", `--token --verbose and -p hunter2 --token-file /etc/t`, `--token --verbose and -p hunter2 --token-file /etc/t`},
+		{"private key 0x", `private_key=0x` + strings.Repeat("ab", 32), `private_key=<secret-1>`},
+		{"json private key", `{"privateKey":"0x` + strings.Repeat("ab", 32) + `"}`, `{"privateKey":"<secret-1>"}`},
+		{"mnemonic and seed", `seed=xyz123 mnemonic: abandon ability able`, `seed=<secret-2> mnemonic: <secret-1>`},
+		{"url password with slash", `postgres://u:p4ss/w0rd@db:5432/x`, `postgres://<secret-1>@db:5432/x`},
+		{"url empty user", `redis://:pw@cache`, `redis://<secret-1>@cache`},
+		{"upper key prefixes", `SK-ANT-API03-abcdefghijklmnop1234 GHP_abcdefghijklmnopqrstuvwxyz0123456789 AIZASyA-abcdefghijklmnopqrstuvwxyz01234`, `<secret-1> <secret-2> <secret-3>`},
+		{"40 hex sha kept", `commit ` + strings.Repeat("ab", 20) + ` built`, `commit ` + strings.Repeat("ab", 20) + ` built`},
+		{"placeholder-looking secret", `password="<hunter2 not a placeholder"`, `password="<secret-1>"`},
 		{"empty", ``, ``},
 	}
 	for _, tc := range cases {
@@ -150,7 +168,7 @@ func FuzzRedact(f *testing.F) {
 		"2001:db8::1.", "fe80::1%eth0", "sk-" + strings.Repeat("a", 20), "\xff\xfe 1.1.1.1",
 		"Authorization: Basic abc", "http://u:p@h/", "https://h/v3/" + strings.Repeat("a1", 16), "fe80::1%",
 	} {
-		f.Add(s, uint8(10), uint8(80), uint8(120), uint8(200), uint8(250))
+		f.Add(s, uint8(10), uint8(80), uint8(120), uint8(200), uint8(250), uint8(30))
 	}
 	// Known secrets planted at random positions must never survive, whatever
 	// text surrounds them.
@@ -160,12 +178,13 @@ func FuzzRedact(f *testing.F) {
 		{"token=SECRETVALUE123", "SECRETVALUE123"},
 		{"sk-abcdefghijklmnop1234567", "abcdefghijklmnop1234567"},
 		{"0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef"},
+		{`password="zebra quokka walrus llama"`, "quokka walrus"},
 	}
-	f.Fuzz(func(t *testing.T, s string, a, b, c, d, e uint8) {
+	f.Fuzz(func(t *testing.T, s string, a, b, c, d, e, cutBack uint8) {
 		if len(s) > 2000 {
 			t.Skip("keeps the planted secrets inside the per-line cap")
 		}
-		offs := []int{int(a), int(b), int(c), int(d), int(e)}
+		offs := []int{int(a), int(b), int(c), int(d), int(e), int(cutBack)}
 		sort.Ints(offs)
 		var sb strings.Builder
 		last := 0
@@ -182,13 +201,26 @@ func FuzzRedact(f *testing.F) {
 		if once[0] != once[1] {
 			t.Fatalf("same input, different output: %q vs %q", once[0], once[1])
 		}
-		for _, p := range planted {
+		// An unmatched quote in s legitimately swallows up to the quoted
+		// plant's opening quote, so that plant is only checked without quotes.
+		quoted := strings.ContainsAny(s, "\"'")
+		for i, p := range planted {
+			if i == len(planted)-1 && quoted {
+				continue
+			}
 			if strings.Contains(once[0], p.secret) {
 				t.Fatalf("%q survived:\n  in %q\nout %q", p.secret, in, once[0])
 			}
 		}
 		if twice := Redact(once); !reflect.DeepEqual(once, twice) {
 			t.Fatalf("not idempotent:\n  in %q\nonce %q\ntwice %q", in, once, twice)
+		}
+		// A key straddling the per-line cut must not leave a piece behind.
+		const key = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789"
+		pad := maxLineBytes - len(key)/2 - len(s) + int(cutBack)%len(key) - len(key)/2
+		cutIn := s + strings.Repeat("x", max(pad, 0)) + "=" + key
+		if got := Redact([]string{cutIn})[0]; strings.Contains(got, key[:8]) || strings.Contains(got, key[len(key)-8:]) {
+			t.Fatalf("key at the cut survived: %q", got[max(len(got)-100, 0):])
 		}
 		// Raw input too, which has no planted secrets but may be anything.
 		raw := Redact([]string{s})
@@ -232,6 +264,68 @@ func TestRedactCapsLongLinesAndInputs(t *testing.T) {
 	}
 	if again := Redact(got); !reflect.DeepEqual(again, got) {
 		t.Fatal("truncated output is not idempotent")
+	}
+}
+
+// secretShapes are credential formats the cut points must not leak a piece of.
+var secretShapes = map[string]string{
+	"anthropic":  "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
+	"github":     "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+	"github pat": "github_pat_11ABCDEFG0abcdefghijkl_abcdefghijklmnopqrstuvwxyz0123456789",
+	"gitlab":     "glpat-abcdefghij1234567890",
+	"google":     "AIzaSyA-abcdefghijklmnopqrstuvwxyz01234",
+	"jwt":        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r",
+	"session":    "0123456789abcdef0123456789abcdef",
+	"bearer":     "Bearer AbCdEfGh1234567890zyx",
+	"token=":     "token=SECRETVALUE1234567890",
+	"quoted":     `password="correct horse battery staple"`,
+}
+
+func leaksRun(out, secret string, n int) (string, bool) {
+	for i := 0; i+n <= len(secret); i++ {
+		if strings.Contains(out, secret[i:i+n]) {
+			return secret[i : i+n], true
+		}
+	}
+	return "", false
+}
+
+// A secret that straddles the per-line cut must be redacted whole, not cut
+// in half with its prefix left behind.
+func TestRedactSecretsAtTheLineCut(t *testing.T) {
+	for name, secret := range secretShapes {
+		// The part of the secret that is the value, for the 8-character check.
+		value := secret
+		if i := strings.IndexAny(secret, "= "); i >= 0 {
+			value = strings.TrimLeft(secret[i:], `= "`)
+		}
+		for start := maxLineBytes - len(secret) - 2; start <= maxLineBytes+2; start++ {
+			in := strings.Repeat("x", start) + "=" + secret
+			out := Redact([]string{in})[0]
+			if run, bad := leaksRun(out, value, 8); bad {
+				t.Fatalf("%s at offset %d leaked %q", name, start, run)
+			}
+		}
+	}
+}
+
+// The hard bound before redaction cuts mid-secret, so a key-shaped run that
+// touches that cut is dropped instead of kept as a prefix.
+func TestRedactSecretsAtTheHardCut(t *testing.T) {
+	defer func(old int) { maxRawLineBytes = old }(maxRawLineBytes)
+	maxRawLineBytes = 1000
+	for name, secret := range secretShapes {
+		value := secret
+		if i := strings.IndexAny(secret, "= "); i >= 0 {
+			value = strings.TrimLeft(secret[i:], `= "`)
+		}
+		for start := maxRawLineBytes - len(truncMarker) - len(secret) - 2; start <= maxRawLineBytes+2; start++ {
+			in := strings.Repeat("x", start) + "=" + secret
+			out := Redact([]string{in})[0]
+			if run, bad := leaksRun(out, value, 8); bad {
+				t.Fatalf("%s at raw offset %d leaked %q", name, start, run)
+			}
+		}
 	}
 }
 

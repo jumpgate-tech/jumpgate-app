@@ -11,6 +11,10 @@ import (
 // Patterns for what identifies a box, its peers or its credentials in client
 // logs. Order matters: secrets go first so their values are never mistaken
 // for addresses, and an enode contains an IP, so enodes go before bare IPs.
+// quotedValue matches a quoted string with backslash escapes, closed or
+// running to the end of the line.
+const quotedValue = `"(?:[^"\\]|\\(?s:.))*\\?(?:"|$)|'(?:[^'\\]|\\(?s:.))*\\?(?:'|$)`
+
 var (
 	// Secret shapes. Each replaces only the secret, keeping the key or scheme
 	// so the excerpt still reads ("password=<secret-1>").
@@ -20,12 +24,22 @@ var (
 	authRE = regexp.MustCompile(`(?i)(\bAuthorization["']?\s*[:=]\s*"?(?:[A-Za-z][A-Za-z0-9_-]*[ \t]+)?)([^\s",;]+)`)
 	// keyedRE covers key=value, key: value, key = value and "key":"value"
 	// where the key names a credential (jumpgate_token, X-Api-Key,
-	// access_token, ...), whatever the value looks like.
-	keyedRE = regexp.MustCompile(`(?i)(\b[a-z0-9_-]*(?:token|password|passwd|secret|api[_-]?key)["']?\s*[:=]\s*["']?)([^\s&"',;]+)`)
+	// access_token, private_key, ...), whatever the value looks like. A value
+	// that opens with a quote runs to the matching unescaped quote, spaces
+	// and all, or to the end of the line when it is never closed.
+	keyedRE = regexp.MustCompile(`(?i)(\b[a-z0-9_-]*(?:token|password|passwd|secret|api[_-]?key|private[_-]?key|priv[_-]?key|seed)["']?\s*[:=]\s*)(` + quotedValue + `|[^\s&"',;]+)`)
+	// lineValueRE covers values that are not one word: a cookie header and a
+	// recovery phrase run to the end of the line.
+	lineValueRE = regexp.MustCompile(`(?i)(\b(?:set-)?cookie["']?\s*[:=]\s*|\b(?:mnemonic|seed[_ -]?phrase|recovery[_ -]?phrase)["']?\s*[:=]\s*)(` + quotedValue + `|[^\r\n]+)`)
+	// cliFlagRE covers "--password hunter2" (a space, not "="). A value that
+	// starts with "-" is the next flag, not a secret.
+	cliFlagRE = regexp.MustCompile(`(?i)(--[a-z0-9_-]*(?:token|password|passwd|secret|api[_-]?key)[ \t]+)(` + quotedValue + `|[^\s-]\S*)`)
 	// urlUserRE covers scheme://user:password@host (and ://:password@host).
-	urlUserRE = regexp.MustCompile(`(\b[A-Za-z][A-Za-z0-9+.-]*://)([^\s/@:<>"']*:[^\s/@<>"']*)(@)`)
+	// The password may hold "/" and "@"; the userinfo ends at the last "@"
+	// before any query or fragment.
+	urlUserRE = regexp.MustCompile(`(\b[A-Za-z][A-Za-z0-9+.-]*://)([^\s/@:<>"']*:[^\s<>"'?#]*)(@)`)
 	urlRE     = regexp.MustCompile(`\b(?:https?|wss?)://[^\s"'<>]+`)
-	keyRE     = regexp.MustCompile(`\b(?:sk|gsk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}|\bglpat-[A-Za-z0-9_-]{16,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bAIza[0-9A-Za-z_-]{35}`)
+	keyRE     = regexp.MustCompile(`(?i)\b(?:sk|gsk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}|\bglpat-[A-Za-z0-9_-]{16,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bAIza[0-9A-Za-z_-]{35}`)
 	jwtRE     = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*`)
 	// sessionRE is a bare 32-hex run: jumpgate's session token. The word
 	// boundaries keep 0x-prefixed values and 40/64-hex addresses and hashes.
@@ -53,7 +67,9 @@ var (
 //     and libp2p peer ids (peer)
 //   - credentials (secret): Authorization headers of any scheme, Bearer
 //     tokens, key=value, key: value and "key":"value" pairs whose key names a
-//     token, password, secret or api key, URL userinfo (user:pass@), sk-,
+//     token, password, secret, api key, private key or seed (a quoted value
+//     is redacted to its closing quote), --password style CLI flags, Cookie
+//     and Set-Cookie values, mnemonic phrases, URL userinfo (user:pass@), sk-,
 //     gsk_, ghp_, github_pat_, glpat- and Google AIza keys, JWTs, URL path
 //     segments shaped like API keys (Infura and Alchemy /v3/<key>), and bare
 //     32-hex runs (jumpgate session tokens)
@@ -62,7 +78,9 @@ var (
 // reliably), Ethereum 0x addresses and 0x or 64-hex block and transaction
 // hashes (public chain data), ports on their own, timestamps, and version
 // strings such as v1.2.3.4. A bare credential with no key name next to it
-// and no known prefix is not recognised.
+// and no known prefix is not recognised, and neither is a bare 40-hex run:
+// that is a git SHA, valuable when diagnosing a build, and a 40-hex value
+// next to a credential keyword is already caught by the keyword.
 //
 // Limits: a line is cut to maxLineBytes with a "...[truncated]" marker, at
 // most maxLines lines and about maxTotalBytes of output are kept, and the
@@ -85,15 +103,26 @@ func Redact(lines []string) []string {
 		return re.ReplaceAllStringFunc(l, func(v string) string { return sub(kind, v) })
 	}
 	// keepKey replaces group 2 of a pattern, leaving groups 1 (and 3) as they
-	// were. A value that is already a placeholder is left alone, which is
-	// what makes the whole function idempotent.
+	// were. A value that is already a secret placeholder is left alone, which
+	// is what makes the whole function idempotent; anything else that merely
+	// looks like one (password="<hunter2") is still redacted. A quoted value
+	// keeps its quotes around the placeholder.
 	keepKey := func(re *regexp.Regexp, l string) string {
 		return re.ReplaceAllStringFunc(l, func(m string) string {
 			g := re.FindStringSubmatch(m)
-			if strings.HasPrefix(g[2], "<") {
+			val, tail := g[2], strings.Join(g[3:], "")
+			quote, closing := "", ""
+			if q := val[0]; q == '"' || q == '\'' {
+				quote = string(q)
+				val = val[1:]
+				if closed(val, q) {
+					val, closing = val[:len(val)-1], quote
+				}
+			}
+			if val == "" || secretPlaceholderRE.MatchString(val) {
 				return m
 			}
-			return g[1] + sub("secret", g[2]) + strings.Join(g[3:], "")
+			return g[1] + quote + sub("secret", val) + closing + tail
 		})
 	}
 	// Bound the work: the loop below is linear in what it reads, so reading
@@ -104,12 +133,21 @@ func Redact(lines []string) []string {
 		limit = maxLines - 1
 	}
 	out := make([]string, 0, min(len(lines), maxLines))
-	total := 0
+	total, work := 0, 0
 	for i, l := range lines {
 		if i >= limit {
 			break
 		}
-		l = clipLine(l)
+		// Redact the whole line and only then clip it, so a secret that
+		// straddles the 4 KB cut is replaced, not left as a prefix. The hard
+		// bound keeps the redaction itself linear.
+		l = hardCut(l)
+		// An omission marker from an earlier pass is exempt from the budgets,
+		// so redacting redacted text keeps it as it was.
+		if work+len(l) > maxWorkBytes && !omittedRE.MatchString(l) {
+			break
+		}
+		raw := len(l)
 		// Go's regexp is slow next to a substring search, so each pattern
 		// runs only on lines that contain something it could match.
 		lower := strings.ToLower(l)
@@ -119,14 +157,20 @@ func Redact(lines []string) []string {
 		if strings.Contains(lower, "bearer") {
 			l = keepKey(bearerRE, l)
 		}
-		if containsAny(lower, "token", "password", "passwd", "secret", "key") {
+		if strings.Contains(lower, "cookie") || containsAny(lower, "mnemonic", "phrase") {
+			l = keepKey(lineValueRE, l)
+		}
+		if strings.Contains(l, "--") {
+			l = keepKey(cliFlagRE, l)
+		}
+		if containsAny(lower, "token", "password", "passwd", "secret", "key", "seed") {
 			l = keepKey(keyedRE, l)
 		}
 		if strings.Contains(l, "://") {
 			l = keepKey(urlUserRE, l)
 			l = redactURLPaths(l, func(v string) string { return sub("secret", v) })
 		}
-		if containsAny(l, "sk-", "sk_", "gsk_", "ghp_", "gho_", "xox", "glpat-", "github_pat_", "AIza") {
+		if containsAny(lower, "sk-", "sk_", "gsk_", "ghp_", "gho_", "xox", "glpat-", "github_pat_", "aiza") {
 			l = whole(keyRE, "secret", l)
 		}
 		if strings.Contains(l, "eyJ") {
@@ -145,15 +189,12 @@ func Redact(lines []string) []string {
 		l = whole(sessionRE, "secret", l)
 		l = replaceBounded(ipv6RE, l, trimIPv6, func(v string) string { return sub("ip", v) })
 		l = replaceBounded(ipv4RE, l, trimIPv4, func(v string) string { return sub("ip", v) })
-		// Placeholders can be longer than what they replace, so clip again.
 		l = clipLine(l)
-		// An omission marker from an earlier pass is exempt from the budget,
-		// so redacting redacted text keeps it as it was.
 		if total+len(l) > maxTotalBytes && !omittedRE.MatchString(l) {
-			limit = i
 			break
 		}
 		total += len(l)
+		work += max(raw, len(l))
 		out = append(out, l)
 	}
 	if dropped := len(lines) - len(out); dropped > 0 {
@@ -168,10 +209,58 @@ const (
 	maxLineBytes  = 4096
 	maxLines      = 2000
 	maxTotalBytes = 128 << 10
-	truncMarker   = " ...[truncated]"
+	// maxWorkBytes bounds what redaction reads of all lines together.
+	maxWorkBytes = 128 << 10
+	truncMarker  = " ...[truncated]"
 )
 
-var omittedRE = regexp.MustCompile(`^\[\d+ more lines omitted\]$`)
+// maxRawLineBytes bounds what redaction reads of one line. It is a variable
+// only so a test can walk a secret across the cut without 32 KB of filler.
+var maxRawLineBytes = 32 << 10
+
+var (
+	omittedRE           = regexp.MustCompile(`^\[\d+ more lines omitted\]$`)
+	secretPlaceholderRE = regexp.MustCompile(`^<secret-\d+>$`)
+)
+
+// closed reports whether s ends in an unescaped q: an even number of
+// backslashes (including none) before it.
+func closed(s string, q byte) bool {
+	if s == "" || s[len(s)-1] != q {
+		return false
+	}
+	n := 0
+	for i := len(s) - 2; i >= 0 && s[i] == '\\'; i-- {
+		n++
+	}
+	return n%2 == 0
+}
+
+func isTokenByte(c byte) bool {
+	return isWordByte(c) || c == '-' || c == '.' || c == '~' || c == '+' || c == '/'
+}
+
+// hardCut bounds the text redaction reads of one line. The cut can fall in
+// the middle of a secret whose tail is then gone and can no longer be
+// recognised, so a run of eight or more token characters touching the cut is
+// dropped as a possible key prefix.
+func hardCut(l string) string {
+	if len(l) <= maxRawLineBytes {
+		return l
+	}
+	cut := maxRawLineBytes - len(truncMarker)
+	for cut > 0 && !utf8.RuneStart(l[cut]) {
+		cut--
+	}
+	run := cut
+	for run > 0 && isTokenByte(l[run-1]) {
+		run--
+	}
+	if cut-run >= 8 {
+		cut = run
+	}
+	return l[:cut] + truncMarker
+}
 
 // clipLine cuts a line to maxLineBytes, marker included, at a rune boundary
 // and, when one is near, at a space so a half-cut token is not left behind.
