@@ -12,6 +12,10 @@ import (
 // the person types want exactly (surrounding spaces aside) and presses
 // enter. Anything else re-asks; esc cancels. It guards against mistakes; the
 // approval tier, when it exists, guards authority.
+//
+// title, detail and want usually quote a target or service name, so they are
+// sanitized once here. want is compared in its sanitized form too: that is
+// the text the person sees and can type; run keeps the raw id it acts on.
 type confirmModal struct {
 	title, detail, want string
 	in                  textinput.Model
@@ -24,7 +28,7 @@ func newConfirm(title, detail, want string, run func() tea.Cmd) *confirmModal {
 	in.Prompt = "> "
 	in.CharLimit = 128
 	in.Focus()
-	return &confirmModal{title: title, detail: detail, want: want, in: in, run: run}
+	return &confirmModal{title: sanitize(title), detail: sanitize(detail), want: sanitize(want), in: in, run: run}
 }
 
 func (m *confirmModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {

@@ -126,6 +126,7 @@ func New(o Options) *App {
 	}
 	a.screens[scrJobs] = jobsScreen{}
 	if server, mine, differs := a.be.Skew(); differs {
+		server, mine = sanitize(server), sanitize(mine)
 		// Offer R only where it works; otherwise the banner still says why
 		// some requests may fail.
 		a.skew = fmt.Sprintf("server %s, this jumpgate %s: the versions differ", server, mine)
@@ -161,16 +162,17 @@ func (a *App) do(what string, f func(ctx context.Context) tea.Msg) tea.Cmd {
 	return func() tea.Msg { return f(a.ctx) }
 }
 
-// errText is an error in one line, with the server's hint when it sent one.
+// errText is an error in one line, with the server's hint when it sent one,
+// sanitized: error text quotes servers, boxes and their output.
 func (a *App) errText(err error) string {
 	var e *api.Error
 	if errors.As(err, &e) {
 		if e.Hint != "" {
-			return e.Message + " " + a.gl.Dash + " " + e.Hint
+			return sanitize(e.Message) + " " + a.gl.Dash + " " + sanitize(e.Hint)
 		}
-		return e.Message
+		return sanitize(e.Message)
 	}
-	return err.Error()
+	return sanitize(err.Error())
 }
 
 func (a *App) setPrefs(p uiPrefs) {
@@ -213,10 +215,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, a.broadcast(msg)
 	case flashMsg:
-		a.flash = string(msg)
+		a.flash = sanitize(string(msg))
 		return a, nil
 	case errMsg:
-		a.flash = msg.what + ": " + a.errText(msg.err)
+		a.flash = sanitize(msg.what) + ": " + a.errText(msg.err)
 		return a, nil
 	case restartedMsg:
 		if msg.err != nil {
@@ -379,7 +381,7 @@ func (a *App) statusBar() string {
 	}
 	box := "no box selected"
 	if a.sel != "" {
-		box = a.sel
+		box = sanitize(a.sel)
 		if row, ok := a.fleet.Row(a.sel); ok {
 			box += " " + a.gl.Sep + " " + linkWord(row)
 		}
