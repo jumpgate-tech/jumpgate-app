@@ -271,3 +271,33 @@ func TestWatchFleet(t *testing.T) {
 	}
 	t.Fatal("the stream ended without a fleet")
 }
+
+func TestDiskAndStatusMethods(t *testing.T) {
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/fleet/a/disk", "/api/fleet/a/disk/measure":
+			fmt.Fprint(w, `{"execBytes":5,"fit":"ok","expectedLabel":"estimate","history":[{"usedBytes":5}]}`)
+		case "/api/fleet/a/status/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"overall\":\"syncing\"}\n\n")
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if d, err := c.Disk(ctx, "a"); err != nil || d.Fit != api.FitOK {
+		t.Fatalf("Disk %+v %v", d, err)
+	}
+	if d, err := c.MeasureDisk(ctx, "a"); err != nil || len(d.History) != 1 {
+		t.Fatalf("MeasureDisk %+v %v", d, err)
+	}
+	for u := range c.WatchStatus(ctx, "a") {
+		if u.Has {
+			if u.Value.Overall != api.SyncSyncing {
+				t.Fatalf("status %+v", u.Value)
+			}
+			return
+		}
+	}
+}

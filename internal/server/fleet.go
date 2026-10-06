@@ -126,6 +126,7 @@ type fleetState struct {
 	chainTried                   time.Time
 	agentChainID                 int // the chain agent.info reported; 0 = not known
 	history                      []api.DiskSample
+	lastDU                       ops.DU // the reading the newest history sample came from
 	// busy is set while a probe of this box runs, including one the poller
 	// gave up waiting for, so a box that hangs is never asked twice at once.
 	busy bool
@@ -174,6 +175,8 @@ type fleetPoller struct {
 	lastWanted time.Time
 	// pubTimer is the pending debounced publish, nil when none is pending.
 	pubTimer *time.Timer
+	// measures are the measure-now probes in flight, one per box.
+	measures map[string]*measureCall
 
 	// active counts loops that have not decided to stop, and maxActive its
 	// high-water mark, for the test that no two loops ever run at once.
@@ -195,7 +198,7 @@ func newFleetPoller(s *Server) *fleetPoller {
 		s: s, probe: serverProber{s}, now: time.Now,
 		every: func(config.Config) time.Duration { return fleetStatusEvery },
 		ctx:   ctx, cancel: cancel,
-		rows: map[string]*fleetState{}, subs: map[chan api.Fleet]struct{}{},
+		rows: map[string]*fleetState{}, measures: map[string]*measureCall{}, subs: map[chan api.Fleet]struct{}{},
 	}
 }
 
@@ -584,7 +587,7 @@ func (p *fleetPoller) recordDiskLocked(st *fleetState, at time.Time, du ops.DU) 
 	}
 	view := diskView(at, du, st.history)
 	view.History = nil // rows stay light; /api/fleet/{id}/disk carries it
-	st.row.Disk, st.diskAt = &view, at
+	st.row.Disk, st.diskAt, st.lastDU = &view, at, du
 }
 
 func (p *fleetPoller) history(id string) []api.DiskSample {
@@ -705,6 +708,178 @@ func (s *Server) handleFleetStream(w http.ResponseWriter, r *http.Request) {
 			conn.Ping()
 		case f := <-ch:
 			conn.Send(f)
+		}
+	}
+}
+
+// measureCall is one measure-now probe in flight; every caller that arrives
+// while it runs waits on it.
+type measureCall struct {
+	done    chan struct{}
+	waiters int // guarded by the poller's mu
+	du      ops.DU
+	err     error
+}
+
+// measureWaiters is how many callers wait on id's measure in flight.
+func (p *fleetPoller) measureWaiters(id string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if c := p.measures[id]; c != nil {
+		return c.waiters
+	}
+	return 0
+}
+
+// measure takes a disk reading of the box now, through the same prober (so
+// the same executor lease or signed intent) as the poll, and records it. A
+// measure that arrives while another for the box runs joins it: one probe,
+// one history sample, the same answer for both. The probe runs under the
+// poller's context and fleetProbeTimeout, not the first caller's, so a caller
+// that gives up never fails the others.
+func (p *fleetPoller) measure(ctx context.Context, cfg config.Config, t config.Target) error {
+	p.mu.Lock()
+	c := p.measures[t.ID]
+	if c == nil {
+		c = &measureCall{done: make(chan struct{})}
+		p.measures[t.ID] = c
+		timeout := fleetProbeTimeout
+		started := p.goLocked(func() {
+			pctx, cancel := context.WithTimeout(p.ctx, timeout)
+			defer cancel()
+			du, err := p.probe.disk(pctx, cfg, t)
+			p.mu.Lock()
+			delete(p.measures, t.ID)
+			p.mu.Unlock()
+			if err == nil {
+				p.recordDisk(t.ID, p.now(), du)
+			}
+			c.du, c.err = du, err
+			close(c.done)
+		})
+		if !started {
+			delete(p.measures, t.ID)
+			p.mu.Unlock()
+			return &dialError{fmt.Errorf("%w: jumpgate is shutting down", agentclient.ErrUnreachable)}
+		}
+	}
+	c.waiters++
+	p.mu.Unlock()
+	select {
+	case <-c.done:
+		return c.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// diskViewFor is a box's last disk reading with its full history.
+func (p *fleetPoller) diskViewFor(id string) (api.DiskView, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st := p.rows[id]
+	if st == nil || len(st.history) == 0 {
+		return api.DiskView{}, false
+	}
+	return diskView(st.diskAt, st.lastDU, append([]api.DiskSample(nil), st.history...)), true
+}
+
+func viaOf(t config.Target) via {
+	if t.Agent != nil {
+		return viaAgent
+	}
+	return viaSSH
+}
+
+// handleFleetRow is one box's fleet row. The rows are seeded from the config
+// first, so a box the poller has not reached yet answers with every section
+// unavailable.
+func (s *Server) handleFleetRow(w http.ResponseWriter, r *http.Request) {
+	cfg, t, ok := s.nodeTarget(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	s.fleet.seed(cfg)
+	s.fleet.want()
+	row, found := s.fleet.snapshot().Row(t.ID)
+	if !found {
+		v := targetView(t)
+		row = api.FleetRow{ID: t.ID, Link: v.Link, ThisMachine: v.ThisMachine}
+	}
+	writeJSON(w, http.StatusOK, row)
+}
+
+// measureDisk takes a disk reading now and answers with the updated view.
+func (s *Server) measureDisk(w http.ResponseWriter, r *http.Request, cfg config.Config, t config.Target) {
+	setVia(w, viaOf(t))
+	if err := s.fleet.measure(r.Context(), cfg, t); err != nil {
+		writeNodeError(w, err)
+		return
+	}
+	v, _ := s.fleet.diskViewFor(t.ID)
+	writeJSON(w, http.StatusOK, v)
+}
+
+// handleFleetDisk is the last reading with its history; with none yet it
+// measures, so the first look at a box is never empty.
+func (s *Server) handleFleetDisk(w http.ResponseWriter, r *http.Request) {
+	cfg, t, ok := s.nodeTarget(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	if v, found := s.fleet.diskViewFor(t.ID); found {
+		setVia(w, viaOf(t))
+		writeJSON(w, http.StatusOK, v)
+		return
+	}
+	s.measureDisk(w, r, cfg, t)
+}
+
+func (s *Server) handleFleetMeasure(w http.ResponseWriter, r *http.Request) {
+	cfg, t, ok := s.nodeTarget(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	s.measureDisk(w, r, cfg, t)
+}
+
+// handleFleetStatusStream sends one box's NodeStatus every
+// agentStatusInterval (spec D31), for paired and SSH-only boxes alike.
+func (s *Server) handleFleetStatusStream(w http.ResponseWriter, r *http.Request) {
+	cfg, t, ok := s.nodeTarget(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	setVia(w, viaOf(t))
+	conn, ok := startSSE(w)
+	if !ok {
+		return
+	}
+	defer conn.Close()
+	tick := time.NewTicker(agentStatusInterval)
+	defer tick.Stop()
+	for {
+		snap, err := s.fleet.probe.status(r.Context(), cfg, t)
+		if r.Context().Err() != nil {
+			return
+		}
+		if err != nil {
+			_, e := apiErrorFor(err)
+			conn.SendNamed("error", e)
+		} else {
+			conn.Send(nodeStatusView(snap))
+		}
+		for waiting := true; waiting; {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-s.fleet.ctx.Done():
+				return
+			case <-conn.Pings():
+				conn.Ping()
+			case <-tick.C:
+				waiting = false
+			}
 		}
 	}
 }

@@ -39,8 +39,12 @@ type fakeProber struct {
 	fwFail    bool
 	hung      chan string // when set, receives a box's id as its hung probe starts
 	diskCalls int
-	fwCalls   int
-	calls     map[string]int
+	// diskGate, when set, holds every disk probe until it is closed;
+	// diskEntered receives one value as each probe starts.
+	diskGate    chan struct{}
+	diskEntered chan struct{}
+	fwCalls     int
+	calls       map[string]int
 
 	inFlight, maxInFlight atomic.Int32
 }
@@ -84,14 +88,25 @@ func (f *fakeProber) status(ctx context.Context, _ config.Config, t config.Targe
 	return monitor.Snapshot{At: time.Now(), ExecActive: true, BeaconActive: true, ExecHead: 100, BeaconSlot: 7, ExecPeers: 12, BeaconPeers: 40, RefHead: 100, DiskKnown: true, DiskUsedPct: 61}, nil
 }
 
+func fakeDU() ops.DU {
+	return ops.DU{ExecBytes: 1e12, BeaconBytes: 1e11, DiskFreeBytes: 2e12, DiskFreeKnown: true, ExpectedExecBytes: 2e12}
+}
+
 func (f *fakeProber) disk(context.Context, config.Config, config.Target) (ops.DU, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.diskCalls++
-	if f.diskFail {
+	fail, gate, entered := f.diskFail, f.diskGate, f.diskEntered
+	f.mu.Unlock()
+	if entered != nil {
+		entered <- struct{}{}
+	}
+	if gate != nil {
+		<-gate
+	}
+	if fail {
 		return ops.DU{}, errors.New("du: cannot access")
 	}
-	return ops.DU{ExecBytes: 1e12, BeaconBytes: 1e11, DiskFreeBytes: 2e12, DiskFreeKnown: true, ExpectedExecBytes: 2e12}, nil
+	return fakeDU(), nil
 }
 
 func (f *fakeProber) firewall(context.Context, config.Config, config.Target) ([]ops.CheckItem, error) {

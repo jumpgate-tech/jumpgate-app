@@ -73,7 +73,7 @@ func (r *registry) get(id string) *targetEntry {
 // evictExecutor forgets id's cached executor if it is still ex (by
 // identity), so the next operation dials the box again: the way a box whose
 // connection dropped recovers without a server restart. The monitor and log
-// watcher built on ex are retired with it, so their next use rebuilds them
+// watcher built on ex, and the box's log follower, are retired with it, so their next use rebuilds them
 // on a fresh executor instead of polling a dead connection. ex is closed
 // once the last call in flight on it returns (leasedExec); a setup run that
 // still holds it gets an unreachable error on its next command.
@@ -95,6 +95,13 @@ func (r *registry) evictExecutor(id string, ex executor.Executor) {
 			e.monStop()
 		}
 		e.mon, e.monStop, e.monDone, e.monExec = nil, nil, nil, nil
+	}
+	if e.logs != nil {
+		// The follower asks the box through its own intent connections, not
+		// ex, so it has no executor to compare: any eviction retires it, and
+		// the next logs viewer starts a fresh one beside the new executor.
+		e.logs.stop()
+		e.logs = nil
 	}
 	if e.watchExec == ex {
 		if e.watchStop != nil {
@@ -635,6 +642,10 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// The fleet: every box's row, polled only while someone watches (fleet.go).
 	mux.HandleFunc("GET /api/fleet", s.handleFleet)
 	mux.HandleFunc("GET /api/fleet/stream", s.handleFleetStream)
+	mux.HandleFunc("GET /api/fleet/{id}", s.handleFleetRow)
+	mux.HandleFunc("GET /api/fleet/{id}/disk", s.handleFleetDisk)
+	mux.HandleFunc("POST /api/fleet/{id}/disk/measure", s.handleFleetMeasure)
+	mux.HandleFunc("GET /api/fleet/{id}/status/stream", s.handleFleetStatusStream)
 
 	mux.HandleFunc("GET /api/targets/{id}/logs", s.handleLogs)
 	mux.HandleFunc("GET /api/targets/{id}/logs/stream", s.handleLogsStream)

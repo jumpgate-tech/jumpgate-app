@@ -144,3 +144,25 @@ func (c *Client) Fleet(ctx context.Context) (api.Fleet, error) {
 func (c *Client) WatchFleet(ctx context.Context) <-chan Update[api.Fleet] {
 	return watch(ctx, c, "/api/fleet/stream", decodeJSON[api.Fleet])
 }
+
+func fleetPath(id, rest string) string { return "/api/fleet/" + url.PathEscape(id) + rest }
+
+// Disk is the box's last disk reading with its history (measured now if it
+// has none).
+func (c *Client) Disk(ctx context.Context, target string) (api.DiskView, error) {
+	var d api.DiskView
+	err := c.Do(ctx, http.MethodGet, fleetPath(target, "/disk"), nil, &d)
+	return d, err
+}
+
+// MeasureDisk takes a disk reading now.
+func (c *Client) MeasureDisk(ctx context.Context, target string) (api.DiskView, error) {
+	var d api.DiskView
+	err := c.Do(ctx, http.MethodPost, fleetPath(target, "/disk/measure"), nil, &d)
+	return d, err
+}
+
+// WatchStatus streams one box's NodeStatus every few seconds.
+func (c *Client) WatchStatus(ctx context.Context, target string) <-chan Update[api.NodeStatus] {
+	return watch(ctx, c, fleetPath(target, "/status/stream"), decodeJSON[api.NodeStatus])
+}
