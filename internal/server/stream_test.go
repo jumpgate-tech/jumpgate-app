@@ -150,7 +150,8 @@ const errorLine = "ERROR Failed to open database: permission denied"
 // ---------------------------------------------------------------------
 
 // openStream starts a GET that stays open, returning the response and a
-// scanner over its body. The caller must close the response.
+// scanner over its body. The request is cancelled and the body closed when
+// the test ends; a caller may also do either sooner.
 //
 // The header phase is bounded separately from the stream itself. Go buffers a
 // response until something flushes it, so a handler that sets SSE headers and
@@ -183,6 +184,16 @@ func openStream(t *testing.T, a *apiTestServer, path string) (*http.Response, *b
 			cancel()
 			t.Fatalf("GET %s: %v", path, r.err)
 		}
+		// End this request when the test ends, however it ends. A test that
+		// fails before its own deferred cancel would otherwise leave the
+		// handler blocked on a context nobody cancels, and the server's
+		// Close cleanup (registered earlier, so it runs after this one)
+		// waits for that handler forever: the 600s hang. Cancelling and
+		// closing twice is harmless.
+		t.Cleanup(func() {
+			cancel()
+			r.res.Body.Close()
+		})
 		return r.res, bufio.NewScanner(r.res.Body), cancel
 	case <-time.After(streamWait):
 		cancel()
@@ -419,6 +430,105 @@ func TestLogsStream_DeliversLinesInOrder(t *testing.T) {
 			t.Fatalf("event %d: got %q, want %q", i, got, w)
 		}
 	}
+}
+
+// headerFlushWriter is an http.ResponseWriter that runs onHeaders when the
+// handler first flushes, which is the moment a real client's Do() returns and
+// the client counts itself attached. Running the far end's next move inside
+// that flush puts it in the narrowest window a handler has: after the client
+// knows it is connected and before the handler's next statement. On a loaded
+// machine (the Windows VM under -p 2) the scheduler opens that window on its
+// own for a few percent of runs; this opens it every time.
+type headerFlushWriter struct {
+	header    http.Header
+	onHeaders func()
+	once      sync.Once
+
+	mu   sync.Mutex
+	body strings.Builder
+	data chan struct{} // closed once a `data:` frame has been written
+	seen bool
+}
+
+func newHeaderFlushWriter(onHeaders func()) *headerFlushWriter {
+	return &headerFlushWriter{header: http.Header{}, onHeaders: onHeaders, data: make(chan struct{})}
+}
+
+func (w *headerFlushWriter) Header() http.Header { return w.header }
+func (w *headerFlushWriter) WriteHeader(int)     {}
+
+func (w *headerFlushWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.body.Write(p)
+	if !w.seen && strings.Contains(w.body.String(), "data: ") {
+		w.seen = true
+		close(w.data)
+	}
+	return len(p), nil
+}
+
+func (w *headerFlushWriter) Flush() { w.once.Do(w.onHeaders) }
+
+func (w *headerFlushWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.String()
+}
+
+// A line logged the instant the stream's headers reach the client is a line
+// that happened while the client was attached, so it must be delivered. The
+// handler used to flush its headers and only then subscribe to the watcher,
+// so a line published in between went to no subscriber and was gone. The log
+// stream has no backlog to cover that gap, unlike the setup stream's snapshot
+// or the monitor's Latest(). This was the intermittent Windows failure of the
+// three TestLogsStream tests ("no SSE event arrived").
+func TestLogsStream_DeliversALineLoggedAsTheHeadersArrive(t *testing.T) {
+	j := newJournalExecutor()
+	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) { return j, nil })
+	addTarget(t, a)
+	completeSetup(t, "local")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptestRequest(ctx, "/api/targets/local/logs/stream")
+	req.SetPathValue("id", "local")
+	w := newHeaderFlushWriter(func() { j.emit(t, errorLine) })
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.srv.handleLogsStream(w, req)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(streamWait):
+			t.Error("the handler did not return after its request was cancelled")
+		}
+	}()
+
+	select {
+	case <-w.data:
+		if body := w.String(); !strings.Contains(body, "Failed to open database") {
+			t.Errorf("streamed a frame, but not the line logged as the headers arrived:\n%s", body)
+		}
+	case <-done:
+		t.Fatalf("the handler returned before streaming anything:\n%s", w.String())
+	case <-time.After(5 * time.Second):
+		t.Fatal("a line logged as the stream's headers arrived never reached the client: " +
+			"the handler must subscribe before it flushes its headers")
+	}
+}
+
+// httptestRequest is a GET for path that is cancelled with ctx.
+func httptestRequest(ctx context.Context, path string) *http.Request {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://jumpgate.test"+path, nil)
+	if err != nil {
+		panic(err)
+	}
+	return req
 }
 
 // ---------------------------------------------------------------------

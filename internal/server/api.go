@@ -1268,10 +1268,15 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sseHeaders(w)
-
+	// Subscribe BEFORE flushing the headers. A client counts itself attached
+	// the moment the headers arrive, and the watcher keeps no backlog for a
+	// subscriber (unlike the setup stream's snapshot or the monitor's
+	// Latest), so a line published between the flush and the subscription
+	// would reach no one.
 	ch, unsub := watch.Subscribe()
 	defer unsub()
+
+	sseHeaders(w)
 
 	ctx := r.Context()
 	for {
