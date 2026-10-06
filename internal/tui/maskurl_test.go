@@ -60,6 +60,61 @@ func TestMaskTextFailsClosed(t *testing.T) {
 	}
 }
 
+func TestMaskTextUnicodeSpacesDoNotSplitAToken(t *testing.T) {
+	for _, sp := range []string{"\u00a0", "\u2003", "\u3000"} {
+		in := "https://h/v3/" + sp + "Zk9SECRETQx7"
+		if got := maskText(in); strings.Contains(got, "SECRET") {
+			t.Errorf("maskText(%q) = %q leaks", in, got)
+		}
+	}
+}
+
+var invisibles = []string{"\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad"}
+
+func TestMaskTextHidesASecretBehindInvisibleCharactersBeforeAt(t *testing.T) {
+	var ins []string
+	for _, ch := range append([]string{"", "\u2003", "\uff20", "%40"}, invisibles...) {
+		at := "@"
+		if ch == "\uff20" || ch == "%40" {
+			at = ""
+		}
+		ins = append(ins, "u:SECRET "+ch+at+"h", "u:SECRET "+ch+" "+at+"h", "u:SECRET \u2003 "+ch+at+"h")
+	}
+	for _, in := range ins {
+		if got := maskText(in); strings.Contains(got, "SECRET") {
+			t.Errorf("maskText(%q) = %q leaks", in, got)
+		}
+		if got := maskText(sanitizeLine(in)); strings.Contains(got, "SECRET") {
+			t.Errorf("sanitize+maskText(%q) = %q leaks", in, got)
+		}
+	}
+}
+
+func TestSanitizeDropsFormatCharacters(t *testing.T) {
+	for _, ch := range invisibles {
+		if got := sanitize("a" + ch + "b"); got != "ab" {
+			t.Errorf("sanitize kept %q: %q", ch, got)
+		}
+	}
+	if got := sanitize("caf\u00e9 \u2003x"); got != "caf\u00e9 \u2003x" {
+		t.Errorf("sanitize changed ordinary text: %q", got)
+	}
+}
+
+// The secret walks across every offset around the cut; the token before the
+// cut's whitespace is masked too, because its "@" partner may be dropped.
+func TestMaskTextCutWalksAcrossASecretWithASpaceBeforeAt(t *testing.T) {
+	for _, secret := range []string{"u:SECRET @h", "u:SECRET  @h", "https://u:SECRET @h/"} {
+		for off := 0; off <= len(secret)+2; off++ {
+			pad := maxMaskText - off
+			in := strings.Repeat("a ", pad/2) + strings.Repeat("b", pad%2) + secret + strings.Repeat(" tail", 20)
+			if got := maskText(in); strings.Contains(got, "SECRET") {
+				t.Fatalf("secret %q offset %d leaks: %q", secret, off, got[max(len(got)-30, 0):])
+			}
+		}
+	}
+}
+
 // A cut at the size cap must not leave part of a secret behind.
 func TestMaskTextCapsItsInputWithoutExposingACutSecret(t *testing.T) {
 	secret := "https://u:SECRETSECRETSECRET@h/"
@@ -118,12 +173,22 @@ func FuzzMaskURL(f *testing.F) {
 		default:
 			u = sch + "host.example:8545/v3?a=1&b=" + secret
 		}
+		if where%6 == 0 && shape >= 128 {
+			gaps := []string{" ", "  ", "\t", "\u00a0", "\u2003", "\u3000", "\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad", " \u200b", "\u2003 ", " \u2003 "}
+			u = sch + "user:" + secret + gaps[int(shape)%len(gaps)] + "@host.example/v1"
+		}
 		if shape%2 == 1 && where%6 >= 2 {
 			u += "?later=" + secret
 		}
 		for _, in := range []string{u, "note " + u + " end", "(" + u + ")", "u=" + u + ","} {
 			if got := maskURL(in); strings.Contains(got, secret) {
 				t.Fatalf("maskURL(%q) = %q", in, got)
+			}
+			// What the screen does: sanitize, then mask. The secret itself
+			// is checked after the same cleaning.
+			clean := sanitizeLine(secret)
+			if got := maskText(sanitizeLine(in)); strings.Contains(got, clean) {
+				t.Fatalf("sanitize+maskText(%q) = %q", in, got)
 			}
 			if got := maskText(in); strings.Contains(got, secret) {
 				t.Fatalf("maskText(%q) = %q", in, got)

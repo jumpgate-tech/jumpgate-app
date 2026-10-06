@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -69,10 +70,11 @@ func isClean(s string) bool {
 	return true
 }
 
-func isBidiControl(r rune) bool {
-	return (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) ||
-		r == 0x200e || r == 0x200f || r == 0x061c
-}
+// isBidiControl is every invisible format character (category Cf): the bidi
+// overrides, isolates and marks, and also zero-width space, joiners, word
+// joiner, BOM and soft hyphen, which hide text from a reader and from
+// matching. Removing them also removes ZWJ from emoji sequences.
+func isBidiControl(r rune) bool { return unicode.Is(unicode.Cf, r) }
 
 // skipEscape skips the sequence after an ESC at s[i-1] and returns the index
 // just past it.

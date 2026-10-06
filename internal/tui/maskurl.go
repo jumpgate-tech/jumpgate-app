@@ -187,23 +187,46 @@ func plainKey(k string) bool {
 	return true
 }
 
-// tokens splits s into alternating runs of whitespace and non-whitespace,
-// which join back to s.
+// asciiSpace is the whitespace that splits tokens. Other Unicode spaces stay
+// inside a token, so they cannot cut a URL in two. maskText's cut uses it too.
+const asciiSpace = " \t\n\r\v\f"
+
+func isASCIISpace(c byte) bool { return strings.IndexByte(asciiSpace, c) >= 0 }
+
+// tokens splits s into alternating runs of ASCII whitespace and anything
+// else, which join back to s.
 func tokens(s string) []string {
 	var out []string
-	start, space := 0, false
-	for i, r := range s {
-		if sp := unicode.IsSpace(r); i > 0 && sp != space {
+	start := 0
+	for i := 1; i < len(s); i++ {
+		if isASCIISpace(s[i]) != isASCIISpace(s[i-1]) {
 			out, start = append(out, s[start:i]), i
-			space = sp
-		} else if i == 0 {
-			space = sp
 		}
 	}
 	if start < len(s) {
 		out = append(out, s[start:])
 	}
 	return out
+}
+
+func ignorable(r rune) bool { return unicode.IsSpace(r) || unicode.Is(unicode.Cf, r) }
+
+// blankToken: only spaces and invisible format characters.
+func blankToken(t string) bool {
+	for _, r := range t {
+		if !ignorable(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// leadsWithAt: after any leading spaces or invisible characters, an "@" or
+// something that reads as one (fullwidth, small, or %40).
+func leadsWithAt(t string) bool {
+	t = strings.TrimLeftFunc(t, ignorable)
+	return strings.HasPrefix(t, "@") || strings.HasPrefix(t, "\uff20") || strings.HasPrefix(t, "\ufe6b") ||
+		(len(t) >= 3 && strings.EqualFold(t[:3], "%40"))
 }
 
 // maxMaskText caps what maskText reads, so a hostile field cannot make it
@@ -226,12 +249,20 @@ func maskText(s string) string {
 	head := s[:cut]
 	// Mask the last (possibly partial) token, and everything from the last
 	// "://" on: its authority may be cut before the "@" that would hide it.
-	const space = " \t\r\n\v\f"
-	start := strings.LastIndexAny(head, space) + 1
+	// Anything from the last "://" on goes: its authority may be cut before
+	// the "@" that would hide it.
 	if i := strings.LastIndex(head, "://"); i >= 0 {
-		start = min(start, strings.LastIndexAny(head[:i], space)+1)
+		head = head[:strings.LastIndexAny(head[:i], asciiSpace)+1]
 	}
-	return maskTokens(head[:start]) + "***\u2026"
+	// Mask first, then drop the last two tokens of the result: a secret split
+	// by a space is only recognised once its "@" is seen, and the cut may
+	// have dropped it; dropping after masking cannot orphan half of a pair.
+	m := maskTokens(head)
+	for range 2 {
+		m = strings.TrimRight(m, asciiSpace)
+		m = m[:strings.LastIndexAny(m, asciiSpace)+1]
+	}
+	return m + "***\u2026"
 }
 
 // maskTokens: a token holding "://", "@", "/" or an encoded or fullwidth @
@@ -254,7 +285,7 @@ func maskTokens(s string) string {
 	out.Grow(len(s))
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
-		if strings.TrimSpace(t) == "" {
+		if blankToken(t) {
 			out.WriteString(t)
 			continue
 		}
@@ -262,9 +293,17 @@ func maskTokens(s string) string {
 		case k >= 0 && !strings.ContainsAny(t[k+3:], "/?#@") && nextAt[i] > i:
 			t = strings.Join(toks[i:nextAt[i]+1], "")
 			i = nextAt[i]
-		case i+2 < len(toks) && strings.HasPrefix(toks[i+2], "@") && strings.TrimSpace(toks[i+1]) == "":
-			t += toks[i+1] + toks[i+2]
-			i += 2
+		case !blankToken(t):
+			// A token followed, across blanks, by one that leads with "@":
+			// the "@" ends userinfo that holds the space.
+			j := i + 1
+			for j < len(toks) && blankToken(toks[j]) {
+				j++
+			}
+			if j < len(toks) && j > i+1 && leadsWithAt(toks[j]) {
+				t = strings.Join(toks[i:j+1], "")
+				i = j
+			}
 		}
 		if sensitiveToken(t) {
 			t = maskURL(t)
