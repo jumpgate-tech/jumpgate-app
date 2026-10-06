@@ -917,6 +917,11 @@ type statusSource struct {
 	idle      *time.Timer
 	closed    bool
 	probeBusy bool
+	// probing is true from a probe's start until its frame is published;
+	// a retire that arrives meanwhile (an executor eviction inside the
+	// probe) waits, so subscribers see the frame that explains it.
+	probing       bool
+	retirePending bool
 }
 
 // subscribeStatus joins t's status source, starting it on the first
@@ -977,6 +982,10 @@ func (p *fleetPoller) retireStatus(id string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if src := p.statuses[id]; src != nil {
+		if src.probing {
+			src.retirePending = true // probeStatus retires after publishing
+			return
+		}
 		p.retireStatusLocked(src)
 	}
 }
@@ -1055,6 +1064,15 @@ func (p *fleetPoller) probeStatus(ctx context.Context, src *statusSource) bool {
 		return true
 	}
 	src.probeBusy = true
+	src.probing = true
+	defer func() {
+		p.mu.Lock()
+		src.probing = false
+		if src.retirePending {
+			p.retireStatusLocked(src)
+		}
+		p.mu.Unlock()
+	}()
 	timeout := fleetProbeTimeout
 	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

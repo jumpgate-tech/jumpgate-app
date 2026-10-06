@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/agentclient"
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/monitor"
 )
 
 func TestFleetDiskMeasuresWhenThereIsNoReading(t *testing.T) {
@@ -345,6 +348,7 @@ func TestStatusStreamEnds(t *testing.T) {
 // new one.
 func TestEvictionEndsTheStatusSource(t *testing.T) {
 	s, _, tg := leaseServer(t)
+	t.Cleanup(s.fleet.stop) // wait for the source's goroutine before the next test changes the timing globals
 	tg.Agent = paired
 	if _, err := config.Update(func(c *config.Config) error { c.Targets = []config.Target{tg}; return nil }); err != nil {
 		t.Fatal(err)
@@ -368,4 +372,34 @@ func TestEvictionEndsTheStatusSource(t *testing.T) {
 	if s.fleet.statusSources() != 0 {
 		t.Fatal("the source is still registered")
 	}
+}
+
+// evictingProber fails a status probe the way an SSH-only box does when its
+// connection check fails: the executor is evicted (which retires the status
+// source) before the probe returns its error.
+type evictingProber struct {
+	*fakeProber
+	s *Server
+}
+
+func (e evictingProber) status(ctx context.Context, cfg config.Config, t config.Target) (monitor.Snapshot, error) {
+	e.s.fleet.retireStatus(t.ID)
+	return monitor.Snapshot{}, &dialError{fmt.Errorf("%w: connection lost", agentclient.ErrUnreachable)}
+}
+
+// A probe that fails and evicts the executor still publishes its failure
+// frame to the subscribers before the source retires and their stream ends.
+func TestEvictingProbePublishesItsFailureBeforeRetiring(t *testing.T) {
+	fastStatus(t)
+	s, _, ts, token := fleetServer(t, config.Target{ID: "a", Mode: "ssh", Agent: paired})
+	s.fleet.probe = evictingProber{newFakeProber(), s}
+	res, _ := openStatus(t, ts, token, "a")
+	body, err := io.ReadAll(res.Body) // the stream must end by itself
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "event: error") || !strings.Contains(string(body), "unreachable") {
+		t.Fatalf("the subscriber never saw the failure frame:\n%s", body)
+	}
+	waitFor(t, "the source is still registered", func() bool { return s.fleet.statusSources() == 0 })
 }
