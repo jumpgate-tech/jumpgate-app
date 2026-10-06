@@ -5,12 +5,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/valve-tech/jumpgate/internal/api"
@@ -105,36 +103,8 @@ var connect = func(ctx context.Context) (*apiclient.Client, error) {
 
 // parseSSHTarget reads user@host[:port], with IPv6 hosts in brackets.
 func parseSSHTarget(s string) (user, host string, port int, err error) {
-	at := strings.LastIndex(s, "@")
-	if at <= 0 || at == len(s)-1 {
-		return "", "", 0, fmt.Errorf("want user@host[:port], got %q", s)
-	}
-	user, rest := s[:at], s[at+1:]
-	if h, p, splitErr := net.SplitHostPort(rest); splitErr == nil {
-		n, convErr := strconv.Atoi(p)
-		if convErr != nil || n <= 0 || n > 65535 {
-			return "", "", 0, fmt.Errorf("bad port in %q", s)
-		}
-		if h == "" {
-			return "", "", 0, fmt.Errorf("empty host in %q", s)
-		}
-		return user, h, n, nil
-	}
-	switch {
-	case strings.HasPrefix(rest, "["):
-		if !strings.HasSuffix(rest, "]") || strings.Count(rest, "[") != 1 || strings.Count(rest, "]") != 1 {
-			return "", "", 0, fmt.Errorf("unbalanced brackets in %q", s)
-		}
-	case strings.ContainsAny(rest, "[]"):
-		return "", "", 0, fmt.Errorf("unbalanced brackets in %q", s)
-	case strings.Contains(rest, ":"):
-		return "", "", 0, fmt.Errorf("bad port in %q", s)
-	}
-	host = strings.Trim(rest, "[]")
-	if host == "" {
-		return "", "", 0, fmt.Errorf("empty host in %q", s)
-	}
-	return user, host, 0, nil
+	v, err := api.ParseLogin(s)
+	return v.User, v.Host, v.Port, err
 }
 
 // usage reports bad arguments and returns exit status 2, which means usage and

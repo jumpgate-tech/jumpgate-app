@@ -133,6 +133,7 @@ func New(o Options) *App {
 	a.screens[scrFleet] = newFleetScreen()
 	a.screens[scrJobs] = jobsScreen{}
 	a.screens[scrGateways] = &gatewaysScreen{}
+	a.screens[scrHosts] = &hostsScreen{}
 	if server, mine, differs := a.be.Skew(); differs {
 		server, mine = sanitizeLine(server), sanitizeLine(mine)
 		// Offer R only where it works; otherwise the banner still says why

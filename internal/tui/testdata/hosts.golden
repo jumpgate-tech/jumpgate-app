@@ -1,0 +1,24 @@
+ jumpgate  1 Fleet  [2 Hosts]  3 Signers  4 Gateways  5 Jobs  6 Settings  ? help
+ HOSTS
+
+▸ box-a          root@10.0.0.5:22                       agent 0x1234…5678
+  box-b          ops@10.0.0.6:2222 via ops@bastion:22   not paired
+  laptop         this machine                           not paired
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ a add  p pair  L pair this machine  d remove  enter open
+ no box selected · server connecting · jobs ⚑ –
