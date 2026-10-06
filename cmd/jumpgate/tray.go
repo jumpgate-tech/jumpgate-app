@@ -41,6 +41,9 @@ const trayBuilt = true
 // stop the HTTP server but leave the webview (and its menubar icon) running.
 // Terminate is documented safe to call from a background goroutine.
 func runWindow(ctx context.Context, url string) {
+	if !webview2Installed() {
+		fatalf("jumpgate: the desktop window needs the Microsoft Edge WebView2 Runtime. Install it from https://go.microsoft.com/fwlink/p/?LinkId=2124703, or run `jumpgate.exe open` to use your browser")
+	}
 	w := webview.New(false)
 	defer w.Destroy()
 	w.SetTitle("Jumpgate") // product #3's name; the tray surface is Jumpgate
@@ -51,8 +54,10 @@ func runWindow(ctx context.Context, url string) {
 	// Snug to the 360px panel — a tiny app, not a browser window.
 	w.SetSize(380, 640, webview.HintNone)
 	// Add the menubar status item (macOS) into webview's own NSApp/NSWindow, so
-	// there's one Cocoa run loop. No-op off macOS. Must precede Run().
+	// there's one Cocoa run loop; on Windows, the notification-area icon. No-op
+	// on Linux. Must precede Run().
 	installStatusItem(w.Window())
+	defer removeStatusItem()
 
 	stopped := make(chan struct{})
 	defer close(stopped)

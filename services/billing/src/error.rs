@@ -34,7 +34,10 @@ pub enum Error {
     #[error("settle id {0} was already used for a different settle")]
     SettleIdReused(String),
     #[error("refusing unix socket path {path}: {reason}")]
-    UnsafeSocketPath { path: std::path::PathBuf, reason: String },
+    UnsafeSocketPath {
+        path: std::path::PathBuf,
+        reason: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

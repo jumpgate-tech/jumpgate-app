@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // allExecIDs / allBeaconIDs enumerate every client id in the catalog by
@@ -301,6 +302,7 @@ func TestRenderUnits_ErigonPulseArchiveFlags(t *testing.T) {
 // cargo to ~/.cargo/bin. It also proves the brace-group form still preserves
 // short-circuiting: if the preceding clone/cd fails, cargo must never run.
 func TestRustBuildCmd_CargoEnvSourcing_NoSubshell(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // runs through local mode, which refuses on Windows
 	rustClients := []string{"reth", "lighthouse-pulse", "lighthouse"}
 	// The assertion is on the brace group and its `&&` chaining, NOT on
 	// `cargo` appearing immediately after it: lighthouse-pulse legitimately

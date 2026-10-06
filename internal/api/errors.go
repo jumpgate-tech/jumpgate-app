@@ -129,9 +129,10 @@ var registry = map[Code]codeInfo{
 	CodeNoControllerKey: {"run `jumpgate keys init`, then `jumpgate stop` so the server restarts with the key", ExitUsage},
 	CodeControllerKeyMismatch: {"the key store holds a different key than the controller identity your boxes trust. " +
 		"Restore the original key (keychain item, 1Password item or key file), then run `jumpgate stop`; do not re-pair boxes to the new key unless you meant to replace the controller", ExitSecurity},
-	CodeRejected:           {"", ExitFailed},
-	CodeAgentFailed:        {"the agent ran the request and it failed on the box; the message is the box's", ExitFailed},
-	CodeLocalUnsupported:   {"this computer cannot run node commands itself; run this on a Linux machine you added with --ssh", ExitFailed},
+	CodeRejected:    {"", ExitFailed},
+	CodeAgentFailed: {"the agent ran the request and it failed on the box; the message is the box's", ExitFailed},
+	CodeLocalUnsupported: {"this computer cannot do that itself: node setup, services, logs, diagnostics and the VPN need a POSIX shell, and the jumpgate agent runs only on Linux. " +
+		"Add a Linux machine with `jumpgate hosts add NAME --ssh` for those. The Docker gateway and devnet do run here", ExitFailed},
 	CodeInvalidPrefs:       {"", ExitUsage},
 	CodeNoSSH:              {"this target has no SSH address: it is this machine", ExitFailed},
 	CodeSSHJumpUnsupported: {"this box is reached through a jump host. jumpgate verifies jump hosts itself when it connects, but cannot yet hand you a plain ssh command that verifies them too; use the TUI or the agent actions (jumpgate status, logs, service) instead", ExitFailed},

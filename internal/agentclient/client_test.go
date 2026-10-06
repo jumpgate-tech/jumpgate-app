@@ -28,6 +28,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/signer"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func must(t *testing.T, err error) {
@@ -65,9 +66,8 @@ func (stubExec) Close() error                                                 { 
 // agent's address and the enrolled controller key.
 func startAgent(t *testing.T) (sock string, agentAddr eip712.Address, controller *signer.Key, a *agent.Agent) {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "jgc")
-	must(t, err)
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	testutil.RequireUnix(t) // a real agent needs peer credentials
+	dir := testutil.ShortTempDir(t)
 	agentKey, err := signer.GenerateKey()
 	must(t, err)
 	controller, err = signer.GenerateKey()
@@ -292,9 +292,7 @@ func TestDoRejectsReceiptsThatDoNotAnswerThisRequest(t *testing.T) {
 // fakeAgent serves handler on a fresh unix socket and returns its path.
 func fakeAgent(t *testing.T, handler http.HandlerFunc) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "jgf")
-	must(t, err)
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := testutil.ShortTempDir(t) // AF_UNIX works on Windows too
 	sock := filepath.Join(dir, "a.sock")
 	ln, err := net.Listen("unix", sock)
 	must(t, err)

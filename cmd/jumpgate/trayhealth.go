@@ -50,3 +50,38 @@ func overallHealth(gws []gwHealth) healthKind {
 	}
 	return healthOff
 }
+
+// healthTooltip is the status item's hover text, the single source for the
+// macOS menubar item (statusitem_darwin.go) and the Windows notification icon
+// (statusitem_windows.go).
+func healthTooltip(k healthKind) string {
+	switch k {
+	case healthOK:
+		return "Jumpgate — serving"
+	case healthWarn:
+		return "Jumpgate — degraded"
+	case healthDown:
+		return "Jumpgate — a gateway is unavailable"
+	}
+	return "Jumpgate — idle"
+}
+
+// trayAction is what a tray menu choice does. The menu ids are fixed here so
+// the mapping is tested without a tray build.
+type trayAction int
+
+const (
+	trayNone trayAction = iota
+	trayOpen
+	trayQuit
+)
+
+func trayActionFor(menuID int) trayAction {
+	switch menuID {
+	case 1:
+		return trayOpen
+	case 2:
+		return trayQuit
+	}
+	return trayNone
+}

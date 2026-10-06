@@ -15,18 +15,14 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // isolate points HOME at a fresh temp dir, so these never touch the real
 // ~/.jumpgate.
 func isolate(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", home)
-	}
-	return home
+	return testutil.Home(t)
 }
 
 func TestDir_IsUnderHomeAndIsNotCreated(t *testing.T) {
@@ -113,9 +109,6 @@ func TestLoad_ABlankRefRPCBaseIsDefaulted(t *testing.T) {
 // The file may hold an AI provider API key, so it is 0600 and its directory
 // 0700 — created that way rather than fixed up afterwards.
 func TestSave_WritesPrivatelyAndCreatesItsDirectory(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix file modes")
-	}
 	isolate(t)
 
 	if err := (Config{AIKey: "sk-secret"}).Save(); err != nil {
@@ -126,21 +119,11 @@ func TestSave_WritesPrivatelyAndCreatesItsDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	di, err := os.Stat(dir)
-	if err != nil {
+	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("the config directory was not created: %v", err)
 	}
-	if perm := di.Mode().Perm(); perm != 0o700 {
-		t.Errorf("directory mode = %04o, want 0700", perm)
-	}
-
-	fi, err := os.Stat(filepath.Join(dir, configFileName))
-	if err != nil {
-		t.Fatalf("stat config: %v", err)
-	}
-	if perm := fi.Mode().Perm(); perm != 0o600 {
-		t.Errorf("file mode = %04o, want 0600 — this file can hold an API key", perm)
-	}
+	testutil.AssertPrivate(t, dir)
+	testutil.AssertPrivate(t, filepath.Join(dir, configFileName)) // this file can hold an API key
 }
 
 // Save leaves no temp file behind. The write goes to a temp file in the same

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // A realistic versions.json matching the shape one.valve.city serves for
@@ -58,6 +60,7 @@ const versions369 = `{
 // broken code produced.
 func runThroughShell(t *testing.T, cmd string) ([]string, string) {
 	t.Helper()
+	testutil.RequirePOSIXShell(t)
 	dir := t.TempDir()
 	// The stub is a shell function, not an executable written to dir: macOS
 	// assesses a newly created executable before it may run, and under many
@@ -156,6 +159,7 @@ func TestRethDownloadCommand_AKeyCannotEscapeIntoASecondCommand(t *testing.T) {
 // capable of being observed at all — a check that can never fail proves
 // nothing about the quoting tests above.
 func TestRethDownloadCommand_TheInjectionCanaryActuallyFires(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	dir := t.TempDir()
 	c := exec.Command("sh", "-c", "touch pwned")
 	c.Dir = dir

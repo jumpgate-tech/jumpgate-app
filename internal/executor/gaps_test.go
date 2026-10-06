@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // ---------------------------------------------------------------------
@@ -21,6 +23,7 @@ import (
 // WriteFile creates the parent directory, because every caller writes into a
 // path that may not exist yet (a data dir, a unit directory, a config sibling).
 func TestLocalWriteFile_CreatesTheParentDirectory(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // local mode refuses on Windows
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a", "b", "c", "erpc.yaml")
 	e := NewLocal()
@@ -89,6 +92,7 @@ func TestLocalWriteFile_ReportsAPathItCannotWrite(t *testing.T) {
 }
 
 func TestLocalReadFile_RoundTripsAndReportsAMissingFile(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // local mode refuses on Windows
 	dir := t.TempDir()
 	path := filepath.Join(dir, "erpc.yaml")
 	e := NewLocal()

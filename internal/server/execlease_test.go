@@ -13,6 +13,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/executor/argvfake"
 )
 
 // execFactory hands out executors and counts how many are open, so a test
@@ -181,5 +182,36 @@ func TestEvictionWaitsForTheOperationInFlight(t *testing.T) {
 	}
 	if _, e := apiErrorFor(err); e.Code != api.CodeUnreachable {
 		t.Fatalf("a call on an evicted executor: %v (%s), want unreachable", err, e.Code)
+	}
+}
+
+// The lease keeps exactly the optional interfaces of what it wraps: callers
+// choose argv or a shell, and this process or a connection, by type assertion.
+func TestLeaseKeepsTheExecutorsOptionalInterfaces(t *testing.T) {
+	fake := argvfake.New()
+	l := lease(fake)
+	if _, ok := l.(executor.ArgvRunner); !ok {
+		t.Error("a leased ArgvRunner lost RunArgv")
+	}
+	h, ok := l.(executor.LocalHost)
+	if !ok || h.HostGOOS() != "windows" {
+		t.Errorf("a leased LocalHost lost its methods (ok=%v)", ok)
+	}
+	if err := executor.RequireShell(l); err == nil {
+		t.Error("a leased shell-less executor passed RequireShell")
+	}
+	if _, err := executor.Exec(context.Background(), l, executor.Command{Argv: []string{"docker", "--version"}, Shell: "command -v docker"}, nil); err != nil {
+		t.Errorf("argv through the lease: %v", err)
+	}
+
+	plain := lease(&autoSucceedExecutor{})
+	if _, ok := plain.(executor.ArgvRunner); ok {
+		t.Error("a leased shell executor claims RunArgv")
+	}
+	if _, ok := plain.(executor.LocalHost); ok {
+		t.Error("a leased shell executor claims to be this machine")
+	}
+	if err := executor.RequireShell(plain); err != nil {
+		t.Errorf("a leased shell executor fails RequireShell: %v", err)
 	}
 }

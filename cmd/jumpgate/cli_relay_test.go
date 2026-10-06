@@ -19,10 +19,7 @@ import (
 // fails. It returns HOME and a snapshot function of what is in it.
 func poisonedHome(t *testing.T) (string, func() string) {
 	t.Helper()
-	home, err := os.MkdirTemp("/tmp", "jgpoison")
-	if err != nil {
-		t.Fatal(err)
-	}
+	home := t.TempDir()
 	jg := filepath.Join(home, ".jumpgate")
 	legacy := filepath.Join(home, ".valve-node-app")
 	for _, d := range []string{filepath.Join(jg, "keys"), legacy} {
@@ -43,7 +40,6 @@ func poisonedHome(t *testing.T) (string, func() string) {
 	}
 	t.Cleanup(func() {
 		_ = os.Chmod(jg, 0o700)
-		os.RemoveAll(home)
 	})
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)

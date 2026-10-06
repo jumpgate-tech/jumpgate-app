@@ -330,9 +330,7 @@ fn cmd_serve(args: impl Iterator<Item = String>) -> billing::Result<()> {
         }
         #[cfg(not(unix))]
         {
-            eprintln!(
-                "error: --socket needs a unix target; this build has no AF_UNIX, use --addr"
-            );
+            eprintln!("error: --socket needs a unix target; this build has no AF_UNIX, use --addr");
             exit(2);
         }
     }
@@ -447,9 +445,7 @@ fn usage() {
     eprintln!("                (--addr and --socket are mutually exclusive)");
     eprintln!("  ({PEPPER_ENV} must be set for every keys command and for serve)");
     eprintln!("  ({ADMIN_TOKEN_ENV} must be set for serve; it gates every /admin/* route)");
-    eprintln!(
-        "  ({RELAY_TOKEN_ENV} must be set for serve; it gates /internal/authenticate only)"
-    );
+    eprintln!("  ({RELAY_TOKEN_ENV} must be set for serve; it gates /internal/authenticate only)");
 }
 
 #[cfg(test)]

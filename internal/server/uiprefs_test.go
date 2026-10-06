@@ -16,6 +16,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/signer"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func getJSON(t *testing.T, url, token string, out any) *http.Response {
@@ -74,7 +75,7 @@ func TestUIPrefsRoundTrip(t *testing.T) {
 
 func controllerServer(t *testing.T, recorded string, sig signer.Signer) (*httptest.Server, string) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	testutil.Home(t)
 	if recorded != "" {
 		if _, err := config.Update(func(c *config.Config) error {
 			c.Controller = &config.Controller{KeyStore: "file", KeyRef: "x", Address: recorded}
@@ -112,6 +113,7 @@ func TestControllerView(t *testing.T) {
 }
 
 func TestCheckSendsASignedAgentInfo(t *testing.T) {
+	testutil.RequireUnix(t) // a real agent answers; its replay persistence fsyncs directories, which Windows cannot
 	ts, token := pairedBox(t, nopExec{}, true)
 	var c api.AgentCheck
 	if res := postJSON(t, ts.URL+"/api/fleet/box/check", token, nil, &c); res.StatusCode != http.StatusOK {

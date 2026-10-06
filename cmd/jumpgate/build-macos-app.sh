@@ -12,7 +12,7 @@
 #     inside a .app (see inAppBundle in main.go) and enters tray mode itself.
 #
 # The tray build needs CGo (WebKit via webview_go), so this is macOS-only and
-# cannot cross-compile. Requires: go, rsvg-convert, iconutil, sips.
+# cannot cross-compile. Requires: go and the Xcode command line tools.
 #
 # Usage:  cmd/jumpgate/build-macos-app.sh [output-dir]
 #   output-dir defaults to the repo root, producing <repo>/Jumpgate.app
@@ -27,7 +27,7 @@ BUNDLE_ID="city.valve.jumpgate"
 EXE_NAME="jumpgate"
 APP="$OUT_DIR/$APP_NAME.app"
 
-VERSION="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo "dev")"
+VERSION="${VERSION:-$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo "dev")}"
 
 echo "==> Building $APP_NAME.app ($VERSION)"
 
@@ -35,30 +35,19 @@ echo "==> Building $APP_NAME.app ($VERSION)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
+# --- the Linux agents this app uploads when pairing (spec D1) --------------
+echo "--> building the embedded Linux agents"
+( cd "$REPO_ROOT" && VERSION="$VERSION" GZIP=1 bash scripts/build-agents.sh internal/agentbin/embedded )
+
 # --- compile the tray binary straight into the bundle -----------------------
-echo "--> go build -tags tray (CGo)"
-CGO_ENABLED=1 go build -tags tray \
+echo "--> go build -tags \"tray embedagents\" (CGo)"
+CGO_ENABLED=1 go build -tags "tray embedagents" \
 	-ldflags "-s -w -X github.com/valve-tech/jumpgate/internal/buildinfo.version=$VERSION" \
 	-o "$APP/Contents/MacOS/$EXE_NAME" \
 	"$REPO_ROOT/cmd/jumpgate"
 
-# --- icon: icon.svg -> AppIcon.icns -----------------------------------------
-echo "--> rendering AppIcon.icns from icon.svg"
-ICONSET="$(mktemp -d)/AppIcon.iconset"
-mkdir -p "$ICONSET"
-render() { rsvg-convert -w "$1" -h "$1" "$SCRIPT_DIR/icon.svg" -o "$ICONSET/$2"; }
-render 16   icon_16x16.png
-render 32   icon_16x16@2x.png
-render 32   icon_32x32.png
-render 64   icon_32x32@2x.png
-render 128  icon_128x128.png
-render 256  icon_128x128@2x.png
-render 256  icon_256x256.png
-render 512  icon_256x256@2x.png
-render 512  icon_512x512.png
-render 1024 icon_512x512@2x.png
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
-rm -rf "$(dirname "$ICONSET")"
+# --- icon: the committed AppIcon.icns (regenerate with scripts/render-icons.sh)
+cp "$SCRIPT_DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
 # --- Info.plist -------------------------------------------------------------
 cat >"$APP/Contents/Info.plist" <<PLIST
@@ -85,6 +74,39 @@ PLIST
 # distribute it to other machines.)
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || \
 	echo "    (codesign skipped — bundle still runs locally)"
+
+# --- Jumpgate Terminal.app: opens the user's terminal running jumpgate ------
+TAPP="$OUT_DIR/$APP_NAME Terminal.app"
+echo "==> Building $APP_NAME Terminal.app"
+rm -rf "$TAPP"
+mkdir -p "$TAPP/Contents/MacOS" "$TAPP/Contents/Resources"
+install -m 0755 "$REPO_ROOT/packaging/macos/jumpgate-terminal" "$TAPP/Contents/MacOS/jumpgate-terminal"
+install -m 0755 "$REPO_ROOT/packaging/macos/jumpgate.command" "$TAPP/Contents/Resources/jumpgate.command"
+# The same binary as the window app: with a terminal and no arguments it
+# opens the terminal home, and it starts the server when a command needs it.
+install -m 0755 "$APP/Contents/MacOS/$EXE_NAME" "$TAPP/Contents/Resources/jumpgate"
+cp "$APP/Contents/Resources/AppIcon.icns" "$TAPP/Contents/Resources/AppIcon.icns"
+cat >"$TAPP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>            <string>$APP_NAME Terminal</string>
+	<key>CFBundleDisplayName</key>     <string>$APP_NAME Terminal</string>
+	<key>CFBundleIdentifier</key>      <string>$BUNDLE_ID.terminal</string>
+	<key>CFBundleExecutable</key>      <string>jumpgate-terminal</string>
+	<key>CFBundleIconFile</key>        <string>AppIcon</string>
+	<key>CFBundlePackageType</key>     <string>APPL</string>
+	<key>CFBundleShortVersionString</key> <string>$VERSION</string>
+	<key>CFBundleVersion</key>         <string>$VERSION</string>
+	<key>LSMinimumSystemVersion</key>  <string>10.15</string>
+	<key>LSUIElement</key>             <true/>
+</dict>
+</plist>
+PLIST
+codesign --force --deep --sign - "$TAPP" >/dev/null 2>&1 || \
+	echo "    (codesign skipped — bundle still runs locally)"
+echo "==> Built $TAPP"
 
 echo "==> Built $APP"
 echo "    open \"$APP\"   # or double-click it in Finder"

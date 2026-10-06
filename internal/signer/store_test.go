@@ -10,6 +10,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/fsperm"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // fakeRunner records commands. The property under test is that a key's hex
@@ -20,7 +23,7 @@ type fakeRunner struct {
 	stdins  []string
 	files   map[string]string // template files read during a call
 	out     string
-	modes   map[string]os.FileMode // template file modes seen during a call
+	private map[string]error // fsperm.CheckPrivate of each template file seen during a call
 	nStores int
 	fn      func(stdin, name string, args []string) (string, error)
 }
@@ -35,12 +38,10 @@ func (f *fakeRunner) run(_ context.Context, stdin string, name string, args ...s
 				f.files = map[string]string{}
 			}
 			f.files[args[i+1]] = string(b)
-			if st, err := os.Stat(args[i+1]); err == nil {
-				if f.modes == nil {
-					f.modes = map[string]os.FileMode{}
-				}
-				f.modes[args[i+1]] = st.Mode().Perm()
+			if f.private == nil {
+				f.private = map[string]error{}
 			}
+			f.private[args[i+1]] = fsperm.CheckPrivate(args[i+1])
 		}
 	}
 	if f.fn != nil {
@@ -51,8 +52,13 @@ func (f *fakeRunner) run(_ context.Context, stdin string, name string, args ...s
 
 func withRunner(t *testing.T, f *fakeRunner, goos string, have ...string) {
 	t.Helper()
-	oldRun, oldGOOS, oldLook := runCmd, hostOS, lookPath
+	oldRun, oldGOOS, oldLook, oldDBus := runCmd, hostOS, lookPath, dbusSession
 	runCmd, hostOS = f.run, goos
+	// A Linux keychain needs a D-Bus session; tests of the no-session case
+	// call withDBus(t, false) after this.
+	if goos == "linux" {
+		dbusSession = func() bool { return true }
+	}
 	lookPath = func(name string) error {
 		for _, h := range have {
 			if h == name {
@@ -61,7 +67,7 @@ func withRunner(t *testing.T, f *fakeRunner, goos string, have ...string) {
 		}
 		return errors.New("not found")
 	}
-	t.Cleanup(func() { runCmd, hostOS, lookPath = oldRun, oldGOOS, oldLook })
+	t.Cleanup(func() { runCmd, hostOS, lookPath, dbusSession = oldRun, oldGOOS, oldLook, oldDBus })
 }
 
 func assertNoSecretInArgv(t *testing.T, f *fakeRunner, secret string) {
@@ -381,7 +387,7 @@ func TestLinuxKeychainFailureNamesTheFileStore(t *testing.T) {
 	}
 }
 
-func TestOnePasswordTemplateIs0600AndRemovedWhenOpFails(t *testing.T) {
+func TestOnePasswordTemplateIsOwnerOnlyAndRemovedWhenOpFails(t *testing.T) {
 	f := &fakeRunner{}
 	mem := memStore(f)
 	f.fn = func(stdin, name string, args []string) (string, error) {
@@ -394,12 +400,12 @@ func TestOnePasswordTemplateIs0600AndRemovedWhenOpFails(t *testing.T) {
 	if _, err := Create(context.Background(), StoreOnePassword, "op://Private/jumpgate-controller/credential"); err == nil {
 		t.Fatal("want an error when op fails")
 	}
-	if len(f.modes) != 1 {
-		t.Fatalf("template files seen: %v", f.modes)
+	if len(f.private) != 1 {
+		t.Fatalf("template files seen: %v", f.private)
 	}
-	for path, mode := range f.modes {
-		if mode != 0o600 {
-			t.Errorf("template mode = %o, want 600", mode)
+	for path, perr := range f.private {
+		if perr != nil {
+			t.Errorf("template %s was not owner-only while op read it: %v", path, perr)
 		}
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("template %s left on disk after op failed", path)
@@ -535,6 +541,7 @@ var realRunCmd = runCmd
 // subprocesses so the production runner is what produces the error type the
 // not-found checks depend on.
 func TestRealRunnerReportsExitCodeAndStderr(t *testing.T) {
+	testutil.RequirePOSIXShell(t) // runs sh and cat
 	cases := []struct {
 		script     string
 		code       int

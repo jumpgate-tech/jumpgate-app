@@ -219,7 +219,9 @@ impl PriceBook {
         let trimmed = method.trim();
         let method = match trimmed {
             "*" => trimmed.to_string(),
-            _ => self.normalize(trimmed).unwrap_or_else(|| trimmed.to_string()),
+            _ => self
+                .normalize(trimmed)
+                .unwrap_or_else(|| trimmed.to_string()),
         };
         let method = method.as_str();
         // Database first, then memory. A failed write must not leave the map
@@ -363,7 +365,9 @@ mod tests {
         assert_eq!(stored, "eth_getLogs");
         assert_eq!(book.price_of_normalized("eth_getLogs", 1).1, 90);
         assert!(
-            book.all_prices().iter().all(|(m, _, _)| m != "ETH_GETLOGS" && m != " ETH_GETLOGS "),
+            book.all_prices()
+                .iter()
+                .all(|(m, _, _)| m != "ETH_GETLOGS" && m != " ETH_GETLOGS "),
             "no stray row under the raw spelling"
         );
     }
@@ -374,8 +378,14 @@ mod tests {
         // before the table knows it. It is stored trimmed, and its spelling
         // becomes the canonical one for later case variants.
         let book = PriceBook::new(Store::open_in_memory().unwrap()).unwrap();
-        assert_eq!(book.set_price("  custom_method ", 0, 7).unwrap(), "custom_method");
-        assert_eq!(book.normalize("CUSTOM_METHOD").as_deref(), Some("custom_method"));
+        assert_eq!(
+            book.set_price("  custom_method ", 0, 7).unwrap(),
+            "custom_method"
+        );
+        assert_eq!(
+            book.normalize("CUSTOM_METHOD").as_deref(),
+            Some("custom_method")
+        );
         assert_eq!(book.price_of_normalized("Custom_Method", 1).1, 7);
         // The "*" default row keeps its name.
         assert_eq!(book.set_price("*", 0, 30).unwrap(), "*");

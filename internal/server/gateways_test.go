@@ -1475,3 +1475,13 @@ func TestKnownSetUnknownGatewayIs404(t *testing.T) {
 		t.Fatalf("got %d/%q, want 404/%s", res.StatusCode, body.Code, api.CodeGatewayNotFound)
 	}
 }
+
+// Windows: the trust-store command needs an elevated prompt, not sudo.
+func TestTrustNeedsRootMessageOnWindows(t *testing.T) {
+	if got := trustNeedsRootMessage("windows", "me"); !strings.Contains(got, "Run as administrator") {
+		t.Fatalf("got %q", got)
+	}
+	if got := trustNeedsRootMessage("linux", "box"); !strings.Contains(got, "sudo") {
+		t.Fatalf("got %q", got)
+	}
+}

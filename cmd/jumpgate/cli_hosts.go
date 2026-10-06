@@ -16,6 +16,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/apiclient"
+	"github.com/valve-tech/jumpgate/internal/bootstrap"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -76,6 +77,14 @@ func hostsAdd(args []string) int {
 	if err := fset.Parse(args[1:]); err != nil || (*local == (*sshArg != "")) {
 		return usage("give exactly one of --ssh or --local")
 	}
+	if *local {
+		if err := bootstrap.LocalSupported(hostGOOS); err != nil {
+			return failed("%v", err)
+		}
+		if geteuid() != 0 && !stdinIsTerminal() {
+			return failed("pairing this machine as a non-root user runs sudo, which asks for your password on a terminal, and stdin is not one. Run `jumpgate hosts add %s --local` from an interactive shell, or as root", name)
+		}
+	}
 
 	if err := checkExistingTarget(name, *local, *sshArg, *jumpArg); err != nil {
 		if errors.Is(err, errBadAddress) {
@@ -89,6 +98,11 @@ func hostsAdd(args []string) int {
 	if !*local {
 		keyPath := *key
 		if keyPath != "" {
+			expanded, err := expandHome(keyPath)
+			if err != nil {
+				return failed("--key: %v", err)
+			}
+			keyPath = expanded
 			// The server resolves paths from its own working directory.
 			abs, err := filepath.Abs(keyPath)
 			if err != nil {
@@ -138,7 +152,22 @@ func hostsAdd(args []string) int {
 		// re-paired or an interrupted pairing finished.
 		fmt.Printf("target %s already exists; pairing it again\n", name)
 	}
-	return streamPair(c, name, *sudo)
+	if *local && geteuid() != 0 {
+		cfg, err := config.Load()
+		if err != nil {
+			return failed("%v", err)
+		}
+		t, ok := findTargetByID(cfg, name)
+		if !ok {
+			return failed("target %s is not in config.json after adding it", name)
+		}
+		addr, code := pairLocalForeground(ctx, os.Stdout, t)
+		if code != 0 {
+			return code
+		}
+		return streamPair(c, name, api.PairRequest{Installed: addr}, true)
+	}
+	return streamPair(c, name, api.PairRequest{Sudo: *sudo}, *local)
 }
 
 // errBadAddress marks an --ssh or --jump value that does not parse.
@@ -449,9 +478,10 @@ var pairFailureCodes = map[api.Code]bool{
 	"": true, api.CodeStepFailed: true, api.CodeVerifyFailed: true, api.CodeRecordFailed: true, api.CodeTransportKey: true,
 }
 
-// streamPair prints each pairing event as it arrives.
-func streamPair(c *apiclient.Client, name string, sudo bool) int {
-	ch, err := c.Pair(context.Background(), name, api.PairRequest{Sudo: sudo})
+// streamPair prints each pairing event as it arrives. local says the target
+// is this machine, which pairing reached without SSH.
+func streamPair(c *apiclient.Client, name string, req api.PairRequest, local bool) int {
+	ch, err := c.Pair(context.Background(), name, req)
 	var e *api.Error
 	if errors.As(err, &e) {
 		if e.Code == api.CodeUnknownHost {
@@ -465,7 +495,7 @@ func streamPair(c *apiclient.Client, name string, sudo bool) int {
 	for ev := range ch {
 		switch {
 		case ev.Done:
-			fmt.Printf("paired: agent %s\nRecommended now: disable root SSH login on the box (PermitRootLogin no). Keep console access as the way back in.\n", ev.Agent)
+			fmt.Print(pairedMessage(ev.Agent, local))
 			return 0
 		case ev.Error != "":
 			code := reportServerError(os.Stderr, "pairing failed at "+ev.Step, apiError{Message: ev.Error, Code: ev.Code, Hint: ev.Hint})
@@ -484,4 +514,15 @@ func streamPair(c *apiclient.Client, name string, sudo bool) int {
 		return failed("the running server is an older jumpgate; run `jumpgate stop` and retry")
 	}
 	return failed("the server closed the stream before pairing finished")
+}
+
+// pairedMessage is what a finished pairing prints. The advice to turn off
+// root SSH login follows an SSH pairing, which may have used it; pairing
+// this machine never touched SSH.
+func pairedMessage(agent string, local bool) string {
+	msg := "paired: agent " + agent + "\n"
+	if !local {
+		msg += "Recommended now: disable root SSH login on the box (PermitRootLogin no). Keep console access as the way back in.\n"
+	}
+	return msg
 }

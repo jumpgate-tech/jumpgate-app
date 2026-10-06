@@ -357,9 +357,9 @@ func TestGatewayCheck_FrontedProbeUsesHTTPSAndVerifies(t *testing.T) {
 	e := caddyReady()
 	p := &gatewayPlan{id: testGatewayID, gw: frontedGateway(), backend: BackendDocker}
 
-	url, cmd, err := p.probeCommand(context.Background(), e, 369)
+	url, cmd, err := curlProbe(p, e, 369)
 	if err != nil {
-		t.Fatalf("probeCommand: %v", err)
+		t.Fatalf("probe: %v", err)
 	}
 	if !strings.HasPrefix(url, "https://"+tlsHost+":8443/") {
 		t.Errorf("url = %q, want the https front door", url)
@@ -380,9 +380,9 @@ func TestGatewayCheck_FrontedProbeUsesHTTPSAndVerifies(t *testing.T) {
 	// is a real Let's Encrypt one, so there is no internal CA to name, and the
 	// public name genuinely resolves, so the loopback --resolve pin is dropped.
 	acme := &gatewayPlan{id: testGatewayID, gw: acmeFrontedGateway(), backend: BackendDocker}
-	url, cmd, err = acme.probeCommand(context.Background(), e, 369)
+	url, cmd, err = curlProbe(acme, e, 369)
 	if err != nil {
-		t.Fatalf("probeCommand: %v", err)
+		t.Fatalf("probe: %v", err)
 	}
 	if !strings.HasPrefix(url, "https://"+tlsHost+":8443/") {
 		t.Errorf("acme url = %q, want the https front door", url)
@@ -399,9 +399,9 @@ func TestGatewayCheck_FrontedProbeUsesHTTPSAndVerifies(t *testing.T) {
 
 	// An unfronted gateway is unchanged: plain http on the published port.
 	plain := &gatewayPlan{id: testGatewayID, gw: testGateway(), backend: BackendDocker}
-	url, cmd, err = plain.probeCommand(context.Background(), e, 369)
+	url, cmd, err = curlProbe(plain, e, 369)
 	if err != nil {
-		t.Fatalf("probeCommand: %v", err)
+		t.Fatalf("probe: %v", err)
 	}
 	if !strings.HasPrefix(url, "http://127.0.0.1:4100/") || strings.Contains(cmd, "--cacert") {
 		t.Errorf("unfronted probe changed: %q / %q", url, cmd)
@@ -455,4 +455,10 @@ func TestExportRootCA(t *testing.T) {
 	if got, err := exportRootCA(context.Background(), early, "c", "/tmp/root.crt"); got || err != nil {
 		t.Fatalf("want a soft no, got %v / %v", got, err)
 	}
+}
+
+// curlProbe is the readiness probe as an SSH target runs it.
+func curlProbe(p *gatewayPlan, e executor.Executor, chainID int) (string, string, error) {
+	url, pr, err := p.probe(context.Background(), e, chainID)
+	return url, pr.CurlCommand(), err
 }

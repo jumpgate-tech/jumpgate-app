@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // TestLocalShellError covers the control-plane-OS decision without needing to
@@ -29,7 +31,7 @@ func TestLocalShellError(t *testing.T) {
 			name:          "windows has no POSIX shell",
 			goos:          "windows",
 			wantErr:       true,
-			wantSubstring: "SSH target",
+			wantSubstring: "added over SSH",
 		},
 	}
 
@@ -68,32 +70,8 @@ func TestLocalAvailable_MatchesHost(t *testing.T) {
 	}
 }
 
-// TestLocal_UnsupportedHostFailsEveryCall asserts the refusal is total. A
-// local executor on a shell-less host must not half-work: writing a systemd
-// unit onto the control plane's own C: drive while no command can ever run is
-// worse than an outright error.
-func TestLocal_UnsupportedHostFailsEveryCall(t *testing.T) {
-	e := &local{unsupported: localShellError("windows")}
-
-	if _, err := e.Run(context.Background(), "echo hello", nil); !errors.Is(err, ErrNoPOSIXShell) {
-		t.Errorf("Run error = %v, want ErrNoPOSIXShell", err)
-	}
-	path := filepath.Join(t.TempDir(), "file.txt")
-	if err := e.WriteFile(context.Background(), path, []byte("x"), 0o600); !errors.Is(err, ErrNoPOSIXShell) {
-		t.Errorf("WriteFile error = %v, want ErrNoPOSIXShell", err)
-	}
-	if _, err := os.Stat(path); err == nil {
-		t.Errorf("WriteFile created %s on an unsupported host; it must not touch the filesystem", path)
-	}
-	if _, err := e.ReadFile(context.Background(), path); !errors.Is(err, ErrNoPOSIXShell) {
-		t.Errorf("ReadFile error = %v, want ErrNoPOSIXShell", err)
-	}
-	if err := e.Close(); err != nil {
-		t.Errorf("Close error = %v, want nil (closing a never-opened executor is a no-op)", err)
-	}
-}
-
 func TestLocal_Run_CapturesStdout(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -112,6 +90,7 @@ func TestLocal_Run_CapturesStdout(t *testing.T) {
 // The --local bootstrap uploads the agent binary through RunOpts.Stdin, so
 // the local executor must feed it to the command.
 func TestLocal_Run_FeedsStdin(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -125,6 +104,7 @@ func TestLocal_Run_FeedsStdin(t *testing.T) {
 }
 
 func TestLocal_Run_CapturesStderrSeparately(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -141,6 +121,7 @@ func TestLocal_Run_CapturesStderrSeparately(t *testing.T) {
 }
 
 func TestLocal_Run_NonZeroExitIsNotAnError(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -154,6 +135,7 @@ func TestLocal_Run_NonZeroExitIsNotAnError(t *testing.T) {
 }
 
 func TestLocal_Run_StreamReceivesLinesInOrder(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -175,6 +157,7 @@ func TestLocal_Run_StreamReceivesLinesInOrder(t *testing.T) {
 }
 
 func TestLocal_WriteFile_ReadFile_RoundTrips(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -204,6 +187,7 @@ func TestLocal_WriteFile_ReadFile_RoundTrips(t *testing.T) {
 }
 
 func TestLocal_WriteFile_OverwriteAppliesNewMode(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -234,6 +218,7 @@ func TestLocal_WriteFile_OverwriteAppliesNewMode(t *testing.T) {
 }
 
 func TestLocal_Run_CtxCancelKillsFast(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -259,6 +244,7 @@ func TestLocal_Run_CtxCancelKillsFast(t *testing.T) {
 // orphan naturally exits (30s here) or the process's own WaitDelay elapses.
 // Killing the whole process group must make Run return well under 2s.
 func TestLocal_Run_CtxCancelKillsProcessGroup(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -283,6 +269,7 @@ func TestLocal_Run_CtxCancelKillsProcessGroup(t *testing.T) {
 const largeLineCmd = "head -c 2097152 /dev/zero | tr '\\0' 'x'"
 
 func TestLocal_Run_LargeSingleLineStdout_NoStream(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 
@@ -304,6 +291,7 @@ func TestLocal_Run_LargeSingleLineStdout_NoStream(t *testing.T) {
 }
 
 func TestLocal_Run_LargeSingleLineStdout_WithStream(t *testing.T) {
+	testutil.RequirePOSIXShell(t)
 	e := NewLocal()
 	t.Cleanup(func() { _ = e.Close() })
 

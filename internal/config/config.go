@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/filelock"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // defaultRefRPCBase is the public demo-key reference RPC base URL, used
@@ -74,7 +76,7 @@ type AgentPairing struct {
 // Controller is this machine's signing identity. The key itself is never here:
 // KeyRef names where it lives (a path, a keychain item, an op:// reference).
 type Controller struct {
-	KeyStore string `json:"keyStore"` // "file" | "keychain" | "1password"
+	KeyStore string `json:"keyStore"` // "file" | "keychain" | "wincred" | "1password"
 	KeyRef   string `json:"keyRef"`
 	Address  string `json:"address"`
 }
@@ -668,6 +670,87 @@ func ConfirmedHostsFile() (string, error) {
 	return filepath.Join(dir, "confirmed_hosts"), nil
 }
 
+// TightenState restricts ~/.jumpgate and every secret already in it to the
+// owner (ruling P29). Writes go through fsperm, but a file that is never
+// rewritten keeps whatever permissions it had: a transport key made by an
+// older release, files moved over from ~/.valve-node-app, a known_hosts
+// another user can append to. The server runs this once at startup. keyFile
+// is the controller key's path when it is kept in a file, else "".
+//
+// Missing files are skipped. It returns the files it had to tighten, so the
+// caller can say so (other users may already have read them), and warnings
+// for files it could not fix, which do not stop the server. The two signing
+// keys are different: if the configured key file or the transport key cannot
+// be made private, err names it and the server must not start, since a key
+// is never to be left open to other users and used anyway.
+func TightenState(keyFile string) (tightened []string, warnings []error, err error) {
+	dir, err := Dir()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := fsperm.MkdirPrivate(dir); err != nil {
+		warnings = append(warnings, fmt.Errorf("config: restrict %s: %w", dir, err))
+	}
+	// The transport key's name is internal/server's (transportKeyPath).
+	transportKey := filepath.Join(dir, "ssh", "jumpgate_ed25519")
+	paths := []string{
+		filepath.Join(dir, configFileName),
+		filepath.Join(dir, "run", "server.json"),
+		filepath.Join(dir, "confirmed_hosts"),
+		filepath.Join(dir, "known_hosts"),
+	}
+	// ssh/ holds the transport key, keys/ the default controller key file.
+	for _, sub := range []string{"run", "ssh", "keys"} {
+		d := filepath.Join(dir, sub)
+		if _, err := os.Lstat(d); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err := fsperm.MkdirPrivate(d); err != nil {
+			warnings = append(warnings, fmt.Errorf("config: restrict %s: %w", d, err))
+		}
+		if sub == "run" {
+			continue // only server.json in it is a secret; the socket is restricted when it is made
+		}
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			warnings = append(warnings, fmt.Errorf("config: read %s: %w", d, err))
+			continue
+		}
+		for _, e := range entries {
+			if p := filepath.Join(d, e.Name()); !slices.Contains(paths, p) {
+				paths = append(paths, p)
+			}
+		}
+	}
+	if keyFile != "" && !slices.Contains(paths, keyFile) {
+		paths = append(paths, keyFile)
+	}
+	for _, p := range paths {
+		if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			warnings = append(warnings, fmt.Errorf("config: inspect %s: %w", p, err))
+			continue
+		}
+		if fsperm.CheckPrivate(p) == nil {
+			continue
+		}
+		perr := fsperm.MakePrivate(p)
+		if perr == nil {
+			perr = fsperm.CheckPrivate(p) // made private, or still not?
+		}
+		if perr != nil {
+			if p == keyFile || p == transportKey {
+				return tightened, warnings, fmt.Errorf("config: %s holds a signing key and other users can read or change it, and jumpgate could not restrict it to you (%v); make it a regular file only you can read (chmod 600 on macOS and Linux; Properties > Security on Windows), then start jumpgate again", p, perr)
+			}
+			warnings = append(warnings, fmt.Errorf("config: restrict %s: %w", p, perr))
+			continue
+		}
+		tightened = append(tightened, p)
+	}
+	return tightened, warnings, nil
+}
+
 // MigrateLegacyDir moves ~/.valve-node-app to ~/.jumpgate once, and leaves a
 // MOVED pointer file in the old place. It is a rename, not a copy, so secrets
 // (provider keys, VPN private keys) never exist twice on disk. It reports
@@ -807,7 +890,7 @@ func lockPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsperm.MkdirPrivate(dir); err != nil {
 		return "", fmt.Errorf("config: create %s: %w", dir, err)
 	}
 	return filepath.Join(dir, lockFileName), nil
@@ -867,53 +950,23 @@ func load() (Config, error) {
 }
 
 // Save writes c to ~/.jumpgate/config.json, creating the directory if
-// needed. The write is atomic (write to a temp file in the same directory,
-// then rename over the target) and the file is mode 0600, since it may
-// contain an AI provider API key.
+// needed. The write is atomic and owner-only (fsperm.WriteFilePrivate), since
+// the file may contain AI provider API keys and VPN private keys.
 func (c Config) Save() error {
 	dir, err := Dir()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsperm.MkdirPrivate(dir); err != nil {
 		return fmt.Errorf("config: create %s: %w", dir, err)
 	}
-
-	path := filepath.Join(dir, configFileName)
-
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return fmt.Errorf("config: marshal: %w", err)
 	}
-
-	tmp, err := os.CreateTemp(dir, configFileName+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("config: create temp file: %w", err)
+	if err := fsperm.WriteFilePrivate(filepath.Join(dir, configFileName), data); err != nil {
+		return fmt.Errorf("config: write: %w", err)
 	}
-	tmpPath := tmp.Name()
-	// If anything below fails before the rename, don't leave the temp file
-	// behind.
-	success := false
-	defer func() {
-		if !success {
-			os.Remove(tmpPath)
-		}
-	}()
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("config: write temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("config: close temp file: %w", err)
-	}
-	if err := os.Chmod(tmpPath, 0o600); err != nil {
-		return fmt.Errorf("config: chmod temp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("config: rename into place: %w", err)
-	}
-	success = true
 	return nil
 }
 

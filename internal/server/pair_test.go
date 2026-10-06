@@ -2,11 +2,15 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -23,9 +27,12 @@ import (
 	gliderssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 	"github.com/valve-tech/jumpgate/internal/signer"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 type pairTestSSHD struct {
@@ -82,22 +89,11 @@ func startPairTestSSHD(t *testing.T, handler gliderssh.Handler) pairTestSSHD {
 	return pairTestSSHD{host: "127.0.0.1", port: ln.Addr().(*net.TCPAddr).Port, hostKey: hostSigner.PublicKey(), keyPath: keyPath}
 }
 
-// shortHome is a temporary HOME short enough for unix socket paths.
-func shortHome(t *testing.T) string {
-	t.Helper()
-	home, err := os.MkdirTemp("/tmp", "jgp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(home) })
-	return home
-}
-
 // pairServer saves an ssh target for d and starts a server with a controller
 // key.
 func pairServer(t *testing.T, d pairTestSSHD) (*httptest.Server, string) {
 	t.Helper()
-	t.Setenv("HOME", shortHome(t))
+	testutil.Home(t)
 	_, err := config.Update(func(c *config.Config) error {
 		c.Targets = append(c.Targets, config.Target{ID: "box", Mode: "ssh",
 			SSH: &executor.SSHConfig{Host: d.host, Port: d.port, User: "root", KeyPath: d.keyPath}})
@@ -201,9 +197,7 @@ func TestPairStreamsStepsAndReportsTheFailingStep(t *testing.T) {
 		t.Fatal("a failed pairing was recorded")
 	}
 	// The tunnel key exists now, 0600, for the next attempt.
-	if fi, err := os.Stat(transportKeyPath()); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("transport key: %v %v", fi, err)
-	}
+	testutil.AssertPrivate(t, transportKeyPath())
 }
 
 func TestPairRefusesAKeylessServer(t *testing.T) {
@@ -226,7 +220,7 @@ func TestPairRefusesAKeylessServer(t *testing.T) {
 // Pairing takes the same per-target slot a wipe, reset or clear does.
 func TestPairTakesTheTargetSlot(t *testing.T) {
 	d := startPairTestSSHD(t, nil)
-	t.Setenv("HOME", shortHome(t))
+	testutil.Home(t)
 	_, _ = config.Update(func(c *config.Config) error {
 		c.Targets = append(c.Targets, config.Target{ID: "box", Mode: "ssh",
 			SSH: &executor.SSHConfig{Host: d.host, Port: d.port, User: "root", KeyPath: d.keyPath}})
@@ -249,7 +243,7 @@ func TestPairTakesTheTargetSlot(t *testing.T) {
 }
 
 func TestEnsureTransportKeyIsStable(t *testing.T) {
-	t.Setenv("HOME", shortHome(t))
+	testutil.Home(t)
 	a, err := ensureTransportKey()
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +263,8 @@ func TestEnsureTransportKeyIsStable(t *testing.T) {
 // A dangling symlink at the key path is an error, never a reason to generate
 // a key (and never a loop).
 func TestEnsureTransportKeyRefusesADanglingSymlink(t *testing.T) {
-	t.Setenv("HOME", shortHome(t))
+	testutil.RequireUnix(t) // creating a symlink needs a privilege on Windows
+	testutil.Home(t)
 	path := transportKeyPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -298,7 +293,7 @@ func TestEnsureTransportKeyRefusesADanglingSymlink(t *testing.T) {
 // Concurrent first pairings all get the same key, and none reads a
 // half-written file.
 func TestEnsureTransportKeyConcurrentFirstUseAgrees(t *testing.T) {
-	t.Setenv("HOME", shortHome(t))
+	testutil.Home(t)
 	const n = 16
 	lines := make([]string, n)
 	errs := make([]error, n)
@@ -322,9 +317,7 @@ func TestEnsureTransportKeyConcurrentFirstUseAgrees(t *testing.T) {
 			t.Fatalf("call %d returned a different key:\n%s\n%s", i, lines[i], lines[0])
 		}
 	}
-	if fi, err := os.Stat(filepath.Dir(transportKeyPath())); err != nil || fi.Mode().Perm() != 0o700 {
-		t.Fatalf("ssh dir: %v %v", fi, err)
-	}
+	testutil.AssertPrivate(t, filepath.Dir(transportKeyPath()))
 	entries, _ := os.ReadDir(filepath.Dir(transportKeyPath()))
 	if len(entries) != 1 {
 		t.Fatalf("temp files left behind: %v", entries)
@@ -333,7 +326,7 @@ func TestEnsureTransportKeyConcurrentFirstUseAgrees(t *testing.T) {
 
 // An existing key is returned as is, never replaced.
 func TestEnsureTransportKeyKeepsAnExistingKey(t *testing.T) {
-	t.Setenv("HOME", shortHome(t))
+	testutil.Home(t)
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	block, _ := ssh.MarshalPrivateKey(priv, "")
 	path := transportKeyPath()
@@ -352,5 +345,194 @@ func TestEnsureTransportKeyKeepsAnExistingKey(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(path); string(got) != string(want) {
 		t.Fatal("the key file was rewritten")
+	}
+}
+
+// localPairServer saves a local target and starts a server whose OS, euid
+// and local executor the test chooses.
+func localPairServer(t *testing.T, goos string, euid int, local executor.Executor) (*httptest.Server, string) {
+	t.Helper()
+	testutil.Home(t)
+	if _, err := config.Update(func(c *config.Config) error {
+		c.Targets = append(c.Targets, config.Target{ID: "box", Mode: "local"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctrl, _ := signer.GenerateKey()
+	token := NewSessionToken()
+	s := New(Config{Token: token, UI: fstest.MapFS{}, Signer: ctrl,
+		NewLocalExecutor: func() executor.Executor { return local },
+		Geteuid:          func() int { return euid }})
+	s.goos = goos
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	return ts, token
+}
+
+// pairRecordingExec answers every command with "Darwin", so bootstrap stops at
+// its Linux preflight, and records what it was asked to run.
+type pairRecordingExec struct {
+	mu   sync.Mutex
+	cmds []string
+}
+
+func (r *pairRecordingExec) Run(_ context.Context, cmd string, _ *executor.RunOpts) (executor.Result, error) {
+	r.mu.Lock()
+	r.cmds = append(r.cmds, cmd)
+	r.mu.Unlock()
+	return executor.Result{Stdout: "Darwin\n"}, nil
+}
+func (r *pairRecordingExec) WriteFile(context.Context, string, []byte, fs.FileMode) error { return nil }
+func (r *pairRecordingExec) ReadFile(context.Context, string) ([]byte, error)             { return nil, nil }
+func (r *pairRecordingExec) Close() error                                                 { return nil }
+
+func (r *pairRecordingExec) commands() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.cmds...)
+}
+
+func readCode(t *testing.T, res *http.Response) (int, string, string) {
+	t.Helper()
+	var e struct{ Code, Hint string }
+	_ = json.NewDecoder(res.Body).Decode(&e)
+	return res.StatusCode, e.Code, e.Hint
+}
+
+func TestPairLocalIsRefusedOffLinux(t *testing.T) {
+	rec := &pairRecordingExec{}
+	ts, token := localPairServer(t, "darwin", 0, rec)
+	status, code, _ := readCode(t, postPair(t, ts, token, `{}`))
+	// 409, as on every other route: the request is well formed, this
+	// machine cannot honour it.
+	if status != http.StatusConflict || code != string(api.CodeLocalUnsupported) {
+		t.Fatalf("got %d %q, want 409 local_unsupported", status, code)
+	}
+	if cmds := rec.commands(); len(cmds) != 0 {
+		t.Fatalf("ran commands: %v", cmds)
+	}
+}
+
+// Off Linux the refusal is the same whatever else the request carries.
+func TestPairLocalOffLinuxRefusesBeforeReadingInstalled(t *testing.T) {
+	ts, token := localPairServer(t, "windows", 1000, &pairRecordingExec{})
+	status, code, _ := readCode(t, postPair(t, ts, token, `{"installed":"me"}`))
+	// 409, as on every other route: the request is well formed, this
+	// machine cannot honour it.
+	if status != http.StatusConflict || code != string(api.CodeLocalUnsupported) {
+		t.Fatalf("got %d %q, want 409 local_unsupported", status, code)
+	}
+}
+
+// D5: the detached server has no terminal, so it never tries sudo for a
+// non-root local pairing; it says how to do it instead.
+func TestPairLocalNonRootNeedsTheTerminal(t *testing.T) {
+	rec := &pairRecordingExec{}
+	ts, token := localPairServer(t, "linux", 1000, rec)
+	status, code, hint := readCode(t, postPair(t, ts, token, `{}`))
+	if status != http.StatusConflict || code != "local_needs_terminal" || !strings.Contains(hint, "jumpgate hosts add") {
+		t.Fatalf("got %d %q %q, want 409 local_needs_terminal with a hint", status, code, hint)
+	}
+	if cmds := rec.commands(); len(cmds) != 0 {
+		t.Fatalf("ran commands: %v", cmds)
+	}
+}
+
+// B-4: as root, pairing runs the steps directly. Stock Debian with a root
+// password has no sudo at all.
+func TestPairLocalAsRootDoesNotUseSudo(t *testing.T) {
+	rec := &pairRecordingExec{}
+	ts, token := localPairServer(t, "linux", 0, rec)
+	res := postPair(t, ts, token, `{}`)
+	_, _ = io.ReadAll(res.Body)
+	cmds := rec.commands()
+	if len(cmds) == 0 {
+		t.Fatal("no command ran")
+	}
+	for _, c := range cmds {
+		if strings.Contains(c, "sudo") {
+			t.Fatalf("root pairing used sudo: %q", c)
+		}
+	}
+}
+
+// D18: the CLI ran the privileged steps in the foreground; the server runs
+// nothing on the machine and goes straight to verifying the agent it names.
+func TestPairLocalInstalledRunsNothingAndVerifies(t *testing.T) {
+	rec := &pairRecordingExec{}
+	ts, token := localPairServer(t, "linux", 1000, rec)
+	res := postPair(t, ts, token, `{"installed":"0x0000000000000000000000000000000000000001"}`)
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", res.StatusCode, body)
+	}
+	// No agent listens in the test, so verification is where it stops.
+	if !strings.Contains(string(body), "done in the foreground") || !strings.Contains(string(body), `"step":"verify","error"`) {
+		t.Fatalf("stream:\n%s", body)
+	}
+	if cmds := rec.commands(); len(cmds) != 0 {
+		t.Fatalf("ran commands: %v", cmds)
+	}
+}
+
+func TestPairInstalledMustBeAnAddress(t *testing.T) {
+	ts, token := localPairServer(t, "linux", 1000, &pairRecordingExec{})
+	if res := postPair(t, ts, token, `{"installed":"me"}`); res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", res.StatusCode)
+	}
+}
+
+func TestPairInstalledOnlyAppliesToLocalTargets(t *testing.T) {
+	d := startPairTestSSHD(t, nil)
+	ts, token := pairServer(t, d)
+	res := postPair(t, ts, token, `{"installed":"0x0000000000000000000000000000000000000001"}`)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", res.StatusCode)
+	}
+}
+
+// linuxBoxExec passes bootstrap's preflight as an amd64 systemd box and
+// fails every later command, so a pairing gets as far as choosing the agent
+// binary and stops at the upload.
+type linuxBoxExec struct{ pairRecordingExec }
+
+func (b *linuxBoxExec) Run(ctx context.Context, cmd string, o *executor.RunOpts) (executor.Result, error) {
+	_, _ = b.pairRecordingExec.Run(ctx, cmd, o)
+	switch {
+	case cmd == "uname -s":
+		return executor.Result{Stdout: "Linux\n"}, nil
+	case cmd == "uname -m":
+		return executor.Result{Stdout: "x86_64\n"}, nil
+	case strings.HasPrefix(cmd, "command -v systemctl"):
+		return executor.Result{}, nil
+	}
+	return executor.Result{ExitCode: 1, Stderr: "refused by the test box"}, nil
+}
+
+// D14 / P19: the pairing stream says where the agent binary came from, so a
+// stale developer override is visible to the person pairing. (The e2e
+// harness drives bootstrap directly, so it is asserted here, on the stream.)
+func TestPairStreamNamesTheAgentSource(t *testing.T) {
+	ts, token := localPairServer(t, "linux", 0, &linuxBoxExec{})
+	dir := filepath.Join(os.Getenv("HOME"), ".jumpgate", "agents")
+	if err := fsperm.MkdirPrivate(dir); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("dev agent")
+	sum := sha256.Sum256(body)
+	if err := fsperm.WriteFilePrivate(filepath.Join(dir, "jumpgate-linux-amd64"), body); err != nil {
+		t.Fatal(err)
+	}
+	if err := fsperm.WriteFilePrivate(filepath.Join(dir, "SHA256SUMS"), []byte(hex.EncodeToString(sum[:])+"  jumpgate-linux-amd64\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	res := postPair(t, ts, token, `{}`)
+	defer res.Body.Close()
+	stream, _ := io.ReadAll(res.Body)
+	want := `"line":"agent binary for linux/amd64: dev override ~/.jumpgate/agents"`
+	if !strings.Contains(string(stream), want) {
+		t.Fatalf("stream does not name the agent source (%s):\n%s", want, stream)
 	}
 }

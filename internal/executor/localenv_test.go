@@ -63,7 +63,22 @@ func TestLocalEnvNoPathEntry(t *testing.T) {
 }
 
 func TestGuiPathDirsEmptyOffDarwin(t *testing.T) {
-	if dirs := guiPathDirs("linux", "/home/x"); dirs != nil {
+	if dirs := guiPathDirs("linux", "/home/x", nil); dirs != nil {
 		t.Errorf("guiPathDirs(linux) = %v, want nil", dirs)
+	}
+}
+
+// An Explorer-started jumpgate-tray.exe inherits the PATH of the login
+// session. If Docker Desktop was installed after login, its CLI dir is not
+// on that PATH, so localEnv appends it, the same way it appends Homebrew on
+// macOS. Windows spells the variable "Path" and separates entries with ";".
+func TestLocalEnvAddsDockerDesktopOnWindows(t *testing.T) {
+	env := localEnv([]string{`Path=C:\Windows\system32`, `ProgramFiles=C:\Program Files`}, "windows", `C:\Users\dev`)
+	want := `Path=C:\Windows\system32;C:\Program Files\Docker\Docker\resources\bin`
+	if env[0] != want {
+		t.Fatalf("got %q\nwant %q", env[0], want)
+	}
+	if dirs := guiPathDirs("windows", "", []string{"Path=x"}); dirs != nil {
+		t.Errorf("guiPathDirs(windows) with no ProgramFiles = %v, want nil", dirs)
 	}
 }

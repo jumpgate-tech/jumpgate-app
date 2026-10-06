@@ -7,10 +7,11 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func cowKey(t *testing.T) *Key {
@@ -105,12 +106,15 @@ func TestRecoverRejectsABadV(t *testing.T) {
 	}
 }
 
-func TestKeyFileRoundTripAndPermissions(t *testing.T) {
+// Review Focus 1: a key other users can read is refused on every OS,
+// including Windows, where the mode check used to be skipped.
+func TestLoadKeyFileRefusesASharedKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keys", "controller.key")
 	k, err := GenerateKeyFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	testutil.AssertPrivate(t, path)
 	if _, err := GenerateKeyFile(path); err == nil {
 		t.Fatal("GenerateKeyFile overwrote an existing key")
 	}
@@ -118,13 +122,27 @@ func TestKeyFileRoundTripAndPermissions(t *testing.T) {
 	if err != nil || loaded.Address() != k.Address() {
 		t.Fatalf("LoadKeyFile = %v, %v", loaded, err)
 	}
-	if runtime.GOOS == "windows" {
-		return
+	testutil.Loosen(t, path)
+	if _, err := LoadKeyFile(path); !errors.Is(err, ErrKeyFilePermissions) {
+		t.Fatalf("LoadKeyFile on a shared key = %v, want ErrKeyFilePermissions", err)
 	}
-	if err := os.Chmod(path, 0o644); err != nil {
+}
+
+// M-4: a planted link is refused, not followed. Windows has no O_NOFOLLOW,
+// so there the refusal is the Lstat before the open. Creating a symlink on
+// Windows needs a privilege (or developer mode) the runner may lack; then
+// there is nothing to test.
+func TestLoadKeyFileRefusesASymlink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.key")
+	if _, err := GenerateKeyFile(real); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadKeyFile(path); !errors.Is(err, ErrKeyFilePermissions) {
-		t.Fatalf("group/world-readable key: err = %v, want ErrKeyFilePermissions", err)
+	link := filepath.Join(dir, "link.key")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	if _, err := LoadKeyFile(link); err == nil || !strings.Contains(err.Error(), "is a link") {
+		t.Fatalf("LoadKeyFile(symlink) = %v, want a refusal of the link", err)
 	}
 }

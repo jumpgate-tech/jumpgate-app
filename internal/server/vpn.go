@@ -192,8 +192,11 @@ func (s *Server) vpnExecutor(w http.ResponseWriter, cfg config.Config, v config.
 		t = ft
 	}
 	ex, err := s.getExecutor(t)
+	if err == nil {
+		err = executor.RequireShell(ex)
+	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeExecutorError(w, err, http.StatusInternalServerError)
 		return nil, "", false
 	}
 	return ex, ifaceOf(v), true
@@ -250,7 +253,7 @@ func (s *Server) bringUpOverlay(ctx context.Context, cfg config.Config, v config
 		}
 		t = ft
 	}
-	ex, err := s.getExecutor(t)
+	ex, err := s.getShellExecutor(t)
 	if err != nil {
 		return err
 	}

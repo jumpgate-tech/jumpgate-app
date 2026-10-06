@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Jumpgate
+GenericName=Node fleet control
+Comment=Run your node fleet from a terminal
+Exec=env JUMPGATE_LAUNCHER=1 jumpgate
+Icon=jumpgate
+Terminal=true
+Categories=System;Monitor;
+Keywords=ethereum;pulsechain;node;validator;

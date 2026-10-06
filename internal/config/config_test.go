@@ -8,6 +8,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // catalog cannot import config (config already imports catalog), so
@@ -22,7 +23,7 @@ func TestValveKeyPlaceholderMatchesCatalog(t *testing.T) {
 }
 
 func TestLoadMissingReturnsZeroValueWithDefaultRefRPCBase(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testutil.Home(t)
 
 	c, err := Load()
 	if err != nil {
@@ -40,7 +41,7 @@ func TestLoadMissingReturnsZeroValueWithDefaultRefRPCBase(t *testing.T) {
 }
 
 func TestSaveThenLoadRoundTrips(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testutil.Home(t)
 
 	want := Config{
 		Targets: []Target{
@@ -114,7 +115,7 @@ Endpoint = 203.0.113.7:51820
 `
 
 func TestVPNRoundTripsVerbatim(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testutil.Home(t)
 
 	want := Config{
 		VPNs: []VPN{
@@ -149,8 +150,7 @@ func TestVPNRoundTripsVerbatim(t *testing.T) {
 // the same reason AIKey does. TestSaveWritesMode0600 covers the file mode; this
 // pins that a VPN config is a thing that actually goes into it.
 func TestVPNSecretStoredInPrivateFile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 
 	c := Config{VPNs: []VPN{{ID: "proton-us", Config: sampleWGConf}}}
 	if err := c.Save(); err != nil {
@@ -158,13 +158,7 @@ func TestVPNSecretStoredInPrivateFile(t *testing.T) {
 	}
 
 	path := filepath.Join(home, ".jumpgate", "config.json")
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("Stat: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("config.json holding a VPN key has mode %o, want 0600", perm)
-	}
+	testutil.AssertPrivate(t, path) // it holds a VPN key
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -189,8 +183,7 @@ func TestFindVPN(t *testing.T) {
 // grow an empty "vpns" key — VPNs is omitempty precisely so an operator who
 // never touched a VPN never sees the field appear.
 func TestVPNsOmittedWhenEmpty(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 
 	if err := (Config{AIProvider: "groq"}).Save(); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -205,7 +198,7 @@ func TestVPNsOmittedWhenEmpty(t *testing.T) {
 }
 
 func TestVPNServerRoundTrips(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testutil.Home(t)
 
 	want := Config{
 		VPNServers: []VPNServer{{
@@ -247,8 +240,7 @@ func TestVPNServerRoundTrips(t *testing.T) {
 // would be a leak of a secret this app went out of its way never to hold. This
 // pins that the serialised shape carries no private-key field.
 func TestVPNServerPersistsNoPrivateKey(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 
 	c := Config{VPNServers: []VPNServer{{
 		ID: "home", Interface: "jumpgate0", Address: "10.9.0.1/24", ListenPort: 51820,
@@ -281,8 +273,7 @@ func TestFindVPNServer(t *testing.T) {
 }
 
 func TestVPNServersOmittedWhenEmpty(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	if err := (Config{AIProvider: "groq"}).Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -321,25 +312,17 @@ func TestTrustedOverlayCIDRs(t *testing.T) {
 }
 
 func TestSaveWritesMode0600(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 
 	if err := (Config{}).Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	info, err := os.Stat(filepath.Join(home, ".jumpgate", "config.json"))
-	if err != nil {
-		t.Fatalf("Stat: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("config.json mode = %o, want 0600", perm)
-	}
+	testutil.AssertPrivate(t, filepath.Join(home, ".jumpgate", "config.json"))
 }
 
 func TestSaveIsAtomicNoLeftoverTempFile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 
 	if err := (Config{AIProvider: "groq"}).Save(); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -359,8 +342,7 @@ func TestSaveIsAtomicNoLeftoverTempFile(t *testing.T) {
 }
 
 func TestDirIsHomeDotValveNode(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 
 	d, err := Dir()
 	if err != nil {
@@ -394,8 +376,7 @@ func writeRawConfig(t *testing.T, home, body string) {
 // running and still serving. The upgrade is silent and lossless, and the id
 // it lands on is the one that maps back to the container that already exists.
 func TestLoad_MigratesAPerTargetGatewayToATopLevelOne(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 
 	writeRawConfig(t, home, `{
 	  "targets": [
@@ -478,8 +459,7 @@ func TestLoad_MigratesAPerTargetGatewayToATopLevelOne(t *testing.T) {
 // that only one container can have. The first keeps it; the second gets its
 // own id (and therefore its own container) rather than silently colliding.
 func TestLoad_MigratesTwoGatewaysWithoutColliding(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 
 	writeRawConfig(t, home, `{
 	  "targets": [
@@ -512,8 +492,7 @@ func TestLoad_MigratesTwoGatewaysWithoutColliding(t *testing.T) {
 // Guessing at what an endpoint "probably meant" is how a migration silently
 // repoints somebody's traffic.
 func TestLoad_MigrationDoesNotAdoptAnUnrelatedLocalURL(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 
 	writeRawConfig(t, home, `{
 	  "targets": [

@@ -21,6 +21,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/filelock"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // ErrAlreadyRunning means another server holds the lock.
@@ -56,14 +57,15 @@ type Shape struct {
 	KeyAdmin      bool   `json:"keyAdmin,omitempty"`
 }
 
-// RunDir is ~/.jumpgate/run, created 0700.
+// RunDir is ~/.jumpgate/run, owner-only (it holds the session token and the
+// server socket).
 func RunDir() (string, error) {
 	base, err := config.Dir()
 	if err != nil {
 		return "", err
 	}
 	dir := filepath.Join(base, "run")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsperm.MkdirPrivate(dir); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -106,18 +108,14 @@ func alreadyRunning(dir string) error {
 	return fmt.Errorf("%w, pid %d", ErrAlreadyRunning, info.PID)
 }
 
-// Publish writes server.json (0600: it carries the session token) once the
-// listeners are up.
+// Publish writes server.json (owner-only: it carries the session token) once
+// the listeners are up.
 func (h *Holder) Publish(info Info) error {
 	b, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(h.dir, "server.json.tmp")
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(h.dir, "server.json"))
+	return fsperm.WriteFilePrivate(filepath.Join(h.dir, "server.json"), b)
 }
 
 // Release removes server.json and drops the lock.
@@ -174,6 +172,8 @@ func Find(ctx context.Context) (Info, bool, error) {
 	return info, res.StatusCode == http.StatusOK, nil
 }
 
+var startServer = startDetached // a seam for tests
+
 // SkewWarning is the note for an operator whose running server is a different
 // jumpgate build than this one, or "" when the versions agree. A CLI upgraded
 // under a running server would otherwise meet routes the old server lacks as
@@ -207,18 +207,20 @@ func EnsureRunning(ctx context.Context, exe string, warn io.Writer) (Info, error
 	if err != nil {
 		return Info{}, err
 	}
-	logf, err := os.OpenFile(filepath.Join(dir, "server.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	logf, err := fsperm.OpenAppendPrivate(filepath.Join(dir, "server.log"))
 	if err != nil {
 		return Info{}, err
 	}
 	defer logf.Close()
 	cmd := exec.Command(exe, "serve", "--no-open")
 	cmd.Stdout, cmd.Stderr = logf, logf
-	detach(cmd)
-	if err := cmd.Start(); err != nil {
+	// The server never pins the directory the CLI happened to start in.
+	cmd.Dir = dir
+	started, err := startServer(cmd)
+	if err != nil {
 		return Info{}, fmt.Errorf("daemon: start server: %w", err)
 	}
-	_ = cmd.Process.Release()
+	_ = started.Process.Release()
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {

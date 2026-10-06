@@ -1,18 +1,15 @@
 // This file holds what the server needs to act as a controller of paired
-// agents: the SSH transport key, the agent binaries bootstrap uploads, how an
-// agent is reached, and where each target's intent sequence is kept.
+// agents: the SSH transport key, how an agent is reached, and where each
+// target's intent sequence is kept.
 package server
 
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -21,6 +18,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
 
 // jgPath is a path under the controller's state directory (~/.jumpgate).
@@ -67,10 +65,7 @@ func ensureTransportKey() (string, error) {
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := fsperm.MkdirPrivate(dir); err != nil {
 		return "", err
 	}
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -81,16 +76,12 @@ func ensureTransportKey() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	tmp, err := os.CreateTemp(dir, ".jumpgate_ed25519.tmp-*")
+	tmp, err := fsperm.CreateTempPrivate(dir, ".jumpgate_ed25519.tmp-*")
 	if err != nil {
 		return "", err
 	}
 	defer os.Remove(tmp.Name())
-	// CreateTemp already makes the file 0600; Chmod states it outright.
-	werr := tmp.Chmod(0o600)
-	if werr == nil {
-		_, werr = tmp.Write(pem.EncodeToMemory(block))
-	}
+	_, werr := tmp.Write(pem.EncodeToMemory(block))
 	if werr == nil {
 		werr = tmp.Sync()
 	}
@@ -124,37 +115,6 @@ func readTransportKey(path string) (string, error) {
 		return "", fmt.Errorf("transport key %s: %w", path, err)
 	}
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))) + " jumpgate-controller", nil
-}
-
-// agentBinary finds the Linux agent for arch: this binary when it already is
-// one, otherwise ~/.jumpgate/agents/jumpgate-linux-<arch>, checked against the
-// SHA256SUMS written beside it by scripts/build-agents.sh.
-func agentBinary(arch string) (string, error) {
-	if runtime.GOOS == "linux" && runtime.GOARCH == arch {
-		return os.Executable()
-	}
-	dir := jgPath("agents")
-	name := "jumpgate-linux-" + arch
-	path := filepath.Join(dir, name)
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("no agent binary for linux/%s at %s; run scripts/build-agents.sh", arch, path)
-	}
-	sums, err := os.ReadFile(filepath.Join(dir, "SHA256SUMS"))
-	if err != nil {
-		return "", fmt.Errorf("no SHA256SUMS beside %s", path)
-	}
-	got := sha256.Sum256(content)
-	for _, line := range strings.Split(string(sums), "\n") {
-		f := strings.Fields(line)
-		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == name {
-			if f[0] != hex.EncodeToString(got[:]) {
-				return "", fmt.Errorf("%s does not match its SHA256SUMS entry", path)
-			}
-			return path, nil
-		}
-	}
-	return "", fmt.Errorf("%s is not listed in SHA256SUMS", name)
 }
 
 // agentTarget is how this controller reaches t's agent: directly for a local

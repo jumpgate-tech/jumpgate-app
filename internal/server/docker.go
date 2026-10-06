@@ -29,9 +29,21 @@ type dockerStatusResponse struct {
 	// Hint is operator-facing guidance for the current state (install it, or
 	// start it). Empty when Docker is present and running.
 	Hint string `json:"hint,omitempty"`
+	// WindowsContainers is true when an engine answered but runs Windows
+	// containers, which cannot run jumpgate's Linux images. Running is then
+	// false: the engine is up but unusable, and the UI's not-running path
+	// shows Hint without trying to start or provision anything (spec D35).
+	WindowsContainers bool `json:"windowsContainers,omitempty"`
 }
 
-const dockerStartHint = "Docker is installed but not running. Start Docker Desktop, OrbStack or colima (`colima start`)."
+// dockerStartHintFor is the stopped-engine hint for goos. Windows has
+// neither OrbStack nor colima, so it names Docker Desktop alone.
+func dockerStartHintFor(goos string) string {
+	if goos == "windows" {
+		return "Docker is installed but not running. Start Docker Desktop and retry."
+	}
+	return "Docker is installed but not running. Start Docker Desktop, OrbStack or colima (`colima start`)."
+}
 
 func (s *Server) handleDockerStatus(w http.ResponseWriter, r *http.Request) {
 	info, err := ops.ProbeDocker(r.Context(), s.newLocalExecutor())
@@ -48,12 +60,16 @@ func (s *Server) handleDockerStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	default:
 		resp.Present = info.Present
-		resp.Running = info.DaemonReachable
-		if resp.Present && !resp.Running {
-			resp.Hint = dockerStartHint
+		resp.WindowsContainers = info.WindowsContainers()
+		resp.Running = info.DaemonReachable && !resp.WindowsContainers
+		switch {
+		case resp.WindowsContainers:
+			resp.Hint = info.WindowsContainersHint()
+		case resp.Present && !resp.Running:
+			resp.Hint = dockerStartHintFor(runtime.GOOS)
 		}
 	}
-	resp.CanStart = runtime.GOOS == "darwin" && resp.Present && !resp.Running
+	resp.CanStart = runtime.GOOS == "darwin" && resp.Present && !resp.Running && !resp.WindowsContainers
 	writeJSON(w, http.StatusOK, resp)
 }
 

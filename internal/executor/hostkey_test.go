@@ -16,11 +16,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // testHostKey generates a distinct public key per call.
@@ -62,15 +63,7 @@ func TestTOFU_FirstContactRecordsTheKey(t *testing.T) {
 		t.Error("the recorded key is not the one presented")
 	}
 
-	if runtime.GOOS != "windows" {
-		fi, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if perm := fi.Mode().Perm(); perm != 0o600 {
-			t.Errorf("mode = %04o, want 0600", perm)
-		}
-	}
+	testutil.AssertPrivate(t, path)
 }
 
 // The second connection to the same host with the same key is accepted, and

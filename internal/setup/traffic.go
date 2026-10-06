@@ -9,7 +9,9 @@ package setup
 // backends. Splitting them that way is the same arrangement ops.ERPCRunArgs and
 // ops.DockerRun already use.
 //
-// WHY curl through the executor rather than a Go http.Client: the gateway may
+// WHY the scrape runs on the target (curl over SSH; in process only when the
+// target is this machine, see ops.HTTPProbe) rather than a plain Go
+// http.Client from here: the gateway may
 // be on another machine. The counters bind loopback ON THE TARGET, deliberately
 // (see ops.ERPCRunSpec.MetricsPort), so from this process there is nothing to
 // dial for an SSH target — the only path to 127.0.0.1 over there is a command
@@ -22,10 +24,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/metrics"
+	"github.com/valve-tech/jumpgate/internal/ops"
 )
 
 // ErrMetricsOff is returned when the operator has turned the gateway's
@@ -87,18 +91,16 @@ func ReadGatewaySamples(ctx context.Context, e executor.Executor, g catalog.Gate
 	}
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/metrics", g.MetricsHTTP())
-	cmd := fmt.Sprintf("curl -s --max-time %d %s", trafficScrapeTimeout, shQuote(url))
-
-	res, err := e.Run(ctx, cmd, nil)
-	if err != nil {
+	out, err := ops.HTTPProbe{URL: url, MaxTime: trafficScrapeTimeout * time.Second}.Do(ctx, e)
+	var pe *ops.ProbeError
+	switch {
+	case errors.As(err, &pe):
+		return nil, fmt.Errorf("traffic: %s did not answer (%s) — the gateway publishes its counters on loopback only, so this is read on the machine it runs on", url, pe.Detail)
+	case err != nil:
 		return nil, fmt.Errorf("traffic: scrape %s: %w", url, err)
 	}
-	if res.ExitCode != 0 {
-		return nil, fmt.Errorf("traffic: %s did not answer (curl exit %d): %s — the gateway publishes its counters on loopback only, so this is read on the machine it runs on",
-			url, res.ExitCode, strings.TrimSpace(res.Stderr))
-	}
 
-	body := strings.TrimSpace(res.Stdout)
+	body := strings.TrimSpace(out)
 	if body == "" {
 		// An empty body with a zero exit is what a listener that accepted the
 		// connection and served nothing looks like. Saying so beats handing a

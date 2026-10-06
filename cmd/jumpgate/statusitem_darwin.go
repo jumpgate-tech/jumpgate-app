@@ -21,6 +21,7 @@ package main
 #cgo darwin CFLAGS: -x objective-c
 #cgo darwin LDFLAGS: -framework Cocoa
 #import <Cocoa/Cocoa.h>
+#include <stdlib.h>
 
 @interface ValveTray : NSObject <NSWindowDelegate>
 @property (strong) NSWindow *window;
@@ -90,8 +91,6 @@ package main
 // Strong global so ARC keeps the controller (menu targets, window delegate,
 // event monitor) alive for the whole process; a local would be collected.
 static ValveTray *gValveTray = nil;
-
-void valveSetHealth(int kind); // defined below; install paints an initial dot
 
 // valveHubImage draws the hub/route mark — a central node routing out to three
 // others — as a template NSImage, so macOS tints it for the light/dark menubar.
@@ -188,8 +187,6 @@ void valveInstallStatusItem(void *nswindow) {
 
     gValveTray = tray;
 
-    valveSetHealth(0); // neutral dot until the first health poll lands
-
     // Start hidden and open under the icon on the next run-loop tick (once the
     // status button has a real frame to anchor to), so launch shows a popover
     // under the icon rather than a centered window flash.
@@ -202,16 +199,16 @@ void valveInstallStatusItem(void *nswindow) {
 // template image (system tints it for the light/dark menubar); the dot is a
 // small colored "●" set as the button's title, so its color survives. Must run
 // on the main thread — the poller marshals via webview.Dispatch.
-void valveSetHealth(int kind) {
+void valveSetHealth(int kind, const char *tipUTF8) {
     if (gValveTray == nil) return;
     NSColor *color;
-    NSString *tip;
     switch (kind) {
-        case 1: color = NSColor.systemGreenColor;  tip = @"Jumpgate — serving"; break;
-        case 2: color = NSColor.systemOrangeColor; tip = @"Jumpgate — degraded"; break;
-        case 3: color = NSColor.systemRedColor;    tip = @"Jumpgate — a gateway is unavailable"; break;
-        default: color = NSColor.tertiaryLabelColor; tip = @"Jumpgate — idle"; break;
+        case 1: color = NSColor.systemGreenColor;  break;
+        case 2: color = NSColor.systemOrangeColor; break;
+        case 3: color = NSColor.systemRedColor;    break;
+        default: color = NSColor.tertiaryLabelColor; break;
     }
+    NSString *tip = [NSString stringWithUTF8String:tipUTF8];
     NSDictionary *attrs = @{
         NSForegroundColorAttributeName: color,
         NSFontAttributeName: [NSFont systemFontOfSize:9],
@@ -228,10 +225,16 @@ import "unsafe"
 // installStatusItem adds the menubar status item bound to the webview window.
 func installStatusItem(nswindow unsafe.Pointer) {
 	C.valveInstallStatusItem(nswindow)
+	setHealth(healthOff) // neutral dot until the first health poll lands
 }
 
 // setHealth repaints the menubar status dot. Must be called on the main thread
 // (the poller marshals via webview.Dispatch).
 func setHealth(k healthKind) {
-	C.valveSetHealth(C.int(k))
+	tip := C.CString(healthTooltip(k)) // the strings are shared with Windows
+	defer C.free(unsafe.Pointer(tip))
+	C.valveSetHealth(C.int(k), tip)
 }
+
+// removeStatusItem is a no-op on macOS: the status item goes away with NSApp.
+func removeStatusItem() {}

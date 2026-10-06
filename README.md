@@ -17,6 +17,22 @@ Supported networks:
 - **PulseChain**
 - **PulseChain v4** (testnet)
 
+## Platforms
+
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| Desktop window | Jumpgate.app (menubar) | jumpgate-tray.exe (notification icon) | "Jumpgate (window)" menu entry |
+| Terminal launcher | Jumpgate Terminal.app | double-click jumpgate.exe | "Jumpgate" menu entry |
+| Key store default | Keychain | Credential Manager (`wincred`) | Secret Service with a desktop session, else an owner-only file |
+| Pair this machine (`--local`) | no | no | yes (root, or sudo on the terminal) |
+| Minimum | macOS 10.15 | Windows 10 1803 / Server 2019 | WebKitGTK 4.1 for the window (Ubuntu 22.04+, Debian 12+, Fedora 38+) |
+
+The agent that runs on your node boxes is Linux-only (amd64 and arm64). Every release of jumpgate carries both agents inside it, so a controller on any OS can pair any Linux box without extra downloads.
+
+The downloads are not code-signed yet: Windows SmartScreen may warn ("More info" > "Run anyway"), and macOS may ask you to open the app from System Settings > Privacy & Security the first time.
+
+Want a node on your own desktop? See [Running a node on your desktop](docs/run-a-node-on-your-desktop.md): run it in a Linux VM and pair it over SSH.
+
 ## v0.2
 
 v0.2 rounds out day-to-day node operation from the same UI: start, stop, and
@@ -67,13 +83,12 @@ a trusted, private network.
 ## Command line
 
 The `jumpgate` binary also has a command line for managing boxes from a
-terminal. Run `jumpgate` with no arguments (or with flags such as `--bind`) for
-the web app as before. The web app and `jumpgate serve` share one server per
+terminal. Run `jumpgate` with no arguments in a terminal for the terminal home: status, a menu, and the command list (`jumpgate help`). `jumpgate open` opens the web app in your browser, starting the background server if needed; `jumpgate serve` runs the server in the foreground. The desktop launchers on each OS open a terminal running `jumpgate`. Flags such as `--bind`, or no terminal (a pipe, the app bundle), start the web app as before. The web app and `jumpgate serve` share one server per
 user: if one is already running, launching the app opens it instead of
 starting a second.
 
 ```bash
-jumpgate keys init                      # create the controller signing key: --store keychain (default where macOS `security` or Linux `secret-tool` exists), file (a 0600 file) or 1password (--ref op://vault/item/field)
+jumpgate keys init                      # create the controller signing key: --store keychain (macOS, or Linux with a desktop session), wincred (Windows Credential Manager, the Windows default), file (an owner-only file; the default over SSH and on headless Linux) or 1password (--ref op://vault/item/field)
 jumpgate hosts add box-a --ssh root@203.0.113.7   # pair a box (or: --local for this machine)
 jumpgate status box-a                   # also: disk, endpoints, firewall
 jumpgate logs box-a -n 200
@@ -174,6 +189,10 @@ actually in the key store, and flags it if that address differs from the
 recorded one. `jumpgate keys show --recorded` prints only the recorded address,
 without opening the key, so it never prompts the keychain or 1Password.
 
+**Linux over SSH:** the server jumpgate starts in the background survives closing the terminal. On distributions where systemd-logind kills a user's processes at logout (`KillUserProcesses=yes`), run `loginctl enable-linger $USER` once so it also survives the SSH session ending.
+
+**Windows:** the background server needs Windows 10 version 1803 or Windows Server 2019 or later (for its local socket).
+
 Real nodes are not supported directly on macOS or Windows. To run one on a
 desktop anyway, use a WSL2 or Lima VM as an ordinary Linux box; see
 [Running a node on your desktop](docs/run-a-node-on-your-desktop.md).
@@ -190,37 +209,63 @@ desktop anyway, use a WSL2 or Lima VM as an ordinary Linux box; see
 - Node services (the execution and beacon clients) run as the dedicated
   unprivileged `valve-node-app` system user, which setup creates. (In v0.1–v0.2
   they ran as root; re-running setup migrates an existing install.)
+- **ssh-agent:** jumpgate uses an agent only when it is run by you (on Windows,
+  also by SYSTEM or Administrators: the OpenSSH agent service). Under `sudo`
+  your agent is refused with "running under sudo? the agent belongs to <user>";
+  pass `--key` or run jumpgate as yourself. A system-wide `ssh_known_hosts` is
+  read only when just trusted accounts can write it and its directory.
 
 ## Quickstart
 
 ### Download a release
 
-Grab the archive for your platform from the
-[latest release](https://github.com/valve-tech/jumpgate/releases/latest),
-extract it, and run the binary:
+Grab the download for your platform from the
+[latest release](https://github.com/jumpgate-tech/jumpgate-app/releases/latest)
+(`checksums.txt` lists a SHA-256 for every file; each file also carries a
+build-provenance attestation, checked with
+`gh attestation verify <file> --repo jumpgate-tech/jumpgate-app`). Each one carries both Linux
+agents, so it can pair a Linux box with nothing else to fetch.
+
+- **macOS:** `Jumpgate-macos-<arch>.zip` (`arm64` for Apple silicon, `amd64`
+  for Intel). Unzip it for `Jumpgate.app` (a window and a menubar icon) and
+  `Jumpgate Terminal.app` (opens a terminal running jumpgate). Drag them to
+  Applications.
+- **Windows:** `jumpgate-windows-amd64.zip`. `jumpgate.exe` is the console
+  program (double-click it, or run it from a terminal); `jumpgate-tray.exe` is
+  the window with a notification icon. A `README.txt` is inside.
+- **Linux:** `jumpgate-linux-<arch>.tar.gz` (`amd64` or `arm64`). Extract it and
+  run `./install.sh` for a per-user install under `~/.local` with two menu
+  entries ("Jumpgate" for a terminal, "Jumpgate (window)" for the desktop
+  panel); `./install.sh --uninstall` removes exactly what it installed.
+- **Headless** (servers, scripts): the `jumpgate_<os>_<arch>` archives
+  (`.tar.gz`, `.zip` on Windows) hold the single `jumpgate` binary:
 
 ```bash
 tar xzf jumpgate_<os>_<arch>.tar.gz   # the Windows archive is a .zip
 ./jumpgate
 ```
 
-This prints a local URL with a one-time session token and opens it in your
-browser:
+In a terminal, bare `jumpgate` opens the terminal home: status and a menu, where `o` opens the web app in your browser. `jumpgate serve` runs the server in the foreground; `jumpgate open` starts it if needed and signs your browser in with a one-time login link, which works once, within 60 seconds, from this computer only. The link reaches the browser through a private file under `~/.jumpgate/run/login`, never on a command line. When no browser can be opened, or with `jumpgate open --print` (for a sandboxed snap or flatpak browser that cannot read `~/.jumpgate`, or a system where `.html` files open in an editor rather than a browser), it prints the link instead:
 
 ```
-http://127.0.0.1:8799/?token=<token>
+http://127.0.0.1:8799/login?code=<one-time code>
 ```
+
+Without a terminal (a pipe, the app bundle) or with flags such as `--bind`, the app behaves as before: it starts the server and opens it in your browser.
 
 Pass `--bind` to change the listen address, or `--no-open` to skip opening a
-browser automatically.
+browser automatically. Login links are accepted only over loopback, so to use
+jumpgate from another machine keep the default bind and tunnel to it, e.g.
+`ssh -L 8799:127.0.0.1:8799 you@host`, then run `jumpgate open --print` on the
+host and open the printed link on your machine.
 
 ### Build from source
 
 Requires Go 1.25+ and Node 22+.
 
 ```bash
-git clone https://github.com/valve-tech/jumpgate.git
-cd jumpgate
+git clone https://github.com/jumpgate-tech/jumpgate-app.git
+cd jumpgate-app
 cd cmd/jumpgate/web && npm ci && npm run build && cd ../../..
 go build -o jumpgate ./cmd/jumpgate
 ./jumpgate
@@ -234,9 +279,10 @@ compiled to static assets and embedded directly into the binary via
 to run — just the binary.
 
 The local server binds to `127.0.0.1` by default and requires a session
-token for every request (via `Authorization: Bearer`, a cookie set from the
-initial `?token=` link, or the query parameter itself), so nothing on your
-machine can drive it without that token.
+token for every request (via `Authorization: Bearer`, or a cookie set when
+a one-time login link is opened), so nothing on your machine can drive it
+without that token. The token itself never appears on a command line or in
+the terminal.
 
 jumpgate itself always runs locally — the UI and API bind to your own
 machine. What it sets up can be **local** (the same machine) or **remote
@@ -247,6 +293,32 @@ dedicated server. Both modes need root on the target for setup itself (see
 Requirements above); the node services it installs run unprivileged.
 
 ## Contributing
+
+This repository is the public, auditable copy of the code and the home of the
+releases. Development and CI run on the maintainers' own self-hosted GitLab, so
+changes are not developed or tested here.
+
+**Manual checks.** Some things only a person on the real desktop can confirm.
+Before a release, someone checks:
+
+- macOS: double-click `Jumpgate.app` and `Jumpgate Terminal.app` from a
+  downloaded zip; the window, the menubar icon and the terminal hand-off work.
+- Windows: `jumpgate.exe` from a double-click and from a terminal, and
+  `jumpgate-tray.exe` (window, notification icon, quit).
+- Linux: on a desktop, `./install.sh`, both menu entries, then `--uninstall`;
+  also on arm64.
+- Linux `--local` pairing with sudo asks for the password on the terminal.
+- A fresh macOS release controller pairs a Linux box over SSH with no
+  `~/.jumpgate/agents` directory (the fingerprint prompt needs a person to
+  answer yes).
+
+**macOS apps.** `cmd/jumpgate/build-macos-app.sh` builds `Jumpgate.app` and
+`Jumpgate Terminal.app`; run `scripts/test-macos-bundle.sh` on a Mac to build
+and check both (plist lint, signature, bundle layout, terminal hand-off). The
+icon is committed as `cmd/jumpgate/AppIcon.icns`; after editing `icon.svg`,
+run `scripts/render-icons.sh` (needs docker). The apps are ad-hoc signed, not
+notarized: if Gatekeeper prompts about a quarantined download, right-click the
+app and choose Open.
 
 The web UI (`cmd/jumpgate/web/`) has no end-to-end (Playwright) test suite
 by design for v1 — the API layer it talks to (`internal/server`) is fully

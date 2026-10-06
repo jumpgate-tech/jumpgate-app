@@ -24,16 +24,28 @@ var subcommands = map[string]func(args []string) int{
 	"serve": cmdServe, "relay": cmdRelay, "stop": cmdStop, "keys": cmdKeys, "agent": cmdAgent, "hosts": cmdHosts,
 	"status": cmdIntent("status", intent.KindStatusRead), "disk": cmdIntent("disk", intent.KindDiskRead),
 	"endpoints": cmdIntent("endpoints", intent.KindEndpointsRead), "firewall": cmdIntent("firewall", intent.KindFirewallRead),
-	"logs": cmdLogs, "service": cmdService, "ssh": cmdSSH,
+	"logs": cmdLogs, "service": cmdService, "ssh": cmdSSH, "help": cmdHelp, "open": cmdOpen,
 }
 
 func main() {
+	if guiSubcommandRefused(os.Args) {
+		showErrorDialog("jumpgate-tray.exe is the desktop app and has no console. Run commands with jumpgate.exe in a terminal, for example:\n\n    jumpgate.exe " + strings.Join(os.Args[1:], " "))
+		os.Exit(exitCode("usage"))
+	}
 	if err := migrateOnStartup(os.Args, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "jumpgate:", err)
+		if isGUIExe() {
+			// No console for the line above to reach (B-3).
+			showErrorDialog("jumpgate: " + err.Error())
+		}
+		pauseIfStandalone(os.Stdin, os.Stderr)
 		os.Exit(1)
 	}
 	if code, handled := dispatch(os.Args, os.Stderr); handled {
 		os.Exit(code)
+	}
+	if isTerminalLaunch(os.Args) {
+		os.Exit(runTerminalHome(context.Background(), os.Stdin, os.Stdout))
 	}
 	runApp()
 }
@@ -74,7 +86,7 @@ func dispatch(args []string, stderr io.Writer) (code int, handled bool) {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	fmt.Fprintf(stderr, "jumpgate: unknown command %q\ncommands: %s\n(run `jumpgate` with no arguments, or with flags such as --bind, for the web app)\n", args[1], strings.Join(names, " "))
+	fmt.Fprintf(stderr, "jumpgate: unknown command %q\ncommands: %s\n(run `jumpgate help` for the commands; `jumpgate serve` runs the server in the foreground)\n", args[1], strings.Join(names, " "))
 	return exitCode("usage"), true
 }
 
@@ -120,11 +132,17 @@ func failed(format string, a ...any) int {
 	return exitCode("failed")
 }
 
-// jgFile is a path inside ~/.jumpgate.
+// exit is os.Exit; a seam for tests.
+var exit = os.Exit
+
+// jgFile is a path inside ~/.jumpgate. With no home directory there is no
+// safe place for jumpgate's files, so it stops instead of writing keys into
+// the working directory (M-12).
 func jgFile(parts ...string) string {
 	dir, err := config.Dir()
 	if err != nil {
-		dir = "."
+		fmt.Fprintln(os.Stderr, "jumpgate:", err)
+		exit(1)
 	}
 	return filepath.Join(append([]string{dir}, parts...)...)
 }

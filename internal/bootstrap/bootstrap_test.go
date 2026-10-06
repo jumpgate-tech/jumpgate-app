@@ -9,7 +9,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -122,16 +121,14 @@ func opts(t *testing.T, box *fakeBox) Options {
 
 func optsWithKey(t *testing.T, box *fakeBox, key string) Options {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "jumpgate-linux-amd64")
-	_ = os.WriteFile(bin, []byte("binary"), 0o755)
 	var ctrl eip712.Address
 	ctrl[19] = 0xC
 	return Options{
-		Exec: box, AgentBinary: func(arch string) (string, error) {
+		Exec: box, AgentBinary: func(arch string) ([]byte, error) {
 			if arch != "amd64" {
-				return "", errors.New("wrong arch " + arch)
+				return nil, errors.New("wrong arch " + arch)
 			}
-			return bin, nil
+			return []byte("binary"), nil
 		},
 		Controller: ctrl, ControllerLabel: "laptop", TransportKey: key,
 	}
@@ -554,6 +551,21 @@ func TestLocalSkipsSSHDAndEnrollsTheUID(t *testing.T) {
 	}
 	if !strings.Contains(all, "--local-uid 501") {
 		t.Error("local uid not enrolled")
+	}
+}
+
+// A root controller needs no socket grant: the agent's peer gate admits uid
+// 0 already, and enrolling it would open the socket to every local user
+// (SocketMode turns 0666 once any local uid is listed).
+func TestLocalAsRootEnrollsNoUID(t *testing.T) {
+	box := freshBox()
+	o := opts(t, box)
+	o.Local, o.LocalUID, o.TransportKey = true, 0, ""
+	if _, err := Run(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if all := strings.Join(box.cmds, "\n"); strings.Contains(all, "--local-uid") {
+		t.Fatalf("root pairing enrolled a local uid:\n%s", all)
 	}
 }
 

@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/valve-tech/jumpgate/cmd/jumpgate/web"
-	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/relay"
 	"github.com/valve-tech/jumpgate/internal/secretenv"
@@ -57,7 +56,8 @@ const defaultERPCURL = "http://127.0.0.1:4000"
 // every process that inherits the environment. Setting both is an error, as is
 // a named file that is unreadable, empty, or not private to this user (see
 // readPrivateFile: a symlink, a non-regular file, group/other permission bits
-// or another owner are all refused).
+// or another owner on unix, and a reparse point or a DACL fsperm does not
+// accept on Windows, are all refused).
 func readToken(getenv func(string) string, name string) (string, error) {
 	direct, file := getenv(name), getenv(name+"_FILE")
 	if file == "" {
@@ -205,10 +205,14 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 	secretenv.Unset(secretEnvNames...)
 
 	// Fail fast on a corrupt config before serving. The server re-reads it per
-	// request rather than holding this value.
-	cfg, err := config.Load()
+	// request rather than holding this value. loadServerConfig also restricts
+	// the state directory and every secret in it to this user (P29) before
+	// anything opens them; a signing key it cannot restrict is fatal. Only
+	// then is the controller key opened and checked against the recorded
+	// address.
+	cfg, err := loadServerConfig(logw)
 	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
+		return nil, err
 	}
 	sgn, keyErr := openControllerKey(cfg)
 	if keyErr != nil {
@@ -258,6 +262,9 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 		Signer:    sgn,
 		SignerErr: keyErr,
 		Shutdown:  shutdown,
+		// Without it the mint API returns bare codes and `jumpgate open` can
+		// only print the link.
+		LoginDir: loginDir(),
 	})
 
 	b := &builtServer{

@@ -163,11 +163,14 @@ func decodeResult[T any](raw json.RawMessage, err error) (T, error) {
 
 // legacyExec is the executor for an unpaired target that has been set up. It
 // is the server's cached executor, so its host-key policy is legacySSHConfig's.
+// Every legacy node operation is shell commands, so a target with no POSIX
+// shell (this computer, on Windows) is refused here: ErrNoPOSIXShell, which
+// apiErrorFor answers with 409 local_unsupported.
 func (s *Server) legacyExec(t config.Target) (executor.Executor, error) {
 	if t.Wire == nil {
 		return nil, errNotSetUp
 	}
-	ex, err := s.getExecutor(t)
+	ex, err := s.getShellExecutor(t)
 	if err != nil {
 		return nil, &dialError{err}
 	}

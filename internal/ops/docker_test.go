@@ -30,7 +30,7 @@ func TestERPCRunArgs_Defaults(t *testing.T) {
 	}
 	want = append(want,
 		"-p", "127.0.0.1:4000:4000",
-		"-v", "/var/lib/valve-node-app/369/erpc.yaml:/erpc.yaml:ro",
+		"--mount", "type=bind,source=/var/lib/valve-node-app/369/erpc.yaml,target=/erpc.yaml,readonly",
 		ERPCImageTag(),
 	)
 	if !reflect.DeepEqual(got, want) {
@@ -409,8 +409,8 @@ func TestERPCRunArgs_CustomImageAndName(t *testing.T) {
 
 func TestERPCRunArgs_MountIsReadOnly(t *testing.T) {
 	args := ERPCRunArgs(ERPCRunSpec{HostConfigPath: "/etc/valve/erpc.yaml"})
-	got := valueAfter(t, args, "-v")
-	if got != "/etc/valve/erpc.yaml:/erpc.yaml:ro" {
+	got := valueAfter(t, args, "--mount")
+	if got != bindMount("/etc/valve/erpc.yaml", "/erpc.yaml") {
 		t.Fatalf("mount: got %q", got)
 	}
 }
@@ -421,9 +421,9 @@ func TestERPCRunArgs_MountIsReadOnly(t *testing.T) {
 func TestERPCRunArgs_PathWithSpacesIsNotPreQuoted(t *testing.T) {
 	const p = `/Users/Some One/Library/Application Support/valve/erpc.yaml`
 	args := ERPCRunArgs(ERPCRunSpec{HostConfigPath: p})
-	got := valueAfter(t, args, "-v")
-	if got != p+":/erpc.yaml:ro" {
-		t.Fatalf("mount arg: got %q, want %q", got, p+":/erpc.yaml:ro")
+	got := valueAfter(t, args, "--mount")
+	if want := bindMount(p, "/erpc.yaml"); got != want {
+		t.Fatalf("mount arg: got %q, want %q", got, want)
 	}
 	if strings.Contains(got, `'`) || strings.Contains(got, `\`) {
 		t.Fatalf("pure renderer must not shell-quote: %q", got)
@@ -996,7 +996,7 @@ func TestERPCRunArgs_JoinsTheNetworkAndCanPublishNothing(t *testing.T) {
 		t.Errorf("a fronted gateway publishes nothing: %v", fronted)
 	}
 	// The config mount survives — it is how the gateway is configured at all.
-	if !strings.Contains(joined, "/home/o/.valve-node-app/erpc.yaml:/erpc.yaml:ro") {
+	if !strings.Contains(joined, "source=/home/o/.valve-node-app/erpc.yaml,target=/erpc.yaml,readonly") {
 		t.Errorf("want the read-only config mount: %v", fronted)
 	}
 
@@ -1070,7 +1070,7 @@ func TestCaddyRunArgs(t *testing.T) {
 		// The default bind is WIDE — a TLS front on loopback serves only the
 		// machine that never needed it.
 		"-p 0.0.0.0:8443:443",
-		"/home/o/.valve-node-app/Caddyfile:/etc/caddy/Caddyfile:ro",
+		"type=bind,source=/home/o/.valve-node-app/Caddyfile,target=/etc/caddy/Caddyfile,readonly",
 		// NOT optional: Caddy's internal CA lives in /data, and without a
 		// persistent volume it is regenerated on every recreate — measured, a
 		// different root fingerprint and every issued certificate invalidated.
@@ -1116,17 +1116,18 @@ func TestCaddyRunArgs_MountsCertFilesAtTheSamePathBothSides(t *testing.T) {
 	joined := strings.Join(args, " ")
 	// One path true on both sides, so the Caddyfile can name it once.
 	for _, want := range []string{
-		"/var/lib/valve-node-app/tls/cert.pem:/var/lib/valve-node-app/tls/cert.pem:ro",
-		"/var/lib/valve-node-app/tls/key.pem:/var/lib/valve-node-app/tls/key.pem:ro",
+		"type=bind,source=/var/lib/valve-node-app/tls/cert.pem,target=/var/lib/valve-node-app/tls/cert.pem,readonly",
+		"type=bind,source=/var/lib/valve-node-app/tls/key.pem,target=/var/lib/valve-node-app/tls/key.pem,readonly",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q: %v", want, args)
 		}
 	}
-	// With no cert files there are exactly two mounts: the Caddyfile and the
-	// data volume. Counting them is the check, because the Caddyfile mount is
-	// itself read-only and a bare ":ro" search would always match.
-	if n := strings.Count(strings.Join(CaddyRunArgs(CaddyRunSpec{}), " "), "-v "); n != 2 {
+	// With no cert files there are exactly two mounts: the Caddyfile bind and
+	// the data volume. Counting them is the check, because the Caddyfile
+	// mount is itself read-only and a bare "readonly" search would always match.
+	bare := strings.Join(CaddyRunArgs(CaddyRunSpec{}), " ")
+	if n := strings.Count(bare, "--mount ") + strings.Count(bare, "-v "); n != 2 {
 		t.Errorf("want only the Caddyfile and data-volume mounts, got %d: %v", n, CaddyRunArgs(CaddyRunSpec{}))
 	}
 }

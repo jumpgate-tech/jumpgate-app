@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Jumpgate (window)
+Comment=Open the Jumpgate panel in a desktop window
+Exec=jumpgate --tray
+Icon=jumpgate
+Terminal=false
+Categories=System;Monitor;
+StartupWMClass=jumpgate

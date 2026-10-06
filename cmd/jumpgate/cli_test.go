@@ -31,6 +31,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/server"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func TestParseSSHTarget(t *testing.T) {
@@ -140,6 +141,7 @@ func TestServerErrorExit(t *testing.T) {
 
 // agent init is idempotent: the box keeps its identity across re-pairing.
 func TestAgentInitKeepsItsIdentity(t *testing.T) {
+	testutil.RequireUnix(t) // agent-side code, Linux-only; it fsyncs directories
 	state, conf := t.TempDir(), t.TempDir()
 	var out1, out2 strings.Builder
 	if err := agentInit(&out1, state, conf, false); err != nil {
@@ -154,6 +156,7 @@ func TestAgentInitKeepsItsIdentity(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(state, "replay.json")); err != nil {
 		t.Fatal("agent init did not create replay.json")
 	}
+	testutil.RequireUnix(t) // directory mode bits mean nothing on Windows
 	if fi, _ := os.Stat(conf); fi.Mode().Perm() != 0o700 {
 		t.Errorf("config dir mode %o, want 700", fi.Mode().Perm())
 	}
@@ -164,6 +167,7 @@ func TestAgentInitKeepsItsIdentity(t *testing.T) {
 // running agent deliberately fails closed on (replay_state). Only an explicit
 // --reset-replay starts one.
 func TestAgentInitRefusesToRecreateALostReplayRecord(t *testing.T) {
+	testutil.RequireUnix(t) // agent-side code, Linux-only; it fsyncs directories
 	state, conf := t.TempDir(), t.TempDir()
 	var first strings.Builder
 	if err := agentInit(&first, state, conf, false); err != nil {
@@ -207,6 +211,9 @@ func TestAgentInitNeverReplacesAnUnreadableKey(t *testing.T) {
 		t.Fatalf("key file was rewritten: %q", b)
 	}
 
+	// The rest needs file modes and symlinks, which are unix-only.
+	testutil.RequireUnix(t)
+
 	// A group-readable key is refused the same way, and left alone.
 	if err := os.WriteFile(keyPath, []byte(strings.Repeat("ab", 32)+"\n"), 0o640); err != nil {
 		t.Fatal(err)
@@ -232,6 +239,7 @@ func TestAgentInitNeverReplacesAnUnreadableKey(t *testing.T) {
 }
 
 func TestAgentEnrollIsIdempotent(t *testing.T) {
+	testutil.RequireUnix(t) // agent-side code, Linux-only; it fsyncs directories
 	conf := t.TempDir()
 	for i := 0; i < 2; i++ {
 		if err := agentEnroll(conf, "", "0x00000000000000000000000000000000000000cc", "routine", "laptop", 501); err != nil {
@@ -248,12 +256,9 @@ func TestAgentEnrollIsIdempotent(t *testing.T) {
 // also restarts the agent, but a hand-run enroll must not leave the uid
 // enrolled yet refused by the kernel at 0660.
 func TestAgentEnrollLocalUIDOpensTheSocket(t *testing.T) {
+	testutil.RequireUnix(t)
 	conf := t.TempDir()
-	d, err := os.MkdirTemp("/tmp", "jgs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(d) })
+	d := testutil.ShortTempDir(t)
 	sock := filepath.Join(d, "agent.sock")
 	ln, err := agent.Listen(sock, -1, 0o660)
 	if err != nil {
@@ -277,6 +282,7 @@ func TestAgentEnrollLocalUIDOpensTheSocket(t *testing.T) {
 // Enrolling a second controller appends; it never drops the first, and the
 // same address in another case is the same controller.
 func TestAgentEnrollAppends(t *testing.T) {
+	testutil.RequireUnix(t) // agent-side code, Linux-only; it fsyncs directories
 	conf := t.TempDir()
 	steps := []string{
 		"0x00000000000000000000000000000000000000cc",
@@ -894,8 +900,7 @@ func TestConfirmHostKeysBoundsTheAnswer(t *testing.T) {
 // and must not fail on it.
 func TestMigrateOnStartup(t *testing.T) {
 	setup := func(t *testing.T) string {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
+		home := testutil.Home(t)
 		legacy := filepath.Join(home, ".valve-node-app")
 		if err := os.MkdirAll(legacy, 0o700); err != nil {
 			t.Fatal(err)

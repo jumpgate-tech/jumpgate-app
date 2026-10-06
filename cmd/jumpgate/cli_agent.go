@@ -26,6 +26,10 @@ const (
 )
 
 func cmdAgent(args []string) int {
+	// The agent runs on Linux boxes; macOS keeps it for its tests (spec D19).
+	if hostGOOS == "windows" {
+		return failed("`jumpgate agent` runs on the Linux boxes jumpgate manages, not on Windows")
+	}
 	if len(args) == 0 {
 		return usage("usage: jumpgate agent init|enroll|run|reset-replay")
 	}

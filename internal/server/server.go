@@ -16,6 +16,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/chainlist"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
 	"github.com/valve-tech/jumpgate/internal/setup"
 	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/updatecheck"
@@ -107,6 +109,10 @@ type Config struct {
 	// docker probes); nil selects executor.NewLocal.
 	NewLocalExecutor func() executor.Executor
 
+	// Geteuid reports this process's effective uid; injectable for tests.
+	// Nil selects os.Geteuid. Pairing this machine as root needs no sudo.
+	Geteuid func() int
+
 	// Signer is the controller key the intent and pair routes sign with. Only
 	// this server process ever holds it. Nil means those routes answer 503
 	// with code "no_controller_key".
@@ -115,6 +121,17 @@ type Config struct {
 	// would not open (a locked keychain, a missing file). The box routes
 	// report it instead of telling the operator to create a key that exists.
 	SignerErr error
+
+	// LoginDir is the directory login-link redirect files are written to
+	// (login.go), normally ~/.jumpgate/run/login. Every caller that serves
+	// browsers (the app, `jumpgate serve`) must set it: a browser opener is
+	// handed only the path of an owner-only file there, never a URL with a
+	// login code, which any local user could read off the opener's command
+	// line and redeem first. It is made owner-only (fsperm.MkdirPrivate)
+	// on first use, and New sweeps stale redirect files from it. Empty means
+	// the mint API returns codes without a file, and callers only print the
+	// link (fail-safe: no browser is opened on it).
+	LoginDir string
 }
 
 // Server is the jumpgate local HTTP server.
@@ -176,7 +193,10 @@ type Server struct {
 	newAIProvider    func(id, apiKey, baseURL string) (ai.Provider, error)
 	newChainlist     func() *chainlist.Discoverer
 	newLocalExecutor func() executor.Executor
-	verifyTLS        func(ctx context.Context, e executor.Executor, gatewayID string, g catalog.GatewayConfig, dialHost string) (setup.TLSVerification, error)
+	// goos is runtime.GOOS; a field so tests can stand in for another OS.
+	goos      string
+	geteuid   func() int
+	verifyTLS func(ctx context.Context, e executor.Executor, gatewayID string, g catalog.GatewayConfig, dialHost string) (setup.TLSVerification, error)
 
 	// Update-check state, guarded by updMu. updCache is the last release read
 	// from GitHub, updAt when it was read, updErr the last check's error text,
@@ -195,6 +215,14 @@ type Server struct {
 
 	// fleet polls every box for /api/fleet while anyone watches (fleet.go).
 	fleet *fleetPoller
+
+	// codes are the outstanding one-time browser login codes (login.go).
+	codes loginCodes
+	// peerUID reports the uid owning a request's client socket and whether
+	// it was found, missing (refuse) or unknowable (allow), where the OS
+	// lets us read it (Linux); nil elsewhere. selfUID is this process's.
+	peerUID func(*http.Request) (int, peerVerdict)
+	selfUID int
 }
 
 // New constructs a Server from the given Config.
@@ -223,6 +251,16 @@ func New(cfg Config) *Server {
 	s.newLocalExecutor = cfg.NewLocalExecutor
 	if s.newLocalExecutor == nil {
 		s.newLocalExecutor = executor.NewLocal
+	}
+	s.goos = runtime.GOOS
+	s.peerUID = defaultPeerUID
+	s.selfUID = os.Getuid()
+	if cfg.LoginDir != "" {
+		sweepLoginFiles(cfg.LoginDir)
+	}
+	s.geteuid = cfg.Geteuid
+	if s.geteuid == nil {
+		s.geteuid = os.Geteuid
 	}
 	s.fleet = newFleetPoller(s)
 	s.reg.onRetire = s.fleet.retireStatus
@@ -263,6 +301,18 @@ func (s *Server) Handler() http.Handler {
 		go s.cfg.Shutdown()
 	})
 
+	// A second app launch or `jumpgate open` asks for a login link over the
+	// authenticated socket; the code, not the token, goes to the browser.
+	mux.HandleFunc("POST /api/login-code", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		link, err := s.NewLoginLink()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, link)
+	})
+
 	s.registerAPIRoutes(mux)
 	s.registerKeyRoutes(mux)
 
@@ -275,21 +325,30 @@ func (s *Server) Handler() http.Handler {
 // authMiddleware enforces the session token on every request. The token may
 // arrive as an Authorization: Bearer header, a jumpgate_token cookie, or a
 // ?token= query parameter. A valid ?token= query parameter sets the cookie
-// and redirects to the same path without the query parameter.
+// and redirects to the same path without the query parameter; only the
+// in-process tray window uses it (D26). Browsers sign in through GET
+// /login?code=…, a one-time code (login.go).
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A login link carries a one-time code, not the token; it is its own
+		// authentication, so it is checked before the token is required.
+		if r.URL.Path == "/login" && r.Method == http.MethodGet {
+			s.handleLogin(w, r)
+			return
+		}
+
+		// ?token= stays for one caller only: the tray's in-process webview
+		// (D26), whose URL is handed to a window inside this process and
+		// reaches no process's command line. A URL with ?token= must never
+		// be produced for a browser opener (open, xdg-open, rundll32): every
+		// local user can read an opener's argv and would get the session
+		// token outright, not a one-time code. Browsers use /login?code=.
 		if q := r.URL.Query().Get("token"); q != "" {
 			if !tokensEqual(q, s.cfg.Token) {
 				writeErrorDetail(w, http.StatusUnauthorized, "unauthorized", "", api.CodeUnauthorized)
 				return
 			}
-			http.SetCookie(w, &http.Cookie{
-				Name:     cookieName,
-				Value:    q,
-				Path:     "/",
-				HttpOnly: true,
-				SameSite: http.SameSiteStrictMode,
-			})
+			http.SetCookie(w, sessionCookie(q))
 			http.Redirect(w, r, r.URL.Path, http.StatusFound)
 			return
 		}
@@ -356,9 +415,14 @@ func (s *Server) ServeUnix(ctx context.Context, path string) error {
 	}
 	ln, err := net.Listen("unix", path)
 	if err != nil {
+		if runtime.GOOS == "windows" {
+			return fmt.Errorf("server: listen on %s: %w (the local socket needs Windows 10 version 1803 or Windows Server 2019 or later)", path, err)
+		}
 		return err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	// Owner-only on every OS: on Windows a mode does nothing, so the socket
+	// gets the same protected DACL as the run dir (spec D2).
+	if err := fsperm.MakePrivate(path); err != nil {
 		ln.Close()
 		return err
 	}

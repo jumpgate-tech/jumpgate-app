@@ -39,8 +39,9 @@ type TrustStoreInstall struct {
 	// authorization was denied since no user interaction was possible." The
 	// osascript one-liner is useless to paste into a plain shell in that state,
 	// so this hands back the equivalent `sudo` command, which prompts normally in
-	// an interactive terminal. It is quoted for `sh` like Command. Empty when
-	// Command is already the run-by-hand form (linux/windows).
+	// an interactive terminal. It is quoted for `sh` like Command. It is also
+	// set on Linux, as the sudo form of Command. Empty on Windows, whose
+	// Command is already the run-by-hand form.
 	ManualCommand string
 }
 
@@ -53,7 +54,7 @@ type TrustStoreInstall struct {
 // check is refused rather than escaped-and-hoped, because the cost of getting
 // the escaping wrong is a command injection running with administrator rights.
 func TrustStoreCommand(goos, certPath, gatewayID string) (TrustStoreInstall, error) {
-	if err := validateCertPath(certPath); err != nil {
+	if err := validateCertPath(goos, certPath); err != nil {
 		return TrustStoreInstall{}, err
 	}
 	switch goos {
@@ -76,23 +77,33 @@ func TrustStoreCommand(goos, certPath, gatewayID string) (TrustStoreInstall, err
 		}, nil
 
 	case "linux":
-		// update-ca-certificates rebuilds the system bundle from
-		// /usr/local/share/ca-certificates. The file is named per gateway so two
-		// gateways' roots do not clobber each other and removing one is
-		// unambiguous.
-		dest := "/usr/local/share/ca-certificates/valve-node-app-" + sanitizeGatewayID(gatewayID) + ".crt"
+		// Debian and Ubuntu rebuild the bundle from
+		// /usr/local/share/ca-certificates with update-ca-certificates; Fedora,
+		// RHEL and Arch use update-ca-trust with an anchors directory. The
+		// command picks whichever the box has. The file is named per gateway so
+		// two gateways' roots do not clobber each other. The valve-node-app-
+		// prefix is an on-box name and stays until the rename migration.
+		name := "valve-node-app-" + sanitizeGatewayID(gatewayID) + ".crt"
+		cmd := "if command -v update-ca-certificates >/dev/null 2>&1; then " +
+			"cp " + shQuote(certPath) + " " + shQuote("/usr/local/share/ca-certificates/"+name) + " && update-ca-certificates; " +
+			"elif command -v update-ca-trust >/dev/null 2>&1; then " +
+			"d=/etc/pki/ca-trust/source/anchors; [ -d \"$d\" ] || d=/etc/ca-certificates/trust-source/anchors; " +
+			"cp " + shQuote(certPath) + " \"$d/" + name + "\" && update-ca-trust extract; " +
+			"else echo 'no CA trust tool found (update-ca-certificates or update-ca-trust)' >&2; exit 1; fi"
 		return TrustStoreInstall{
-			Command:   "cp " + shQuote(certPath) + " " + shQuote(dest) + " && update-ca-certificates",
+			Command:   cmd,
 			NeedsRoot: true,
+			// For a person at a terminal when the controller is not root.
+			ManualCommand: "sudo sh -c " + shQuote(cmd),
 		}, nil
 
 	case "windows":
 		// certutil -addstore ROOT writes the machine root store, which requires
-		// an elevated (Administrator) shell. There is no in-band elevation as
-		// darwin has, so the caller surfaces this as a command to run rather than
-		// attempting it against a shell that would only be denied.
+		// an elevated (Administrator) shell. cmd.exe does not understand POSIX
+		// single quotes, so the path is double-quoted; validateCertPath already
+		// forbids a double quote in it.
 		return TrustStoreInstall{
-			Command:   "certutil -addstore -f ROOT " + shQuote(certPath),
+			Command:   `certutil -addstore -f ROOT "` + certPath + `"`,
 			NeedsRoot: true,
 		}, nil
 
@@ -126,7 +137,7 @@ func TrustStoreCommand(goos, certPath, gatewayID string) (TrustStoreInstall, err
 // and single-quoted the same way, because it is interpolated into a shell
 // command; a path that fails the check is refused, not escaped-and-hoped.
 func TrustVerifyCommand(goos, certPath string) (string, error) {
-	if err := validateCertPath(certPath); err != nil {
+	if err := validateCertPath(goos, certPath); err != nil {
 		return "", err
 	}
 	switch goos {
@@ -141,10 +152,15 @@ func TrustVerifyCommand(goos, certPath string) (string, error) {
 // trust-store commands rely on. It is deliberately strict: the path is one this
 // app derived (rootCAPath), so a metacharacter in it is far likelier a bug than
 // a real filename, and a root-CA install is the wrong place to be lenient.
-func validateCertPath(p string) error {
-	p = strings.TrimSpace(p)
-	if p == "" {
+//
+// The RAW path is checked, never a trimmed copy: a leading or trailing line
+// break is exactly what would split a pasted command in two.
+func validateCertPath(goos, p string) error {
+	if strings.TrimSpace(p) == "" {
 		return fmt.Errorf("trust: empty certificate path")
+	}
+	if goos == "windows" {
+		return validateWindowsCertPath(p)
 	}
 	if !strings.HasPrefix(p, "/") {
 		return fmt.Errorf("trust: certificate path %q is not an absolute POSIX path", p)
@@ -152,6 +168,27 @@ func validateCertPath(p string) error {
 	for _, r := range p {
 		switch r {
 		case '\'', '"', '\\', '`', '$', '\n', '\r', 0:
+			return fmt.Errorf("trust: certificate path %q contains an unsafe character %q", p, string(r))
+		}
+	}
+	return nil
+}
+
+// validateWindowsCertPath is validateCertPath for the Windows command, which
+// a person pastes, with the path double-quoted, into an elevated prompt: a
+// cmd.exe one, or PowerShell, which is what Windows 11's "Terminal (Admin)"
+// opens. A Windows path is drive-absolute (C:\…) and its separator is a
+// backslash, which neither shell treats specially. Inside double quotes
+// cmd.exe still expands %VAR% (and !VAR! with delayed expansion) and honours
+// ^; PowerShell expands $var and $(…) and treats ` as its escape. Those, a
+// double quote, and a line break are refused, so the string is inert in both.
+func validateWindowsCertPath(p string) error {
+	if len(p) < 3 || !(('A' <= p[0] && p[0] <= 'Z') || ('a' <= p[0] && p[0] <= 'z')) || p[1] != ':' || p[2] != '\\' {
+		return fmt.Errorf("trust: certificate path %q is not an absolute Windows path", p)
+	}
+	for _, r := range p {
+		switch r {
+		case '"', '%', '!', '^', '$', '`', '\n', '\r', 0:
 			return fmt.Errorf("trust: certificate path %q contains an unsafe character %q", p, string(r))
 		}
 	}

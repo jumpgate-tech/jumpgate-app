@@ -265,7 +265,10 @@ fn bind_unix(path: &FsPath) -> Result<tokio::net::UnixListener> {
                 // Ours to create, so ours to lock down. `mode` applies to every
                 // missing ancestor too; the explicit chmod pins the leaf at
                 // exactly 0700 whatever the umask.
-                std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
+                std::fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(parent)?;
                 std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
             }
             Err(e) => return Err(e.into()),
@@ -276,7 +279,11 @@ fn bind_unix(path: &FsPath) -> Result<tokio::net::UnixListener> {
     // not as whatever it points to.
     match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_socket() => std::fs::remove_file(path)?,
-        Ok(_) => return Err(refuse("a file that is not a socket is already there".into())),
+        Ok(_) => {
+            return Err(refuse(
+                "a file that is not a socket is already there".into(),
+            ))
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
     }
@@ -406,11 +413,7 @@ async fn require_bearer(State(state): State<AppState>, req: Request, next: Next)
 /// The bearer gate on `/internal/*`. This checks `relay_token` only — the
 /// admin token never opens this door, which is the whole point of splitting
 /// the credential (design doc section 7: least privilege).
-async fn require_relay_bearer(
-    State(state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Response {
+async fn require_relay_bearer(State(state): State<AppState>, req: Request, next: Next) -> Response {
     if bearer_matches(&req, &state.relay_token) {
         next.run(req).await
     } else {
@@ -526,7 +529,11 @@ async fn authenticate_key(
         let km = state.keys.lock().expect("keys lock");
         km.constraints(&record.id)?
     };
-    Ok((StatusCode::OK, Json(AuthenticateView::build(record, constraints))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(AuthenticateView::build(record, constraints)),
+    )
+        .into_response())
 }
 
 /// Reserve up to `credits` credits for an account (design doc section 8: the
@@ -1661,7 +1668,10 @@ mod tests {
         assert_eq!(body["allow_trace"], false);
         assert_eq!(body["rate"], "unlimited");
         assert!(body["account_address"].is_null());
-        assert!(body["constraints"].is_object(), "constraints must be present");
+        assert!(
+            body["constraints"].is_object(),
+            "constraints must be present"
+        );
         remove_db(&path);
     }
 
@@ -1823,7 +1833,9 @@ mod tests {
             .method("POST")
             .uri("/internal/authenticate")
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(serde_json::to_vec(&json!({ "key": raw })).unwrap()))
+            .body(Body::from(
+                serde_json::to_vec(&json!({ "key": raw })).unwrap(),
+            ))
             .unwrap();
         let (status, _) = send(&app, req).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -1949,7 +1961,11 @@ mod tests {
                 ),
             )
             .await;
-            assert_eq!(status, StatusCode::BAD_REQUEST, "credits={bad} must be a 400");
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "credits={bad} must be a 400"
+            );
         }
         remove_db(&path);
     }
@@ -2216,7 +2232,10 @@ mod tests {
         for t in tasks {
             total += t.await.unwrap();
         }
-        assert_eq!(total, 55, "20 requests of 10 against 55 must total exactly 55");
+        assert_eq!(
+            total, 55,
+            "20 requests of 10 against 55 must total exactly 55"
+        );
         remove_db(&path);
     }
 
@@ -2270,9 +2289,7 @@ mod tests {
     /// client stack for one call.
     async fn raw_http_get(stream: &mut tokio::net::UnixStream, path: &str) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let req = format!(
-            "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-        );
+        let req = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         stream.write_all(req.as_bytes()).await.unwrap();
         let mut out = Vec::new();
         stream.read_to_end(&mut out).await.unwrap();
@@ -2295,7 +2312,10 @@ mod tests {
         let mut stream = wait_for_socket(&sock_path).await;
 
         let dir_mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
-        assert_eq!(dir_mode, 0o700, "the socket's parent directory must be 0700");
+        assert_eq!(
+            dir_mode, 0o700,
+            "the socket's parent directory must be 0700"
+        );
         let sock_mode = std::fs::metadata(&sock_path).unwrap().permissions().mode() & 0o777;
         assert_eq!(sock_mode, 0o600, "the socket file must be 0600");
 
@@ -2324,7 +2344,10 @@ mod tests {
         // only works if `serve_unix` unlinks it first.
         std::fs::create_dir_all(&dir).unwrap();
         drop(std::os::unix::net::UnixListener::bind(&sock_path).unwrap());
-        assert!(sock_path.exists(), "the stale socket file must be left behind");
+        assert!(
+            sock_path.exists(),
+            "the stale socket file must be left behind"
+        );
 
         let sock_path_for_task = sock_path.clone();
         let handle = tokio::spawn(async move {
@@ -2367,7 +2390,11 @@ mod tests {
         let sock_path = dir.join("b.sock");
 
         let listener = bind_unix(&sock_path).expect("an owned 0750 directory is acceptable");
-        assert_eq!(dir_mode(&dir), 0o750, "the existing directory's mode must not change");
+        assert_eq!(
+            dir_mode(&dir),
+            0o750,
+            "the existing directory's mode must not change"
+        );
 
         drop(listener);
         let _ = std::fs::remove_dir_all(&dir);
@@ -2382,8 +2409,15 @@ mod tests {
 
         let err = bind_unix(&sock_path).expect_err("a 0777 parent must be refused");
         assert!(matches!(err, Error::UnsafeSocketPath { .. }), "got: {err}");
-        assert_eq!(dir_mode(&dir), 0o777, "a refused directory's mode must not change");
-        assert!(!sock_path.exists(), "nothing may be bound in a refused directory");
+        assert_eq!(
+            dir_mode(&dir),
+            0o777,
+            "a refused directory's mode must not change"
+        );
+        assert!(
+            !sock_path.exists(),
+            "nothing may be bound in a refused directory"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

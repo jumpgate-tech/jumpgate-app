@@ -8,11 +8,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // The billing client talks to the Rust key store over a unix socket. These
@@ -39,11 +40,7 @@ func newBillingStub(t *testing.T) *billingStub {
 	// A unix socket path is capped near 104 bytes on macOS and 108 on Linux.
 	// t.TempDir() embeds the test name under an already long TMPDIR and blows
 	// past that, so the socket goes in a short directory of its own.
-	dir, err := os.MkdirTemp("/tmp", "jgr")
-	if err != nil {
-		t.Fatalf("temp dir: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := testutil.ShortTempDir(t)
 	sock := filepath.Join(dir, "b.sock")
 
 	st := &billingStub{socket: sock, status: http.StatusOK, body: `{}`}

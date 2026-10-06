@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os/exec"
-	"runtime"
 	"testing"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // TestDiskCmd_ExitsNonZeroWhenDfFails runs the real probe command under sh
@@ -18,12 +18,10 @@ import (
 // status tail's, so a failed df looked like a successful probe with no
 // output, and the poll could not tell that apart from a reading.
 func TestDiskCmd_ExitsNonZeroWhenDfFails(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("probe runs under a POSIX shell")
-	}
+	testutil.RequirePOSIXShell(t) // the probe runs under a POSIX shell
 	sh, err := exec.LookPath("sh")
 	if err != nil {
-		t.Skip("no sh on PATH")
+		t.Fatal(err)
 	}
 
 	// df is replaced by a shell function, which takes precedence over PATH,

@@ -9,15 +9,6 @@ import (
 	"testing"
 )
 
-func tokenEnv(name, file string) func(string) string {
-	return func(k string) string {
-		if k == name+"_FILE" {
-			return file
-		}
-		return ""
-	}
-}
-
 // A token file must be private: group or other bits are refused, with the
 // file named and the chmod that fixes it.
 func TestTokenFileWithGroupOrOtherBitsIsRefused(t *testing.T) {

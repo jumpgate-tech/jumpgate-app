@@ -347,7 +347,7 @@ func probeDockerView(ctx context.Context, ex executor.Executor) dockerView {
 	switch {
 	case info.WindowsContainers():
 		v.Detail = "this engine is in Windows-container mode"
-		v.Hint = "the devnet and gateway images are Linux images — switch Docker to Linux containers and retry"
+		v.Hint = info.WindowsContainersHint()
 	case !info.DaemonReachable:
 		v.Hint = "start the engine and retry: Docker Desktop / OrbStack / colima on a desktop, or `systemctl start docker` on Linux"
 	}

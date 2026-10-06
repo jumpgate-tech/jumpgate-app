@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -49,8 +50,10 @@ func claimAppInstance(ctx context.Context, wait time.Duration) (*daemon.Holder, 
 	}
 }
 
-// appURL is the login URL the browser or tray window opens: the token in the
-// query is exchanged for a session cookie on first load.
+// appURL is the URL the in-process tray window opens: the token in the query
+// is exchanged for a session cookie on first load. It is for runWindow only
+// (D26); a browser gets a one-time loginURL, because an opener's command
+// line is readable by every local user (D4).
 func appURL(info daemon.Info) string {
 	return fmt.Sprintf("http://%s/?token=%s", info.HTTPAddr, info.Token)
 }
@@ -73,6 +76,30 @@ func serveAndPublish(ctx context.Context, stop context.CancelFunc, s *server.Ser
 			fmt.Fprintf(os.Stderr, "jumpgate server on %s and %s\n", bind, sock)
 			return nil
 		})
+}
+
+// loadServerConfig is the start of serve and of the app, once the server
+// lock is held: it loads the config, then restricts the state directory and
+// every secret already in it to this user (ruling P29). A file it cannot
+// restrict is reported and the server still comes up, except a signing key
+// (the controller key file, the transport key): that stops startup.
+func loadServerConfig(stderr io.Writer) (config.Config, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return cfg, fmt.Errorf("load config: %w", err)
+	}
+	keyFile := ""
+	if cfg.Controller != nil && signer.Store(cfg.Controller.KeyStore) == signer.StoreFile {
+		keyFile = cfg.Controller.KeyRef
+	}
+	tightened, warnings, err := config.TightenState(keyFile)
+	for _, p := range tightened {
+		fmt.Fprintf(stderr, "jumpgate: other users could read or change %s; it is now restricted to you (if it holds a key, treat that key as exposed)\n", p)
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(stderr, "jumpgate: %v\n", w)
+	}
+	return cfg, err
 }
 
 // openControllerKey opens the controller key named in the config, or returns

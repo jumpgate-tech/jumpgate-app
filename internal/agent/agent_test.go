@@ -17,6 +17,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/ops"
 	"github.com/valve-tech/jumpgate/internal/signer"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 // fakeExec answers every command with a fixed result and records them.
@@ -45,6 +46,9 @@ type rig struct {
 
 func newRig(t *testing.T, setUp bool) *rig {
 	t.Helper()
+	// Every rig persists replay and policy records, which fsyncs directories:
+	// the agent is Linux-only, and Windows cannot sync a directory.
+	testutil.RequireUnix(t)
 	dir := t.TempDir()
 	r := &rig{dir: dir, exec: &fakeExec{res: executor.Result{Stdout: "active\nactive\n"}}, now: time.Unix(1_800_000_000, 0)}
 	r.agentKey, _ = signer.GenerateKey()
@@ -110,6 +114,7 @@ func rejection(t *testing.T, rc intent.Receipt, result []byte) intent.Rejection 
 }
 
 func TestAgentInfoAnswersEvenBeforeSetup(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r := newRig(t, false)
 	rc, res := r.send(t, intent.KindAgentInfo, struct{}{}, nil)
 	if rc.Status != intent.StatusOK {
@@ -124,6 +129,7 @@ func TestAgentInfoAnswersEvenBeforeSetup(t *testing.T) {
 
 // Review Focus 3.
 func TestNodeKindsBeforeSetupAreNotSetUp(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r := newRig(t, false)
 	for _, k := range []string{intent.KindStatusRead, intent.KindDiskRead, intent.KindFirewallRead, intent.KindLogsRead} {
 		rc, res := r.send(t, k, struct{}{}, nil)
@@ -137,6 +143,7 @@ func TestNodeKindsBeforeSetupAreNotSetUp(t *testing.T) {
 }
 
 func TestRejections(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	cases := []struct {
 		name   string
 		mutate func(*intent.Intent)
@@ -161,6 +168,7 @@ func TestRejections(t *testing.T) {
 }
 
 func TestAStrangerIsUnauthorised(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r := newRig(t, true)
 	r.controller, _ = signer.GenerateKey() // not enrolled
 	rc, res := r.send(t, intent.KindStatusRead, struct{}{}, nil)
@@ -172,6 +180,7 @@ func TestAStrangerIsUnauthorised(t *testing.T) {
 // The spec's acceptance: a captured intent replayed to the same agent is
 // rejected. A rejection must not consume the sequence either.
 func TestReplayIsRejectedAndRejectionsDoNotConsumeSeq(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r := newRig(t, true)
 	body := []byte("{}")
 	n, _ := intent.NewNonce()
@@ -193,6 +202,7 @@ func TestReplayIsRejectedAndRejectionsDoNotConsumeSeq(t *testing.T) {
 }
 
 func TestRejectionBeforeAdmitDoesNotAdvanceSeq(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r := newRig(t, true)
 	r.send(t, intent.KindStatusRead, struct{}{}, func(i *intent.Intent) { i.Agent = eip712.Address{1} }) // seq 1, rejected
 	r.seq = 0
@@ -203,6 +213,7 @@ func TestRejectionBeforeAdmitDoesNotAdvanceSeq(t *testing.T) {
 }
 
 func TestServiceActionRunsOpsAndValidatesInput(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r := newRig(t, true)
 	rc, res := r.send(t, intent.KindServiceAction, intent.ServiceActionPayload{Service: "beacon", Action: "restart"}, nil)
 	if rc.Status != intent.StatusOK {
@@ -215,6 +226,7 @@ func TestServiceActionRunsOpsAndValidatesInput(t *testing.T) {
 }
 
 func TestLogsReadClampsN(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r := newRig(t, true)
 	rc, res := r.send(t, intent.KindLogsRead, intent.LogsReadPayload{N: 1_000_000}, nil)
 	if rc.Status != intent.StatusOK {
@@ -242,6 +254,7 @@ func containsAll(s string, subs ...string) bool {
 
 // Review Focus 1, end to end: a broken replay record refuses everything.
 func TestCorruptReplayStateRefusesEverything(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r := newRig(t, true)
 	if err := os.WriteFile(filepath.Join(r.dir, "replay.json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
@@ -256,6 +269,7 @@ func TestCorruptReplayStateRefusesEverything(t *testing.T) {
 
 // A failed persist during admission is a signed refusal, never a dispatch.
 func TestAdmissionPersistFailureRefusesAndRunsNothing(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r := newRig(t, true)
 	orig := syncDir
 	syncDir = func(string) error { return errors.New("injected dir sync failure") }
@@ -272,6 +286,7 @@ func TestAdmissionPersistFailureRefusesAndRunsNothing(t *testing.T) {
 // A corrupt record refuses, but once an operator repairs it the running agent
 // reloads it without a restart. A still-corrupt file keeps refusing.
 func TestRunningAgentReloadsRepairedReplayState(t *testing.T) {
+	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r := newRig(t, true)
 	path := filepath.Join(r.dir, "replay.json")
 	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {

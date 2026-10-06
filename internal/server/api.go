@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -337,14 +336,10 @@ func (sr *setupRun) subscribe() ([]setup.Event, chan setup.Event, func()) {
 func defaultNewExecutor(t config.Target) (executor.Executor, error) {
 	switch t.Mode {
 	case "local":
-		// Local mode drives this machine with POSIX shell commands, so a
-		// control plane without a POSIX shell (Windows) cannot support it.
-		// Refuse here, at construction, so POST /targets answers with an
-		// actionable message instead of the target being persisted and then
-		// failing on every command it ever runs.
-		if err := executor.LocalAvailable(); err != nil {
-			return nil, fmt.Errorf("target %q: %w", t.ID, err)
-		}
+		// "This computer" exists on every OS. On one with no POSIX shell
+		// (Windows) it runs the Docker gateway and devnet through RunArgv
+		// (spec D29). The routes that need a shell refuse it through
+		// getShellExecutor (Task 13), so it is not refused here any more.
 		return executor.NewLocal(), nil
 	case "ssh":
 		if t.SSH == nil {
@@ -432,6 +427,23 @@ func (s *Server) getExecutorLocked(entry *targetEntry, t config.Target) (executo
 	return entry.exec, nil
 }
 
+// getShellExecutor is getExecutor for the routes whose work is shell
+// commands: node setup, services, disk, endpoints, firewall, diagnostics,
+// logs, the monitor and the VPN. A target whose executor cannot run a shell
+// (this computer, on Windows) is refused here with ErrNoPOSIXShell, which
+// writeExecutorError turns into 409 local_unsupported. Docker routes use
+// getExecutor: they run through RunArgv and need no shell.
+func (s *Server) getShellExecutor(t config.Target) (executor.Executor, error) {
+	ex, err := s.getExecutor(t)
+	if err != nil {
+		return nil, err
+	}
+	if err := executor.RequireShell(ex); err != nil {
+		return nil, fmt.Errorf("target %q: %w", t.ID, err)
+	}
+	return ex, nil
+}
+
 // getMonitor returns t's monitor.Monitor, lazily creating and starting one
 // on first use. It polls until the target is deleted or setup is re-run (see
 // retireObserversLocked). retired is closed at that point: the monitor stops
@@ -447,6 +459,9 @@ func (s *Server) getMonitor(t config.Target, refRPCBase string) (mon *monitor.Mo
 	ex, err := s.getExecutorLocked(entry, t)
 	if err != nil {
 		return nil, nil, err
+	}
+	if err := executor.RequireShell(ex); err != nil {
+		return nil, nil, fmt.Errorf("target %q: %w", t.ID, err)
 	}
 	refRPC := ""
 	if refRPCBase != "" {
@@ -477,6 +492,9 @@ func (s *Server) getWatcher(t config.Target) (watch *logwatch.Watcher, retired <
 	ex, err := s.getExecutorLocked(entry, t)
 	if err != nil {
 		return nil, nil, err
+	}
+	if err := executor.RequireShell(ex); err != nil {
+		return nil, nil, fmt.Errorf("target %q: %w", t.ID, err)
 	}
 	watch = logwatch.New(ex, logUnits)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -532,6 +550,21 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// writeExecutorError reports a failure to get an executor on the routes that
+// still answer an executor failure with their own status (the VPN routes). A
+// machine with no POSIX shell (a Windows controller asked to act on "this
+// host") is a clear refusal the UI can explain, not a server error (I-12):
+// 409 local_unsupported with the registry's hint, the same answer
+// writeDialError gives. Any other failure keeps the status the route already
+// answered with, otherwise.
+func writeExecutorError(w http.ResponseWriter, err error, otherwise int) {
+	if errors.Is(err, executor.ErrNoPOSIXShell) {
+		writeNodeError(w, err)
+		return
+	}
+	writeError(w, otherwise, err.Error())
 }
 
 // writeSSEEvent marshals v and writes it as one `data: <json>\n\n` SSE
@@ -835,7 +868,7 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if t.Mode == "ssh" {
-		if t.SSH == nil || t.SSH.Host == "" || t.SSH.User == "" || (t.SSH.KeyPath == "" && os.Getenv("SSH_AUTH_SOCK") == "") {
+		if t.SSH == nil || t.SSH.Host == "" || t.SSH.User == "" || (t.SSH.KeyPath == "" && !executor.AgentAvailable()) {
 			writeError(w, http.StatusBadRequest, "ssh targets need host, user, and a key path or a running ssh-agent")
 			return
 		}
@@ -1042,7 +1075,7 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ex, err := s.getExecutor(target)
+	ex, err := s.getShellExecutor(target)
 	if err != nil {
 		writeDialError(w, err)
 		return
@@ -1362,12 +1395,12 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, ok := startSSE(w)
-	if !ok {
-		return
-	}
-	defer conn.Close()
-
+	// Subscribe BEFORE startSSE flushes the headers. A client counts itself
+	// attached the moment the headers arrive, and without ?backlog= the
+	// watcher keeps nothing for a new subscriber (unlike the setup stream's
+	// snapshot or the monitor's Latest), so a line published between the
+	// flush and the subscription would reach no one.
+	//
 	// With ?backlog= the stream opens on a reset frame, taken atomically
 	// with the subscription (no line twice, none lost), and a reset is sent
 	// again whenever this subscriber fell behind and lost lines (spec A4).
@@ -1378,14 +1411,22 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	backlog := backlogParam(raw)
 	var ch <-chan logwatch.Hit
 	var unsub func()
+	var initial []logwatch.Hit
 	if resets {
-		var hits []logwatch.Hit
-		hits, ch, unsub = watch.SubscribeRecent(backlog)
-		conn.SendNamed("reset", hits)
+		initial, ch, unsub = watch.SubscribeRecent(backlog)
 	} else {
 		ch, unsub = watch.Subscribe()
 	}
 	defer unsub()
+
+	conn, ok := startSSE(w)
+	if !ok {
+		return
+	}
+	defer conn.Close()
+	if resets {
+		conn.SendNamed("reset", initial)
+	}
 
 	ctx := r.Context()
 	for {
@@ -1612,7 +1653,7 @@ func (s *Server) handleServiceClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ex, err := s.getExecutor(target)
+	ex, err := s.getShellExecutor(target)
 	if err != nil {
 		writeDialError(w, err)
 		return
@@ -1701,7 +1742,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	report, err := s.runDiagnostics(r.Context(), target, "manual")
 	if err != nil {
 		entry.endDiag(nil)
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeExecutorError(w, err, http.StatusBadGateway)
 		return
 	}
 	entry.endDiag(report)
@@ -1731,7 +1772,7 @@ func (s *Server) handleDiskFree(w http.ResponseWriter, r *http.Request) {
 		writeTargetNotFound(w)
 		return
 	}
-	ex, err := s.getExecutor(target)
+	ex, err := s.getShellExecutor(target)
 	if err != nil {
 		writeDialError(w, err)
 		return

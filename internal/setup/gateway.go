@@ -20,6 +20,7 @@ package setup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
@@ -277,15 +278,11 @@ func (p *gatewayPlan) configPath(ctx context.Context, e executor.Executor) (stri
 	if p.dockerConfigPath != "" {
 		return p.dockerConfigPath, nil
 	}
-	res, err := e.Run(ctx, `printf '%s\n' "$HOME"`, nil)
+	home, err := homeOn(ctx, e)
 	if err != nil {
-		return "", fmt.Errorf("gateway: resolve $HOME on the target: %w", err)
+		return "", fmt.Errorf("gateway: could not resolve the home directory on the target: %w — the docker backend keeps erpc.yaml there because it must be a path the engine can bind-mount", err)
 	}
-	home := strings.TrimSpace(res.Stdout)
-	if res.ExitCode != 0 || home == "" {
-		return "", fmt.Errorf("gateway: could not resolve $HOME on the target (exit %d): the docker backend keeps erpc.yaml there because it must be a path the engine can bind-mount", res.ExitCode)
-	}
-	p.dockerConfigPath = path.Join(home, gatewayHomeDir, p.configFileName())
+	p.dockerConfigPath = joinOn(e, home, gatewayHomeDir, p.configFileName())
 	return p.dockerConfigPath, nil
 }
 
@@ -312,7 +309,7 @@ func (p *gatewayPlan) siblingPath(ctx context.Context, e executor.Executor, name
 	if err != nil {
 		return "", err
 	}
-	return path.Join(path.Dir(cfg), name), nil
+	return joinOn(e, dirOn(e, cfg), name), nil
 }
 
 // tlsFileName scopes a TLS file to this gateway, exactly as configFileName
@@ -381,7 +378,12 @@ func (p *gatewayPlan) preflight(ctx context.Context, e executor.Executor, st *St
 			return fmt.Errorf("preflight: %w", err)
 		}
 		if info.WindowsContainers() {
-			return fmt.Errorf("preflight: this docker engine is in Windows-container mode, and the eRPC image is a Linux image — switch Docker to Linux containers and retry")
+			return fmt.Errorf("preflight: this docker engine is in Windows-container mode, and the eRPC image is a Linux image — %s", info.WindowsContainersHint())
+		}
+		// D34: the TLS front mounts a certificate file at its own host path
+		// inside a Linux container, and a Windows path (C:\…) cannot be one.
+		if h, ok := e.(executor.LocalHost); ok && h.HostGOOS() == "windows" && p.fronted() && p.gw.TLS.CertSourceOrDefault() == catalog.CertFiles {
+			return fmt.Errorf("preflight: a gateway on this Windows computer cannot use certificate files yet (%s): choose the internal or ACME certificate source, or host the gateway on a Linux machine", p.gw.TLS.CertFile)
 		}
 		if !info.DaemonReachable {
 			return fmt.Errorf("preflight: the docker CLI is installed but no engine answered — start Docker Desktop / OrbStack / colima (or `systemctl start docker`) and retry: %s", info.DaemonError)
@@ -411,6 +413,9 @@ func (p *gatewayPlan) preflight(ctx context.Context, e executor.Executor, st *St
 // outright. The overlap is these two commands, deliberately left duplicated
 // rather than refactoring a function two plans depend on.
 func requireLinuxRoot(ctx context.Context, e executor.Executor) error {
+	if err := executor.RequireShell(e); err != nil {
+		return fmt.Errorf("preflight: a systemd gateway runs on a Linux host, and this computer has no POSIX shell (%v) — use the %q backend here, or a Linux machine added with --ssh", err, BackendDocker)
+	}
 	res, err := e.Run(ctx, "uname", nil)
 	if err != nil {
 		return fmt.Errorf("preflight: uname: %w", err)
@@ -531,12 +536,11 @@ func (p *gatewayPlan) checkPortFree(ctx context.Context, e executor.Executor, st
 // listener being FOUND, never about being unable to look. A missing listener
 // tool exits non-zero without a transport error and so reads as free.
 func (p *gatewayPlan) probePort(ctx context.Context, e executor.Executor, st *State, port int, what string, reclaim bool) error {
-	res, err := e.Run(ctx, fmt.Sprintf(listenerProbe, port), nil)
+	found, err := probeListeners(ctx, e, port)
 	if err != nil {
 		return fmt.Errorf("preflight: probe listeners on port %d: %w", port, err)
 	}
-	if res.ExitCode == 0 && strings.TrimSpace(res.Stdout) != "" {
-		found := strings.TrimSpace(res.Stdout)
+	if found != "" {
 		if reclaim {
 			_ = emit(ctx, st, Event{StepID: "preflight", Line: fmt.Sprintf(
 				"port %d already has a foreign listener; proceeding and reclaiming it — docker/systemd will fail loudly if this is a real collision:\n%s",
@@ -1110,19 +1114,20 @@ func (p *gatewayPlan) waitReady(ctx context.Context, e executor.Executor) error 
 // misconfiguration worth failing on rather than a transient upstream fault.
 func (p *gatewayPlan) gatewayCheck(ctx context.Context, e executor.Executor) error {
 	chainID := p.gw.Networks[0].ChainID
-	url, cmd, err := p.probeCommand(ctx, e, chainID)
+	url, pr, err := p.probe(ctx, e, chainID)
 	if err != nil {
 		return err
 	}
-	res, err := e.Run(ctx, cmd, nil)
-	if err != nil {
-		return fmt.Errorf("gateway: eth_chainId probe: %w", err)
-	}
-	if res.ExitCode != 0 {
+	raw, err := pr.Do(ctx, e)
+	var pe *ops.ProbeError
+	switch {
+	case errors.As(err, &pe):
 		if derr := p.diagnoseContainer(ctx, e); derr != nil {
 			return derr
 		}
-		return fmt.Errorf("gateway: eth_chainId at %s failed (curl exit %d): %s", url, res.ExitCode, strings.TrimSpace(res.Stderr))
+		return fmt.Errorf("gateway: eth_chainId at %s failed (%s)", url, pe.Detail)
+	case err != nil:
+		return fmt.Errorf("gateway: eth_chainId probe: %w", err)
 	}
 
 	var body struct {
@@ -1131,7 +1136,7 @@ func (p *gatewayPlan) gatewayCheck(ctx context.Context, e executor.Executor) err
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	raw := strings.TrimSpace(res.Stdout)
+	raw = strings.TrimSpace(raw)
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
 		// Not JSON at all is the normal shape of "nothing is listening yet"
 		// (empty body) — report the raw answer, which is what the operator
@@ -1152,83 +1157,62 @@ func (p *gatewayPlan) gatewayCheck(ctx context.Context, e executor.Executor) err
 	return nil
 }
 
-// probeCommand builds the readiness probe: the URL it targets and the curl
-// invocation that hits it.
+// probe builds the readiness probe: the URL it targets and the request that
+// hits it, which an SSH target runs as curl and the local machine makes in
+// process (ops.HTTPProbe).
 //
 // For an unfronted gateway that is the plain http endpoint on its published
 // port, unchanged. For a fronted one the whole point is to prove the thing the
 // operator will actually use, so the probe goes through HTTPS — which means
 // three deliberate choices:
 //
-//   - --resolve pins the hostname to the published bind address ON THE TARGET
+//   - Resolve (curl's --resolve) pins the hostname to the published bind address ON THE TARGET
 //     rather than trusting DNS. The probe runs on the target (curl over the
 //     executor), Caddy publishes there, and pinning is what stops a gateway
 //     that works perfectly from failing setup because the operator has not
 //     pointed a name at their machine yet.
-//   - --cacert names the internal CA's exported root, so the CHAIN IS ACTUALLY
+//   - CAFile (curl's --cacert) names the internal CA's exported root, so the CHAIN IS ACTUALLY
 //     VERIFIED. Passing -k here would have made the probe unable to distinguish
 //     a working front from one serving a certificate for the wrong name — the
 //     specific failure this feature introduces.
-//   - a bare curl is appended with || as a second attempt when a CA file is not
+//   - a second attempt against the system store follows when the CA file is not
 //     available, which is the CertFiles case: a publicly-trusted certificate
 //     (tailscale, localhost.direct) verifies against the system store and needs
 //     no CA file, while a self-signed one verifies against its own certificate
 //     passed as the CA. Trying the specific one first and the system store
 //     second covers both without asking the operator which they have.
-func (p *gatewayPlan) probeCommand(ctx context.Context, e executor.Executor, chainID int) (string, string, error) {
-	body := shQuote(gatewayChainIDCall)
-	const curlBase = "curl -s --max-time 10 -X POST -H 'Content-Type: application/json' --data "
+func (p *gatewayPlan) probe(ctx context.Context, e executor.Executor, chainID int) (string, ops.HTTPProbe, error) {
+	pr := ops.HTTPProbe{Body: gatewayChainIDCall, MaxTime: 10 * time.Second}
 
 	if !p.fronted() {
-		url := fmt.Sprintf("http://%s:%d%s", probeHost(p.gw.Bind()), p.gw.HTTP(), p.gw.PathFor(chainID))
-		return url, curlBase + body + " " + shQuote(url), nil
+		pr.URL = fmt.Sprintf("http://%s:%d%s", probeHost(p.gw.Bind()), p.gw.HTTP(), p.gw.PathFor(chainID))
+		return pr.URL, pr, nil
 	}
 
 	front, err := p.front(ctx, e)
 	if err != nil {
-		return "", "", err
+		return "", pr, err
 	}
 	tls := p.gw.TLS
-	url := front.Caddy.URL() + p.gw.PathFor(chainID)
+	pr.URL = front.Caddy.URL() + p.gw.PathFor(chainID)
 
-	// resolve and ca default EMPTY, which is exactly the Public (acme) tier: a
-	// real Let's Encrypt certificate verifies against the system trust store
-	// (no --cacert), and the name genuinely resolves on the public internet, so
-	// the loopback --resolve pin is meaningless and is dropped. The
-	// internal/files tiers fill both in below.
-	resolve := ""
-	ca := ""
+	// Resolve and CAFile stay EMPTY for the Public (acme) tier: a real Let's
+	// Encrypt certificate verifies against the system trust store (no CA
+	// file), and the name genuinely resolves on the public internet, so the
+	// loopback pin is meaningless and is dropped. The internal/files tiers
+	// fill both in below.
 	if front.Caddy.CertSourceOrDefault() != catalog.CertACME {
-		resolve = fmt.Sprintf("--resolve %s", shQuote(fmt.Sprintf("%s:%d:%s", tls.Hostname, tls.HTTPS(), probeHost(tls.Bind()))))
-		ca = front.Caddy.CertFile
+		pr.Resolve = fmt.Sprintf("%s:%d:%s", tls.Hostname, tls.HTTPS(), probeHost(tls.Bind()))
+		pr.CAFile = front.Caddy.CertFile
 		if front.Caddy.CertSourceOrDefault() == catalog.CertInternal {
 			root, err := p.rootCAPath(ctx, e)
 			if err != nil {
-				return "", "", err
+				return "", pr, err
 			}
-			ca = root
+			pr.CAFile = root
 		}
 	}
-
-	attempt := func(extra string) string {
-		parts := []string{curlBase + body}
-		if resolve != "" {
-			parts = append(parts, resolve)
-		}
-		if extra != "" {
-			parts = append(parts, extra)
-		}
-		return strings.Join(append(parts, shQuote(url)), " ")
-	}
-	// No CA file to name — verify against the system trust store only. This is
-	// the acme case (a real public cert), reached with an empty ca.
-	if ca == "" {
-		return url, attempt(""), nil
-	}
-	// Try the specific CA first, then fall through to the system trust store
-	// when the CA file is a leaf rather than an authority (the files case).
-	cmd := attempt("--cacert "+shQuote(ca)) + " || " + attempt("")
-	return url, cmd, nil
+	return pr.URL, pr, nil
 }
 
 // probeHost turns the gateway's bind address into something connectable. A

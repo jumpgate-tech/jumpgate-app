@@ -83,7 +83,7 @@ func TestStreamPairReportsTheErrorEvent(t *testing.T) {
 	})
 	c, _ := connect(context.Background())
 	stdout, stderr := captureStdio(t)
-	if code := streamPair(c, "box", false); code != 4 {
+	if code := streamPair(c, "box", api.PairRequest{}, false); code != 4 {
 		t.Fatalf("exit %d, stderr %q", code, stderr())
 	}
 	if !strings.Contains(stdout(), "[verify] start") || !strings.Contains(stderr(), "SECURITY") || !strings.Contains(stderr(), "not signed") {
@@ -112,6 +112,11 @@ func TestHostsAddGoesThroughConnect(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
+	// --local is refused off Linux, and a non-root user pairs in the
+	// foreground; as root on Linux the whole pairing goes to the server.
+	oldGOOS, oldEuid := hostGOOS, geteuid
+	hostGOOS, geteuid = "linux", func() int { return 0 }
+	t.Cleanup(func() { hostGOOS, geteuid = oldGOOS, oldEuid })
 	stdout, stderr := captureStdio(t)
 	if code := hostsAdd([]string{"box", "--local"}); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr())
@@ -173,7 +178,7 @@ func TestStreamPairFromAnotherVersionSaysStop(t *testing.T) {
 	})
 	c, _ := connect(context.Background())
 	_, stderr := captureStdio(t)
-	if code := streamPair(c, "box", false); code != 1 {
+	if code := streamPair(c, "box", api.PairRequest{}, false); code != 1 {
 		t.Fatalf("exit %d", code)
 	}
 	if !strings.Contains(stderr(), "older jumpgate") || !strings.Contains(stderr(), "jumpgate stop") {

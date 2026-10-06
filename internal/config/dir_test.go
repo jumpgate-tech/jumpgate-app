@@ -6,16 +6,17 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func TestDirIsJumpgate(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	got, err := Dir()
 	if err != nil {
 		t.Fatal(err)
@@ -29,8 +30,7 @@ func TestDirIsJumpgate(t *testing.T) {
 // directory is moved once, and a pointer file is left so a reader of the old
 // path learns where it went.
 func TestMigrateLegacyDirMovesOnce(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	legacy := filepath.Join(home, ".valve-node-app")
 	if err := os.MkdirAll(legacy, 0o700); err != nil {
 		t.Fatal(err)
@@ -61,8 +61,7 @@ func TestMigrateLegacyDirMovesOnce(t *testing.T) {
 // two configs silently would lose one of them, so it is an error to resolve
 // by hand.
 func TestMigrateLegacyDirRefusesWhenBothExist(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	for _, d := range []string{".valve-node-app", ".jumpgate"} {
 		if err := os.MkdirAll(filepath.Join(home, d), 0o700); err != nil {
 			t.Fatal(err)
@@ -75,6 +74,10 @@ func TestMigrateLegacyDirRefusesWhenBothExist(t *testing.T) {
 		t.Fatal("want an error when both directories hold a config")
 	}
 }
+
+// jsonPath escapes a path for embedding in a hand-written JSON string: a
+// Windows path's backslashes would otherwise read as escape sequences.
+func jsonPath(p string) string { return strings.ReplaceAll(p, `\`, `\\`) }
 
 func writeConfigJSON(t *testing.T, dir, body string) {
 	t.Helper()
@@ -90,12 +93,11 @@ func writeConfigJSON(t *testing.T, dir, body string) {
 // every one of them pointing at nothing. They must follow the move; anything
 // outside the legacy directory (a user-chosen key elsewhere) must not change.
 func TestLoadRepointsPathsInsideTheLegacyDir(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	legacy := filepath.Join(home, ".valve-node-app")
 	body := `{"targets":[{"id":"box","mode":"ssh","ssh":{"Host":"h","User":"root",` +
-		`"KeyPath":"` + filepath.Join(legacy, "keys", "id") + `",` +
-		`"HostKeyFile":"` + filepath.Join(legacy, "known_hosts") + `"}},` +
+		`"KeyPath":"` + jsonPath(filepath.Join(legacy, "keys", "id")) + `",` +
+		`"HostKeyFile":"` + jsonPath(filepath.Join(legacy, "known_hosts")) + `"}},` +
 		`{"id":"other","mode":"ssh","ssh":{"Host":"o","User":"root","KeyPath":"/keys/elsewhere","HostKeyFile":"/var/lib/valve-node-app/known_hosts"}}]}`
 	writeConfigJSON(t, legacy, body)
 
@@ -125,11 +127,10 @@ func TestLoadRepointsPathsInsideTheLegacyDir(t *testing.T) {
 // still enforced after it, rather than the file being recreated empty and the
 // next key trusted on first use.
 func TestPinnedHostKeySurvivesMigration(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	legacy := filepath.Join(home, ".valve-node-app")
 	writeConfigJSON(t, legacy, `{"targets":[{"id":"box","mode":"ssh","ssh":{"Host":"h","User":"root","KeyPath":"/k","HostKeyFile":"`+
-		filepath.Join(legacy, "known_hosts")+`"}}]}`)
+		jsonPath(filepath.Join(legacy, "known_hosts"))+`"}}]}`)
 
 	newKey := func() ssh.PublicKey {
 		pub, _, err := ed25519.GenerateKey(rand.Reader)
@@ -166,8 +167,7 @@ func TestPinnedHostKeySurvivesMigration(t *testing.T) {
 }
 
 func TestConfirmedHostsFileLivesInTheConfigDirAndIsNotTheTOFUFile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	got, err := ConfirmedHostsFile()
 	if err != nil {
 		t.Fatal(err)
@@ -210,8 +210,7 @@ func mustRead(t *testing.T, path string) string {
 // I1: any CLI command creates ~/.jumpgate/config.json.lock before the
 // migration runs. That jumpgate-made artefact must not block the move.
 func TestMigrateLegacyDirMergesIntoADirHoldingOnlyTheLock(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	legacy := legacyInstall(t, home)
 	cur := filepath.Join(home, ".jumpgate")
 	if err := os.MkdirAll(cur, 0o700); err != nil {
@@ -251,8 +250,7 @@ func TestMigrateLegacyDirMergesIntoADirHoldingOnlyTheLock(t *testing.T) {
 // I1: `jumpgate status` creates ~/.jumpgate/run/ (and may leave server files
 // in it) before spawning serve.
 func TestMigrateLegacyDirMergesIntoADirHoldingOnlyRun(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	legacyInstall(t, home)
 	cur := filepath.Join(home, ".jumpgate")
 	if err := os.MkdirAll(filepath.Join(cur, "run"), 0o700); err != nil {
@@ -279,11 +277,10 @@ func TestMigrateLegacyDirMergesIntoADirHoldingOnlyRun(t *testing.T) {
 // the legacy one and keeps the stored path pointing at it, so a pinned host
 // key is never swapped for another file.
 func TestMigrateLegacyDirMergeKeepsBothCopiesOnACollision(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := testutil.Home(t)
 	legacy := filepath.Join(home, ".valve-node-app")
 	writeConfigJSON(t, legacy, `{"targets":[{"id":"box","mode":"ssh","ssh":{"Host":"h","User":"root","KeyPath":"/k","HostKeyFile":"`+
-		filepath.Join(legacy, "known_hosts")+`"}}]}`)
+		jsonPath(filepath.Join(legacy, "known_hosts"))+`"}}]}`)
 	if err := os.WriteFile(filepath.Join(legacy, "known_hosts"), []byte("pinned\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
