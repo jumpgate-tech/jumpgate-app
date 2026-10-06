@@ -414,8 +414,9 @@ func TestEscFlashSaysOnlyWhatIsTrue(t *testing.T) {
 		}
 	})
 	t.Run("confirming a key", func(t *testing.T) {
+		// The typed yes was sent: the key may be on record already.
 		got := flashAfterEsc(t, func(f *addFlow) { f.asked = true })
-		if got != "stopped; no pairing was started" {
+		if got != "stopped; the host key you confirmed may already be recorded, and no pairing was started" {
 			t.Fatalf("flash %q", got)
 		}
 	})
@@ -474,5 +475,77 @@ func TestConfirmReadsAsTheBriefAndNamesTheJump(t *testing.T) {
 	fr = tuitest.Frame(m)
 	if !strings.Contains(fr, "10.0.0.7:22 is box-c") || strings.Contains(fr, "jump host") {
 		t.Errorf("second hop:\n%s", fr)
+	}
+}
+
+// Leaving the Hosts screen ends an add or pair flow there and then, and says
+// what that left behind, in the same words esc uses; nothing is dropped
+// silently on the way back.
+func TestLeavingHostsEndsTheFlowAndSaysSo(t *testing.T) {
+	leave := func(t *testing.T, m tea.Model, how string) tea.Model {
+		t.Helper()
+		switch how {
+		case "screen":
+			a := m.(*App)
+			a.flash = ""
+			a.openScreen(scrFleet)
+			return a
+		default: // a restart re-opens the screen it was on
+			m, _ = tuitest.Send(m, restartedMsg{be: tuitest.NewFake()})
+			return m
+		}
+	}
+	for _, how := range []string{"screen", "restart"} {
+		t.Run(how+"/probing", func(t *testing.T) {
+			m, fl := probingFlow(t, hostsApp(t, tuitest.NewFake(), "linux"), "box-c")
+			m = leave(t, m, how)
+			if fl.ctx.Err() == nil || m.(*App).screens[scrHosts].(*hostsScreen).flow != nil {
+				t.Fatal("the flow outlived the screen")
+			}
+			if !strings.Contains(m.(*App).flash, "stopped; no pairing was started") {
+				t.Fatalf("flash %q", m.(*App).flash)
+			}
+		})
+		t.Run(how+"/pairing under way", func(t *testing.T) {
+			m, fl := probingFlow(t, hostsApp(t, tuitest.NewFake(), "linux"), "box-c")
+			fl.step, fl.started = stepPairing, true
+			m = leave(t, m, how)
+			if fl.ctx.Err() == nil || !strings.Contains(m.(*App).flash, "finishes on the server") {
+				t.Fatalf("ctx %v flash %q", fl.ctx.Err(), m.(*App).flash)
+			}
+		})
+		t.Run(how+"/host key on screen", func(t *testing.T) {
+			f := tuitest.NewFake()
+			f.Probes = []api.HostKeyProbe{{Hops: []api.HostKeyHop{{HostPort: "10.0.0.7:22", State: api.HostKeyUnknown, ProbeID: "p1", Fingerprint: "SHA256:aaa", KeyType: "ssh-ed25519"}}}}
+			m := press(t, hostsApp(t, f, "linux"), "a")
+			m = typed(t, m, "box-c")
+			m = press(t, m, "enter")
+			m = typed(t, m, "root@10.0.0.7")
+			m = press(t, m, "enter", "enter", "enter", "enter")
+			fl := m.(*App).screens[scrHosts].(*hostsScreen).flow
+			if fl == nil || fl.step != stepConfirm {
+				t.Fatalf("not at the host key: %s", tuitest.Frame(m))
+			}
+			m = typed(t, m, "yes") // typed, not entered
+			m = leave(t, m, how)
+			if fl.ctx.Err() == nil || f.Called("ConfirmHostKey") {
+				t.Fatalf("ctx %v calls %v", fl.ctx.Err(), f.Calls)
+			}
+			if got := m.(*App).flash; !strings.Contains(got, "host key was not trusted") {
+				t.Fatalf("flash %q", got)
+			}
+			m = press(t, m, "2")
+			if fr := tuitest.Frame(m); strings.Contains(fr, "SHA256:aaa") {
+				t.Fatalf("the confirmation came back:\n%s", fr)
+			}
+		})
+		t.Run(how+"/form", func(t *testing.T) {
+			m := typed(t, press(t, hostsApp(t, tuitest.NewFake(), "linux"), "a"), "box-c")
+			fl := m.(*App).screens[scrHosts].(*hostsScreen).flow
+			m = leave(t, m, how)
+			if fl.ctx.Err() == nil || !strings.Contains(m.(*App).flash, "nothing was added") {
+				t.Fatalf("ctx %v flash %q", fl.ctx.Err(), m.(*App).flash)
+			}
+		})
 	}
 }

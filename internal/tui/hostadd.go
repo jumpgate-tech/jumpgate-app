@@ -351,13 +351,25 @@ func (f *addFlow) key(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-// leaveNote says only what is true when the person leaves mid-flow. The
-// server pairs on a context the client cannot cancel, so once Pair has
-// returned a channel the pairing finishes there. Before that nothing has
-// been paired, and a box added by this flow may be left unpaired.
+// leaveNote says only what is true when the person leaves mid-flow (esc,
+// or leaving the Hosts screen). The server pairs on a context the client
+// cannot cancel, so once Pair has returned a channel the pairing finishes
+// there. Before that nothing has been paired, and a box added by this flow
+// may be left unpaired. A host key on screen and not yet answered is not
+// trusted; one already answered yes may have been recorded. A finished flow
+// leaves nothing to say.
 func (f *addFlow) leaveNote(a *App) string {
-	if f.started {
+	switch {
+	case f.step == stepDone || f.step == stepFailed:
+		return ""
+	case f.started:
 		return "stopped watching; a pairing already under way finishes on the server"
+	case f.step == stepForm:
+		return "stopped adding a box; nothing was added"
+	case f.step == stepConfirm:
+		return "stopped; the host key was not trusted and no pairing was started"
+	case f.asked:
+		return "stopped; the host key you confirmed may already be recorded, and no pairing was started"
 	}
 	note := "stopped; no pairing was started"
 	if !f.repair && (f.adding || f.step == stepPairing) {

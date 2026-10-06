@@ -73,9 +73,23 @@ func (s *hostsScreen) endFlow() {
 
 func (s *hostsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 	if s.flow != nil {
-		if _, isEnter := msg.(enterMsg); isEnter {
-			s.endFlow() // the screen was left and re-entered: start clean
-		} else {
+		switch msg.(type) {
+		case leaveMsg:
+			// Another screen took over (or a restart re-opens this one): the
+			// flow ends now, not on return, and the person is told what it
+			// left behind in the words esc uses. A host key on screen is
+			// cancelled with nothing trusted.
+			if note := s.flow.leaveNote(a); note != "" {
+				if a.flash != "" {
+					note = a.flash + "; " + note
+				}
+				a.flash = note
+			}
+			s.endFlow()
+			return nil
+		case enterMsg:
+			s.endFlow() // nothing should be left by leaveMsg; start clean regardless
+		default:
 			cmd, done := s.flow.update(a, msg)
 			if done {
 				s.endFlow()
