@@ -361,7 +361,7 @@ func TestRedactPathologicalInputsAreFast(t *testing.T) {
 	}
 	single := 100 * time.Millisecond
 	if raceEnabled {
-		single = time.Second // the race detector costs about 10x
+		single = 4 * time.Second // the race detector costs about 10x, more with parallel packages
 	}
 	for name, in := range inputs {
 		start := time.Now()
@@ -374,7 +374,7 @@ func TestRedactPathologicalInputsAreFast(t *testing.T) {
 	// for the single-line cases, and looser still under the race detector.
 	bound := 600 * time.Millisecond
 	if raceEnabled {
-		bound = 5 * time.Second
+		bound = 20 * time.Second
 	}
 	lines := make([]string, maxLines)
 	for i := range lines {
