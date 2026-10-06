@@ -89,6 +89,11 @@ func TestCheckSSHArgvRefusesEverythingElse(t *testing.T) {
 		"kh quoted bs":    replace(8, `UserKnownHostsFile="a b\"`),
 		"kh quoted esc":   replace(8, `UserKnownHostsFile="a\" "b"`),
 		"kh bare quote":   replace(8, `UserKnownHostsFile=a"b`),
+		"kh apostrophe":   replace(8, `UserKnownHostsFile=/home/o'neil/kh`),
+		"kh quoted apos":  replace(8, `UserKnownHostsFile="/home/o'neil x/kh"`),
+		"kh unc":          replace(8, `UserKnownHostsFile=\\srv\kh`),
+		"kh double bs":    replace(8, `UserKnownHostsFile="C:\a b\\c"`),
+		"kh bs space":     replace(8, `UserKnownHostsFile="C:\a\ b"`),
 		"key dollar":      replace(4, "/k/${HOME}"),
 		"key tilde":       replace(4, "~/id"),
 		"key quote":       replace(4, `/k/"id`),
@@ -101,5 +106,15 @@ func TestCheckSSHArgvRefusesEverythingElse(t *testing.T) {
 		if err := CheckSSHArgv(argv); err == nil {
 			t.Errorf("%s: %q passed", name, argv)
 		}
+	}
+}
+
+// Windows paths keep their single backslashes: ssh's argv split leaves a
+// backslash before any other character as it is.
+func TestCheckSSHArgvAcceptsWindowsKnownHostsPaths(t *testing.T) {
+	a := goodArgv()
+	a[8] = `UserKnownHostsFile=C:\Users\x\.jumpgate\confirmed_hosts "C:\Users\John Smith\.ssh\known_hosts" C:\ProgramData\ssh\ssh_known_hosts`
+	if err := CheckSSHArgv(a); err != nil {
+		t.Fatal(err)
 	}
 }

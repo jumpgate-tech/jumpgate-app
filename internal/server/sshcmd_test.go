@@ -251,3 +251,28 @@ func TestSSHCommandUsesTheStrictHostFiles(t *testing.T) {
 		t.Fatalf("argv\n got %q\nwant %q", cmd.Argv, want)
 	}
 }
+
+// ssh splits UserKnownHostsFile with its own argv rules: an apostrophe
+// opens a quote and a backslash before a backslash, quote or space is an
+// escape. A path ssh would read differently is refused with a clear error;
+// an ordinary Windows path (single backslashes) passes both sides as is.
+func TestSSHArgvRefusesKnownHostsPathsSSHWouldReinterpret(t *testing.T) {
+	for _, kh := range []string{
+		`/home/o'neil/.ssh/known_hosts`, `C:\Users\o'neil\.ssh\known_hosts`,
+		`\\server\share\known_hosts`, `C:\Users\a\\b\known_hosts`, `C:\Users\dir\`, `C:\Users\a\ b\kh`,
+	} {
+		_, err := sshArgv(sshTarget("10.0.0.5", "root", nil), []string{"/h/c", kh})
+		if err == nil || !strings.Contains(err.Error(), "known_hosts path") {
+			t.Errorf("%q: err %v", kh, err)
+		}
+	}
+	for _, kh := range []string{`C:\Users\John Smith\.ssh\known_hosts`, `C:\ProgramData\ssh\ssh_known_hosts`, `C:\Users\JOHNSM~1\.ssh\known_hosts`} {
+		argv, err := sshArgv(sshTarget("10.0.0.5", "root", nil), []string{`C:\Users\x\.jumpgate\confirmed_hosts`, kh})
+		if err != nil {
+			t.Fatalf("%q refused: %v", kh, err)
+		}
+		if err := api.CheckSSHArgv(argv); err != nil {
+			t.Fatalf("client screen refused %q: %v", argv, err)
+		}
+	}
+}

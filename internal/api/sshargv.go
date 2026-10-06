@@ -210,6 +210,39 @@ func checkKnownHostsList(v string) error {
 		if err := checkSSHPath(tok); err != nil {
 			return fmt.Errorf("known_hosts: %w", err)
 		}
+		if err := CheckKnownHostsPath(tok); err != nil {
+			return fmt.Errorf("known_hosts: %w", err)
+		}
+	}
+	return nil
+}
+
+// CheckKnownHostsPath refuses a path that ssh's own argv split (misc.c
+// argv_split, which reads every UserKnownHostsFile value) would change:
+//
+//   - an apostrophe or a double quote opens or closes a quote;
+//   - a backslash followed by a backslash, an apostrophe, a double quote or
+//     (outside quotes) a space is an escape, so "\\server" would become
+//     "\server"; a backslash at the end would escape the server's closing
+//     quote.
+//
+// A backslash before any other character is kept as it is, inside quotes
+// or not, so an ordinary Windows path (C:\Users\John Smith\.ssh\known_hosts)
+// passes unchanged and needs no conversion to forward slashes. A path this
+// refuses (an apostrophe in the user name, a UNC home) fails closed: the
+// shell is not offered, and the error says why. The server's sshArgv and
+// CheckSSHArgv both apply this one check.
+func CheckKnownHostsPath(p string) error {
+	if strings.ContainsAny(p, `'"`) {
+		return errors.New("the path has a quote or an apostrophe, which ssh would read as quoting")
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] != '\\' {
+			continue
+		}
+		if i == len(p)-1 || strings.IndexByte(`\ `, p[i+1]) >= 0 {
+			return errors.New("the path has a double backslash, a backslash before a space, or a trailing backslash, which ssh would read as an escape")
+		}
 	}
 	return nil
 }

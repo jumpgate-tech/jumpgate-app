@@ -57,8 +57,8 @@ func sshArgv(t config.Target, knownHosts []string) ([]string, error) {
 		if err := checkPath(f); err != nil {
 			return nil, fmt.Errorf("known_hosts path: %w", err)
 		}
-		if strings.ContainsAny(f, `"`) {
-			return nil, errors.New("known_hosts path: contains a quote")
+		if err := api.CheckKnownHostsPath(f); err != nil {
+			return nil, fmt.Errorf("known_hosts path %s: %w", f, err)
 		}
 		if strings.ContainsAny(f, " \t") {
 			f = `"` + f + `"` // ssh's own list syntax for a path with spaces
