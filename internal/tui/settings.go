@@ -488,7 +488,7 @@ func (s *settingsScreen) view(a *App, w, h int) string {
 	}
 	end := min(s.offset+room, len(lines))
 	out := strings.Join(lines[s.offset:end], "\n")
-	foot := " ↑↓ move  space toggle  enter change  (saved at once)"
+	foot := " " + a.gl.UpDown + " move  space toggle  enter change  (saved at once)"
 	if s.editingKey {
 		foot = " " + s.keyInput.View() + "   enter save, esc cancel"
 	}

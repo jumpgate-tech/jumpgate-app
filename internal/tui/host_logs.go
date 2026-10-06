@@ -351,7 +351,7 @@ func (h *hostScreen) viewLogs(a *App, w, hgt int) string {
 	for len(out) < hgt-1 {
 		out = append(out, "")
 	}
-	foot := " / filter  ! level  f follow  " + a.gl.Sep + "  ↑↓ scroll  e explain"
+	foot := " / filter  ! level  f follow  " + a.gl.Sep + "  " + a.gl.UpDown + " scroll  e explain"
 	if h.logEditing {
 		foot = " " + h.logFilter.View()
 	}

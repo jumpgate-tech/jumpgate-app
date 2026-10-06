@@ -41,13 +41,14 @@ func (t Theme) state(s api.SyncState) lipgloss.Style {
 // fonts lack block elements (spec D8).
 type Glyphs struct {
 	Flag, Full, Empty, Tick, Ellipsis, Sel, Sep, Dash string
+	UpDown                                            string // the scroll keys in a footer
 	Spark                                             []string
 	ASCII                                             bool
 }
 
 var (
-	unicodeGlyphs = Glyphs{Flag: "⚑", Full: "█", Empty: "░", Tick: "│", Ellipsis: "…", Sel: "▸", Sep: "·", Dash: "–", Spark: strings.Split("▁▂▃▄▅▆▇█", "")}
-	asciiGlyphs   = Glyphs{Flag: "!", Full: "#", Empty: ".", Tick: "|", Ellipsis: "~", Sel: ">", Sep: "|", Dash: "-", Spark: []string{"_", ".", "-", "=", "#"}, ASCII: true}
+	unicodeGlyphs = Glyphs{Flag: "⚑", Full: "█", Empty: "░", Tick: "│", Ellipsis: "…", Sel: "▸", Sep: "·", Dash: "–", UpDown: "↑↓", Spark: strings.Split("▁▂▃▄▅▆▇█", "")}
+	asciiGlyphs   = Glyphs{Flag: "!", Full: "#", Empty: ".", Tick: "|", Ellipsis: "~", Sel: ">", Sep: "|", Dash: "-", UpDown: "up/dn", Spark: []string{"_", ".", "-", "=", "#"}, ASCII: true}
 )
 
 // DetectGlyphs picks the glyph set: the preference when it names one, else

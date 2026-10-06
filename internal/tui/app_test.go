@@ -23,12 +23,19 @@ import (
 
 var _ Backend = (*tuitest.Fake)(nil)
 
+// glyphOverride, when set, replaces the glyphs every newTestApp asks for,
+// so the ascii sweep can drive each screen through its usual setup.
+var glyphOverride string
+
 var testNow = time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 
 // newTestApp is an App over a fake at w×h with glyphs fixed, so frames are
 // the same on every OS and terminal.
 func newTestApp(t *testing.T, f *tuitest.Fake, w, h int, glyphs string) *App {
 	t.Helper()
+	if glyphOverride != "" {
+		glyphs = glyphOverride
+	}
 	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" }, Hostname: "laptop", Now: func() time.Time { return testNow }, Location: time.UTC})
 	t.Cleanup(func() { a.cancel() }) // a restart replaces a.cancel: read it at cleanup time
 	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: w, Height: h}, prefsMsg{p: api.UIPrefs{Glyphs: glyphs, ShowEstimates: true}})
