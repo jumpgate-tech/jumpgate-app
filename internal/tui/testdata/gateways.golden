@@ -1,0 +1,24 @@
+ jumpgate  1 Fleet  2 Hosts  3 Signers  [4 Gateways]  5 Jobs  6 Settings  ? help
+ GATEWAYS (read-only; change them in the web app)
+
+ rpc-main       on box          running   https://rpc.example.org/
+   PulseChain (369)  https://rpc.example.org/369
+   the certificate expires in 6 days
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ no box selected · server connecting · jobs ⚑ –

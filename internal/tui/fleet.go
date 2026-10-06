@@ -72,7 +72,19 @@ func syncRank(r api.FleetRow) int {
 	if r.Status == nil {
 		return 1
 	}
-	return map[api.SyncState]int{api.SyncStopped: 0, api.SyncSyncing: 2, api.SyncNoData: 3, api.SyncSynced: 4}[r.Status.Overall]
+	switch r.Status.Overall {
+	case api.SyncStopped:
+		return 0
+	case api.SyncUnavailable, "":
+		return 1
+	case api.SyncSyncing:
+		return 2
+	case api.SyncNoData:
+		return 3
+	case api.SyncSynced:
+		return 4
+	}
+	return 1 // a state this build does not know is no better than unavailable
 }
 
 func diskFrac(r api.FleetRow) float64 {
@@ -135,6 +147,13 @@ func shortAddr(addr string, g Glyphs) string {
 func (s *fleetScreen) cell(a *App, r api.FleetRow, col string) string {
 	const na = "n/a"
 	stale := r.Stale.Status || a.conn != apiclient.Live
+	// mark dims a value that may be out of date and tags it, as the sync cells do.
+	mark := func(v string) string {
+		if stale {
+			return a.th.Dim.Render(v + "~")
+		}
+		return v
+	}
 	switch col {
 	case "host":
 		if r.ThisMachine {
@@ -180,7 +199,7 @@ func (s *fleetScreen) cell(a *App, r api.FleetRow, col string) string {
 		if r.Status == nil || r.Status.HeadLag == nil {
 			return a.th.Dim.Render(na)
 		}
-		return shortCount(*r.Status.HeadLag)
+		return mark(shortCount(*r.Status.HeadLag))
 	case "peers":
 		if r.Status == nil {
 			return a.th.Dim.Render(na)
@@ -194,7 +213,7 @@ func (s *fleetScreen) cell(a *App, r api.FleetRow, col string) string {
 			}
 			return fmt.Sprint(c.Peers)
 		}
-		return side(r.Status.Exec) + "/" + side(r.Status.Beacon)
+		return mark(side(r.Status.Exec) + "/" + side(r.Status.Beacon))
 	case "disk":
 		frac := diskFrac(r)
 		if frac < 0 {
@@ -230,7 +249,7 @@ func (s *fleetScreen) cell(a *App, r api.FleetRow, col string) string {
 		if r.LastSeen == nil {
 			return a.th.Dim.Render(na)
 		}
-		return formatAge(a.now().Sub(*r.LastSeen))
+		return mark(formatAge(a.now().Sub(*r.LastSeen)))
 	case "agent":
 		if r.Agent == "" {
 			return a.gl.Dash

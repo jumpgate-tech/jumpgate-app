@@ -40,6 +40,24 @@ type (
 		d   api.DiskView
 		err error
 	}
+	endpointsMsg struct {
+		id  string
+		gen uint64
+		e   api.Endpoints
+		err error
+	}
+	firewallMsg struct {
+		id    string
+		gen   uint64
+		items []api.CheckItem
+		err   error
+	}
+	// gatewaysMsg is not per box: the list is the same for every screen that
+	// asks, and broadcast hands it to the host and the Gateways screen alike.
+	gatewaysMsg struct {
+		gws []api.GatewaySummary
+		err error
+	}
 )
 
 // hostScreen is one box's detail. Its streams live in ctx, cancelled when
@@ -61,6 +79,15 @@ type hostScreen struct {
 	diskHas   bool
 	diskErr   error
 	measuring bool
+
+	eps    api.Endpoints
+	epsHas bool
+	epsErr error
+	gws    []api.GatewaySummary
+	fw     []api.CheckItem
+	fwHas  bool
+	fwErr  error
+	scroll int // first visible line of the Endpoints or Security tab; clamped when drawn
 }
 
 // openHost shows a box's detail, closing any open one.
@@ -119,6 +146,16 @@ func (h *hostScreen) load(a *App, tab string) tea.Cmd {
 			d, err := be.Disk(ctx, id)
 			return diskMsg{id: id, gen: gen, d: d, err: err}
 		}
+	case "endpoints":
+		return tea.Batch(func() tea.Msg {
+			e, err := be.Endpoints(ctx, id)
+			return endpointsMsg{id: id, gen: gen, e: e, err: err}
+		}, loadGateways(a))
+	case "security":
+		return func() tea.Msg {
+			items, err := be.Firewall(ctx, id)
+			return firewallMsg{id: id, gen: gen, items: items, err: err}
+		}
 	}
 	return nil
 }
@@ -156,6 +193,31 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			h.disk, h.diskHas, h.diskErr = msg.d, true, nil
 		}
 		return nil
+	case endpointsMsg:
+		if msg.id != h.id || msg.gen != h.gen {
+			return nil
+		}
+		if msg.err != nil {
+			h.epsErr = msg.err
+		} else {
+			h.eps, h.epsHas, h.epsErr = msg.e, true, nil
+		}
+		return nil
+	case firewallMsg:
+		if msg.id != h.id || msg.gen != h.gen {
+			return nil
+		}
+		if msg.err != nil {
+			h.fwErr = msg.err
+		} else {
+			h.fw, h.fwHas, h.fwErr = msg.items, true, nil
+		}
+		return nil
+	case gatewaysMsg:
+		if msg.err == nil {
+			h.gws = msg.gws
+		}
+		return nil
 	case tea.KeyPressMsg:
 		if cmd, ok := h.tabKey(a, msg); ok {
 			return cmd
@@ -165,9 +227,11 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			a.closeDetail()
 		case key.Matches(msg, navKeys.Left):
 			h.tab--
+			h.scroll = 0
 			return h.load(a, h.tabName(a))
 		case key.Matches(msg, navKeys.Right):
 			h.tab++
+			h.scroll = 0
 			return h.load(a, h.tabName(a))
 		case key.Matches(msg, hostKeys.Sidebar):
 			a.sidebar = !a.sidebar
@@ -179,6 +243,15 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 // tabKey gives the visible tab first refusal of a key.
 func (h *hostScreen) tabKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 	switch h.tabName(a) {
+	case "endpoints", "security":
+		switch {
+		case key.Matches(k, navKeys.Up):
+			h.scroll = max(h.scroll-1, 0)
+			return nil, true
+		case key.Matches(k, navKeys.Down):
+			h.scroll++ // clamped against the content when drawn
+			return nil, true
+		}
 	case "storage":
 		if key.Matches(k, hostKeys.Measure) {
 			if h.measuring {
@@ -230,6 +303,10 @@ func (h *hostScreen) body(a *App, w, hgt int) string {
 		return h.viewOverview(a, w)
 	case "storage":
 		return h.viewStorage(a, w)
+	case "endpoints":
+		return h.viewEndpoints(a, w, hgt)
+	case "security":
+		return h.viewSecurity(a, w, hgt)
 	}
 	title, ok := tabTitles[h.tabName(a)]
 	if !ok {

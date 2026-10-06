@@ -241,3 +241,16 @@ func TestFleetUnavailableClientsAreNotZero(t *testing.T) {
 		t.Fatalf("row %q", line)
 	}
 }
+
+func TestSyncRankPutsUnavailableSecondAndStaleMarksLagPeersAge(t *testing.T) {
+	row := func(st api.SyncState) api.FleetRow { return api.FleetRow{Status: &api.NodeStatus{Overall: st}} }
+	want := map[api.SyncState]int{api.SyncStopped: 0, api.SyncUnavailable: 1, "": 1, api.SyncSyncing: 2, api.SyncNoData: 3, api.SyncSynced: 4}
+	for st, rank := range want {
+		if got := syncRank(row(st)); got != rank {
+			t.Errorf("syncRank(%q) = %d, want %d", st, got, rank)
+		}
+	}
+	if syncRank(api.FleetRow{}) != 1 {
+		t.Error("a row with no status ranks second")
+	}
+}

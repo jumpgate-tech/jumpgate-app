@@ -1,0 +1,24 @@
+ jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  5 Jobs  6 Settings    ? help
+ box
+ Overview  Storage  [Endpoints]  Security  Logs  Services
+
+ RPC ENDPOINTS
+ exec    http://127.0.0.1:8545      reachable · chain id matches
+ beacon  http://127.0.0.1:5052      not reachable
+ access  over SSH; open a tunnel with
+         ssh -L 8545:127.0.0.1:8545 -L 5052:127.0.0.1:5052 root@10.0.0.5
+
+ GATEWAYS ON THIS BOX (read-only; change them in the web app)
+ rpc-main       on box          running   https://rpc.example.org/
+   PulseChain (369)  https://rpc.example.org/369
+
+
+
+
+
+
+
+
+
+
+ box · server connecting · jobs ⚑ –

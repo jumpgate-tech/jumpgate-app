@@ -132,3 +132,17 @@ func sparkline(vals []uint64, g Glyphs) string {
 	}
 	return b.String()
 }
+
+// window is the part of lines that fits visible rows from *off, clamping *off
+// so it stays in range when the content shrinks or the window grows. Every
+// line is cut to w cells.
+func window(lines []string, off *int, visible, w int, ell string) []string {
+	visible = max(visible, 1)
+	*off = min(max(*off, 0), max(len(lines)-visible, 0))
+	end := min(*off+visible, len(lines))
+	out := make([]string, 0, end-*off)
+	for _, l := range lines[*off:end] {
+		out = append(out, truncate(l, w, ell))
+	}
+	return out
+}
