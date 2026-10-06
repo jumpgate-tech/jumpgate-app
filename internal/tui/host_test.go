@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"runtime"
 	"strings"
@@ -181,9 +182,10 @@ func TestOverviewShowsTooManyStreams(t *testing.T) {
 	}
 	// With a reading already shown, the error is a note and the reading stays.
 	// (Messages go in directly: the settled watch above may still hold the channel.)
+	gen := m.(*App).detail.(*hostScreen).gen
 	m, _ = tuitest.Send(m,
-		statusMsg{id: "box", u: apiclient.Update[api.NodeStatus]{Value: syncedStatus(), Has: true, State: apiclient.Live}},
-		statusMsg{id: "box", u: apiclient.Update[api.NodeStatus]{State: apiclient.Retrying, Err: tooMany}})
+		statusMsg{id: "box", gen: gen, u: apiclient.Update[api.NodeStatus]{Value: syncedStatus(), Has: true, State: apiclient.Live}},
+		statusMsg{id: "box", gen: gen, u: apiclient.Update[api.NodeStatus]{State: apiclient.Retrying, Err: tooMany}})
 	fr := tuitest.Frame(m)
 	if !strings.Contains(fr, "21,345,678") || !strings.Contains(fr, "latest reading failed: too many windows") {
 		t.Fatalf("with a reading:\n%s", fr)
@@ -246,5 +248,69 @@ func TestHostScreensCannotBeEscaped(t *testing.T) {
 		requireClean(t, "storage after a failed measure", m.View().Content)
 		a.detail.(*hostScreen).tab = 6 // the hostile tab name
 		requireClean(t, "unknown tab", m.View().Content)
+	}
+}
+
+// Closing a box and opening the same one again: a late reply from the first
+// open must not reach the second, which reads its own stream.
+func TestReopeningTheSameHostDropsTheOldOpensMessages(t *testing.T) {
+	f := tuitest.NewFake()
+	a := newTestApp(t, f, 80, 24, "unicode")
+	a.openHost("box")
+	old := a.detail.(*hostScreen)
+	a.closeDetail()
+	a.openHost("box")
+	cur := a.detail.(*hostScreen)
+	if cur.gen == old.gen {
+		t.Fatal("a reopened host has the old generation")
+	}
+	stale := make(chan apiclient.Update[api.NodeStatus])
+	m, cmds := tuitest.Send(a,
+		statusMsg{id: "box", gen: old.gen, u: apiclient.Update[api.NodeStatus]{Value: syncedStatus(), Has: true, State: apiclient.Live}, ch: stale},
+		diskMsg{id: "box", gen: old.gen, d: sampleDisk()})
+	if len(cmds) != 0 {
+		t.Fatalf("a stale message produced %d commands (it would keep reading the old channel)", len(cmds))
+	}
+	if h := m.(*App).detail.(*hostScreen); h.statusHas || h.diskHas {
+		t.Fatalf("the reopened host took the old open's data: %+v", h)
+	}
+}
+
+// ctxBackend records the context each disk call runs on.
+type ctxBackend struct {
+	*tuitest.Fake
+	diskCtx, measureCtx chan context.Context
+}
+
+func (b ctxBackend) Disk(ctx context.Context, t string) (api.DiskView, error) {
+	b.diskCtx <- ctx
+	return b.Fake.Disk(ctx, t)
+}
+
+func (b ctxBackend) MeasureDisk(ctx context.Context, t string) (api.DiskView, error) {
+	b.measureCtx <- ctx
+	return b.Fake.MeasureDisk(ctx, t)
+}
+
+// Disk and measure run in the host's context: leaving the box cancels them.
+func TestHostDiskCallsRunOnTheHostContext(t *testing.T) {
+	be := ctxBackend{Fake: tuitest.NewFake(), diskCtx: make(chan context.Context, 1), measureCtx: make(chan context.Context, 1)}
+	a := New(Options{Backend: be, GOOS: "linux", Getenv: func(string) string { return "" }, Now: func() time.Time { return testNow }})
+	t.Cleanup(a.cancel)
+	a.openHost("box")
+	h := a.detail.(*hostScreen)
+	h.tab = 1 // storage
+	tuitest.Run(h.load(a, "storage"))
+	tuitest.Run(func() tea.Cmd { c, _ := h.tabKey(a, tuitest.Key("m")); return c }())
+	if len(be.diskCtx) != 1 || len(be.measureCtx) != 1 {
+		t.Fatal("Disk and MeasureDisk were not both called")
+	}
+	dctx, mctx := <-be.diskCtx, <-be.measureCtx
+	if dctx.Err() != nil || mctx.Err() != nil {
+		t.Fatal("a context is done before the host closed")
+	}
+	a.closeDetail()
+	if dctx.Err() == nil || mctx.Err() == nil {
+		t.Fatal("closing the host left a disk call's context live")
 	}
 }

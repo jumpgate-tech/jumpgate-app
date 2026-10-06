@@ -97,7 +97,8 @@ type App struct {
 
 	active  screenID
 	screens [6]screen
-	detail  screen // the open host, if any (Task 15)
+	detail  screen // the open host, if any
+	hostGen uint64 // counts openHost calls; see hostScreen.gen
 	modal   modal
 	flash   string
 	skew    string
@@ -125,6 +126,7 @@ func New(o Options) *App {
 	for i := range a.screens {
 		a.screens[i] = comingScreen{name: screenNames[i]}
 	}
+	a.screens[scrFleet] = newFleetScreen()
 	a.screens[scrJobs] = jobsScreen{}
 	if server, mine, differs := a.be.Skew(); differs {
 		server, mine = sanitizeLine(server), sanitizeLine(mine)

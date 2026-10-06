@@ -1,0 +1,24 @@
+ jumpgate  [1 Fleet]  2 Hosts  3 Signers  4 Gateways  5 Jobs  6 Settings  ? help
+ HOST         LINK       NET       SYNC      LAG    PEERS   DISK            FW
+▸box-a        agent      PulseCha… synced    2      48/72   [████│░░░] 61%  warn
+ box-b        down 4m    Ethereum  syncing~  n/a    3/9     n/a             n/a
+ laptop*      local*     ?         n/a       n/a    n/a     n/a             n/a
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 3 boxes · sort: host · ~ stale  * this machine
+ box-a · agent · server live · jobs ⚑ –                                  5s ago

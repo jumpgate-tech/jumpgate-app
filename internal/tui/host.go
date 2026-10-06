@@ -29,12 +29,14 @@ var tabTitles = map[string]string{
 
 type (
 	statusMsg struct {
-		id string
-		u  apiclient.Update[api.NodeStatus]
-		ch <-chan apiclient.Update[api.NodeStatus]
+		id  string
+		gen uint64 // the open that asked: a reopened box drops the old one's replies
+		u   apiclient.Update[api.NodeStatus]
+		ch  <-chan apiclient.Update[api.NodeStatus]
 	}
 	diskMsg struct {
 		id  string
+		gen uint64
 		d   api.DiskView
 		err error
 	}
@@ -44,6 +46,7 @@ type (
 // the person leaves the box.
 type hostScreen struct {
 	id     string
+	gen    uint64
 	tab    int
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -64,7 +67,8 @@ type hostScreen struct {
 func (a *App) openHost(id string) tea.Cmd {
 	a.closeDetail()
 	ctx, cancel := context.WithCancel(a.ctx)
-	h := &hostScreen{id: id, ctx: ctx, cancel: cancel, loaded: map[string]bool{}}
+	a.hostGen++
+	h := &hostScreen{id: id, gen: a.hostGen, ctx: ctx, cancel: cancel, loaded: map[string]bool{}}
 	a.detail, a.sel = h, id
 	return tea.Batch(h.watchStatus(a.be.WatchStatus(ctx, id)), h.load(a, h.tabName(a)))
 }
@@ -80,7 +84,7 @@ func (a *App) closeDetail() {
 // watchStatus waits for the next status update; the handler asks again. It
 // ends when the box is left, whether or not the backend closes the channel.
 func (h *hostScreen) watchStatus(ch <-chan apiclient.Update[api.NodeStatus]) tea.Cmd {
-	id, ctx := h.id, h.ctx
+	id, gen, ctx := h.id, h.gen, h.ctx
 	return func() tea.Msg {
 		select {
 		case <-ctx.Done():
@@ -89,7 +93,7 @@ func (h *hostScreen) watchStatus(ch <-chan apiclient.Update[api.NodeStatus]) tea
 			if !ok {
 				return nil
 			}
-			return statusMsg{id: id, u: u, ch: ch}
+			return statusMsg{id: id, gen: gen, u: u, ch: ch}
 		}
 	}
 }
@@ -108,13 +112,13 @@ func (h *hostScreen) load(a *App, tab string) tea.Cmd {
 		return nil
 	}
 	h.loaded[tab] = true
-	id := h.id
+	id, gen, ctx, be := h.id, h.gen, h.ctx, a.be // captured: the command goroutine reads no App field
 	switch tab {
 	case "storage":
-		return a.do("disk", func(ctx context.Context) tea.Msg {
-			d, err := a.be.Disk(ctx, id)
-			return diskMsg{id: id, d: d, err: err}
-		})
+		return func() tea.Msg {
+			d, err := be.Disk(ctx, id)
+			return diskMsg{id: id, gen: gen, d: d, err: err}
+		}
 	}
 	return nil
 }
@@ -128,7 +132,7 @@ func (h *hostScreen) keys() []key.Binding {
 func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case statusMsg:
-		if msg.id != h.id {
+		if msg.id != h.id || msg.gen != h.gen {
 			return nil
 		}
 		h.statusConn = msg.u.State
@@ -142,7 +146,7 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 		return h.watchStatus(msg.ch)
 	case diskMsg:
-		if msg.id != h.id {
+		if msg.id != h.id || msg.gen != h.gen {
 			return nil
 		}
 		h.measuring = false
@@ -181,11 +185,11 @@ func (h *hostScreen) tabKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 				return nil, true // already measuring; the server joins it anyway
 			}
 			h.measuring = true
-			id := h.id
-			return a.do("measure", func(ctx context.Context) tea.Msg {
-				d, err := a.be.MeasureDisk(ctx, id)
-				return diskMsg{id: id, d: d, err: err}
-			}), true
+			id, gen, ctx, be := h.id, h.gen, h.ctx, a.be
+			return func() tea.Msg {
+				d, err := be.MeasureDisk(ctx, id)
+				return diskMsg{id: id, gen: gen, d: d, err: err}
+			}, true
 		}
 	}
 	return nil, false
