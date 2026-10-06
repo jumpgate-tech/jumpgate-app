@@ -87,7 +87,9 @@ func TestCmdTUIRefusesWithoutATerminal(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
 	oldIn, oldOut, oldRun, oldConnect := stdinIsTerminal, stdoutIsTerminal, runTUIProgram, connectTUI
-	t.Cleanup(func() { stdinIsTerminal, stdoutIsTerminal, runTUIProgram, connectTUI = oldIn, oldOut, oldRun, oldConnect })
+	t.Cleanup(func() {
+		stdinIsTerminal, stdoutIsTerminal, runTUIProgram, connectTUI = oldIn, oldOut, oldRun, oldConnect
+	})
 	started := false
 	connectTUI = func(context.Context, string) (*apiclient.Client, error) {
 		started = true // not even a server may be started

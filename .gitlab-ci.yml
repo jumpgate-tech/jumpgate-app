@@ -47,7 +47,8 @@ go-linux:
     - command -v gcc >/dev/null || (apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev)
     - export HOME="$(mktemp -d)" USERPROFILE="$HOME"
   script:
-    - test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+    # Only tracked sources: the job cache (.cache/go-mod) holds third-party code.
+    - test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)" || { git ls-files -z '*.go' | xargs -0 gofmt -l; exit 1; }
     - go vet ./...
     - go vet -tags e2e ./internal/bootstrap/
     - GOOS=linux go vet -tags realsecret ./internal/signer/
