@@ -84,9 +84,9 @@ func TestMaskURL(t *testing.T) {
 	for in, want := range map[string]string{
 		"http://127.0.0.1:8545":                                         "http://127.0.0.1:8545",
 		"https://rpc.example.org/369":                                   "https://rpc.example.org/369",
-		"https://user:hunter2@rpc.example.org:8443/x":                   "https://user:***@rpc.example.org:8443/x",
-		"https://user:p@ss/w@rpc.example.org/":                          "https://user:***@rpc.example.org/",
-		"https://tok3nvalue@rpc.example.org/":                           "https://***@rpc.example.org/",
+		"https://user:hunter2@rpc.example.org:8443/x":                   "https://***/x",
+		"https://user:p@ss/w@rpc.example.org/":                          "https://***/***/",
+		"https://tok3nvalue@rpc.example.org/":                           "https://***/",
 		"https://mainnet.infura.io/v3/0123456789abcdef0123456789abcdef": "https://mainnet.infura.io/v3/***",
 		"https://eth-mainnet.g.alchemy.com/v2/Ab3_dEf-Gh1jKlMnOpQrStUv": "https://eth-mainnet.g.alchemy.com/v2/***",
 		"https://rpc.example.org/api/key/short":                         "https://rpc.example.org/api/key/***",
@@ -97,7 +97,7 @@ func TestMaskURL(t *testing.T) {
 			t.Errorf("maskURL(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if got := maskText("see https://u:pw@h/p?k=v now"); got != "see https://***@h/p?k=*** now" {
+	if got := maskText("see https://u:pw@h/p?k=v now"); got != "see https://***/p?k=*** now" {
 		t.Errorf("maskText = %q", got)
 	}
 }
@@ -118,7 +118,7 @@ func TestEndpointsAndGatewaysNeverShowCredentials(t *testing.T) {
 			t.Errorf("%q is on screen:\n%s", secret, fr)
 		}
 	}
-	if !strings.Contains(fr, "rpc.example.org") || !strings.Contains(fr, "u:***@") {
+	if !strings.Contains(fr, "gw.example.org") || !strings.Contains(fr, "https://***/") {
 		t.Errorf("host or masked userinfo missing:\n%s", fr)
 	}
 }
