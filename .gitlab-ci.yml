@@ -208,7 +208,7 @@ release-snapshot:
       files: [go.sum]
     paths: [.cache/go-mod/, .cache/go-build/]
   script:
-    - go install github.com/goreleaser/goreleaser/v2@latest
+    - go install github.com/goreleaser/goreleaser/v2@v2.18.2
     - export PATH="$(go env GOPATH)/bin:$PATH"
     - goreleaser check
     - goreleaser release --snapshot --clean --skip=publish

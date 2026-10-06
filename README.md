@@ -221,7 +221,9 @@ desktop anyway, use a WSL2 or Lima VM as an ordinary Linux box; see
 
 Grab the download for your platform from the
 [latest release](https://github.com/jumpgate-tech/jumpgate-app/releases/latest)
-(`checksums.txt` lists a SHA-256 for every file). Each one carries both Linux
+(`checksums.txt` lists a SHA-256 for every file; each file also carries a
+build-provenance attestation, checked with
+`gh attestation verify <file> --repo jumpgate-tech/jumpgate-app`). Each one carries both Linux
 agents, so it can pair a Linux box with nothing else to fetch.
 
 - **macOS:** `Jumpgate-macos-<arch>.zip` (`arm64` for Apple silicon, `amd64`
