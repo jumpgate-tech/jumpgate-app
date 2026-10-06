@@ -324,3 +324,32 @@ func FuzzMaskURL(f *testing.F) {
 		}
 	})
 }
+
+// A "://" word followed later on its line by an at-like word takes every word
+// between them (userinfo with spaces), and when the 4 KB cut drops the at-like
+// word, the rest of the line.
+func TestMaskTextURLWithSpacesInUserinfo(t *testing.T) {
+	in := "https://u:A B SECRET D E F@h/"
+	if got := maskText(in); strings.Contains(got, "SECRET") {
+		t.Errorf("maskText(%q) = %q leaks", in, got)
+	}
+	if got := maskText("ok\nhttps://u:A B SECRET D E F@h/ tail"); strings.Contains(got, "SECRET") || !strings.HasPrefix(got, "ok\n") {
+		t.Errorf("multi-line: %q", got)
+	}
+	// A new line ends the search: a later line's @ does not reach back.
+	if got := maskText("https://h/ x y z\nA B C d@e"); !strings.Contains(got, "y z\nA ***") {
+		t.Errorf("a later line reached back: %q", got)
+	}
+	for cut := 0; cut < 40; cut++ {
+		pad := maxMaskText - cut
+		cutIn := strings.Repeat("a ", pad/2) + strings.Repeat("b", pad%2) + in + strings.Repeat(" tail", 20)
+		if got := maskText(cutIn); strings.Contains(got, "SECRET") {
+			t.Fatalf("cut offset %d leaks: %q", cut, got[max(len(got)-30, 0):])
+		}
+	}
+	// Cut right before the @: nothing after "://" survives.
+	pre := strings.Repeat("a ", (maxMaskText-len("https://u:A B SECRET D E F"))/2) + "https://u:A B SECRET D E F@h/"
+	if got := maskText(pre); strings.Contains(got, "SECRET") {
+		t.Errorf("cut before @ leaks: %q", got[max(len(got)-30, 0):])
+	}
+}

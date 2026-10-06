@@ -200,6 +200,9 @@ const maxMaskText = 4096
 //     @ after it);
 //   - the one token after a token holding "://" goes too (a key after a
 //     space in the path);
+//   - a word holding "://" followed later on the same line by an at-like word
+//     takes every word between them, and when the cut drops the rest of the
+//     line, every word after it;
 //   - input over 4 KB is cut on a rune boundary, its last two tokens go and
 //     it ends in an ellipsis (the cut may have dropped the @ that hides them).
 //
@@ -229,7 +232,13 @@ func maskText(s string) string {
 		}
 	}
 	mask := make([]bool, len(words))
+	// open is the first word after the earliest "://" word on this line that
+	// has not met an at-like word yet; -1 when none.
+	open := -1
 	for w, p := range words {
+		if p > 0 && !isSpace(parts[p][0]) && strings.ContainsAny(parts[p-1], "\n\r") {
+			open = -1
+		}
 		t := parts[p]
 		ascii := asciiOnly(t)
 		mask[w] = mask[w] || !ascii || strings.ContainsAny(t, "@:/%\\=?#&")
@@ -238,11 +247,33 @@ func maskText(s string) string {
 				mask[k] = true
 			}
 		}
-		if strings.Contains(t, "://") && w+1 < len(words) {
-			mask[w+1] = true
+		if !ascii || strings.ContainsAny(t, "@%") {
+			// An at-like word closes a URL opened earlier on the line: every
+			// word between them may be userinfo with spaces in it.
+			if open >= 0 {
+				for k := open; k < w; k++ {
+					mask[k] = true
+				}
+				open = -1
+			}
+		}
+		if strings.Contains(t, "://") {
+			if w+1 < len(words) {
+				mask[w+1] = true
+			}
+			if open < 0 {
+				open = w + 1
+			}
 		}
 	}
 	if cut {
+		// The at-like word may have been cut off: an unclosed URL takes the
+		// rest of its line with it.
+		if open >= 0 {
+			for k := open; k < len(words); k++ {
+				mask[k] = true
+			}
+		}
 		for k := max(len(words)-2, 0); k < len(words); k++ {
 			mask[k] = true
 		}
