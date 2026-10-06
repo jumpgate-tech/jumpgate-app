@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -98,6 +99,9 @@ type hostScreen struct {
 	follow     bool // keep the newest line in view
 	logBack    int  // lines scrolled back from the newest
 
+	svcCursor int
+	svcLast   string
+
 	scroll int // first visible line of the Endpoints or Security tab; clamped when drawn
 }
 
@@ -176,7 +180,7 @@ func (h *hostScreen) load(a *App, tab string) tea.Cmd {
 func (h *hostScreen) capturing() bool { return h.logEditing }
 
 func (h *hostScreen) keys() []key.Binding {
-	return []key.Binding{navKeys.Left, navKeys.Right, globalKeys.Back, hostKeys.Measure, hostKeys.Sidebar}
+	return []key.Binding{navKeys.Left, navKeys.Right, globalKeys.Back, hostKeys.Measure, hostKeys.Sidebar, svcKeys.Shell, svcKeys.Actions}
 }
 
 func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
@@ -253,11 +257,47 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			h.gws = msg.gws
 		}
 		return nil
+	case serviceMsg:
+		if msg.id != h.id || msg.gen != h.gen {
+			return nil
+		}
+		svc, id := sanitizeLine(msg.svc), sanitizeLine(msg.id)
+		if msg.err != nil {
+			h.svcLast = fmt.Sprintf("%s %s on %s failed: %s", sanitizeLine(msg.action), svc, id, a.errText(msg.err))
+		} else {
+			state := "inactive"
+			if msg.res.Active {
+				state = "active"
+			}
+			h.svcLast = fmt.Sprintf("%s %s on %s: %s", sanitizeLine(msg.action), svc, id, state)
+		}
+		a.flash = h.svcLast
+		return nil
+	case sshCmdMsg:
+		if msg.id != h.id || msg.gen != h.gen {
+			return nil
+		}
+		return h.runShell(a, msg)
+	case shellDoneMsg:
+		if msg.id != h.id || msg.gen != h.gen {
+			return nil
+		}
+		if msg.err != nil {
+			a.flash = "the ssh session ended: " + sanitizeLine(msg.err.Error())
+		} else {
+			a.flash = "back from " + sanitizeLine(msg.id)
+		}
+		return nil
 	case tea.KeyPressMsg:
 		if cmd, ok := h.tabKey(a, msg); ok {
 			return cmd
 		}
 		switch {
+		case key.Matches(msg, svcKeys.Shell):
+			return h.shell(a)
+		case key.Matches(msg, svcKeys.Actions):
+			a.modal = newActions(a, h)
+			return nil
 		case key.Matches(msg, globalKeys.Back):
 			a.closeDetail()
 		case key.Matches(msg, navKeys.Left):
@@ -291,18 +331,25 @@ func (h *hostScreen) tabKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 		return h.logsKey(a, k)
 	case "storage":
 		if key.Matches(k, hostKeys.Measure) {
-			if h.measuring {
-				return nil, true // already measuring; the server joins it anyway
-			}
-			h.measuring = true
-			id, gen, ctx, be := h.id, h.gen, h.ctx, a.be
-			return func() tea.Msg {
-				d, err := be.MeasureDisk(ctx, id)
-				return diskMsg{id: id, gen: gen, d: d, err: err}
-			}, true
+			return h.measure(a), true
 		}
+	case "services":
+		return h.servicesKey(a, k)
 	}
 	return nil, false
+}
+
+// measure takes a disk reading now, unless one is under way.
+func (h *hostScreen) measure(a *App) tea.Cmd {
+	if h.measuring {
+		return nil // already measuring; the server joins it anyway
+	}
+	h.measuring = true
+	id, gen, ctx, be := h.id, h.gen, h.ctx, a.be
+	return func() tea.Msg {
+		d, err := be.MeasureDisk(ctx, id)
+		return diskMsg{id: id, gen: gen, d: d, err: err}
+	}
 }
 
 // tabUpdate hands other messages to the tabs that keep their own state
@@ -352,6 +399,8 @@ func (h *hostScreen) body(a *App, w, hgt int) string {
 		return h.viewSecurity(a, w, hgt)
 	case "logs":
 		return h.viewLogs(a, w, hgt)
+	case "services":
+		return h.viewServices(a, w)
 	}
 	title, ok := tabTitles[h.tabName(a)]
 	if !ok {

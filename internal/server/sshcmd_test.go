@@ -133,3 +133,16 @@ func TestSSHCommandForAJumpTargetIs422WithItsOwnCode(t *testing.T) {
 		t.Fatal("no hint")
 	}
 }
+
+// The client-side screen must accept what this server really builds.
+func TestSSHArgvPassesTheClientScreen(t *testing.T) {
+	for _, tg := range []config.Target{sshTarget("10.0.0.5", "root", nil), sshTarget("box.example", "", nil)} {
+		argv, err := sshArgv(tg, []string{"/h/c", "/h/with space/k"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := api.CheckSSHArgv(argv); err != nil {
+			t.Fatalf("%q: %v", argv, err)
+		}
+	}
+}

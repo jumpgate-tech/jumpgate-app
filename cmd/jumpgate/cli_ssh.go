@@ -68,6 +68,10 @@ func cmdSSH(args []string) int {
 	if cmd.Argv[0] != "ssh" && cmd.Argv[0] != "ssh.exe" {
 		return failed("the server sent %q as the program; jumpgate ssh only runs the system ssh", cmd.Argv[0])
 	}
+	// The server is trusted to know the box, not to choose what runs here.
+	if err := api.CheckSSHArgv(cmd.Argv); err != nil {
+		return failed("refusing the server's ssh command: %v", err)
+	}
 	// The server names the program; this machine decides which binary that is.
 	return runInteractive(append([]string{sshBinary()}, cmd.Argv[1:]...))
 }

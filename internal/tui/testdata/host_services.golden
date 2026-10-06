@@ -1,0 +1,24 @@
+ jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  5 Jobs  6 Settings    ? help
+ box
+ Overview  Storage  Endpoints  Security  Logs  [Services]
+
+ SERVICES
+ ▸ exec    active     s start  t stop  r restart
+   beacon  active
+
+ S  open an SSH shell on this box (system ssh, confirmed host keys only)
+ x  every action for this box
+
+
+
+
+
+
+
+
+
+
+
+
+
+ box · server connecting · jobs ⚑ –

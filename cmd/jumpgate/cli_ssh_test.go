@@ -109,3 +109,24 @@ func TestSSHRefusesAJumpTargetWithTheRegistryHint(t *testing.T) {
 		t.Fatalf("no hint: %q", stderr())
 	}
 }
+
+func TestSSHRefusesAHostileArgvAndRunsNothing(t *testing.T) {
+	for _, body := range []string{
+		`{"argv":["ssh","-o","ProxyCommand=nc evil 1","--","h"],"display":""}`,
+		`{"argv":["ssh","-J","evil","--","h"],"display":""}`,
+		`{"argv":["ssh","-o","LocalCommand=id","--","h"],"display":""}`,
+		`{"argv":["ssh","-o","StrictHostKeyChecking=no","--","h"],"display":""}`,
+		`{"argv":["ssh","h"],"display":""}`,
+		`{"argv":["/tmp/x/ssh","--","h"],"display":""}`,
+	} {
+		body := body
+		withServer(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) })
+		ran := false
+		old := runInteractive
+		runInteractive = func([]string) int { ran = true; return 0 }
+		if code := cmdSSH([]string{"box"}); code == 0 || ran {
+			t.Errorf("%s: exit %d, ran %v", body, code, ran)
+		}
+		runInteractive = old
+	}
+}
