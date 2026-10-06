@@ -1,17 +1,17 @@
  jumpgate  1 Fleet  [2 Hosts]  3 Signers  4 Gateways  5 Jobs  6 Settings  ? help
- trust the host key of bastion:22
+ ADD A BOX
 
- bastion:22 presents an unconfirmed host key:
+ unconfirmed host key
+
+ bastion:22 is the jump host for box-c
 
    ssh-ed25519  SHA256:aaa
 
- Compare it with the box's console before you trust it:
+ Compare it with the box's console:
    ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 
- Type yes to confirm, esc to cancel:
+ Type yes to trust it, esc to stop:
  >
-
-
 
 
 

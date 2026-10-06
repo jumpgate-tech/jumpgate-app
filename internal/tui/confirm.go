@@ -21,6 +21,7 @@ import (
 // the same word.
 type confirmModal struct {
 	title, detail, want string
+	prompt              string // "Type %s to ...", for a caller with its own words; "" is the default
 	refused             string // non-empty: this confirmation can never run
 	in                  textinput.Model
 	miss                string
@@ -78,7 +79,11 @@ func (m *confirmModal) view(a *App, w, _ int) string {
 	if m.refused != "" {
 		return s + " " + a.th.Warn.Render(m.refused) + "\n\n " + a.th.Dim.Render("esc to close")
 	}
-	s += fmt.Sprintf(" Type %s to confirm, esc to cancel:\n ", a.th.Key.Render(m.want)) + m.in.View()
+	prompt := m.prompt
+	if prompt == "" {
+		prompt = "Type %s to confirm, esc to cancel:"
+	}
+	s += fmt.Sprintf(" "+prompt+"\n ", a.th.Key.Render(m.want)) + m.in.View()
 	if m.miss != "" {
 		s += "\n\n " + a.th.Warn.Render(m.miss)
 	}

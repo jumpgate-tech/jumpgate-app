@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -80,6 +82,7 @@ type addFlow struct {
 	cm      *confirmModal // the typed "yes" for the key on screen
 	asked   bool          // cm was answered yes and ConfirmHostKey is in flight
 	adding  bool          // AddTarget is in flight
+	started bool          // Pair returned a channel: the server is pairing
 	lines   []string
 	agent   string
 }
@@ -125,7 +128,7 @@ func (f *addFlow) submit(a *App) tea.Cmd {
 	}
 	addr, err := api.ParseLogin(strings.TrimSpace(f.fields[1].Value()))
 	if err != nil {
-		f.errLine = "address: " + sanitizeLine(err.Error()) + " (want user@host[:port])"
+		f.errLine = "address: " + sanitizeLine(err.Error())
 		return nil
 	}
 	if k := strings.TrimSpace(f.fields[2].Value()); k != "" {
@@ -174,17 +177,34 @@ func (f *addFlow) askHop(a *App, hop *api.HostKeyHop) {
 		return
 	}
 	h := *hop // what is shown and what is sent are this one copy
-	detail := fmt.Sprintf("%s presents an unconfirmed host key:\n\n   %s  %s\n\n"+
-		" Compare it with the box's console before you trust it:\n   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
-		sanitizeLine(h.HostPort), h.KeyType, h.Fingerprint)
+	detail := fmt.Sprintf("%s\n\n   %s  %s\n\n"+
+		" Compare it with the box's console:\n   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
+		f.whose(h.HostPort), h.KeyType, h.Fingerprint)
 	f.step, f.hop = stepConfirm, &h
 	be, gen := a.be, f.gen
-	f.cm = newConfirm("trust the host key of "+h.HostPort, detail, "yes", func() tea.Cmd {
+	f.cm = newConfirm("unconfirmed host key", detail, "yes", func() tea.Cmd {
 		f.asked = true
 		return f.run("confirm", func(ctx context.Context) tea.Msg {
 			return hostKeyConfirmedMsg{gen: gen, err: be.ConfirmHostKey(ctx, h.ProbeID, h.Fingerprint)}
 		})
 	})
+	f.cm.prompt = "Type %s to trust it, esc to stop:"
+}
+
+// whose says which machine a host key is for: the jump host on the way to
+// the box, or the box itself.
+func (f *addFlow) whose(hostPort string) string {
+	name := sanitizeLine(f.name)
+	if j := f.addr.Jump; j != nil {
+		port := j.Port
+		if port == 0 {
+			port = 22
+		}
+		if hostPort == net.JoinHostPort(j.Host, strconv.Itoa(port)) {
+			return sanitizeLine(hostPort) + " is the jump host for " + name
+		}
+	}
+	return sanitizeLine(hostPort) + " is " + name
 }
 
 // update runs one step; done means the flow is over and the list returns.
@@ -241,6 +261,9 @@ func (f *addFlow) update(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case pairMsg:
 		if msg.gen != f.gen || f.step != stepPairing {
 			return nil, false
+		}
+		if msg.ch != nil {
+			f.started = true
 		}
 		switch {
 		case msg.err != nil:
@@ -321,11 +344,26 @@ func (f *addFlow) key(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 	case stepProbing, stepPairing:
 		if k.String() == "esc" {
-			a.flash = "stopped watching; a pairing already under way finishes on the server"
+			a.flash = f.leaveNote(a)
 			return nil, true
 		}
 	}
 	return nil, false
+}
+
+// leaveNote says only what is true when the person leaves mid-flow. The
+// server pairs on a context the client cannot cancel, so once Pair has
+// returned a channel the pairing finishes there. Before that nothing has
+// been paired, and a box added by this flow may be left unpaired.
+func (f *addFlow) leaveNote(a *App) string {
+	if f.started {
+		return "stopped watching; a pairing already under way finishes on the server"
+	}
+	note := "stopped; no pairing was started"
+	if !f.repair && (f.adding || f.step == stepPairing) {
+		note += " " + a.gl.Dash + " the box may have been added unpaired: check the Hosts list"
+	}
+	return note
 }
 
 func (f *addFlow) addAndPair(a *App) tea.Cmd {
@@ -357,10 +395,10 @@ func waitPair(ctx context.Context, gen uint64, ch <-chan api.PairEvent) tea.Cmd 
 	return func() tea.Msg {
 		select {
 		case <-ctx.Done():
-			return pairMsg{gen: gen, closed: true}
+			return pairMsg{gen: gen, ch: ch, closed: true}
 		case ev, ok := <-ch:
 			if !ok {
-				return pairMsg{gen: gen, closed: true}
+				return pairMsg{gen: gen, ch: ch, closed: true}
 			}
 			return pairMsg{gen: gen, ev: ev, ch: ch}
 		}
@@ -368,12 +406,12 @@ func waitPair(ctx context.Context, gen uint64, ch <-chan api.PairEvent) tea.Cmd 
 }
 
 func (f *addFlow) view(a *App, w, h int) string {
-	if f.step == stepConfirm && f.cm != nil {
-		return f.cm.view(a, w, h)
-	}
 	title := " " + a.th.Title.Render("ADD A BOX")
 	if f.repair {
 		title = " " + a.th.Title.Render("PAIR "+sanitizeLine(f.name))
+	}
+	if f.step == stepConfirm && f.cm != nil {
+		return title + "\n\n" + f.cm.view(a, w, h)
 	}
 	var b strings.Builder
 	b.WriteString(title + "\n\n")

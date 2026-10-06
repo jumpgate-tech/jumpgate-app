@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"slices"
 	"strings"
@@ -329,5 +330,149 @@ func TestPairThisMachineNameIsNeverRawHostname(t *testing.T) {
 		if got := localName(in); got != want {
 			t.Errorf("localName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// probingFlow starts a flow for name and submits its form without running
+// the commands, so the flow stays at its first step and the test decides
+// which replies arrive.
+func probingFlow(t *testing.T, m tea.Model, name string) (tea.Model, *addFlow) {
+	t.Helper()
+	m = press(t, m, "a")
+	m = typed(t, m, name)
+	m, _ = tuitest.Send(m, tuitest.Key("enter"))
+	m = typed(t, m, "root@10.0.0.7")
+	m, _ = tuitest.Send(m, tuitest.Keys("enter", "enter", "enter", "enter")...)
+	return m, m.(*App).screens[scrHosts].(*hostsScreen).flow
+}
+
+func unknownProbe(gen uint64) probeMsg {
+	return probeMsg{gen: gen, p: api.HostKeyProbe{Hops: []api.HostKeyHop{{HostPort: "evil:22", State: api.HostKeyUnknown, ProbeID: "stale", Fingerprint: "SHA256:stale", KeyType: "ssh-ed25519"}}}}
+}
+
+// The generation token is what stops a reply for a flow that was left from
+// acting on the NEXT flow when both wait at the same step.
+func TestALateReplyFromAnEarlierFlowNeverReachesTheNextOne(t *testing.T) {
+	newer := func(t *testing.T) (*tuitest.Fake, tea.Model, uint64, *addFlow) {
+		f := tuitest.NewFake()
+		m, a := probingFlow(t, hostsApp(t, f, "linux"), "box-a2")
+		m = press(t, m, "esc") // A is left while it waits
+		m, b := probingFlow(t, m, "box-b2")
+		if a.gen == b.gen {
+			t.Fatal("two flows share a generation")
+		}
+		return f, m, a.gen, b
+	}
+	t.Run("probe", func(t *testing.T) {
+		f, m, old, b := newer(t)
+		m, _ = tuitest.Send(m, unknownProbe(old))
+		if b.step != stepProbing || b.cm != nil || strings.Contains(tuitest.Frame(m), "SHA256:stale") {
+			t.Fatalf("A's probe reply reached B: step %v\n%s", b.step, tuitest.Frame(m))
+		}
+		_ = f
+	})
+	t.Run("confirm", func(t *testing.T) {
+		f, m, old, b := newer(t)
+		b.asked = true // B has its own confirmation in flight
+		m, cmd := tuitest.Send(m, hostKeyConfirmedMsg{gen: old})
+		if !b.asked || len(cmd) != 0 || b.step != stepProbing {
+			t.Fatalf("A's confirm reply reached B: asked %v step %v", b.asked, b.step)
+		}
+		_ = f
+		_ = m
+	})
+	t.Run("added", func(t *testing.T) {
+		f, m, old, b := newer(t)
+		b.step, b.adding = stepPairing, true // B's AddTarget is in flight
+		m, cmd := tuitest.Send(m, targetAddedMsg{gen: old, err: errors.New("boom")})
+		if !b.adding || b.step != stepPairing || len(cmd) != 0 {
+			t.Fatalf("A's add reply reached B: adding %v step %v", b.adding, b.step)
+		}
+		_ = f
+		_ = m
+	})
+	t.Run("pair", func(t *testing.T) {
+		_, m, old, b := newer(t)
+		b.step = stepPairing
+		tuitest.Send(m, pairMsg{gen: old, ev: api.PairEvent{Done: true, Agent: "0xdead"}})
+		if b.step != stepPairing || b.agent != "" {
+			t.Fatalf("A's pair event reached B: step %v", b.step)
+		}
+	})
+}
+
+func TestEscFlashSaysOnlyWhatIsTrue(t *testing.T) {
+	flashAfterEsc := func(t *testing.T, mutate func(f *addFlow)) string {
+		m, fl := probingFlow(t, hostsApp(t, tuitest.NewFake(), "linux"), "box-c")
+		mutate(fl)
+		m, _ = tuitest.Send(m, tuitest.Key("esc"))
+		return m.(*App).flash
+	}
+	t.Run("probing", func(t *testing.T) {
+		if got := flashAfterEsc(t, func(*addFlow) {}); got != "stopped; no pairing was started" {
+			t.Fatalf("flash %q", got)
+		}
+	})
+	t.Run("confirming a key", func(t *testing.T) {
+		got := flashAfterEsc(t, func(f *addFlow) { f.asked = true })
+		if got != "stopped; no pairing was started" {
+			t.Fatalf("flash %q", got)
+		}
+	})
+	t.Run("adding", func(t *testing.T) {
+		got := flashAfterEsc(t, func(f *addFlow) { f.step, f.adding = stepPairing, true })
+		if !strings.Contains(got, "no pairing was started") || !strings.Contains(got, "may have been added unpaired") || !strings.Contains(got, "Hosts list") {
+			t.Fatalf("flash %q", got)
+		}
+	})
+	t.Run("pair not yet answered", func(t *testing.T) {
+		got := flashAfterEsc(t, func(f *addFlow) { f.step = stepPairing })
+		if !strings.Contains(got, "may have been added unpaired") {
+			t.Fatalf("flash %q", got)
+		}
+	})
+	t.Run("pairing under way", func(t *testing.T) {
+		got := flashAfterEsc(t, func(f *addFlow) { f.step, f.started = stepPairing, true })
+		if !strings.Contains(got, "finishes on the server") || strings.Contains(got, "no pairing was started") {
+			t.Fatalf("flash %q", got)
+		}
+	})
+}
+
+func TestAddressErrorIsSaidOnce(t *testing.T) {
+	m := press(t, hostsApp(t, tuitest.NewFake(), "linux"), "a")
+	m = typed(t, m, "box-c")
+	m = press(t, m, "enter")
+	m = typed(t, m, "10.0.0.7")
+	m = press(t, m, "enter", "enter", "enter", "enter")
+	if fr := tuitest.Frame(m); strings.Count(fr, "want user@host") != 1 {
+		t.Fatalf("frame:\n%s", fr)
+	}
+}
+
+func TestConfirmReadsAsTheBriefAndNamesTheJump(t *testing.T) {
+	f := tuitest.NewFake()
+	f.Probes = []api.HostKeyProbe{
+		{Hops: []api.HostKeyHop{{HostPort: "bastion:22", State: api.HostKeyUnknown, ProbeID: "p1", Fingerprint: "SHA256:aaa", KeyType: "ssh-ed25519"}}},
+		{Hops: []api.HostKeyHop{{HostPort: "bastion:22", State: api.HostKeyConfirmed}, {HostPort: "10.0.0.7:22", State: api.HostKeyUnknown, ProbeID: "p2", Fingerprint: "SHA256:bbb", KeyType: "ssh-ed25519"}}},
+	}
+	m := press(t, hostsApp(t, f, "linux"), "a")
+	m = typed(t, m, "box-c")
+	m = press(t, m, "enter")
+	m = typed(t, m, "root@10.0.0.7")
+	m = press(t, m, "enter", "enter")
+	m = typed(t, m, "ops@bastion")
+	m = press(t, m, "enter", "enter")
+	fr := tuitest.Frame(m)
+	for _, want := range []string{"ADD A BOX", "bastion:22 is the jump host for box-c", "Type yes to trust it, esc to stop:", "Compare it with the box's console:"} {
+		if !strings.Contains(fr, want) {
+			t.Errorf("first hop lacks %q:\n%s", want, fr)
+		}
+	}
+	m = typed(t, m, "yes")
+	m = press(t, m, "enter")
+	fr = tuitest.Frame(m)
+	if !strings.Contains(fr, "10.0.0.7:22 is box-c") || strings.Contains(fr, "jump host") {
+		t.Errorf("second hop:\n%s", fr)
 	}
 }
