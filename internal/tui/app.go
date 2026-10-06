@@ -126,7 +126,7 @@ func New(o Options) *App {
 	}
 	a.screens[scrJobs] = jobsScreen{}
 	if server, mine, differs := a.be.Skew(); differs {
-		server, mine = sanitize(server), sanitize(mine)
+		server, mine = sanitizeLine(server), sanitizeLine(mine)
 		// Offer R only where it works; otherwise the banner still says why
 		// some requests may fail.
 		a.skew = fmt.Sprintf("server %s, this jumpgate %s: the versions differ", server, mine)
@@ -157,9 +157,13 @@ func (a *App) watchFleet(ch <-chan apiclient.Update[api.Fleet]) tea.Cmd {
 	}
 }
 
-// do runs f off the update loop with the app's context.
+// do runs f off the update loop with the app's context as it is now: a
+// restart that replaces a.ctx cancels this one, so work started for the old
+// server stops, and the command goroutine never reads a field the update
+// loop writes.
 func (a *App) do(what string, f func(ctx context.Context) tea.Msg) tea.Cmd {
-	return func() tea.Msg { return f(a.ctx) }
+	ctx := a.ctx
+	return func() tea.Msg { return f(ctx) }
 }
 
 // errText is an error in one line, with the server's hint when it sent one,
@@ -168,11 +172,11 @@ func (a *App) errText(err error) string {
 	var e *api.Error
 	if errors.As(err, &e) {
 		if e.Hint != "" {
-			return sanitize(e.Message) + " " + a.gl.Dash + " " + sanitize(e.Hint)
+			return sanitizeLine(e.Message) + " " + a.gl.Dash + " " + sanitizeLine(e.Hint)
 		}
-		return sanitize(e.Message)
+		return sanitizeLine(e.Message)
 	}
-	return sanitize(err.Error())
+	return sanitizeLine(err.Error())
 }
 
 func (a *App) setPrefs(p uiPrefs) {
@@ -215,10 +219,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, a.broadcast(msg)
 	case flashMsg:
-		a.flash = sanitize(string(msg))
+		a.flash = sanitizeLine(string(msg))
 		return a, nil
 	case errMsg:
-		a.flash = sanitize(msg.what) + ": " + a.errText(msg.err)
+		a.flash = sanitizeLine(msg.what) + ": " + a.errText(msg.err)
 		return a, nil
 	case restartedMsg:
 		if msg.err != nil {
@@ -311,8 +315,9 @@ func (a *App) canRestart() bool { return a.skew != "" && a.o.Restart != nil }
 // restart replaces the server on the person's request (spec D30).
 func (a *App) restart() tea.Cmd {
 	a.flash = "restarting the server" + a.gl.Ellipsis
+	ctx, restart := a.ctx, a.o.Restart // captured, as in do
 	return func() tea.Msg {
-		be, err := a.o.Restart(a.ctx)
+		be, err := restart(ctx)
 		return restartedMsg{be: be, err: err}
 	}
 }
@@ -381,7 +386,7 @@ func (a *App) statusBar() string {
 	}
 	box := "no box selected"
 	if a.sel != "" {
-		box = sanitize(a.sel)
+		box = sanitizeLine(a.sel)
 		if row, ok := a.fleet.Row(a.sel); ok {
 			box += " " + a.gl.Sep + " " + linkWord(row)
 		}

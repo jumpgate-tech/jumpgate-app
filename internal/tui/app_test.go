@@ -291,3 +291,31 @@ func TestColourFollowsTheEnvironment(t *testing.T) {
 		t.Fatalf("colour under TERM=dumb: %q", colourSGR.FindString(out))
 	}
 }
+
+type ctxKey struct{}
+
+// A command keeps the context it was created with: work started before a
+// server restart is cancelled with the old server and never runs on the new
+// one, and reading a.ctx from the command goroutine would race the restart.
+func TestCommandsKeepTheirContext(t *testing.T) {
+	f := tuitest.NewFake()
+	f.ServerVersion = "v0.8.0"
+	var restartCtx context.Context
+	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" },
+		Restart: func(ctx context.Context) (Backend, error) { restartCtx = ctx; return f, nil }})
+	t.Cleanup(func() { a.cancel() })
+	a.ctx = context.WithValue(a.ctx, ctxKey{}, "old")
+
+	var got context.Context
+	work := a.do("work", func(ctx context.Context) tea.Msg { got = ctx; return nil })
+	restart := a.restart()
+	tuitest.Send(a, restartedMsg{be: f}) // replaces a.ctx
+	work()
+	restart()
+	if got.Value(ctxKey{}) != "old" || got.Err() == nil {
+		t.Fatalf("do ran with the new context (value %v, err %v)", got.Value(ctxKey{}), got.Err())
+	}
+	if restartCtx.Value(ctxKey{}) != "old" {
+		t.Fatal("restart ran with the new context")
+	}
+}

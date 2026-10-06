@@ -68,3 +68,45 @@ func TestConfirmAcceptsAPaste(t *testing.T) {
 		t.Fatalf("pasted word with trailing whitespace: ran %d", ran)
 	}
 }
+
+// A word that is not shown as itself cannot be typed honestly: one that
+// sanitizes to nothing would confirm on a bare enter, and two ids could
+// sanitize to the same word. Such a confirmation refuses to run at all.
+func TestConfirmRefusesAWordItCannotShow(t *testing.T) {
+	for _, want := range []string{"\x1b[0m\u202e", "box\x1b[2Ja", "", "   ", "a\nb"} {
+		a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
+		ran := 0
+		a.modal = newConfirm("Remove", "detail", want, func() tea.Cmd { ran++; return nil })
+		tuitest.Send(a, tuitest.Key("enter"))
+		tuitest.Send(a, tea.PasteMsg{Content: want})
+		tuitest.Send(a, tuitest.Key("enter"))
+		tuitest.Send(a, tuitest.Type(sanitize(want))...)
+		tuitest.Send(a, tuitest.Key("enter"))
+		if ran != 0 {
+			t.Fatalf("want %q: the action ran", want)
+		}
+		if a.modal == nil {
+			t.Fatalf("want %q: enter closed the refusal; only esc should", want)
+		}
+		if fr := tuitest.Frame(a); !strings.Contains(fr, "cannot be confirmed here") {
+			t.Fatalf("want %q: frame:\n%s", want, fr)
+		}
+		tuitest.Send(a, tuitest.Key("esc"))
+		if a.modal != nil || ran != 0 {
+			t.Fatalf("want %q: esc did not close", want)
+		}
+	}
+}
+
+// ctrl+v never reads the system clipboard (no pbpaste or xclip child):
+// only the terminal's bracketed paste fills the field.
+func TestConfirmCtrlVReadsNoClipboard(t *testing.T) {
+	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
+	m := newConfirm("x", "y", "beacon", func() tea.Cmd { return nil })
+	if done, cmd := m.key(a, tuitest.Key("ctrl+v")); done || cmd != nil {
+		t.Fatalf("ctrl+v: done %v, cmd %v", done, cmd != nil)
+	}
+	if m.in.Value() != "" {
+		t.Fatalf("ctrl+v typed %q", m.in.Value())
+	}
+}

@@ -12,7 +12,7 @@ import (
 )
 
 func TestKeyNames(t *testing.T) {
-	for _, n := range []string{"enter", "esc", "tab", "shift+tab", "up", "down", "backspace", "space", "ctrl+c", "q", "/", "?", "1"} {
+	for _, n := range []string{"enter", "esc", "tab", "shift+tab", "up", "down", "backspace", "space", "ctrl+c", "ctrl+v", "q", "/", "?", "1"} {
 		if got := Key(n).String(); got != n {
 			t.Errorf("Key(%q).String() = %q", n, got)
 		}

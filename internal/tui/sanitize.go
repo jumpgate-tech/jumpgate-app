@@ -20,8 +20,8 @@ import (
 // DEL, C1 controls (U+0080–U+009F, as runes or as raw bytes), ESC sequences
 // (CSI, OSC, DCS, SOS, PM, APC and two-byte escapes, with their bodies; an
 // unterminated string sequence takes the rest of the text with it), and the
-// bidi overrides and isolates (U+202A–U+202E, U+2066–U+2069) that make text
-// read differently from what it is. Other invalid UTF-8 becomes U+FFFD.
+// bidi overrides, isolates and marks (U+202A–U+202E, U+2066–U+2069, LRM,
+// RLM, ALM) that make text read differently from what it is. Other invalid UTF-8 becomes U+FFFD.
 func sanitize(s string) string {
 	if isClean(s) {
 		return s
@@ -70,7 +70,8 @@ func isClean(s string) bool {
 }
 
 func isBidiControl(r rune) bool {
-	return (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
+	return (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) ||
+		r == 0x200e || r == 0x200f || r == 0x061c
 }
 
 // skipEscape skips the sequence after an ESC at s[i-1] and returns the index
@@ -119,19 +120,29 @@ func skipCSI(s string, i int) int {
 }
 
 // skipString skips a string sequence's body up to and including its end:
-// BEL, ESC \, or ST (U+009C, as a rune or a raw byte). Without an end it
-// runs to the end of s, so a cut-off sequence cannot leak its payload.
+// BEL, ESC \, or the rune ST (U+009C). The body is read rune by rune, so the
+// byte 0x9C inside another character (U+011C is C4 9C) is not mistaken for
+// ST. Without an end it runs to the end of s, so a cut-off sequence cannot
+// leak its payload.
 func skipString(s string, i int) int {
 	for i < len(s) {
+		r, size := utf8.DecodeRuneInString(s[i:])
 		switch {
-		case s[i] == 0x07, s[i] == 0x9c:
-			return i + 1
-		case s[i] == 0x1b && i+1 < len(s) && s[i+1] == '\\':
+		case r == 0x07, r == 0x9c:
+			return i + size
+		case r == 0x1b && i+1 < len(s) && s[i+1] == '\\':
 			return i + 2
-		case strings.HasPrefix(s[i:], "\u009c"):
-			return i + len("\u009c")
 		}
-		i++
+		i += size
 	}
 	return i
 }
+
+// lineBreaks are the characters sanitize keeps that would break a one-line
+// field across rows.
+var lineBreaks = strings.NewReplacer("\n", " ", "\t", " ", "\r", " ")
+
+// sanitizeLine is sanitize for a one-line field (the status bar, a flash, the
+// skew banner, a box name): line breaks and tabs become spaces, so hostile
+// text cannot add rows to the frame.
+func sanitizeLine(s string) string { return lineBreaks.Replace(sanitize(s)) }

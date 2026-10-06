@@ -38,6 +38,9 @@ func TestSanitize(t *testing.T) {
 		"bel bs del nul":       {"a\x07b\x08c\x7fd\x00e", "abcde"},
 		"bidi overrides":       {"a\u202eb\u202ac\u202bd\u202ce\u202df", "abcdef"},
 		"bidi isolates":        {"a\u2066b\u2067c\u2068d\u2069e", "abcde"},
+		"bidi marks":           {"a\u200eb\u200fc\u061cd", "abcd"},
+		"0x9c inside a rune":   {"a\x1b]0;\u011cx\x07b", "ab"},
+		"st rune ends osc":     {"a\x1b]0;t\u009cb", "ab"},
 		"invalid utf-8":        {"a\xffb\xc3", "a\ufffdb\ufffd"},
 		"unicode kept":         {"⚑ █ é 日本", "⚑ █ é 日本"},
 	} {
@@ -48,7 +51,7 @@ func TestSanitize(t *testing.T) {
 }
 
 // hostile carries every attack in one string.
-const hostile = "\x1b[2J\x1b[H\x1b]0;pwned\x07\x1b]52;c;cm0gLXJmIH4=\x07\x1b]8;;https://evil.example/\x1b\\link\x1b]8;;\x1b\\\x9b2J\u202e\rX"
+const hostile = "line1\nline2\t\n\x1b[2J\x1b[H\x1b]0;pwned\x07\x1b]52;c;cm0gLXJmIH4=\x07\x1b]8;;https://evil.example/\x1b\\link\x1b]8;;\x1b\\\x9b2J\u202e\rX"
 
 // plainTheme renders without any escape, so every ESC left in a frame came
 // from data rather than the TUI's own styling.
@@ -59,6 +62,10 @@ func plainTheme() Theme {
 
 func requireClean(t *testing.T, what, content string) {
 	t.Helper()
+	// Hostile newlines in one-line fields must not add rows.
+	if n := strings.Count(content, "\n") + 1; n != 24 {
+		t.Fatalf("%s: frame has %d lines, want 24:\n%s", what, n, content)
+	}
 	for _, bad := range []string{"\x1b", "\x9b", "\u009b", "\r", "\x07", "\u202e"} {
 		if strings.Contains(content, bad) {
 			t.Fatalf("%s: frame contains %q:\n%q", what, bad, content)
@@ -105,4 +112,10 @@ func TestExternalTextCannotEscape(t *testing.T) {
 	cm.in.Blur()
 	cm.in.SetStyles(textinput.Styles{})
 	requireClean(t, "confirmation", a.View().Content)
+}
+
+func TestSanitizeLine(t *testing.T) {
+	if got := sanitizeLine("a\nb\tc\rd\x1b[2Je"); got != "a b cde" {
+		t.Errorf("sanitizeLine = %q", got)
+	}
 }
