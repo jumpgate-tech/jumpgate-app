@@ -2,8 +2,10 @@ package ai
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRedact(t *testing.T) {
@@ -82,6 +84,33 @@ func TestRedactSamples(t *testing.T) {
 			`keys <secret-1> <secret-2> <secret-3>`},
 		{"jwt", `got ` + jwt + ` back`, `got <secret-1> back`},
 		{"short sk word kept", `the task-force and sk-1 stay`, `the task-force and sk-1 stay`},
+		{"url userinfo", `curl http://user:pass@host:8545/p`, `curl http://<secret-1>@host:8545/p`},
+		{"url userinfo ip host", `dial http://admin:s3cret@10.0.0.5:8545/`, `dial http://<secret-1>@<ip-1>:8545/`},
+		{"url without userinfo", `http://host:8545/p and ws://h:1/x`, `http://host:8545/p and ws://h:1/x`},
+		{"auth basic", `Authorization: Basic dXNlcjpwYXNz`, `Authorization: Basic <secret-1>`},
+		{"auth token scheme", `Authorization: Token abcdefghijklmnop`, `Authorization: Token <secret-1>`},
+		{"auth other scheme", `authorization: Digest abcd1234`, `authorization: Digest <secret-1>`},
+		{"auth no scheme", `Authorization: rawcredential123`, `Authorization: <secret-1>`},
+		{"auth short bearer", `Authorization: Bearer abc`, `Authorization: Bearer <secret-1>`},
+		{"colon password", `Password: hunter2`, `Password: <secret-1>`},
+		{"colon token", `token: abcdef`, `token: <secret-1>`},
+		{"header api key", `X-Api-Key: abc123`, `X-Api-Key: <secret-1>`},
+		{"spaced equals", `api_key = x`, `api_key = <secret-1>`},
+		{"spaced colon", `secret : y`, `secret : <secret-1>`},
+		{"json no opening quote", `access_token":"x"`, `access_token":"<secret-1>"`},
+		{"json access token", `{"access_token":"x","n":1}`, `{"access_token":"<secret-1>","n":1}`},
+		{"github pat", `pat github_pat_11ABCDEFG0abcdefghijkl_abcdefghijklmnopqrstuvwxyz0123456789 end`, `pat <secret-1> end`},
+		{"google key", `key AIzaSyA-abcdefghijklmnopqrstuvwxyz01234 end`, `key <secret-1> end`},
+		{"infura path", `POST https://mainnet.infura.io/v3/0123456789abcdef0123456789abcdef failed`, `POST https://mainnet.infura.io/v3/<secret-1> failed`},
+		{"alchemy path", `GET https://eth-mainnet.g.alchemy.com/v2/AbCdEfGhIjKlMnOpQrStUvWxYz012345?x=1`, `GET https://eth-mainnet.g.alchemy.com/v2/<secret-1>?x=1`},
+		{"key before trailing ip segment", `https://h/AbCdEfGhIjKlMnOpQrStUvWxYz012345/1.1.1.1`, `https://h/<secret-1>/<ip-1>`},
+		{"slug url kept", `see https://docs.example.com/how-to-run-a-node-without-any-problems-at-all`, `see https://docs.example.com/how-to-run-a-node-without-any-problems-at-all`},
+		{"tx url kept", `https://etherscan.io/tx/0x` + strings.Repeat("ab", 32), `https://etherscan.io/tx/0x` + strings.Repeat("ab", 32)},
+		{"bare session token", `session 0123456789abcdef0123456789abcdef ok`, `session <secret-1> ok`},
+		{"0x 32 hex kept", `val 0x0123456789abcdef0123456789abcdef ok`, `val 0x0123456789abcdef0123456789abcdef ok`},
+		{"64 hex kept", `hash ` + strings.Repeat("ab", 32), `hash ` + strings.Repeat("ab", 32)},
+		{"ipv6 zone", `peer fe80::1%eth0`, `peer <ip-1>`},
+		{"ipv6 zone punctuation", `on fe80::1%eth0, ok`, `on <ip-1>, ok`},
 		{"empty", ``, ``},
 	}
 	for _, tc := range cases {
@@ -119,17 +148,52 @@ func FuzzRedact(f *testing.F) {
 		"enode://" + strings.Repeat("ab", 64) + "@1.2.3.4:1", "enr:-Iu4Q", "token=", "Bearer ",
 		"password=<secret-1>", "eyJ.eyJ.", "reth::cli 12:34:56", "/ip4/1.2.3.4/tcp/9000", "<ip-1> <enode-9>",
 		"2001:db8::1.", "fe80::1%eth0", "sk-" + strings.Repeat("a", 20), "\xff\xfe 1.1.1.1",
+		"Authorization: Basic abc", "http://u:p@h/", "https://h/v3/" + strings.Repeat("a1", 16), "fe80::1%",
 	} {
-		f.Add(s)
+		f.Add(s, uint8(10), uint8(80), uint8(120), uint8(200), uint8(250))
 	}
-	f.Fuzz(func(t *testing.T, s string) {
-		once := Redact([]string{s, s})
+	// Known secrets planted at random positions must never survive, whatever
+	// text surrounds them.
+	planted := []struct{ text, secret string }{
+		{"203.0.113.77", "203.0.113.77"},
+		{"2001:db8:85a3::8a2e:370:7334", "2001:db8:85a3::8a2e:370:7334"},
+		{"token=SECRETVALUE123", "SECRETVALUE123"},
+		{"sk-abcdefghijklmnop1234567", "abcdefghijklmnop1234567"},
+		{"0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef"},
+	}
+	f.Fuzz(func(t *testing.T, s string, a, b, c, d, e uint8) {
+		if len(s) > 2000 {
+			t.Skip("keeps the planted secrets inside the per-line cap")
+		}
+		offs := []int{int(a), int(b), int(c), int(d), int(e)}
+		sort.Ints(offs)
+		var sb strings.Builder
+		last := 0
+		for i, o := range offs {
+			at := o * (len(s) + 1) / 256
+			sb.WriteString(s[last:at])
+			sb.WriteString(" " + planted[i].text + " ")
+			last = at
+		}
+		sb.WriteString(s[last:])
+		in := sb.String()
+
+		once := Redact([]string{in, in})
 		if once[0] != once[1] {
 			t.Fatalf("same input, different output: %q vs %q", once[0], once[1])
 		}
-		twice := Redact(once)
-		if !reflect.DeepEqual(once, twice) {
-			t.Fatalf("not idempotent:\n  in %q\nonce %q\ntwice %q", s, once, twice)
+		for _, p := range planted {
+			if strings.Contains(once[0], p.secret) {
+				t.Fatalf("%q survived:\n  in %q\nout %q", p.secret, in, once[0])
+			}
+		}
+		if twice := Redact(once); !reflect.DeepEqual(once, twice) {
+			t.Fatalf("not idempotent:\n  in %q\nonce %q\ntwice %q", in, once, twice)
+		}
+		// Raw input too, which has no planted secrets but may be anything.
+		raw := Redact([]string{s})
+		if again := Redact(raw); !reflect.DeepEqual(raw, again) {
+			t.Fatalf("not idempotent:\n  in %q\nonce %q\ntwice %q", s, raw, again)
 		}
 	})
 }
@@ -146,5 +210,67 @@ func TestLocalAndDisclosure(t *testing.T) {
 	}
 	if Disclosure("") != "" {
 		t.Fatal("no provider, no disclosure")
+	}
+}
+
+func TestRedactCapsLongLinesAndInputs(t *testing.T) {
+	long := strings.Repeat("x", 3<<20) + " tail 203.0.113.7"
+	got := Redact([]string{long, "ok 10.0.0.1"})
+	if len(got[0]) > maxLineBytes || !strings.HasSuffix(got[0], truncMarker) || got[1] != "ok <ip-1>" {
+		t.Fatalf("long line: len %d, got %q", len(got[0]), got[1])
+	}
+	many := make([]string, maxLines+500)
+	for i := range many {
+		many[i] = "peer 10.0.0.1"
+	}
+	out := Redact(many)
+	if len(out) != maxLines || !strings.Contains(out[maxLines-1], "omitted") {
+		t.Fatalf("got %d lines, last %q", len(out), out[len(out)-1])
+	}
+	if again := Redact(out); !reflect.DeepEqual(again, out) {
+		t.Fatal("capped output is not idempotent")
+	}
+	if again := Redact(got); !reflect.DeepEqual(again, got) {
+		t.Fatal("truncated output is not idempotent")
+	}
+}
+
+func TestRedactPathologicalInputsAreFast(t *testing.T) {
+	const n = 3 << 20
+	inputs := map[string]string{
+		"dots":      strings.Repeat("1.", n/2),
+		"colons":    strings.Repeat(":", n),
+		"hexcolons": strings.Repeat("a:", n/2),
+		"tokens":    strings.Repeat("token=", n/6),
+		"bearers":   strings.Repeat("Bearer ", n/7),
+		"urls":      strings.Repeat("http://a:b@", n/11),
+		"hex":       strings.Repeat("0123456789abcdef", n/16),
+		"slashes":   "https://h" + strings.Repeat("/", n),
+	}
+	single := 100 * time.Millisecond
+	if raceEnabled {
+		single = time.Second // the race detector costs about 10x
+	}
+	for name, in := range inputs {
+		start := time.Now()
+		Redact([]string{in})
+		if d := time.Since(start); d > single {
+			t.Errorf("%s: %v", name, d)
+		}
+	}
+	// This input is match-dense on every line, so the bound is looser than
+	// for the single-line cases, and looser still under the race detector.
+	bound := 250 * time.Millisecond
+	if raceEnabled {
+		bound = 5 * time.Second
+	}
+	lines := make([]string, maxLines)
+	for i := range lines {
+		lines[i] = strings.Repeat("1.2.3.4 token=a http://u:p@h/ ", 200)
+	}
+	start := time.Now()
+	Redact(lines)
+	if d := time.Since(start); d > bound {
+		t.Errorf("max-size input: %v", d)
 	}
 }

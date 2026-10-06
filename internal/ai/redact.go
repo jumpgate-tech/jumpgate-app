@@ -5,6 +5,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Patterns for what identifies a box, its peers or its credentials in client
@@ -14,13 +15,21 @@ var (
 	// Secret shapes. Each replaces only the secret, keeping the key or scheme
 	// so the excerpt still reads ("password=<secret-1>").
 	bearerRE = regexp.MustCompile(`(?i)(\bBearer\s+)([A-Za-z0-9._~+/=-]{8,})`)
-	// assignRE covers key=value pairs whose key names a credential, including
-	// jumpgate_token= and ?token= in URLs and cookies.
-	assignRE = regexp.MustCompile(`(?i)(\b[a-z0-9_-]*(?:token|password|passwd|secret|api[_-]?key)=)([^\s&"',;]+)`)
-	// jsonSecretRE covers "password":"value" in structured logs.
-	jsonSecretRE = regexp.MustCompile(`(?i)("[a-z0-9_-]*(?:token|password|passwd|secret|api[_-]?key)"\s*:\s*")([^"]*)(")`)
-	keyRE        = regexp.MustCompile(`\b(?:sk|gsk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}|\bglpat-[A-Za-z0-9_-]{16,}`)
-	jwtRE        = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*`)
+	// authRE covers "Authorization: <scheme> <credential>" for any scheme
+	// (Basic, Token, Digest, ...), and a bare credential with no scheme.
+	authRE = regexp.MustCompile(`(?i)(\bAuthorization["']?\s*[:=]\s*"?(?:[A-Za-z][A-Za-z0-9_-]*[ \t]+)?)([^\s",;]+)`)
+	// keyedRE covers key=value, key: value, key = value and "key":"value"
+	// where the key names a credential (jumpgate_token, X-Api-Key,
+	// access_token, ...), whatever the value looks like.
+	keyedRE = regexp.MustCompile(`(?i)(\b[a-z0-9_-]*(?:token|password|passwd|secret|api[_-]?key)["']?\s*[:=]\s*["']?)([^\s&"',;]+)`)
+	// urlUserRE covers scheme://user:password@host (and ://:password@host).
+	urlUserRE = regexp.MustCompile(`(\b[A-Za-z][A-Za-z0-9+.-]*://)([^\s/@:<>"']*:[^\s/@<>"']*)(@)`)
+	urlRE     = regexp.MustCompile(`\b(?:https?|wss?)://[^\s"'<>]+`)
+	keyRE     = regexp.MustCompile(`\b(?:sk|gsk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}|\bglpat-[A-Za-z0-9_-]{16,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bAIza[0-9A-Za-z_-]{35}`)
+	jwtRE     = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*`)
+	// sessionRE is a bare 32-hex run: jumpgate's session token. The word
+	// boundaries keep 0x-prefixed values and 40/64-hex addresses and hashes.
+	sessionRE = regexp.MustCompile(`\b[0-9a-fA-F]{32}\b`)
 
 	enodeRE = regexp.MustCompile(`enode://[0-9a-fA-F]{128}@[^\s"',]+`)
 	enrRE   = regexp.MustCompile(`\benr:-[A-Za-z0-9_-]+`)
@@ -28,19 +37,37 @@ var (
 	// A bare 128-hex node id, as geth and erigon print for a remote peer.
 	nodeIDRE = regexp.MustCompile(`\b[0-9a-fA-F]{128}\b`)
 	// Candidates only: net.ParseIP and the boundary checks decide.
-	ipv6RE = regexp.MustCompile(`[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*`)
+	ipv6RE = regexp.MustCompile(`[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(?:%[A-Za-z0-9_-]+)?`)
 	ipv4RE = regexp.MustCompile(`(?:\d{1,3}\.){3}\d{1,3}`)
 )
 
-// Redact replaces IP addresses (v4, v6, v4-mapped, inside multiaddrs and
-// bracketed host:port), enode URLs, ENR records, libp2p and node peer ids and
-// obvious credentials with placeholders before lines go to a third-party
-// provider. The same value gets the same placeholder within one call, so a
-// reader can still follow "the same peer" through the excerpt. Redacting
-// already-redacted text changes nothing. The input is not modified.
+// Redact prepares log lines for a third-party AI provider. The same value
+// gets the same placeholder within one call, so a reader can still follow
+// "the same peer" through the excerpt. Redacting already-redacted text changes
+// nothing, and the input is not modified.
 //
-// Ethereum 0x addresses and hostnames are deliberately left alone: they are
-// public chain data or not reliably distinguishable from prose.
+// Redacted (placeholder kind in parentheses):
+//   - IPv4 and IPv6 addresses, including v4-mapped, bracketed host:port,
+//     zone ids (fe80::1%eth0) and addresses inside /ip4 and /ip6 multiaddrs (ip)
+//   - enode:// URLs (enode), bare 128-hex node ids (node), ENR records (enr)
+//     and libp2p peer ids (peer)
+//   - credentials (secret): Authorization headers of any scheme, Bearer
+//     tokens, key=value, key: value and "key":"value" pairs whose key names a
+//     token, password, secret or api key, URL userinfo (user:pass@), sk-,
+//     gsk_, ghp_, github_pat_, glpat- and Google AIza keys, JWTs, URL path
+//     segments shaped like API keys (Infura and Alchemy /v3/<key>), and bare
+//     32-hex runs (jumpgate session tokens)
+//
+// Not redacted: hostnames and domain names (they cannot be told from prose
+// reliably), Ethereum 0x addresses and 0x or 64-hex block and transaction
+// hashes (public chain data), ports on their own, timestamps, and version
+// strings such as v1.2.3.4. A bare credential with no key name next to it
+// and no known prefix is not recognised.
+//
+// Limits: a line is cut to maxLineBytes with a "...[truncated]" marker, at
+// most maxLines lines and about maxTotalBytes of output are kept, and the
+// rest is replaced by one "[N more lines omitted]" line, so the result can
+// have fewer lines than the input.
 func Redact(lines []string) []string {
 	seen := map[string]string{}
 	count := map[string]int{}
@@ -69,22 +96,142 @@ func Redact(lines []string) []string {
 			return g[1] + sub("secret", g[2]) + strings.Join(g[3:], "")
 		})
 	}
-	out := make([]string, len(lines))
+	// Bound the work: the loop below is linear in what it reads, so reading
+	// at most maxLines lines of maxLineBytes and about maxTotalBytes of
+	// output keeps a hostile log from stalling a request.
+	limit := maxLines
+	if len(lines) > maxLines {
+		limit = maxLines - 1
+	}
+	out := make([]string, 0, min(len(lines), maxLines))
+	total := 0
 	for i, l := range lines {
-		l = keepKey(bearerRE, l)
-		l = keepKey(assignRE, l)
-		l = keepKey(jsonSecretRE, l)
-		l = whole(keyRE, "secret", l)
-		l = whole(jwtRE, "secret", l)
-		l = whole(enodeRE, "enode", l)
-		l = whole(enrRE, "enr", l)
-		l = whole(peerRE, "peer", l)
+		if i >= limit {
+			break
+		}
+		l = clipLine(l)
+		// Go's regexp is slow next to a substring search, so each pattern
+		// runs only on lines that contain something it could match.
+		lower := strings.ToLower(l)
+		if strings.Contains(lower, "authorization") {
+			l = keepKey(authRE, l)
+		}
+		if strings.Contains(lower, "bearer") {
+			l = keepKey(bearerRE, l)
+		}
+		if containsAny(lower, "token", "password", "passwd", "secret", "key") {
+			l = keepKey(keyedRE, l)
+		}
+		if strings.Contains(l, "://") {
+			l = keepKey(urlUserRE, l)
+			l = redactURLPaths(l, func(v string) string { return sub("secret", v) })
+		}
+		if containsAny(l, "sk-", "sk_", "gsk_", "ghp_", "gho_", "xox", "glpat-", "github_pat_", "AIza") {
+			l = whole(keyRE, "secret", l)
+		}
+		if strings.Contains(l, "eyJ") {
+			l = whole(jwtRE, "secret", l)
+		}
+		if strings.Contains(l, "enode://") {
+			l = whole(enodeRE, "enode", l)
+		}
+		if strings.Contains(l, "enr:-") {
+			l = whole(enrRE, "enr", l)
+		}
+		if containsAny(l, "16Uiu2HAm", "12D3KooW", "Qm") {
+			l = whole(peerRE, "peer", l)
+		}
 		l = whole(nodeIDRE, "node", l)
+		l = whole(sessionRE, "secret", l)
 		l = replaceBounded(ipv6RE, l, trimIPv6, func(v string) string { return sub("ip", v) })
 		l = replaceBounded(ipv4RE, l, trimIPv4, func(v string) string { return sub("ip", v) })
-		out[i] = l
+		// Placeholders can be longer than what they replace, so clip again.
+		l = clipLine(l)
+		// An omission marker from an earlier pass is exempt from the budget,
+		// so redacting redacted text keeps it as it was.
+		if total+len(l) > maxTotalBytes && !omittedRE.MatchString(l) {
+			limit = i
+			break
+		}
+		total += len(l)
+		out = append(out, l)
+	}
+	if dropped := len(lines) - len(out); dropped > 0 {
+		out = append(out, fmt.Sprintf("[%d more lines omitted]", dropped))
 	}
 	return out
+}
+
+// Limits on what one Redact call will read. Explain excerpts are a few
+// hundred lines, so these only bite on hostile or pathological input.
+const (
+	maxLineBytes  = 4096
+	maxLines      = 2000
+	maxTotalBytes = 128 << 10
+	truncMarker   = " ...[truncated]"
+)
+
+var omittedRE = regexp.MustCompile(`^\[\d+ more lines omitted\]$`)
+
+// clipLine cuts a line to maxLineBytes, marker included, at a rune boundary
+// and, when one is near, at a space so a half-cut token is not left behind.
+func clipLine(l string) string {
+	if len(l) <= maxLineBytes {
+		return l
+	}
+	cut := maxLineBytes - len(truncMarker)
+	for cut > 0 && !utf8.RuneStart(l[cut]) {
+		cut--
+	}
+	if sp := strings.LastIndexByte(l[max(cut-64, 0):cut], ' '); sp >= 0 {
+		cut = max(cut-64, 0) + sp
+	}
+	return l[:cut] + truncMarker
+}
+
+// redactURLPaths replaces a URL path segment that has the shape of an API key
+// (32 or more URL-safe characters with a digit, as in Infura's /v3/<key> and
+// Alchemy's /v2/<key>), except 0x-prefixed values and 64-hex hashes.
+func redactURLPaths(l string, repl func(string) string) string {
+	return urlRE.ReplaceAllStringFunc(l, func(u string) string {
+		start := strings.Index(u, "://") + 3
+		path := strings.IndexByte(u[start:], '/')
+		if path < 0 {
+			return u
+		}
+		path += start
+		end := len(u)
+		if q := strings.IndexAny(u[path:], "?#"); q >= 0 {
+			end = path + q
+		}
+		segs := strings.Split(u[path:end], "/")
+		for i, seg := range segs {
+			if looksLikeKey(seg) {
+				segs[i] = repl(seg)
+			}
+		}
+		return u[:path] + strings.Join(segs, "/") + u[end:]
+	})
+}
+
+func looksLikeKey(seg string) bool {
+	if len(seg) < 32 || strings.HasPrefix(seg, "0x") {
+		return false
+	}
+	digit, hex := false, true
+	for i := 0; i < len(seg); i++ {
+		c := seg[i]
+		switch {
+		case isDigit(c):
+			digit = true
+		case c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F':
+		case c >= 'g' && c <= 'z' || c >= 'G' && c <= 'Z' || c == '_' || c == '-':
+			hex = false
+		default:
+			return false
+		}
+	}
+	return digit && !(hex && len(seg) == 64)
 }
 
 // replaceBounded replaces the regexp matches that fit(...) accepts as a whole
@@ -105,6 +252,15 @@ func replaceBounded(re *regexp.Regexp, s string, fit func(s string, start, end i
 	}
 	b.WriteString(s[last:])
 	return b.String()
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func isWordByte(c byte) bool {
@@ -132,14 +288,23 @@ func trimIPv4(s string, start, end int) (int, int, bool) {
 // punctuation is trimmed, and that is not a Rust path (reth::cli), a clock
 // time or a word that merely looks hexadecimal.
 func trimIPv6(s string, start, end int) (int, int, bool) {
+	// The longest address is under 50 bytes plus a zone id; a longer run is
+	// garbage, and refusing it keeps the trimming loop below cheap.
+	if end-start > 100 {
+		return 0, 0, false
+	}
 	for start < end {
 		v := s[start:end]
+		addr := v
+		if z := strings.IndexByte(v, '%'); z >= 0 {
+			addr = v[:z]
+		}
 		switch {
-		case net.ParseIP(v) != nil && strings.Count(v, ":") >= 2:
+		case net.ParseIP(addr) != nil && strings.Count(addr, ":") >= 2:
 			if start > 0 && isWordByte(s[start-1]) || end < len(s) && isWordByte(s[end]) {
 				return 0, 0, false
 			}
-			if v != "::" && !strings.ContainsAny(v, "0123456789") {
+			if addr != "::" && !strings.ContainsAny(addr, "0123456789") {
 				return 0, 0, false
 			}
 			return start, end, true
