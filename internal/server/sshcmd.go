@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 )
 
@@ -65,12 +66,12 @@ func sshArgv(t config.Target, knownHosts []string) ([]string, error) {
 		return nil, errors.New("no known_hosts file to check the host key against")
 	}
 	argv = append(argv,
-		"-o", "StrictHostKeyChecking=yes",
-		"-o", "UserKnownHostsFile="+strings.Join(files, " "),
-		"-o", "GlobalKnownHostsFile=none",
+		"-o", api.SSHOptStrictHostKeyChecking,
+		"-o", api.SSHOptKnownHostsPrefix+strings.Join(files, " "),
+		"-o", api.SSHOptGlobalKnownHosts,
 		// A user's ssh_config must not add an unverified hop.
-		"-o", "ProxyJump=none",
-		"-o", "ProxyCommand=none")
+		"-o", api.SSHOptProxyJump,
+		"-o", api.SSHOptProxyCommand)
 	if c.User != "" {
 		argv = append(argv, "-l", c.User)
 	}

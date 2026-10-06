@@ -52,7 +52,7 @@ func TestSSHRefusesAProgramThatIsNotSSH(t *testing.T) {
 
 func TestSSHUsesTheSystemBinaryName(t *testing.T) {
 	withServer(t, func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"argv":["ssh.exe","-l","u","--","h"],"display":""}`)
+		fmt.Fprint(w, `{"argv":["ssh.exe","-p","22","-o","StrictHostKeyChecking=yes","-o","UserKnownHostsFile=/h/c","-o","GlobalKnownHostsFile=none","-o","ProxyJump=none","-o","ProxyCommand=none","-l","u","--","h"],"display":""}`)
 	})
 	var got []string
 	old := runInteractive

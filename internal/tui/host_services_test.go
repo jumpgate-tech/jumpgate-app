@@ -123,7 +123,7 @@ func TestRestartAlsoNeedsTheName(t *testing.T) {
 
 func TestShellRunsTheServersSSHCommand(t *testing.T) {
 	f := tuitest.NewFake()
-	f.SSHV["box"] = api.SSHCommand{Argv: []string{"ssh", "-p", "22", "-l", "root", "--", "10.0.0.5"}, Display: "ssh \x1b[31m"}
+	f.SSHV["box"] = api.SSHCommand{Argv: []string{"ssh", "-p", "22", "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=/h/c", "-o", "GlobalKnownHostsFile=none", "-o", "ProxyJump=none", "-o", "ProxyCommand=none", "-l", "root", "--", "10.0.0.5"}, Display: "ssh \x1b[31m"}
 	a := openTestHost(t, f, "unicode")
 	a.th = plainTheme()
 	got := stubShell(a)
@@ -141,6 +141,8 @@ func TestShellRefusesAHostileArgv(t *testing.T) {
 		{"ssh", "-J", "evil", "--", "h"},
 		{"/bin/sh", "-c", "id"},
 		{"ssh", "h"},
+		{"ssh", "-p", "22", "-o", " ProxyCommand=echo PWN", "--", "h"},
+		{"ssh", "-p", "22", "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=/dev/null", "--", "h"},
 		{},
 	} {
 		f := tuitest.NewFake()
@@ -237,7 +239,7 @@ func TestActionsMenuStopAndRestartAlwaysConfirm(t *testing.T) {
 
 func TestActionsMenuShellAndEsc(t *testing.T) {
 	f := tuitest.NewFake()
-	f.SSHV["box"] = api.SSHCommand{Argv: []string{"ssh", "--", "h"}}
+	f.SSHV["box"] = api.SSHCommand{Argv: []string{"ssh", "-p", "22", "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=/h/c", "-o", "GlobalKnownHostsFile=none", "-o", "ProxyJump=none", "-o", "ProxyCommand=none", "--", "h"}}
 	a := openTestHost(t, f, "unicode")
 	got := stubShell(a)
 	m := press(t, a, "x", "esc")
@@ -292,5 +294,20 @@ func TestServiceResultsAreSanitized(t *testing.T) {
 	noEscapes(t, "service error", m)
 	if !strings.Contains(tuitest.Frame(m), "denied") {
 		t.Fatal("error not shown")
+	}
+}
+
+// Leaving the box closes the confirmation or menu that belongs to it.
+func TestLeavingTheHostClosesItsModal(t *testing.T) {
+	for _, keys := range [][]string{{"x"}, {"j", "t"}} {
+		f := tuitest.NewFake()
+		a := press(t, servicesHost(t, f), keys...).(*App)
+		if a.modal == nil {
+			t.Fatalf("%v opened no modal", keys)
+		}
+		a.closeDetail()
+		if a.modal != nil || a.detail != nil {
+			t.Fatalf("%v: modal survived leaving the host", keys)
+		}
 	}
 }

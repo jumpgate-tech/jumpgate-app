@@ -119,6 +119,14 @@ func (a *App) openHost(id string) tea.Cmd {
 func (a *App) closeDetail() {
 	if h, ok := a.detail.(*hostScreen); ok {
 		h.cancel()
+		switch m := a.modal.(type) { // a menu or confirmation for this box goes with it
+		case *actionsModal:
+			if m.h == h {
+				a.modal = nil
+			}
+		case *confirmModal:
+			a.modal = nil
+		}
 	}
 	a.detail = nil
 }
