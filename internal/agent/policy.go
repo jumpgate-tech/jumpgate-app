@@ -45,6 +45,7 @@ var DefaultRequirements = map[string][]Tier{
 	intent.KindEndpointsRead: {TierRoutine},
 	intent.KindFirewallRead:  {TierRoutine},
 	intent.KindLogsRead:      {TierRoutine},
+	intent.KindLogsSince:     {TierRoutine},
 	intent.KindServiceAction: {TierRoutine},
 }
 

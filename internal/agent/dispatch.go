@@ -63,11 +63,15 @@ func decode[T any](payload []byte) (T, *Reject) {
 // receipt (StatusFailed), distinct from a rejection.
 func (a *Agent) dispatch(ctx context.Context, i intent.Intent, payload []byte, p Policy) ([]byte, uint8, *Reject) {
 	if i.Kind == intent.KindAgentInfo {
-		_, notSetUp := a.loadNode()
-		return mustJSON(intent.AgentInfo{
+		w, notSetUp := a.loadNode()
+		info := intent.AgentInfo{
 			Version: buildinfo.Version(), Address: a.Address().Hex(), LastSeq: a.replay.LastSeq(i.Controller),
 			PlanVersions: PlanVersions, Signers: len(p.Signers), SetUp: notSetUp == nil,
-		}), intent.StatusOK, nil
+		}
+		if notSetUp == nil {
+			info.ChainID = w.ChainID
+		}
+		return mustJSON(info), intent.StatusOK, nil
 	}
 
 	w, rej := a.loadNode()
@@ -145,6 +149,20 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, payload []byte, p
 			}
 		}
 		return mustJSON(hits), intent.StatusOK, nil
+
+	case intent.KindLogsSince:
+		pl, rej := decode[intent.LogsSincePayload](payload)
+		if rej != nil {
+			return nil, 0, rej
+		}
+		res, rej, err := logsSince(ctx, ex, pl, a.cfg.Now())
+		if rej != nil {
+			return nil, 0, rej
+		}
+		if err != nil {
+			return failed(err)
+		}
+		return mustJSON(res), intent.StatusOK, nil
 
 	case intent.KindServiceAction:
 		pl, rej := decode[intent.ServiceActionPayload](payload)

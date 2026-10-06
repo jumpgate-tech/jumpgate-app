@@ -8,6 +8,7 @@ const (
 	KindEndpointsRead = "endpoints.read"
 	KindFirewallRead  = "firewall.read"
 	KindLogsRead      = "logs.read"
+	KindLogsSince     = "logs.since"
 	KindServiceAction = "service.action"
 )
 
@@ -51,6 +52,11 @@ type (
 	EndpointsReadPayload struct {
 		SSHLogin string `json:"sshLogin"`
 	}
+	// LogsSincePayload asks for journal lines after Cursor (empty: the last N).
+	LogsSincePayload struct {
+		Cursor string `json:"cursor"`
+		N      int    `json:"n"`
+	}
 	ServiceActionPayload struct {
 		Service string `json:"service"` // "exec" | "beacon"
 		Action  string `json:"action"`  // "start" | "stop" | "restart"
@@ -65,6 +71,7 @@ type AgentInfo struct {
 	PlanVersions []string `json:"planVersions"`
 	Signers      int      `json:"signers"`
 	SetUp        bool     `json:"setUp"`
+	ChainID      int      `json:"chainId,omitempty"` // the box's node; 0 before setup
 }
 
 // Logs limits.
