@@ -29,8 +29,10 @@ var (
 	// and all, or to the end of the line when it is never closed.
 	keyedRE = regexp.MustCompile(`(?i)(\b[a-z0-9_-]*(?:token|password|passwd|secret|api[_-]?key|private[_-]?key|priv[_-]?key|seed)["']?\s*[:=]\s*)(` + quotedValue + `|[^\s&"',;]+)`)
 	// lineValueRE covers values that are not one word: a cookie header and a
-	// recovery phrase run to the end of the line.
-	lineValueRE = regexp.MustCompile(`(?i)(\b(?:set-)?cookie["']?\s*[:=]\s*|\b(?:mnemonic|seed[_ -]?phrase|recovery[_ -]?phrase)["']?\s*[:=]\s*)(` + quotedValue + `|[^\r\n]+)`)
+	// recovery phrase run to the end of the line. A lone \r does not end the
+	// line here (it is a carriage return, not a new log record), so text
+	// after one is still part of the value; only \n ends it.
+	lineValueRE = regexp.MustCompile(`(?i)(\b(?:set-)?cookie["']?\s*[:=]\s*|\b(?:mnemonic|seed[_ -]?phrase|recovery[_ -]?phrase)["']?\s*[:=]\s*)(` + quotedValue + `|[^\n]+)`)
 	// cliFlagRE covers "--password hunter2" (a space, not "="). A value that
 	// starts with "-" is the next flag, not a secret.
 	cliFlagRE = regexp.MustCompile(`(?i)(--[a-z0-9_-]*(?:token|password|passwd|secret|api[_-]?key)[ \t]+)(` + quotedValue + `|[^\s-]\S*)`)
@@ -39,8 +41,15 @@ var (
 	// before any query or fragment.
 	urlUserRE = regexp.MustCompile(`(\b[A-Za-z][A-Za-z0-9+.-]*://)([^\s/@:<>"']*:[^\s<>"'?#]*)(@)`)
 	urlRE     = regexp.MustCompile(`\b(?:https?|wss?)://[^\s"'<>]+`)
-	keyRE     = regexp.MustCompile(`(?i)\b(?:sk|gsk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}|\bglpat-[A-Za-z0-9_-]{16,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bAIza[0-9A-Za-z_-]{35}`)
-	jwtRE     = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*`)
+	// keyRE matches API keys. Formats with a distinctive prefix match on the
+	// prefix alone, even glued to a word character ("tokensk-ant-..."), since
+	// a leading \b would let any preceding letter hide the key. The generic
+	// sk-/gsk_ forms keep the boundary unless the body is long and plain, so
+	// hyphenated words such as "disk-usage-statistics" are left alone.
+	keyRE = regexp.MustCompile(`(?i)(?:sk-(?:ant|proj|or)-|gsk_|gh[pousr]_|xox[abp]-|glpat-)[A-Za-z0-9_-]{16,}` +
+		`|github_pat_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z_-]{35}|sk-[A-Za-z0-9]{20,}` +
+		`|\b(?:sk|gsk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}`)
+	jwtRE = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*`)
 	// sessionRE is a bare 32-hex run: jumpgate's session token. The word
 	// boundaries keep 0x-prefixed values and 40/64-hex addresses and hashes.
 	sessionRE = regexp.MustCompile(`\b[0-9a-fA-F]{32}\b`)
@@ -170,7 +179,7 @@ func Redact(lines []string) []string {
 			l = keepKey(urlUserRE, l)
 			l = redactURLPaths(l, func(v string) string { return sub("secret", v) })
 		}
-		if containsAny(lower, "sk-", "sk_", "gsk_", "ghp_", "gho_", "xox", "glpat-", "github_pat_", "aiza") {
+		if containsAny(lower, "sk-", "sk_", "gsk_", "ghp_", "gho_", "ghs_", "ghu_", "ghr_", "xox", "glpat-", "github_pat_", "aiza") {
 			l = whole(keyRE, "secret", l)
 		}
 		if strings.Contains(l, "eyJ") {

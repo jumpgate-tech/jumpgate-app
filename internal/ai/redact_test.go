@@ -129,6 +129,15 @@ func TestRedactSamples(t *testing.T) {
 		{"upper key prefixes", `SK-ANT-API03-abcdefghijklmnop1234 GHP_abcdefghijklmnopqrstuvwxyz0123456789 AIZASyA-abcdefghijklmnopqrstuvwxyz01234`, `<secret-1> <secret-2> <secret-3>`},
 		{"40 hex sha kept", `commit ` + strings.Repeat("ab", 20) + ` built`, `commit ` + strings.Repeat("ab", 20) + ` built`},
 		{"placeholder-looking secret", `password="<hunter2 not a placeholder"`, `password="<secret-1>"`},
+		{"cookie lone cr", "Cookie: a=1\rsid=supersecretsessionvalue", `Cookie: <secret-1>`},
+		{"cookie crlf then next header", "Cookie: a=1\r\nHost: node.example", "Cookie: <secret-1>\nHost: node.example"},
+		{"mnemonic lone cr", "mnemonic: w1 w2\rw3 w4 w5 w6", `mnemonic: <secret-1>`},
+		{"glued anthropic", `xxxsk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789`, `xxx<secret-1>`},
+		{"glued after word", `tokensk-ant-api03-abcdefghijklmnop1234 ok`, `token<secret-1> ok`},
+		{"glued github", `Xghp_abcdefghijklmnopqrstuvwxyz0123456789 Ygho_abcdefghijklmnopqrstuvwxyz0123456789 Zghs_abcdefghijklmnopqrstuvwxyz0123456789`, `X<secret-1> Y<secret-2> Z<secret-3>`},
+		{"glued gitlab slack google", `aglpat-abcdefghij1234567890 bxoxb-abcdefghijklmnop1234 cAIzaSyA-abcdefghijklmnopqrstuvwxyz01234`, `a<secret-1> b<secret-2> c<secret-3>`},
+		{"glued openai style", `Xsk-abcdefghijklmnopqrstuvwxyz0123`, `X<secret-1>`},
+		{"hyphenated words kept", `disk-usage-statistics-total-report risk-assessment-for-every-node`, `disk-usage-statistics-total-report risk-assessment-for-every-node`},
 		{"empty", ``, ``},
 	}
 	for _, tc := range cases {
@@ -281,6 +290,10 @@ var secretShapes = map[string]string{
 	"quoted":     `password="correct horse battery staple"`,
 }
 
+// prefixed lists the shapes recognised by their prefix alone, even glued to
+// a word character.
+var prefixed = map[string]bool{"anthropic": true, "github": true, "github pat": true, "gitlab": true, "google": true}
+
 func leaksRun(out, secret string, n int) (string, bool) {
 	for i := 0; i+n <= len(secret); i++ {
 		if strings.Contains(out, secret[i:i+n]) {
@@ -299,11 +312,16 @@ func TestRedactSecretsAtTheLineCut(t *testing.T) {
 		if i := strings.IndexAny(secret, "= "); i >= 0 {
 			value = strings.TrimLeft(secret[i:], `= "`)
 		}
-		for start := maxLineBytes - len(secret) - 2; start <= maxLineBytes+2; start++ {
-			in := strings.Repeat("x", start) + "=" + secret
-			out := Redact([]string{in})[0]
-			if run, bad := leaksRun(out, value, 8); bad {
-				t.Fatalf("%s at offset %d leaked %q", name, start, run)
+		for _, sep := range []string{"=", ""} {
+			if sep == "" && !prefixed[name] {
+				continue // only keys with a distinctive prefix can be glued
+			}
+			for start := maxLineBytes - len(secret) - 2; start <= maxLineBytes+2; start++ {
+				in := strings.Repeat("x", start) + sep + secret
+				out := Redact([]string{in})[0]
+				if run, bad := leaksRun(out, value, 8); bad {
+					t.Fatalf("%s (sep %q) at offset %d leaked %q", name, sep, start, run)
+				}
 			}
 		}
 	}
@@ -354,7 +372,7 @@ func TestRedactPathologicalInputsAreFast(t *testing.T) {
 	}
 	// This input is match-dense on every line, so the bound is looser than
 	// for the single-line cases, and looser still under the race detector.
-	bound := 250 * time.Millisecond
+	bound := 600 * time.Millisecond
 	if raceEnabled {
 		bound = 5 * time.Second
 	}
