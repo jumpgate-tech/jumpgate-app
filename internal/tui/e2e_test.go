@@ -2,10 +2,13 @@ package tui_test
 
 import (
 	"context"
+	"errors"
 	"io/fs"
-	"os"
+	"net"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -36,6 +39,17 @@ func (quietExec) WriteFile(context.Context, string, []byte, fs.FileMode) error {
 func (quietExec) ReadFile(context.Context, string) ([]byte, error)             { return nil, nil }
 func (quietExec) Close() error                                                 { return nil }
 
+// wsaEAFNOSUPPORT is Windows' "address family not supported", what a
+// Windows before 10 version 1803 answers an AF_UNIX socket with.
+const wsaEAFNOSUPPORT = 10047
+
+// unixSocketUnsupported: err says this OS cannot make a unix socket at all,
+// the one reason the end-to-end test skips rather than fails.
+func unixSocketUnsupported(err error) bool {
+	var errno syscall.Errno
+	return runtime.GOOS == "windows" && errors.As(err, &errno) && errno == wsaEAFNOSUPPORT
+}
+
 // The whole path: the TUI's client, the real server's routes and fleet
 // poller, and the real program loop, on every OS CI runs.
 func TestTUIAgainstARealServer(t *testing.T) {
@@ -62,13 +76,21 @@ func TestTUIAgainstARealServer(t *testing.T) {
 			t.Error("the server did not stop")
 		}
 	})
+	// Ready is a connection that succeeds: the socket file exists from bind,
+	// before listen. ServeUnix returning first is a failure, unless this
+	// Windows has no AF_UNIX at all.
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if _, err := os.Stat(sock); err == nil {
+		if c, err := net.DialTimeout("unix", sock, time.Second); err == nil {
+			c.Close()
 			break
 		}
 		select {
 		case err := <-served:
-			t.Skipf("no local socket here: %v", err)
+			served <- err // for the cleanup's wait
+			if unixSocketUnsupported(err) {
+				t.Skipf("no local socket on this Windows: %v", err)
+			}
+			t.Fatalf("the server stopped before it listened: %v", err)
 		default:
 		}
 		if time.Now().After(deadline) {
