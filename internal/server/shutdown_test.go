@@ -137,9 +137,17 @@ func TestListenAndServe_ShutsDownWithAnSSEStreamOpen(t *testing.T) {
 	}
 	defer s.releaseSetupRun("box", c)
 
+	// Its own transport, not http.DefaultClient's. startServing's readiness
+	// poll leaves a connection returning to that pool, and a request sent
+	// right behind it can dial a spare connection and then reuse the pooled
+	// one. The spare one never sends a request, so the server holds it as
+	// StateNew, and Shutdown waits on a StateNew connection until it is 5s
+	// old: exactly this test's bound, so it failed about one run in six.
+	client := &http.Client{Transport: &http.Transport{}}
+	defer client.CloseIdleConnections()
 	req, _ := http.NewRequest("GET", "http://"+addr+"/api/targets/box/setup/stream", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	res, err := http.DefaultClient.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("open the stream: %v", err)
 	}
