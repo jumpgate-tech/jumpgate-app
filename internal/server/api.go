@@ -70,11 +70,13 @@ func (r *registry) get(id string) *targetEntry {
 	return e
 }
 
-// evictExecutor forgets id's cached executor if it is still ex, so the next
-// operation dials the box again: the way a box whose connection dropped
-// recovers without a server restart. It touches nothing else in the entry. ex
-// is closed only when no monitor, log watcher or setup run holds it; one that
-// does keeps its reference until it is retired.
+// evictExecutor forgets id's cached executor if it is still ex (by
+// identity), so the next operation dials the box again: the way a box whose
+// connection dropped recovers without a server restart. The monitor and log
+// watcher built on ex are retired with it, so their next use rebuilds them
+// on a fresh executor instead of polling a dead connection. ex is closed
+// once the last call in flight on it returns (leasedExec); a setup run that
+// still holds it gets an unreachable error on its next command.
 func (r *registry) evictExecutor(id string, ex executor.Executor) {
 	r.mu.Lock()
 	e, ok := r.entries[id]
@@ -84,19 +86,23 @@ func (r *registry) evictExecutor(id string, ex executor.Executor) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.exec != ex {
+	if ex == nil || e.exec != ex {
 		return
 	}
 	e.exec = nil
-	held := e.mon != nil || e.watch != nil
-	if run := e.setup; run != nil {
-		run.mu.Lock()
-		held = held || run.running
-		run.mu.Unlock()
+	if e.monExec == ex {
+		if e.monStop != nil {
+			e.monStop()
+		}
+		e.mon, e.monStop, e.monDone, e.monExec = nil, nil, nil, nil
 	}
-	if !held {
-		ex.Close()
+	if e.watchExec == ex {
+		if e.watchStop != nil {
+			e.watchStop()
+		}
+		e.watch, e.watchStop, e.watchDone, e.watchExec = nil, nil, nil, nil
 	}
+	ex.Close()
 }
 
 // setupCancelWait bounds how long registry.remove waits for an in-flight
@@ -141,11 +147,13 @@ type targetEntry struct {
 
 	mon     *monitor.Monitor
 	monStop context.CancelFunc
-	monDone <-chan struct{} // closed when mon is retired
+	monDone <-chan struct{}   // closed when mon is retired
+	monExec executor.Executor // the executor mon polls through
 
 	watch     *logwatch.Watcher
 	watchStop context.CancelFunc
-	watchDone <-chan struct{} // closed when watch is retired
+	watchDone <-chan struct{}   // closed when watch is retired
+	watchExec executor.Executor // the executor watch tails through
 
 	setup *setupRun
 
@@ -183,8 +191,8 @@ func (e *targetEntry) retireObserversLocked() {
 	if e.logs != nil {
 		e.logs.stop()
 	}
-	e.mon, e.monStop, e.monDone = nil, nil, nil
-	e.watch, e.watchStop, e.watchDone = nil, nil, nil
+	e.mon, e.monStop, e.monDone, e.monExec = nil, nil, nil, nil
+	e.watch, e.watchStop, e.watchDone, e.watchExec = nil, nil, nil, nil
 	e.logs = nil
 }
 
@@ -202,7 +210,7 @@ func (e *targetEntry) setExec(ex executor.Executor) {
 		ex.Close()
 		return
 	}
-	e.exec = ex
+	e.exec = lease(ex)
 }
 
 // setupRun tracks one setup.RunAll invocation for a target: every event it
@@ -401,8 +409,8 @@ func (s *Server) getExecutorLocked(entry *targetEntry, t config.Target) (executo
 	if err != nil {
 		return nil, err
 	}
-	entry.exec = ex
-	return ex, nil
+	entry.exec = lease(ex)
+	return entry.exec, nil
 }
 
 // getMonitor returns t's monitor.Monitor, lazily creating and starting one
@@ -432,7 +440,7 @@ func (s *Server) getMonitor(t config.Target, refRPCBase string) (mon *monitor.Mo
 	// peers) in this monitor's snapshots kick off a background diagnostics
 	// run, gated by the per-target cooldown (diag.go).
 	go s.watchMonitorForDiag(ctx, t, mon)
-	entry.mon = mon
+	entry.mon, entry.monExec = mon, ex
 	entry.monStop = cancel
 	entry.monDone = ctx.Done()
 	return mon, entry.monDone, nil
@@ -458,7 +466,7 @@ func (s *Server) getWatcher(t config.Target) (watch *logwatch.Watcher, retired <
 	// background diagnostics run, gated by the per-target cooldown
 	// (diag.go).
 	go s.watchLogsForDiag(ctx, t, watch)
-	entry.watch = watch
+	entry.watch, entry.watchExec = watch, ex
 	entry.watchStop = cancel
 	entry.watchDone = ctx.Done()
 	return watch, entry.watchDone, nil

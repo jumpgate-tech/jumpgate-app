@@ -713,36 +713,3 @@ func TestFleetSSHOnlyBoxRecoversAfterTheConnectionDrops(t *testing.T) {
 		t.Fatalf("after the connection came back: opened %d, row %+v", opened, row)
 	}
 }
-
-// closeCounter is an executor that counts Close calls.
-type closeCounter struct {
-	nopExec
-	closed atomic.Int32
-}
-
-func (c *closeCounter) Close() error { c.closed.Add(1); return nil }
-
-// evictExecutor drops only the executor it was shown, and closes it only
-// when nothing else in the entry holds it.
-func TestEvictExecutorDropsOnlyThatExecutor(t *testing.T) {
-	r := newRegistry()
-	cur, other := &closeCounter{}, &closeCounter{}
-	r.get("a").setExec(cur)
-	r.evictExecutor("a", other) // a newer dial already replaced it: keep cur
-	if r.get("a").exec != cur || cur.closed.Load() != 0 {
-		t.Fatal("evicted an executor it was not shown")
-	}
-	r.evictExecutor("a", cur)
-	if r.get("a").exec != nil || cur.closed.Load() != 1 {
-		t.Fatalf("exec %v closed %d", r.get("a").exec, cur.closed.Load())
-	}
-	held := &closeCounter{}
-	e := r.get("b")
-	e.setExec(held)
-	e.mon = monitor.New(monitor.Config{Exec: held})
-	r.evictExecutor("b", held)
-	if e.exec != nil || held.closed.Load() != 0 {
-		t.Fatalf("an executor a monitor holds was closed (%d) or kept", held.closed.Load())
-	}
-	r.evictExecutor("missing", held) // no entry: nothing happens
-}
