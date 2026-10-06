@@ -1,0 +1,24 @@
+ jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  [5 Jobs]  6 Settings  ? help
+ Help  (esc to close)
+
+keys everywhere
+  1-6          screens
+  ?            help
+  :            command
+  esc          back
+  q            quit
+  ctrl+c       quit now
+  ↑/k          up
+  ↓/j          down
+  ←/h          previous tab
+  →/l          next tab
+  enter        open
+  /            filter
+
+
+
+
+
+
+
+ no box selected · server connecting · jobs ⚑ –

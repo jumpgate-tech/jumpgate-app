@@ -1,0 +1,24 @@
+ jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  [5 Jobs]  6 Settings  ? help
+ Jobs inbox
+
+ Durable jobs arrive with sub-project 2: long operations that outlive
+ this window, and the decisions they wait for. Nothing runs as a job yet.
+
+ The ⚑ count in the status bar will show jobs that need you.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ no box selected · server connecting · jobs ⚑ –
