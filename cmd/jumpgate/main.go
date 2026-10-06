@@ -28,9 +28,15 @@ const bindFlagUsage = "address to bind the local server to. " +
 	"WARNING: binding beyond 127.0.0.1 exposes full control of your servers over plain HTTP"
 
 func runApp() {
+	// A double-clicked jumpgate-tray.exe has no console: route errors to
+	// app.log and a dialog before anything can fail (B-3).
+	gui := guiLaunch(os.Args)
+	if gui {
+		setupGUILogging()
+	}
 	opts, err := addServerFlags(flag.CommandLine, os.Getenv)
 	if err != nil {
-		log.Fatalf("jumpgate: %v", err)
+		fatalf("jumpgate: %v", err)
 	}
 	noOpen := flag.Bool("no-open", false, "do not open a browser window automatically")
 	tray := flag.Bool("tray", false, "open the UI in a native desktop window (tiny-app mode) instead of a browser tab; requires a build made with -tags tray")
@@ -53,7 +59,8 @@ func runApp() {
 
 	ctx, stop := shutdownContext(context.Background())
 	defer stop()
-	windowed := *tray || inAppBundle()
+	requestQuit = stop
+	windowed := *tray || inAppBundle() || gui
 
 	// One server per user (R25): the app takes the same lock as `jumpgate
 	// serve`. If a server is already up — another app launch, or one a CLI
@@ -61,7 +68,7 @@ func runApp() {
 	// say plainly which of this launch's options it was not built with.
 	holder, running, err := claimAppInstance(ctx, 10*time.Second)
 	if err != nil {
-		log.Fatalf("jumpgate: %v", err)
+		fatalf("jumpgate: %v", err)
 	}
 	if running != nil {
 		if skew := daemon.SkewWarning(*running); skew != "" {
@@ -79,7 +86,7 @@ func runApp() {
 	b, err := buildServer(*opts, stop, os.Stderr)
 	if err != nil {
 		holder.Release()
-		log.Fatalf("jumpgate: %v", err)
+		fatalf("jumpgate: %v", err)
 	}
 	s, token, bind := b.srv, b.token, opts.Bind
 
@@ -94,7 +101,7 @@ func runApp() {
 	// --tray still works for running the tray binary straight from a shell.
 	if windowed {
 		if !trayBuilt {
-			log.Fatalf("jumpgate: --tray needs a build made with the tray tag: go build -tags tray ./cmd/jumpgate")
+			fatalf("jumpgate: --tray needs a build made with the tray tag: go build -tags tray ./cmd/jumpgate")
 		}
 		// The window is the foreground; HTTP runs behind it. runWindow must own
 		// the main goroutine (the platform webview owns the UI run loop), so the
@@ -103,10 +110,11 @@ func runApp() {
 		srvErr := make(chan error, 1)
 		go func() { srvErr <- serveAndPublish(ctx, stop, s, holder, bind, token, &b.shape) }()
 		if err := waitReady(ctx, bind); err != nil {
-			log.Fatalf("jumpgate: server did not come up: %v", err)
+			fatalf("jumpgate: server did not come up: %v", err)
 		}
 		// The in-process webview keeps the ?token= URL: it reaches no
 		// process's argv (D26).
+		log.Print("jumpgate: opening the desktop window")
 		runWindow(ctx, appURL(daemon.Info{HTTPAddr: bind, Token: token}))
 		stop()
 		<-srvErr // wait for the shutdown we just asked for; its error is expected
@@ -125,12 +133,12 @@ func runApp() {
 			log.Printf("jumpgate: %v; run `jumpgate open`", err)
 			return
 		}
-		handOffLogin(os.Stdout, bind, link, !*noOpen)
+		handOffLogin(os.Stdout, bind, link, serveHandOff(*noOpen))
 	}()
 
 	if err := serveAndPublish(ctx, stop, s, holder, bind, token, &b.shape); err != nil {
 		holder.Release()
-		log.Fatalf("jumpgate: server: %v", err)
+		fatalf("jumpgate: server: %v", err)
 	}
 }
 
@@ -143,8 +151,9 @@ func openRunningServer(ctx context.Context, info daemon.Info, windowed, noOpen b
 	fmt.Fprintf(os.Stderr, "jumpgate: already running, pid %d; opening it\n", info.PID)
 	if windowed {
 		if !trayBuilt {
-			log.Fatalf("jumpgate: --tray needs a build made with the tray tag: go build -tags tray ./cmd/jumpgate")
+			fatalf("jumpgate: --tray needs a build made with the tray tag: go build -tags tray ./cmd/jumpgate")
 		}
+		log.Print("jumpgate: opening the desktop window")
 		runWindow(ctx, appURL(info))
 		return
 	}
@@ -153,7 +162,7 @@ func openRunningServer(ctx context.Context, info daemon.Info, windowed, noOpen b
 		log.Printf("jumpgate: %v; run `jumpgate open`", err)
 		return
 	}
-	handOffLogin(out, info.HTTPAddr, link, !noOpen)
+	handOffLogin(out, info.HTTPAddr, link, serveHandOff(noOpen))
 }
 
 // shutdownContext returns a context canceled by the first SIGINT or SIGTERM.

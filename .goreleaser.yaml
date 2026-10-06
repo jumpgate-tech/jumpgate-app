@@ -4,6 +4,9 @@ project_name: jumpgate
 before:
   hooks:
     - go mod tidy
+    # Release controllers embed both static Linux agents (spec D1), built from
+    # this commit with this tag as their version (D15).
+    - env GZIP=1 VERSION={{ .Tag }} bash scripts/build-agents.sh internal/agentbin/embedded
 
 builds:
   - id: jumpgate
@@ -11,12 +14,13 @@ builds:
     binary: jumpgate
     env:
       - CGO_ENABLED=0
-    # Inject the release version so the running binary knows what it is and the
-    # update check can compare against the latest release. {{.Version}} is the
-    # git tag goreleaser is building.
+    tags:
+      - embedagents
+    # The tag (v-prefixed) is the version everywhere, so the controller and
+    # the agents it embeds report the same string.
     ldflags:
       - -s -w
-      - -X github.com/valve-tech/jumpgate/internal/buildinfo.version={{.Version}}
+      - -X github.com/valve-tech/jumpgate/internal/buildinfo.version={{ .Tag }}
     goos:
       - darwin
       - linux
@@ -36,6 +40,18 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+  algorithm: sha256
+  extra_files:
+    - glob: ./internal/agentbin/embedded/jumpgate-linux-amd64
+    - glob: ./internal/agentbin/embedded/jumpgate-linux-arm64
+
+release:
+  # The raw agents, for anyone who wants to verify or install one by hand.
+  extra_files:
+    - glob: ./internal/agentbin/embedded/jumpgate-linux-amd64
+    - glob: ./internal/agentbin/embedded/jumpgate-linux-arm64
+    - glob: ./internal/agentbin/embedded/SHA256SUMS
+      name_template: agents-SHA256SUMS
 
 changelog:
   sort: asc

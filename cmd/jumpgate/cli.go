@@ -29,8 +29,16 @@ var subcommands = map[string]func(args []string) int{
 }
 
 func main() {
+	if guiSubcommandRefused(os.Args) {
+		showErrorDialog("jumpgate-tray.exe is the desktop app and has no console. Run commands with jumpgate.exe in a terminal, for example:\n\n    jumpgate.exe " + strings.Join(os.Args[1:], " "))
+		os.Exit(exitCode("usage"))
+	}
 	if err := migrateOnStartup(os.Args, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "jumpgate:", err)
+		if isGUIExe() {
+			// No console for the line above to reach (B-3).
+			showErrorDialog("jumpgate: " + err.Error())
+		}
 		pauseIfStandalone(os.Stdin, os.Stderr)
 		os.Exit(1)
 	}

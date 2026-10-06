@@ -1,0 +1,8 @@
+# webview_go asks pkg-config for webkit2gtk-4.0, which Ubuntu 24.04 and
+# Debian 13 no longer ship. 4.1 is the same API on libsoup 3, so this name
+# simply requires it (spec D11). Only the release and CI builds put this
+# directory on PKG_CONFIG_PATH.
+Name: webkit2gtk-4.0
+Description: Shim mapping webkit2gtk-4.0 to webkit2gtk-4.1 for webview_go
+Version: 2.44.0
+Requires: webkit2gtk-4.1

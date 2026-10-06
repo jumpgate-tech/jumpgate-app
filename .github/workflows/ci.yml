@@ -267,3 +267,68 @@ jobs:
         env:
           JUMPGATE_TEST_WIN_AGENT: "1"
         run: go test -count=1 -timeout 120s -run TestOpenSSHAgentPipe -v ./internal/executor/
+
+  desktop-macos:
+    if: github.event_name == 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: vet and test the tray build
+        run: |
+          go vet -tags tray ./cmd/jumpgate
+          go test -tags tray ./cmd/jumpgate
+      - name: build and check both apps
+        run: scripts/test-macos-bundle.sh
+
+  desktop-linux:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: build, install and open the Linux desktop bundle
+        run: scripts/test-linux-desktop.sh
+
+  # The Windows desktop build (B-3): the tray-tagged tests, the release zip,
+  # and a double-click of jumpgate-tray.exe that must log to app.log, choose
+  # the desktop window, serve, and stop on `jumpgate.exe stop`.
+  desktop-windows:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: WebView2 runtime
+        shell: pwsh
+        run: |
+          $k = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          if (-not (Test-Path $k)) {
+            Invoke-WebRequest https://go.microsoft.com/fwlink/p/?LinkId=2124703 -OutFile wv2.exe
+            Start-Process .\wv2.exe -ArgumentList '/silent','/install' -Wait
+          }
+      - name: vet and test the tray build
+        run: |
+          go vet -tags tray ./cmd/jumpgate
+          go test -tags tray ./cmd/jumpgate
+      - name: package
+        run: scripts/package-windows.sh dist
+      - name: double-click smoke
+        shell: pwsh
+        run: scripts/windows-desktop-smoke.ps1 -Stage dist/jumpgate-windows-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jumpgate-windows-amd64-ci
+          path: dist/jumpgate-windows-amd64.zip

@@ -160,6 +160,9 @@ func TestUnknownLoginCodeIsRefused(t *testing.T) {
 // (a server bound beyond loopback) is refused and does not burn the code.
 func TestLoginCodeIsLoopbackOnly(t *testing.T) {
 	s, _, _ := loginServer(t)
+	// The synthetic requests carry no LocalAddr, which the Linux peer check
+	// (rightly) refuses; this test is about the loopback gate alone.
+	s.peerUID = nil
 	code := s.NewLoginCode()
 	for _, peer := range []string{"192.0.2.10:5000", "@", ""} {
 		req := httptest.NewRequest(http.MethodGet, "/login?code="+code, nil)
