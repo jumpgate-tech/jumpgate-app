@@ -150,3 +150,18 @@ func TestSSHArgvPassesTheClientScreen(t *testing.T) {
 		}
 	}
 }
+
+func TestSSHArgvRefusesExpandingAndQuotedPaths(t *testing.T) {
+	for _, kp := range []string{"/k/${HOME}/id", "~/id", "/k/$X", "/k/my id", `/k/"id`} {
+		tg := sshTarget("10.0.0.5", "root", nil)
+		tg.SSH.KeyPath = kp
+		if _, err := sshArgv(tg, []string{"/h/c"}); err == nil {
+			t.Errorf("key path %q accepted", kp)
+		}
+	}
+	for _, kh := range []string{"${HOME}/kh", "~/kh", "/h/$X"} {
+		if _, err := sshArgv(sshTarget("10.0.0.5", "root", nil), []string{kh}); err == nil {
+			t.Errorf("known_hosts %q accepted", kh)
+		}
+	}
+}

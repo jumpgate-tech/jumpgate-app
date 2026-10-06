@@ -63,8 +63,8 @@ func CheckSSHArgv(argv []string) error {
 		if err != nil {
 			return err
 		}
-		if err := checkSSHPath(path); err != nil {
-			return fmt.Errorf("key path: %w", err)
+		if err := checkSSHPath(path); err != nil || strings.ContainsAny(path, " \t\"'") {
+			return errors.New("key path: not a plain path")
 		}
 	}
 	if err := p.option(SSHOptStrictHostKeyChecking); err != nil {
@@ -157,13 +157,15 @@ func (p *argvReader) option(want string) error {
 	return nil
 }
 
+// checkSSHPath refuses what ssh would expand or reinterpret: control
+// characters, '%' and '$' (token and environment expansion) and a leading '~'.
 func checkSSHPath(s string) error {
-	if s == "" || s[0] == '-' {
-		return errors.New("empty, or starts with '-'")
+	if s == "" || s[0] == '-' || s[0] == '~' {
+		return errors.New("empty, or starts with '-' or '~'")
 	}
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f || r == '%' {
-			return errors.New("has a control character or '%'")
+		if r < 0x20 || r == 0x7f || r == '%' || r == '$' {
+			return errors.New("has a control character, '%' or '$'")
 		}
 	}
 	return nil
@@ -184,8 +186,10 @@ func checkKnownHostsList(v string) error {
 				return errors.New("known_hosts: unterminated quote")
 			}
 			tok, v = v[1:1+end], v[end+2:]
-			if strings.ContainsAny(tok, "\t") {
-				return errors.New("known_hosts: tab in a path")
+			// ssh reads \" inside quotes as an escaped quote; the server
+			// never writes one, so a quoted path may not end in a backslash.
+			if strings.ContainsAny(tok, "\t") || strings.HasSuffix(tok, `\`) {
+				return errors.New("known_hosts: tab or escaped quote in a quoted path")
 			}
 		} else {
 			end := strings.IndexByte(v, ' ')

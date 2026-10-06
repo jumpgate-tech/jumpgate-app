@@ -47,6 +47,9 @@ func sshArgv(t config.Target, knownHosts []string) ([]string, error) {
 		if err := checkPath(c.KeyPath); err != nil {
 			return nil, fmt.Errorf("ssh key path: %w", err)
 		}
+		if strings.ContainsAny(c.KeyPath, " \t\"'") {
+			return nil, errors.New("ssh key path: contains whitespace or a quote")
+		}
 		argv = append(argv, "-i", c.KeyPath)
 	}
 	var files []string
@@ -130,14 +133,18 @@ func checkPort(p int) (string, error) {
 }
 
 // checkPath refuses what ssh would expand or what could not be one argv
-// element: control characters and "%".
+// element: control characters, "%" and "$" (ssh's token and environment
+// expansion) and a leading "~".
 func checkPath(p string) error {
+	if strings.HasPrefix(p, "~") {
+		return errors.New("starts with '~'")
+	}
 	for _, r := range p {
 		if r < 0x20 || r == 0x7f {
 			return errors.New("contains a control character")
 		}
-		if r == '%' {
-			return errors.New("contains '%'")
+		if r == '%' || r == '$' {
+			return errors.New("contains '%' or '$'")
 		}
 	}
 	return nil
