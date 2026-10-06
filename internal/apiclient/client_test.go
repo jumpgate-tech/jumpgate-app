@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
@@ -298,6 +299,36 @@ func TestDiskAndStatusMethods(t *testing.T) {
 				t.Fatalf("status %+v", u.Value)
 			}
 			return
+		}
+	}
+}
+
+// WatchStatus's channel closes when its context ends, so a ranging reader
+// stops.
+func TestWatchStatusClosesOnCancel(t *testing.T) {
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"overall\":\"synced\"}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := c.WatchStatus(ctx, "a")
+	for u := range ch {
+		if u.Has {
+			break
+		}
+	}
+	cancel()
+	timeout := time.After(3 * time.Second)
+	for {
+		select {
+		case _, open := <-ch:
+			if !open {
+				return
+			}
+		case <-timeout:
+			t.Fatal("the channel stayed open after cancel")
 		}
 	}
 }

@@ -92,7 +92,13 @@ func fakeDU() ops.DU {
 	return ops.DU{ExecBytes: 1e12, BeaconBytes: 1e11, DiskFreeBytes: 2e12, DiskFreeKnown: true, ExpectedExecBytes: 2e12}
 }
 
-func (f *fakeProber) disk(context.Context, config.Config, config.Target) (ops.DU, error) {
+func (f *fakeProber) diskCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.diskCalls
+}
+
+func (f *fakeProber) disk(ctx context.Context, _ config.Config, _ config.Target) (ops.DU, error) {
 	f.mu.Lock()
 	f.diskCalls++
 	fail, gate, entered := f.diskFail, f.diskGate, f.diskEntered
@@ -101,7 +107,11 @@ func (f *fakeProber) disk(context.Context, config.Config, config.Target) (ops.DU
 		entered <- struct{}{}
 	}
 	if gate != nil {
-		<-gate
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ops.DU{}, ctx.Err()
+		}
 	}
 	if fail {
 		return ops.DU{}, errors.New("du: cannot access")

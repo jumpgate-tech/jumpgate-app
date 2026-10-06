@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -177,6 +178,8 @@ type fleetPoller struct {
 	pubTimer *time.Timer
 	// measures are the measure-now probes in flight, one per box.
 	measures map[string]*measureCall
+	// statuses are the shared status sources, one per watched box.
+	statuses map[string]*statusSource
 
 	// active counts loops that have not decided to stop, and maxActive its
 	// high-water mark, for the test that no two loops ever run at once.
@@ -198,7 +201,7 @@ func newFleetPoller(s *Server) *fleetPoller {
 		s: s, probe: serverProber{s}, now: time.Now,
 		every: func(config.Config) time.Duration { return fleetStatusEvery },
 		ctx:   ctx, cancel: cancel,
-		rows: map[string]*fleetState{}, measures: map[string]*measureCall{}, subs: map[chan api.Fleet]struct{}{},
+		rows: map[string]*fleetState{}, measures: map[string]*measureCall{}, statuses: map[string]*statusSource{}, subs: map[chan api.Fleet]struct{}{},
 	}
 }
 
@@ -745,17 +748,22 @@ func (p *fleetPoller) measure(ctx context.Context, cfg config.Config, t config.T
 		p.measures[t.ID] = c
 		timeout := fleetProbeTimeout
 		started := p.goLocked(func() {
+			defer close(c.done)
 			pctx, cancel := context.WithTimeout(p.ctx, timeout)
 			defer cancel()
+			defer func() {
+				p.mu.Lock()
+				delete(p.measures, t.ID)
+				p.mu.Unlock()
+			}()
 			du, err := p.probe.disk(pctx, cfg, t)
-			p.mu.Lock()
-			delete(p.measures, t.ID)
-			p.mu.Unlock()
+			if err != nil && errors.Is(pctx.Err(), context.DeadlineExceeded) {
+				err = fmt.Errorf("%w: the box did not answer within %s", agentclient.ErrUnreachable, timeout)
+			}
 			if err == nil {
 				p.recordDisk(t.ID, p.now(), du)
 			}
 			c.du, c.err = du, err
-			close(c.done)
 		})
 		if !started {
 			delete(p.measures, t.ID)
@@ -843,42 +851,265 @@ func (s *Server) handleFleetMeasure(w http.ResponseWriter, r *http.Request) {
 	s.measureDisk(w, r, cfg, t)
 }
 
+// Status streams share one source per box (spec D31): however many windows
+// watch a box, it is probed once per agentStatusInterval.
+const maxStatusStreams = 8
+
+// statusIdleStop is how long a source outlives its last subscriber, so a
+// window that reconnects at once does not restart it. A variable for tests.
+var statusIdleStop = 3 * time.Second
+
+var errTooManyStreams = errors.New("too many status streams on this box")
+
+// statusFrame is one probe's outcome: a status, or why there is none.
+type statusFrame struct {
+	status *api.NodeStatus
+	err    *api.Error
+}
+
+// statusSource is the one prober of a box's status stream. Its fields are
+// guarded by the poller's mu.
+type statusSource struct {
+	id        string
+	cancel    context.CancelFunc
+	subs      map[chan statusFrame]struct{}
+	latest    *statusFrame
+	idle      *time.Timer
+	closed    bool
+	probeBusy bool
+}
+
+// subscribeStatus joins t's status source, starting it on the first
+// subscriber. The channel holds the latest frame only (a slow reader skips
+// frames, never slows the probe) and is closed when the source ends: idle,
+// fleet shutdown, target removal or executor eviction. It returns
+// errTooManyStreams past maxStatusStreams subscribers.
+func (p *fleetPoller) subscribeStatus(t config.Target) (<-chan statusFrame, func(), error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stopped {
+		return nil, nil, &dialError{fmt.Errorf("%w: jumpgate is shutting down", agentclient.ErrUnreachable)}
+	}
+	src := p.statuses[t.ID]
+	if src != nil && len(src.subs) >= maxStatusStreams {
+		return nil, nil, errTooManyStreams
+	}
+	if src == nil {
+		ctx, cancel := context.WithCancel(p.ctx)
+		src = &statusSource{id: t.ID, cancel: cancel, subs: map[chan statusFrame]struct{}{}}
+		if !p.goLocked(func() { p.runStatus(ctx, src, agentStatusInterval) }) {
+			cancel()
+			return nil, nil, &dialError{fmt.Errorf("%w: jumpgate is shutting down", agentclient.ErrUnreachable)}
+		}
+		p.statuses[t.ID] = src
+	}
+	if src.idle != nil {
+		src.idle.Stop()
+		src.idle = nil
+	}
+	ch := make(chan statusFrame, 1)
+	if src.latest != nil {
+		ch <- *src.latest
+	}
+	src.subs[ch] = struct{}{}
+	return ch, func() { p.unsubscribeStatus(src, ch) }, nil
+}
+
+func (p *fleetPoller) unsubscribeStatus(src *statusSource, ch chan statusFrame) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(src.subs, ch)
+	if len(src.subs) > 0 || src.closed || src.idle != nil {
+		return
+	}
+	src.idle = time.AfterFunc(statusIdleStop, func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if len(src.subs) == 0 && !src.closed {
+			p.retireStatusLocked(src)
+		}
+	})
+}
+
+// retireStatus ends id's status source (if any): its subscribers' streams
+// end, and a viewer that reconnects gets a new source.
+func (p *fleetPoller) retireStatus(id string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if src := p.statuses[id]; src != nil {
+		p.retireStatusLocked(src)
+	}
+}
+
+func (p *fleetPoller) retireStatusLocked(src *statusSource) {
+	if src.closed {
+		return
+	}
+	src.closed = true
+	if src.idle != nil {
+		src.idle.Stop()
+		src.idle = nil
+	}
+	if p.statuses[src.id] == src {
+		delete(p.statuses, src.id)
+	}
+	for ch := range src.subs {
+		close(ch)
+	}
+	src.subs = map[chan statusFrame]struct{}{}
+	src.cancel()
+}
+
+func (p *fleetPoller) statusSubscribers(id string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if src := p.statuses[id]; src != nil {
+		return len(src.subs)
+	}
+	return 0
+}
+
+func (p *fleetPoller) statusSources() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.statuses)
+}
+
+// runStatus probes the box once per interval until ctx ends, and fans each
+// answer out. A probe still running from an earlier tick (one that ignores
+// its context) is not stacked on.
+func (p *fleetPoller) runStatus(ctx context.Context, src *statusSource, every time.Duration) {
+	defer func() {
+		p.mu.Lock()
+		p.retireStatusLocked(src)
+		p.mu.Unlock()
+	}()
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		if !p.probeStatus(ctx, src) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+// probeStatus runs one probe and publishes it; false means the source should
+// end (the target is gone).
+func (p *fleetPoller) probeStatus(ctx context.Context, src *statusSource) bool {
+	cfg, err := p.s.loadConfig()
+	if err != nil {
+		return ctx.Err() == nil // keep the last frame; try again next tick
+	}
+	t, ok := findTarget(cfg, src.id)
+	if !ok {
+		return false
+	}
+	p.mu.Lock()
+	if src.probeBusy {
+		p.mu.Unlock()
+		return true
+	}
+	src.probeBusy = true
+	timeout := fleetProbeTimeout
+	pctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	done := make(chan statusFrame, 1)
+	started := p.goLocked(func() {
+		snap, err := p.probe.status(pctx, cfg, t)
+		var f statusFrame
+		if err != nil {
+			_, e := apiErrorFor(err)
+			f.err = &e
+		} else {
+			v := nodeStatusView(snap)
+			f.status = &v
+		}
+		done <- f
+		p.mu.Lock()
+		src.probeBusy = false
+		p.mu.Unlock()
+	})
+	if !started {
+		src.probeBusy = false
+	}
+	p.mu.Unlock()
+	if !started {
+		return false
+	}
+	var f statusFrame
+	select {
+	case f = <-done:
+	case <-pctx.Done():
+		if ctx.Err() != nil {
+			return false
+		}
+		_, e := apiErrorFor(fmt.Errorf("%w: the box did not answer within %s", agentclient.ErrUnreachable, timeout))
+		f.err = &e
+	}
+	if ctx.Err() != nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if src.closed {
+		return false
+	}
+	src.latest = &f
+	for ch := range src.subs {
+		select {
+		case <-ch:
+		default:
+		}
+		ch <- f
+	}
+	return true
+}
+
 // handleFleetStatusStream sends one box's NodeStatus every
-// agentStatusInterval (spec D31), for paired and SSH-only boxes alike.
+// agentStatusInterval (spec D31), for paired and SSH-only boxes alike, from
+// the box's shared status source.
 func (s *Server) handleFleetStatusStream(w http.ResponseWriter, r *http.Request) {
-	cfg, t, ok := s.nodeTarget(w, r.PathValue("id"))
+	_, t, ok := s.nodeTarget(w, r.PathValue("id"))
 	if !ok {
 		return
 	}
 	setVia(w, viaOf(t))
+	ch, unsub, err := s.fleet.subscribeStatus(t)
+	if errors.Is(err, errTooManyStreams) {
+		writeAPIError(w, http.StatusTooManyRequests, api.Error{Message: err.Error(), Code: api.CodeTooManyStreams})
+		return
+	}
+	if err != nil {
+		writeNodeError(w, err)
+		return
+	}
+	defer unsub()
 	conn, ok := startSSE(w)
 	if !ok {
 		return
 	}
 	defer conn.Close()
-	tick := time.NewTicker(agentStatusInterval)
-	defer tick.Stop()
 	for {
-		snap, err := s.fleet.probe.status(r.Context(), cfg, t)
-		if r.Context().Err() != nil {
+		select {
+		case <-r.Context().Done():
 			return
-		}
-		if err != nil {
-			_, e := apiErrorFor(err)
-			conn.SendNamed("error", e)
-		} else {
-			conn.Send(nodeStatusView(snap))
-		}
-		for waiting := true; waiting; {
-			select {
-			case <-r.Context().Done():
-				return
-			case <-s.fleet.ctx.Done():
-				return
-			case <-conn.Pings():
-				conn.Ping()
-			case <-tick.C:
-				waiting = false
+		case <-s.fleet.ctx.Done():
+			return
+		case <-conn.Pings():
+			conn.Ping()
+		case f, open := <-ch:
+			if !open {
+				return // the source ended: the client reconnects to a new one
+			}
+			if f.err != nil {
+				conn.SendNamed("error", f.err)
+			} else {
+				conn.Send(f.status)
 			}
 		}
 	}

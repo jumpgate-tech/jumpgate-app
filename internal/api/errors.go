@@ -59,6 +59,9 @@ const (
 	CodeTooManyProbes       Code = "too_many_probes"
 	CodeHostKeyNotOurs      Code = "host_key_not_ours"
 
+	// A box's status stream is shared; this many are already open on it.
+	CodeTooManyStreams Code = "too_many_streams"
+
 	// The pairing stream's own failures.
 	CodeStepFailed   Code = "step_failed"
 	CodeVerifyFailed Code = "verify_failed"
@@ -123,6 +126,7 @@ var registry = map[Code]codeInfo{
 
 	CodeProbeExpired:        {"probe the host again; a probe is good for 5 minutes and one confirmation", ExitFailed},
 	CodeFingerprintMismatch: {"the fingerprint you confirmed is not the key the box presented; probe again and compare carefully", ExitSecurity},
+	CodeTooManyStreams:      {"this box already has the most status streams open at once; close one (another window or `jumpgate` session) and retry", ExitFailed},
 	CodeTooManyProbes:       {"too many host-key probes are waiting for a confirmation; confirm them or wait up to 5 minutes for them to expire, then probe again", ExitFailed},
 	CodeHostKeyNotOurs:      {"that key is in your OpenSSH ~/.ssh/known_hosts, which jumpgate reads but never edits; remove it there yourself (`ssh-keygen -R HOST`)", ExitFailed},
 

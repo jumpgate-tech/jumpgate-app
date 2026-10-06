@@ -51,6 +51,10 @@ const defaultRecentLogs = 200
 type registry struct {
 	mu      sync.Mutex
 	entries map[string]*targetEntry
+	// onRetire, when set, is told that id's connection was evicted or the
+	// target removed, so what is shared across viewers (the fleet's status
+	// source) restarts. It must not take a targetEntry lock.
+	onRetire func(id string)
 }
 
 func newRegistry() *registry {
@@ -90,6 +94,9 @@ func (r *registry) evictExecutor(id string, ex executor.Executor) {
 		return
 	}
 	e.exec = nil
+	if r.onRetire != nil {
+		r.onRetire(id)
+	}
 	if e.monExec == ex {
 		if e.monStop != nil {
 			e.monStop()
@@ -129,6 +136,9 @@ func (r *registry) remove(id string) {
 	r.mu.Unlock()
 	if !ok {
 		return
+	}
+	if r.onRetire != nil {
+		r.onRetire(id)
 	}
 
 	e.mu.Lock()

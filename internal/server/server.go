@@ -225,6 +225,7 @@ func New(cfg Config) *Server {
 		s.newLocalExecutor = executor.NewLocal
 	}
 	s.fleet = newFleetPoller(s)
+	s.reg.onRetire = s.fleet.retireStatus
 	return s
 }
 
