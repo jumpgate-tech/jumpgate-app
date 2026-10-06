@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -229,7 +231,9 @@ func TestExplainSendsAtMostTheNewestLines(t *testing.T) {
 	f.Logs("box") <- liveLogs(hits...)
 	a := tab(t, openTestHost(t, f, "unicode"), 4)
 	explain(t, a)
-	if !f.Called(fmt.Sprintf("Explain box %d", explainMax)) {
+	// 1200 lines of 1500 bytes do not fit the body budget: the newest that do go.
+	want := explainBodyMax / (explainLineMax + 3)
+	if !f.Called(fmt.Sprintf("Explain box %d", want)) {
 		t.Fatalf("calls %v", f.Calls)
 	}
 	if explainMax*explainLineMax >= 1<<20 || explainMax >= 5000 {
@@ -352,4 +356,121 @@ func TestLogsAndExplainSurviveHostileText(t *testing.T) {
 	m, _ = tuitest.Send(m, tea.PasteMsg{Content: hostileLog[0]})
 	m, _ = tuitest.Send(m, tuitest.Key("enter"))
 	check("hostile filter", m)
+}
+
+// The request is budgeted by its JSON-encoded size: "<" encodes to 6 bytes.
+func TestExplainBodyStaysUnderTheServersLimit(t *testing.T) {
+	for name, ch := range map[string]string{"angle": "<", "quote": `"`, "backslash": `\`, "ampersand": "&", "ls": "\u2028", "multibyte": "\u00e9"} {
+		h := &hostScreen{}
+		for i := 0; i < 600; i++ {
+			l := fmt.Sprintf("%04d", i) + strings.Repeat(ch, 1700)
+			h.logs = append(h.logs, api.LogHit{Severity: "error", Line: l})
+		}
+		lines := h.explainLines()
+		body, err := json.Marshal(struct {
+			Lines []string `json:"lines"`
+		}{lines})
+		if err != nil || len(body) >= 1<<20 || len(body) > explainBodyMax+64 {
+			t.Errorf("%s: body %d bytes (err %v)", name, len(body), err)
+		}
+		if len(lines) == 0 || !strings.HasPrefix(lines[len(lines)-1], "0599") || len(lines) > explainMax {
+			t.Errorf("%s: %d lines; the newest must be kept", name, len(lines))
+		}
+		for _, l := range lines {
+			if !utf8.ValidString(l) {
+				t.Fatalf("%s: a line was cut inside a rune", name)
+			}
+		}
+	}
+}
+
+func scrollHost(t *testing.T, n int) (*hostScreen, func(...api.LogHit)) {
+	h := &hostScreen{follow: true, logFilter: newLogFilter()}
+	var hits []api.LogHit
+	for i := 0; i < n; i++ {
+		hits = append(hits, hit(i, "x-exec.service", "info", fmt.Sprintf("line %d", i)))
+	}
+	h.applyLogs(liveLogs(hits...))
+	return h, func(l ...api.LogHit) { h.applyLogs(liveLogs(l...)) }
+}
+
+func logWindow(a *App, h *hostScreen) string {
+	var out []string
+	for _, l := range strings.Split(h.viewLogs(a, 80, 12), "\n") {
+		if strings.Contains(l, "line ") {
+			out = append(out, strings.TrimSpace(l))
+		}
+	}
+	return strings.Join(out, "|")
+}
+
+func TestLogsFollowOffFreezesTheView(t *testing.T) {
+	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
+	h, add := scrollHost(t, 30)
+	h.follow, h.logBack = false, 3
+	before := logWindow(a, h)
+	add(hit(31, "x-exec.service", "info", "line 31"), hit(32, "x-exec.service", "info", "line 32"), hit(33, "x-exec.service", "info", "line 33"), hit(34, "x-exec.service", "info", "line 34"))
+	if after := logWindow(a, h); after != before {
+		t.Fatalf("scrolled back, lines arrived:\n%s\n%s", before, after)
+	}
+	// Lines the filter hides do not move the window; visible ones do count.
+	h.logFilter.SetValue("line")
+	h.logBack = 3
+	before = logWindow(a, h)
+	add(hit(40, "x-exec.service", "info", "other"), hit(41, "x-exec.service", "info", "line 41"))
+	if after := logWindow(a, h); after != before {
+		t.Fatalf("filtered:\n%s\n%s", before, after)
+	}
+	h.logFilter.SetValue("")
+	// Off at the bottom: frozen too.
+	h, add = scrollHost(t, 30)
+	h.follow, h.logBack = false, 0
+	before = logWindow(a, h)
+	add(hit(31, "x-exec.service", "info", "line 31"))
+	if after := logWindow(a, h); after != before {
+		t.Fatalf("off at the bottom moved:\n%s\n%s", before, after)
+	}
+	// On: jumps to the newest.
+	h.follow = true
+	if after := logWindow(a, h); !strings.HasSuffix(after, "line 31") {
+		t.Fatalf("follow on: %s", after)
+	}
+}
+
+func TestLogsFrozenViewSurvivesTrimming(t *testing.T) {
+	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
+	h, add := scrollHost(t, logKeep)
+	h.follow, h.logBack = false, logKeep-2
+	for i := 0; i < 5; i++ {
+		var more []api.LogHit
+		for j := 0; j < 700; j++ {
+			more = append(more, hit(j, "x-exec.service", "info", "line x"))
+		}
+		add(more...)
+		_ = logWindow(a, h) // must not panic
+		if h.logBack > len(h.visibleLogs()) {
+			t.Fatalf("logBack %d beyond %d lines", h.logBack, len(h.visibleLogs()))
+		}
+	}
+}
+
+func TestExplainWithNoErrorLinesSaysTheServerFetchesItsOwn(t *testing.T) {
+	f := tuitest.NewFake()
+	f.SettingsV = api.Settings{AIProvider: "gemini", AIDisclosure: "Sends lines to Gemini."}
+	f.ExplainV = api.Explain{Text: "Nothing alarming.", Redacted: true}
+	f.Logs("box") <- liveLogs(hit(1, "x-exec.service", "info", "all fine"))
+	a := tab(t, openTestHost(t, f, "unicode"), 4)
+	m, cmds := tuitest.Send(a, tuitest.Key("e"))
+	m = tuitest.Settle(m, cmds...)
+	fr := tuitest.Frame(m)
+	for _, w := range []string{"No error lines in view", "fetch the box's recent error lines", "Gemini", "enter"} {
+		if !strings.Contains(fr, w) {
+			t.Errorf("modal lacks %q:\n%s", w, fr)
+		}
+	}
+	m, cmds = tuitest.Send(m, tuitest.Key("enter"))
+	m = tuitest.Settle(m, cmds...)
+	if !f.Called("Explain box 0") || !strings.Contains(tuitest.Frame(m), "Nothing alarming.") {
+		t.Fatalf("calls %v\n%s", f.Calls, tuitest.Frame(m))
+	}
 }

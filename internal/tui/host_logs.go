@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,11 +20,14 @@ import (
 const (
 	logBacklog = 500  // lines asked for on every (re)connect
 	logKeep    = 2000 // lines kept in the tab
-	// explainMax is the most lines one Explain sends: the newest. The server
-	// refuses more than 5000 lines or 1 MB (413 too_many_lines, too_large);
-	// this stays far under both, with explainLineMax bytes per line.
+	// An Explain request is budgeted by its JSON-encoded size: "<", ">" and
+	// "&" encode to 6 bytes and quote and backslash to 2. The server refuses
+	// more than 5000 lines or 1 MB (413 too_many_lines, too_large); this
+	// sends at most explainMax of the newest lines, each cut to explainLineMax
+	// bytes, with the encoded total under explainBodyMax.
 	explainMax     = 400
 	explainLineMax = 1500
+	explainBodyMax = 512 << 10
 	// logLineMax bounds what is kept per line; the screen cuts to the width.
 	logLineMax = 4096
 	// explainTextMax bounds the answer read from the provider.
@@ -51,6 +55,7 @@ type (
 		id         string
 		gen        uint64
 		disclosure string
+		provider   string
 		err        error
 	}
 	explainMsg struct {
@@ -130,14 +135,25 @@ func (h *hostScreen) applyLogs(u apiclient.Update[[]api.LogHit]) {
 	if u.Reset {
 		h.logs, h.logBack = h.logs[:0], 0
 	}
+	added, q := 0, h.query()
 	for _, l := range in {
-		h.logs = append(h.logs, cleanHit(l))
+		c := cleanHit(l)
+		h.logs = append(h.logs, c)
+		if h.shows(c, q) {
+			added++
+		}
+	}
+	if !h.follow && !u.Reset {
+		// Scrolled back or paused: the window keeps its lines, so it moves
+		// away from the newest by what arrived in view.
+		h.logBack += added
 	}
 	if over := len(h.logs) - logKeep; over > 0 {
 		n := copy(h.logs, h.logs[over:])
 		clear(h.logs[n:])
 		h.logs = h.logs[:n]
 	}
+	h.logBack = min(h.logBack, len(h.visibleLogs()))
 }
 
 func severityRank(s string) int {
@@ -176,18 +192,26 @@ func containsFold(s, sub string) bool {
 // visibleLogs are the kept lines at or above the level that contain the
 // filter text.
 func (h *hostScreen) visibleLogs() []api.LogHit {
-	q := strings.ToLower(strings.TrimSpace(h.logFilter.Value()))
 	out := make([]api.LogHit, 0, len(h.logs))
+	q := h.query()
 	for _, l := range h.logs {
-		if severityRank(l.Severity) < h.logMin {
-			continue
+		if h.shows(l, q) {
+			out = append(out, l)
 		}
-		if q != "" && !containsFold(l.Line, q) {
-			continue
-		}
-		out = append(out, l)
 	}
 	return out
+}
+
+func (h *hostScreen) query() string {
+	return strings.ToLower(strings.TrimSpace(h.logFilter.Value()))
+}
+
+// shows: at or above the level and holding the filter text.
+func (h *hostScreen) shows(l api.LogHit, q string) bool {
+	if severityRank(l.Severity) < h.logMin {
+		return false
+	}
+	return q == "" || containsFold(l.Line, q)
 }
 
 func (h *hostScreen) logsKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
@@ -229,17 +253,31 @@ func (h *hostScreen) logsKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 	return nil, true
 }
 
-// explainLines are the lines Explain would send: the error lines in view,
-// newest last, at most explainMax, each cut to explainLineMax bytes.
+// explainLines are the lines Explain would send: the newest error lines in
+// view, newest last. Each is cut on a rune boundary, and the oldest are
+// dropped until the JSON-encoded request fits explainBodyMax.
 func (h *hostScreen) explainLines() []string {
-	var lines []string
-	for _, l := range h.visibleLogs() {
-		if severityRank(l.Severity) == 2 {
-			lines = append(lines, cutBytes(l.Line, explainLineMax))
+	vis := h.visibleLogs()
+	var rev []string
+	total := 0
+	for i := len(vis) - 1; i >= 0 && len(rev) < explainMax; i-- {
+		if severityRank(vis[i].Severity) != 2 {
+			continue
 		}
+		l := cutBytes(vis[i].Line, explainLineMax)
+		enc, err := json.Marshal(l)
+		if err != nil {
+			continue
+		}
+		if total+len(enc)+1 > explainBodyMax {
+			break
+		}
+		total += len(enc) + 1
+		rev = append(rev, l)
 	}
-	if len(lines) > explainMax {
-		lines = lines[len(lines)-explainMax:]
+	lines := make([]string, len(rev))
+	for i, l := range rev {
+		lines[len(rev)-1-i] = l
 	}
 	return lines
 }
@@ -254,7 +292,7 @@ func (h *hostScreen) askExplain(a *App) tea.Cmd {
 	id, gen, be := h.id, h.gen, a.be
 	return func() tea.Msg {
 		s, err := be.Settings(ctx)
-		return disclosureMsg{id: id, gen: gen, disclosure: s.AIDisclosure, err: err}
+		return disclosureMsg{id: id, gen: gen, disclosure: s.AIDisclosure, provider: s.AIProvider, err: err}
 	}
 }
 
@@ -336,6 +374,7 @@ type explainModal struct {
 	lines      []string // what a send would carry; the server redacts it
 	state      explainState
 	disclosure string
+	provider   string
 	discLoaded bool
 	err        error
 	e          api.Explain
@@ -348,7 +387,7 @@ func (m *explainModal) gotDisclosure(msg disclosureMsg) {
 		m.err = msg.err
 		return
 	}
-	m.disclosure, m.discLoaded = msg.disclosure, true
+	m.disclosure, m.provider, m.discLoaded = msg.disclosure, msg.provider, true
 }
 
 func (m *explainModal) gotExplain(msg explainMsg) {
@@ -370,7 +409,7 @@ func (m *explainModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 			m.cancel()
 			return true, nil
 		case explainAsking:
-			if !m.discLoaded || len(m.lines) == 0 {
+			if !m.discLoaded {
 				return false, nil
 			}
 			m.state = explainSending
@@ -410,7 +449,15 @@ func (m *explainModal) view(a *App, w, _ int) string {
 	switch m.state {
 	case explainAsking, explainSending:
 		n := len(m.lines)
-		out += para(fmt.Sprintf("%d error %s from this view would be sent to the AI provider.", n, plural(n, "line", "lines")))
+		if n == 0 {
+			prov := sanitizeLine(cutBytes(m.provider, 64))
+			if prov == "" {
+				prov = "the AI provider"
+			}
+			out += para("No error lines in view; jumpgate will fetch the box's recent error lines (redacted) and send them to " + prov + ".")
+		} else {
+			out += para(fmt.Sprintf("%d error %s from this view would be sent to the AI provider.", n, plural(n, "line", "lines")))
+		}
 		switch {
 		case m.err != nil:
 			out += "\n" + para(a.th.Bad.Render("could not read the provider disclosure, so nothing is sent: ")+a.errText(m.err))
@@ -423,8 +470,6 @@ func (m *explainModal) view(a *App, w, _ int) string {
 			}
 			out += "\n" + para(d)
 			switch {
-			case n == 0:
-				out += "\n " + a.th.Warn.Render("there are no error lines to explain") + "\n"
 			case m.state == explainSending:
 				out += "\n " + a.th.Dim.Render("asking"+a.gl.Ellipsis) + "\n"
 			default:
