@@ -17,6 +17,22 @@ Supported networks:
 - **PulseChain**
 - **PulseChain v4** (testnet)
 
+## Platforms
+
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| Desktop window | Jumpgate.app (menubar) | jumpgate-tray.exe (notification icon) | "Jumpgate (window)" menu entry |
+| Terminal launcher | Jumpgate Terminal.app | double-click jumpgate.exe | "Jumpgate" menu entry |
+| Key store default | Keychain | Credential Manager (`wincred`) | Secret Service with a desktop session, else an owner-only file |
+| Pair this machine (`--local`) | no | no | yes (root, or sudo on the terminal) |
+| Minimum | macOS 10.15 | Windows 10 1803 / Server 2019 | WebKitGTK 4.1 for the window (Ubuntu 22.04+, Debian 12+, Fedora 38+) |
+
+The agent that runs on your node boxes is Linux-only (amd64 and arm64). Every release of jumpgate carries both agents inside it, so a controller on any OS can pair any Linux box without extra downloads.
+
+The downloads are not code-signed yet: Windows SmartScreen may warn ("More info" > "Run anyway"), and macOS may ask you to open the app from System Settings > Privacy & Security the first time.
+
+Want a node on your own desktop? See [Running a node on your desktop](docs/run-a-node-on-your-desktop.md): run it in a Linux VM and pair it over SSH.
+
 ## v0.2
 
 v0.2 rounds out day-to-day node operation from the same UI: start, stop, and
@@ -203,9 +219,24 @@ desktop anyway, use a WSL2 or Lima VM as an ordinary Linux box; see
 
 ### Download a release
 
-Grab the archive for your platform from the
-[latest release](https://github.com/valve-tech/jumpgate/releases/latest),
-extract it, and run the binary:
+Grab the download for your platform from the
+[latest release](https://github.com/jumpgate-tech/jumpgate-app/releases/latest)
+(`checksums.txt` lists a SHA-256 for every file). Each one carries both Linux
+agents, so it can pair a Linux box with nothing else to fetch.
+
+- **macOS:** `Jumpgate-macos-<arch>.zip` (`arm64` for Apple silicon, `amd64`
+  for Intel). Unzip it for `Jumpgate.app` (a window and a menubar icon) and
+  `Jumpgate Terminal.app` (opens a terminal running jumpgate). Drag them to
+  Applications.
+- **Windows:** `jumpgate-windows-amd64.zip`. `jumpgate.exe` is the console
+  program (double-click it, or run it from a terminal); `jumpgate-tray.exe` is
+  the window with a notification icon. A `README.txt` is inside.
+- **Linux:** `jumpgate-linux-<arch>.tar.gz` (`amd64` or `arm64`). Extract it and
+  run `./install.sh` for a per-user install under `~/.local` with two menu
+  entries ("Jumpgate" for a terminal, "Jumpgate (window)" for the desktop
+  panel); `./install.sh --uninstall` removes exactly what it installed.
+- **Headless** (servers, scripts): the `jumpgate_<os>_<arch>` archives
+  (`.tar.gz`, `.zip` on Windows) hold the single `jumpgate` binary:
 
 ```bash
 tar xzf jumpgate_<os>_<arch>.tar.gz   # the Windows archive is a .zip
@@ -231,8 +262,8 @@ host and open the printed link on your machine.
 Requires Go 1.25+ and Node 22+.
 
 ```bash
-git clone https://github.com/valve-tech/jumpgate.git
-cd jumpgate
+git clone https://github.com/jumpgate-tech/jumpgate-app.git
+cd jumpgate-app
 cd cmd/jumpgate/web && npm ci && npm run build && cd ../../..
 go build -o jumpgate ./cmd/jumpgate
 ./jumpgate
@@ -260,6 +291,24 @@ dedicated server. Both modes need root on the target for setup itself (see
 Requirements above); the node services it installs run unprivileged.
 
 ## Contributing
+
+This repository is the public, auditable copy of the code and the home of the
+releases. Development and CI run on the maintainers' own self-hosted GitLab, so
+changes are not developed or tested here.
+
+**Manual checks.** Some things only a person on the real desktop can confirm.
+Before a release, someone checks:
+
+- macOS: double-click `Jumpgate.app` and `Jumpgate Terminal.app` from a
+  downloaded zip; the window, the menubar icon and the terminal hand-off work.
+- Windows: `jumpgate.exe` from a double-click and from a terminal, and
+  `jumpgate-tray.exe` (window, notification icon, quit).
+- Linux: on a desktop, `./install.sh`, both menu entries, then `--uninstall`;
+  also on arm64.
+- Linux `--local` pairing with sudo asks for the password on the terminal.
+- A fresh macOS release controller pairs a Linux box over SSH with no
+  `~/.jumpgate/agents` directory (the fingerprint prompt needs a person to
+  answer yes).
 
 **macOS apps.** `cmd/jumpgate/build-macos-app.sh` builds `Jumpgate.app` and
 `Jumpgate Terminal.app`; run `scripts/test-macos-bundle.sh` on a Mac to build
