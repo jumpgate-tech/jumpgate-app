@@ -141,10 +141,10 @@ func TestEveryScreenIsASCIIUnderASCIIGlyphs(t *testing.T) {
 			return press(t, logsHost(t, explainFake(api.Explain{}, "gemini")), "e")
 		},
 		"explain done remote": func(t *testing.T) tea.Model {
-			return explain(t, logsHost(t, explainFake(api.Explain{Text: "The node lost its peers.", SentExcerpt: []string{"peer <ip-1> disconnected"}, Redacted: true}, "gemini")))
+			return explain(t, logsHost(t, explainFake(api.Explain{Text: "The node lost its peers.", SentExcerpt: []string{"peer <ip-1> disconnected"}, Redacted: true, Provider: "gemini"}, "gemini")))
 		},
 		"explain done local": func(t *testing.T) tea.Model {
-			return explain(t, logsHost(t, explainFake(api.Explain{Text: "ok", SentExcerpt: []string{"x"}}, "ollama")))
+			return explain(t, logsHost(t, explainFake(api.Explain{Text: "ok", SentExcerpt: []string{"x"}, Provider: "ollama", Local: true}, "ollama")))
 		},
 		"explain failed": func(t *testing.T) tea.Model {
 			f := explainFake(api.Explain{}, "groq")

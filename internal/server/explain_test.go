@@ -234,3 +234,26 @@ func (r *recordingExec) saw(parts ...string) bool {
 	}
 	return false
 }
+
+// Where the lines went is said by the server, not inferred from Redacted:
+// a remote provider whose lines needed no redaction is still remote.
+func TestExplainSaysWhichProviderGotTheLines(t *testing.T) {
+	for _, c := range []struct {
+		provider, line  string
+		local, redacted bool
+	}{
+		{"gemini", "peer 203.0.113.7 timed out", false, true},
+		{"groq", "reth::cli started", false, false},
+		{"ollama", "peer 203.0.113.7 timed out", true, false},
+	} {
+		a := newAPITestServer(t)
+		addTarget(t, a)
+		res := a.do(t, "PUT", "/api/settings", map[string]any{"aiProvider": c.provider, "aiKey": "k"})
+		res.Body.Close()
+		res = a.do(t, "POST", "/api/targets/local/explain", map[string]any{"lines": []string{c.line}})
+		out := decode[api.Explain](t, res)
+		if out.Provider != c.provider || out.Local != c.local || out.Redacted != c.redacted {
+			t.Errorf("%s: %+v", c.provider, out)
+		}
+	}
+}

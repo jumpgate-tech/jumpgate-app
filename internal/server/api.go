@@ -1487,7 +1487,12 @@ type explainResponse struct {
 	// the UI can show the operator what went out — whether that's the
 	// caller-supplied lines or the auto-selected recent error hits.
 	SentExcerpt []string `json:"sentExcerpt"`
-	Redacted    bool     `json:"redacted"`
+	// Redacted: redaction ran and changed a line. It is false for a local
+	// provider (nothing is redacted) and for a remote one when nothing
+	// matched, so where the lines went is Provider and Local, never this.
+	Redacted bool   `json:"redacted"`
+	Provider string `json:"provider"`
+	Local    bool   `json:"local"`
 }
 
 func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
@@ -1545,8 +1550,8 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	if len(tail) > ai.MaxExplainLines {
 		tail = tail[len(tail)-ai.MaxExplainLines:]
 	}
-	sent := tail
-	if !ai.Local(cfg.AIProvider) {
+	sent, local := tail, ai.Local(cfg.AIProvider)
+	if !local {
 		sent = ai.Redact(tail)
 	}
 	redacted := !slices.Equal(sent, tail)
@@ -1583,7 +1588,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, explainResponse{Text: text, SentExcerpt: sent, Redacted: redacted})
+	writeJSON(w, http.StatusOK, explainResponse{Text: text, SentExcerpt: sent, Redacted: redacted, Provider: cfg.AIProvider, Local: local})
 }
 
 // ---------------------------------------------------------------------

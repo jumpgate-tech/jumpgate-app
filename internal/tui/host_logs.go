@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/valve-tech/jumpgate/internal/ai"
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/apiclient"
 )
@@ -487,13 +488,7 @@ func (m *explainModal) view(a *App, w, _ int) string {
 			out += para(strings.ReplaceAll(p, "\t", "    "))
 		}
 		n := len(m.e.SentExcerpt)
-		sent := fmt.Sprintf("sent %d %s", n, plural(n, "line", "lines"))
-		if m.e.Redacted {
-			sent += ", addresses and peer ids removed"
-		} else {
-			sent += ", unredacted (local provider)"
-		}
-		out += "\n " + a.th.Dim.Render(sent) + "\n"
+		out += "\n " + a.th.Dim.Render(m.sentLine(n)) + "\n"
 		// What the server says went out, as received: redacted there, never
 		// derived here.
 		for i, l := range m.e.SentExcerpt {
@@ -508,6 +503,28 @@ func (m *explainModal) view(a *App, w, _ int) string {
 		}
 	}
 	return out
+}
+
+// sentLine says where the lines went. That follows from the provider, never
+// from Redacted: a remote provider whose lines needed no redaction still got
+// them. The server names the provider; one from before it did is taken to
+// be the provider the disclosure named.
+func (m *explainModal) sentLine(n int) string {
+	prov, local := m.e.Provider, m.e.Local
+	if prov == "" {
+		prov, local = m.provider, ai.Local(m.provider)
+	}
+	if prov = sanitizeLine(cutBytes(prov, 64)); prov == "" {
+		prov = "the AI provider"
+	}
+	sent := fmt.Sprintf("sent %d %s to %s", n, plural(n, "line", "lines"), prov)
+	switch {
+	case local:
+		return sent + " unredacted: a local provider, kept on this machine"
+	case m.e.Redacted:
+		return sent + ", redacted: addresses and peer ids removed"
+	}
+	return sent + ", redacted (nothing matched)"
 }
 
 func plural(n int, one, many string) string {

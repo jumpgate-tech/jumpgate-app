@@ -5,7 +5,14 @@ package api
 type Explain struct {
 	Text        string   `json:"text"`
 	SentExcerpt []string `json:"sentExcerpt"`
-	Redacted    bool     `json:"redacted"`
+	// Redacted: redaction ran and changed at least one line. It is false both
+	// for a local provider (no redaction) and for a remote one when nothing
+	// matched; Local tells the two apart.
+	Redacted bool `json:"redacted"`
+	// Provider is the provider the lines went to; Local is true when it is
+	// a local one (sent unredacted, kept on this machine).
+	Provider string `json:"provider"`
+	Local    bool   `json:"local"`
 }
 
 // Settings is GET /api/settings. Secrets are never returned, only whether

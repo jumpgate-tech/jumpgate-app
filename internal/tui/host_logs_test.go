@@ -474,3 +474,40 @@ func TestExplainWithNoErrorLinesSaysTheServerFetchesItsOwn(t *testing.T) {
 		t.Fatalf("calls %v\n%s", f.Calls, tuitest.Frame(m))
 	}
 }
+
+// The done line says where the lines went from the provider, not from
+// whether redaction changed anything: a remote provider is never called
+// local.
+func TestExplainSaysWhereTheLinesWent(t *testing.T) {
+	for _, c := range []struct {
+		name, provider string
+		e              api.Explain
+		want, not      []string
+	}{
+		{"local", "ollama", api.Explain{Text: "x", SentExcerpt: []string{"a"}, Provider: "ollama", Local: true},
+			[]string{"kept on this machine", "unredacted", "ollama"}, []string{"to ollama, redacted"}},
+		{"remote with matches", "gemini", api.Explain{Text: "x", SentExcerpt: []string{"a"}, Provider: "gemini", Redacted: true},
+			[]string{"to gemini, redacted", "addresses and peer ids removed"}, []string{"local", "unredacted", "nothing matched"}},
+		{"remote without matches", "groq", api.Explain{Text: "x", SentExcerpt: []string{"a"}, Provider: "groq"},
+			[]string{"to groq, redacted (nothing matched)"}, []string{"local", "unredacted"}},
+		{"old server, remote", "groq", api.Explain{Text: "x", SentExcerpt: []string{"a"}},
+			[]string{"to groq, redacted (nothing matched)"}, []string{"local", "unredacted"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := tuitest.NewFake()
+			f.ExplainV = c.e
+			f.SettingsV = api.Settings{AIProvider: c.provider, AIDisclosure: "disclosure"}
+			fr := strings.Join(strings.Fields(tuitest.Frame(explain(t, logsHost(t, f)))), " ")
+			for _, w := range c.want {
+				if !strings.Contains(fr, w) {
+					t.Errorf("lacks %q:\n%s", w, fr)
+				}
+			}
+			for _, w := range c.not {
+				if strings.Contains(fr, w) {
+					t.Errorf("says %q:\n%s", w, fr)
+				}
+			}
+		})
+	}
+}
