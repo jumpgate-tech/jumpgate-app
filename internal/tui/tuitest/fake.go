@@ -235,6 +235,15 @@ func (f *Fake) Settings(context.Context) (api.Settings, error) {
 func (f *Fake) SaveSettings(_ context.Context, u api.SettingsUpdate) (api.Settings, error) {
 	f.mu.Lock()
 	f.LastUpdate = u
+	if f.Err["SaveSettings"] == nil { // a saved update shows in the next read, as on the server
+		if u.AIProvider != nil {
+			f.SettingsV.AIProvider = *u.AIProvider
+			f.SettingsV.AIDisclosure = ""
+		}
+		if u.AIKey != nil {
+			f.SettingsV.AIKeySet = *u.AIKey != ""
+		}
+	}
 	v := f.SettingsV
 	f.mu.Unlock()
 	return v, f.call("SaveSettings")

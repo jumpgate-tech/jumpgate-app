@@ -1,0 +1,24 @@
+ jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  5 Jobs  [6 Settings]  ? help
+ FLEET COLUMNS
+▸ [x] HOST
+  [x] LINK
+  [x] NET
+  [x] SYNC
+  [x] LAG
+  [x] PEERS
+  [x] DISK
+  [x] FW
+  [ ] EL
+  [ ] CL
+  [ ] JOBS
+  [ ] AGE
+  [ ] AGENT
+
+ HOST TABS
+  [x] Overview
+  [x] Storage
+  [x] Endpoints
+  [x] Security
+ ↑↓ move  space toggle  enter change  (saved at once)
+
+ box-a · agent · server live · jobs ⚑ –                                  5s ago

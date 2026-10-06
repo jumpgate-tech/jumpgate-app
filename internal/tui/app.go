@@ -63,8 +63,9 @@ type (
 	}
 	tickMsg  time.Time
 	prefsMsg struct {
-		p   api.UIPrefs
-		err error
+		p    api.UIPrefs
+		err  error
+		save bool // the reply to a save: p is what to go back to on err
 	}
 	fleetMsg struct {
 		u  apiclient.Update[api.Fleet]
@@ -135,6 +136,7 @@ func New(o Options) *App {
 	a.screens[scrGateways] = &gatewaysScreen{}
 	a.screens[scrHosts] = &hostsScreen{}
 	a.screens[scrSigners] = &signersScreen{}
+	a.screens[scrSettings] = &settingsScreen{}
 	if server, mine, differs := a.be.Skew(); differs {
 		server, mine = sanitizeLine(server), sanitizeLine(mine)
 		// Offer R only where it works; otherwise the banner still says why
@@ -230,7 +232,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(a.watchFleet(msg.ch), a.broadcast(msg))
 	case prefsMsg:
-		if msg.err != nil {
+		if msg.err != nil && msg.save {
+			a.setPrefs(msg.p) // the server refused: show what it still has
+			a.flash = "could not save the display setting: " + a.errText(msg.err)
+		} else if msg.err != nil {
 			a.flash = "could not read display settings: " + a.errText(msg.err)
 		} else {
 			a.setPrefs(msg.p)
@@ -293,6 +298,9 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 	switch {
 	case key.Matches(k, globalKeys.Help):
 		a.modal = newHelp(a)
+		return nil
+	case key.Matches(k, globalKeys.Palette):
+		a.modal = newPalette()
 		return nil
 	case key.Matches(k, globalKeys.Screens):
 		return a.openScreen(screenID(k.Code - '1'))

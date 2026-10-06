@@ -158,16 +158,21 @@ func (s *hostsScreen) key(a *App, k tea.KeyPressMsg) tea.Cmd {
 		s.startFlow(a, f)
 		return f.probe(a)
 	case key.Matches(k, hostsKeys.Remove) && sel != nil:
-		id := sel.ID
-		a.modal = newConfirm("remove "+id,
-			"This controller forgets "+id+" and its pairing. The box keeps running, and keeps this controller enrolled until it is revoked there.",
-			id, func() tea.Cmd {
-				return a.do("remove", func(ctx context.Context) tea.Msg {
-					return removedMsg{id: id, err: a.be.RemoveTarget(ctx, id)}
-				})
-			})
+		confirmRemove(a, sel.ID)
 	}
 	return nil
+}
+
+// confirmRemove asks for the box's name before forgetting it. The key and
+// the palette both come through here.
+func confirmRemove(a *App, id string) {
+	a.modal = newConfirm("remove "+id,
+		"This controller forgets "+id+" and its pairing. The box keeps running, and keeps this controller enrolled until it is revoked there.",
+		id, func() tea.Cmd {
+			return a.do("remove", func(ctx context.Context) tea.Msg {
+				return removedMsg{id: id, err: a.be.RemoveTarget(ctx, id)}
+			})
+		})
 }
 
 // localName is the box name for this machine: the host name cut down to what
