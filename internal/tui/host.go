@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -80,13 +81,23 @@ type hostScreen struct {
 	diskErr   error
 	measuring bool
 
-	eps    api.Endpoints
-	epsHas bool
-	epsErr error
-	gws    []api.GatewaySummary
-	fw     []api.CheckItem
-	fwHas  bool
-	fwErr  error
+	eps        api.Endpoints
+	epsHas     bool
+	epsErr     error
+	gws        []api.GatewaySummary
+	fw         []api.CheckItem
+	fwHas      bool
+	fwErr      error
+	logs       []api.LogHit // sanitized on arrival, at most logKeep
+	logsConn   apiclient.ConnState
+	logsErr    error
+	logsNote   string
+	logFilter  textinput.Model
+	logEditing bool
+	logMin     int  // 0 all, 1 warn and above, 2 error and above
+	follow     bool // keep the newest line in view
+	logBack    int  // lines scrolled back from the newest
+
 	scroll int // first visible line of the Endpoints or Security tab; clamped when drawn
 }
 
@@ -95,7 +106,7 @@ func (a *App) openHost(id string) tea.Cmd {
 	a.closeDetail()
 	ctx, cancel := context.WithCancel(a.ctx)
 	a.hostGen++
-	h := &hostScreen{id: id, gen: a.hostGen, ctx: ctx, cancel: cancel, loaded: map[string]bool{}}
+	h := &hostScreen{id: id, gen: a.hostGen, ctx: ctx, cancel: cancel, loaded: map[string]bool{}, follow: true, logFilter: newLogFilter()}
 	a.detail, a.sel = h, id
 	return tea.Batch(h.watchStatus(a.be.WatchStatus(ctx, id)), h.load(a, h.tabName(a)))
 }
@@ -151,6 +162,8 @@ func (h *hostScreen) load(a *App, tab string) tea.Cmd {
 			e, err := be.Endpoints(ctx, id)
 			return endpointsMsg{id: id, gen: gen, e: e, err: err}
 		}, loadGateways(a))
+	case "logs":
+		return h.watchLogs(be.WatchLogs(ctx, id, logBacklog))
 	case "security":
 		return func() tea.Msg {
 			items, err := be.Firewall(ctx, id)
@@ -160,7 +173,7 @@ func (h *hostScreen) load(a *App, tab string) tea.Cmd {
 	return nil
 }
 
-func (h *hostScreen) capturing() bool { return false }
+func (h *hostScreen) capturing() bool { return h.logEditing }
 
 func (h *hostScreen) keys() []key.Binding {
 	return []key.Binding{navKeys.Left, navKeys.Right, globalKeys.Back, hostKeys.Measure, hostKeys.Sidebar}
@@ -213,6 +226,28 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			h.fw, h.fwHas, h.fwErr = msg.items, true, nil
 		}
 		return nil
+	case logsMsg:
+		if msg.id != h.id || msg.gen != h.gen {
+			return nil
+		}
+		h.applyLogs(msg.u)
+		return h.watchLogs(msg.ch)
+	case disclosureMsg:
+		if msg.id != h.id || msg.gen != h.gen {
+			return nil
+		}
+		if m, ok := a.modal.(*explainModal); ok && m.h == h {
+			m.gotDisclosure(msg)
+		}
+		return nil
+	case explainMsg:
+		if msg.id != h.id || msg.gen != h.gen {
+			return nil
+		}
+		if m, ok := a.modal.(*explainModal); ok && m.h == h {
+			m.gotExplain(msg)
+		}
+		return nil
 	case gatewaysMsg:
 		if msg.err == nil {
 			h.gws = msg.gws
@@ -252,6 +287,8 @@ func (h *hostScreen) tabKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 			h.scroll++ // clamped against the content when drawn
 			return nil, true
 		}
+	case "logs":
+		return h.logsKey(a, k)
 	case "storage":
 		if key.Matches(k, hostKeys.Measure) {
 			if h.measuring {
@@ -270,7 +307,13 @@ func (h *hostScreen) tabKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 
 // tabUpdate hands other messages to the tabs that keep their own state
 // (later tasks: logs, services).
-func (h *hostScreen) tabUpdate(a *App, msg tea.Msg) tea.Cmd { return nil }
+func (h *hostScreen) tabUpdate(a *App, msg tea.Msg) tea.Cmd {
+	if p, ok := msg.(tea.PasteMsg); ok && h.logEditing {
+		// A paste is text, never escape sequences or line breaks.
+		h.logFilter, _ = h.logFilter.Update(tea.PasteMsg{Content: sanitizeLine(p.Content)})
+	}
+	return nil
+}
 
 func (h *hostScreen) view(a *App, w, hgt int) string {
 	head := " " + a.th.Title.Render(sanitizeLine(h.id))
@@ -307,6 +350,8 @@ func (h *hostScreen) body(a *App, w, hgt int) string {
 		return h.viewEndpoints(a, w, hgt)
 	case "security":
 		return h.viewSecurity(a, w, hgt)
+	case "logs":
+		return h.viewLogs(a, w, hgt)
 	}
 	title, ok := tabTitles[h.tabName(a)]
 	if !ok {

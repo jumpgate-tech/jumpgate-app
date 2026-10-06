@@ -29,7 +29,7 @@ var testNow = time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 // the same on every OS and terminal.
 func newTestApp(t *testing.T, f *tuitest.Fake, w, h int, glyphs string) *App {
 	t.Helper()
-	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" }, Hostname: "laptop", Now: func() time.Time { return testNow }})
+	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" }, Hostname: "laptop", Now: func() time.Time { return testNow }, Location: time.UTC})
 	t.Cleanup(a.cancel)
 	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: w, Height: h}, prefsMsg{p: api.UIPrefs{Glyphs: glyphs, ShowEstimates: true}})
 	return m.(*App)

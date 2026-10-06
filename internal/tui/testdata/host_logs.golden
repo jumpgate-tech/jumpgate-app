@@ -1,0 +1,24 @@
+ jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  5 Jobs  6 Settings    ? help
+ box
+ Overview  Storage  Endpoints  Security  [Logs]  Services
+ LOGS live 4 lines · all levels · follow on
+ 12:00:01 exec         Imported new chain segment number=21345678
+ 12:00:02 beacon WARN  Low peer count peers=3
+ 12:00:03 exec   ERROR peer 203.0.113.7 disconnected: too many peers
+ 12:00:04 beacon CRIT  Database corrupted
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ / filter  ! level  f follow  ·  ↑↓ scroll  e explain
+ box · server connecting · jobs ⚑ –

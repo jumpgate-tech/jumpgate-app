@@ -61,4 +61,6 @@ type Options struct {
 	Getenv   func(string) string // nil: os.Getenv
 	Hostname string              // the default name when pairing this machine
 	Now      func() time.Time    // nil: time.Now
+	// Location is the zone log times are shown in; nil: time.Local.
+	Location *time.Location
 }

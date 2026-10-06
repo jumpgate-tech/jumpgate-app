@@ -84,6 +84,7 @@ type App struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	now    func() time.Time
+	loc    *time.Location // the zone log times are shown in
 
 	w, h  int
 	th    Theme
@@ -120,8 +121,11 @@ func New(o Options) *App {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	if o.Location == nil {
+		o.Location = time.Local
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{o: o, be: o.Backend, ctx: ctx, cancel: cancel, now: o.Now, th: NewTheme(), prefs: api.DefaultPrefs(), conn: apiclient.Connecting}
+	a := &App{o: o, loc: o.Location, be: o.Backend, ctx: ctx, cancel: cancel, now: o.Now, th: NewTheme(), prefs: api.DefaultPrefs(), conn: apiclient.Connecting}
 	a.gl = DetectGlyphs(a.prefs.Glyphs, o.GOOS, o.Getenv)
 	for i := range a.screens {
 		a.screens[i] = comingScreen{name: screenNames[i]}
