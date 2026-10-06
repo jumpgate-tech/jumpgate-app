@@ -16,6 +16,16 @@
 # USERPROFILE, HOME, APPDATA and LOCALAPPDATA point at a fresh per-run directory;
 # GOPATH (module cache) and GOCACHE are shared under C:\jg so reruns are fast.
 # Exit status: 0 only if both go vet and go test pass.
+#
+# JUMPGATE_TEST_WIN_AGENT=1 also enables the OpenSSH agent tests. Win32-OpenSSH's
+# ssh-agent cannot ssh-add keys from a pubkey SSH logon (DPAPI needs a
+# password-based logon session), so with this flag run.cmd executes inside a
+# one-shot scheduled task running as Administrator with the stored password.
+# The host pipes ~/vms/jumpgate-win/admin-password to the VM over ssh STDIN only;
+# PowerShell reads it into a variable, registers the task, waits, collects the
+# log and exit code, and deletes the task. The password never reaches disk or
+# any argv. NEVER change the Administrator password to make this work; the
+# stored one is the only one.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,6 +71,7 @@ set LOCALAPPDATA=%RUN%\\home\\AppData\\Local
 set GOPATH=C:\\jg\\gopath
 set GOCACHE=C:\\jg\\gocache
 set GOFLAGS=-buildvcs=false
+$([ "${JUMPGATE_TEST_WIN_AGENT:-0}" = 1 ] && echo 'set JUMPGATE_TEST_WIN_AGENT=1')
 mkdir "%APPDATA%" "%LOCALAPPDATA%" "%RUN%\\src" 2>nul
 tar.exe -xzf "%RUN%\\src.tgz" -C "%RUN%\\src" || exit /b 3
 cd /d "%RUN%\\src"
@@ -84,7 +95,55 @@ EOF
 "$vm" ssh "New-Item -ItemType Directory -Force C:\\jg\\runs\\$run | Out-Null" </dev/null
 "$vm" scp "$tmp/src.tgz" "$tmp/run.cmd" "Administrator@127.0.0.1:C:/jg/runs/$run/"
 rc=0
-"$vm" ssh "cmd.exe /c C:\\jg\\runs\\$run\\run.cmd; exit \$LASTEXITCODE" </dev/null || rc=$?
+if [ "${JUMPGATE_TEST_WIN_AGENT:-0}" = 1 ]; then
+  pwfile="${JUMPGATE_WIN_VM_DIR:-$HOME/vms/jumpgate-win}/admin-password"
+  [ -r "$pwfile" ] || { echo "[test-windows-vm] missing $pwfile" >&2; exit 1; }
+  # The PowerShell below holds no secret; the password arrives on stdin.
+  cat >"$tmp/agent.ps1.in" <<'PS'
+$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'
+$pw = [Console]::In.ReadLine()
+$dir = 'C:\jg\runs\@RUN@'
+$name = 'jg-run-@RUN@'
+$log = "$dir\out.log"; $rcf = "$dir\rc.txt"
+$inner = '& cmd.exe /c "' + "$dir\run.cmd >$log 2>&1" + '"; ' + '$LASTEXITCODE' + " | Out-File -Encoding ascii '$rcf'"
+$enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
+$act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -EncodedCommand $enc"
+$rc = 1; $off = 0
+try {
+  Register-ScheduledTask -TaskName $name -Action $act -User "$env:COMPUTERNAME\Administrator" -Password $pw -RunLevel Highest -Force | Out-Null
+  $pw = $null
+  Start-ScheduledTask -TaskName $name
+  $t0 = Get-Date
+  while ($true) {
+    Start-Sleep -Seconds 2
+    if (Test-Path $log) {
+      try {
+        $fs = [IO.File]::Open($log, 'Open', 'Read', 'ReadWrite,Delete')
+        $len = $fs.Length
+        if ($len -gt $off) {
+          [void]$fs.Seek($off, 'Begin')
+          $buf = New-Object byte[] ($len - $off)
+          $n = $fs.Read($buf, 0, $buf.Length); $off += $n
+          [Console]::Out.Write([Text.Encoding]::Default.GetString($buf, 0, $n))
+        }
+        $fs.Close()
+      } catch {}
+    }
+    if (Test-Path $rcf) { Start-Sleep -Seconds 1; break }
+    if ((Get-ScheduledTask -TaskName $name).State -ne 'Running' -and ((Get-Date) - $t0).TotalSeconds -gt 60) { Write-Output 'task ended without an exit code'; break }
+  }
+  if (Test-Path $rcf) { $rc = [int](Get-Content $rcf -Raw).Trim() }
+} finally {
+  $pw = $null
+  Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
+}
+exit $rc
+PS
+  enc="$(sed "s/@RUN@/$run/g" "$tmp/agent.ps1.in" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
+  "$vm" ssh "powershell.exe -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $enc" <"$pwfile" || rc=$?
+else
+  "$vm" ssh "cmd.exe /c C:\\jg\\runs\\$run\\run.cmd; exit \$LASTEXITCODE" </dev/null || rc=$?
+fi
 if [ "${KEEP_RUN:-0}" != 1 ]; then
   "$vm" ssh "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue C:\\jg\\runs\\$run" </dev/null || true
 fi
