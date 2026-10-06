@@ -63,7 +63,7 @@ func CheckSSHArgv(argv []string) error {
 		if err != nil {
 			return err
 		}
-		if err := checkSSHPath(path); err != nil || strings.ContainsAny(path, " \t\"'") {
+		if err := checkSSHPath(path); err != nil || strings.ContainsAny(path, "\"'") {
 			return errors.New("key path: not a plain path")
 		}
 	}

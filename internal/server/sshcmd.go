@@ -47,8 +47,8 @@ func sshArgv(t config.Target, knownHosts []string) ([]string, error) {
 		if err := checkPath(c.KeyPath); err != nil {
 			return nil, fmt.Errorf("ssh key path: %w", err)
 		}
-		if strings.ContainsAny(c.KeyPath, " \t\"'") {
-			return nil, errors.New("ssh key path: contains whitespace or a quote")
+		if strings.ContainsAny(c.KeyPath, "\"'") {
+			return nil, errors.New("ssh key path: contains a quote")
 		}
 		argv = append(argv, "-i", c.KeyPath)
 	}

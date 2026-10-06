@@ -152,7 +152,7 @@ func TestSSHArgvPassesTheClientScreen(t *testing.T) {
 }
 
 func TestSSHArgvRefusesExpandingAndQuotedPaths(t *testing.T) {
-	for _, kp := range []string{"/k/${HOME}/id", "~/id", "/k/$X", "/k/my id", `/k/"id`} {
+	for _, kp := range []string{"/k/${HOME}/id", "~/id", "/k/$X", `/k/"id`, "/k/it's"} {
 		tg := sshTarget("10.0.0.5", "root", nil)
 		tg.SSH.KeyPath = kp
 		if _, err := sshArgv(tg, []string{"/h/c"}); err == nil {
@@ -163,5 +163,20 @@ func TestSSHArgvRefusesExpandingAndQuotedPaths(t *testing.T) {
 		if _, err := sshArgv(sshTarget("10.0.0.5", "root", nil), []string{kh}); err == nil {
 			t.Errorf("known_hosts %q accepted", kh)
 		}
+	}
+}
+
+func TestSSHArgvKeyPathWithSpacesIsBare(t *testing.T) {
+	tg := sshTarget("10.0.0.5", "root", nil)
+	tg.SSH.KeyPath = `C:\Users\John Smith\.ssh\id_ed25519`
+	argv, err := sshArgv(tg, []string{"/h/c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argv[3] != "-i" || argv[4] != tg.SSH.KeyPath {
+		t.Fatalf("argv %q", argv)
+	}
+	if err := api.CheckSSHArgv(argv); err != nil {
+		t.Fatal(err)
 	}
 }

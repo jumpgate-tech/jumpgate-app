@@ -25,6 +25,20 @@ func TestCheckSSHArgvAcceptsTheServersShape(t *testing.T) {
 	}
 }
 
+func TestCheckSSHArgvAllowsSpacesInTheKeyPath(t *testing.T) {
+	a := goodArgv()
+	a[4] = `C:\Users\John Smith\.ssh\id_ed25519`
+	if err := CheckSSHArgv(a); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"C:\\Users\\\"John Smith\"\\id", "/k/it's", "/k/a\tb"} {
+		a[4] = bad
+		if err := CheckSSHArgv(a); err == nil {
+			t.Errorf("%q passed", bad)
+		}
+	}
+}
+
 func TestCheckSSHArgvRefusesEverythingElse(t *testing.T) {
 	mut := func(f func(a []string) []string) []string { return f(goodArgv()) }
 	replace := func(i int, v string) []string { return mut(func(a []string) []string { a[i] = v; return a }) }
@@ -77,7 +91,6 @@ func TestCheckSSHArgvRefusesEverythingElse(t *testing.T) {
 		"kh bare quote":   replace(8, `UserKnownHostsFile=a"b`),
 		"key dollar":      replace(4, "/k/${HOME}"),
 		"key tilde":       replace(4, "~/id"),
-		"key space":       replace(4, "/k/my id"),
 		"key quote":       replace(4, `/k/"id`),
 		"newline":         replace(16, "a\nb"),
 		"nul":             replace(18, "h\x00"),
