@@ -1,0 +1,2 @@
+# Golden TUI frames compare byte for byte on every OS.
+*.golden text eol=lf
