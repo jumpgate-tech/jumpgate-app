@@ -31,7 +31,7 @@ func newTestApp(t *testing.T, f *tuitest.Fake, w, h int, glyphs string) *App {
 	t.Helper()
 	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" }, Hostname: "laptop", Now: func() time.Time { return testNow }})
 	t.Cleanup(a.cancel)
-	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: w, Height: h}, prefsMsg{p: api.UIPrefs{Glyphs: glyphs}})
+	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: w, Height: h}, prefsMsg{p: api.UIPrefs{Glyphs: glyphs, ShowEstimates: true}})
 	return m.(*App)
 }
 

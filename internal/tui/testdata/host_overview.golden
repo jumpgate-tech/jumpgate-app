@@ -1,0 +1,24 @@
+ jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  5 Jobs  6 Settings    ? help
+ box
+ [Overview]  Storage  Endpoints  Security  Logs  Services
+
+ EXECUTION                            BEACON
+ state   synced                       state     synced
+ head    21,345,678                   slot      9,876,543
+ peers   48                           peers     72
+ lag     0 blocks                     distance  0
+
+ overall synced · read 3s ago · disk 61% used
+
+
+
+
+
+
+
+
+
+
+
+
+ box · server connecting · jobs ⚑ –

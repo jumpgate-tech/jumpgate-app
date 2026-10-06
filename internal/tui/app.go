@@ -102,6 +102,7 @@ type App struct {
 	flash   string
 	skew    string
 	sel     string // the box the status bar names
+	sidebar bool   // the host list beside an open host, below the width that shows it anyway
 }
 
 // New builds the root model.
@@ -200,7 +201,8 @@ func (a *App) current() screen {
 
 // openScreen shows a top-level screen and tells it so.
 func (a *App) openScreen(id screenID) tea.Cmd {
-	a.detail, a.active = nil, id
+	a.closeDetail()
+	a.active = id
 	return a.screens[id].update(a, enterMsg{})
 }
 
@@ -352,6 +354,9 @@ func (a *App) render() string {
 	}
 	if a.modal != nil {
 		body += fit(a.modal.view(a, a.w, bodyH), a.w, bodyH, a.gl.Ellipsis)
+	} else if a.detail != nil && (a.w >= 100 || a.sidebar) {
+		main := fit(a.current().view(a, a.w-19, bodyH), a.w-19, bodyH, a.gl.Ellipsis)
+		body += lipgloss.JoinHorizontal(lipgloss.Top, a.sidebarView(bodyH), " ", main)
 	} else {
 		body += fit(a.current().view(a, a.w, bodyH), a.w, bodyH, a.gl.Ellipsis)
 	}
