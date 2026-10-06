@@ -36,6 +36,11 @@ func (h *hostScreen) viewEndpoints(a *App, w, hgt int) string {
 		return "\n " + a.th.Dim.Render("probing the endpoints"+a.gl.Ellipsis)
 	}
 	e := h.eps
+	var lines []string
+	if h.epsErr != nil {
+		// A later probe failed: keep the last good reading, said to be old.
+		lines = append(lines, " "+a.th.Warn.Render("last probe failed, showing the previous reading: "+a.errText(h.epsErr)))
+	}
 	chain := a.th.Warn.Render("chain id does not match")
 	if e.ChainIDMatches {
 		chain = "chain id matches"
@@ -49,7 +54,7 @@ func (h *hostScreen) viewEndpoints(a *App, w, hgt int) string {
 		}
 		return []string{" " + label + "  " + pad(u, 26) + " " + verdict}
 	}
-	lines := []string{" " + a.th.Title.Render("RPC ENDPOINTS")}
+	lines = append(lines, " "+a.th.Title.Render("RPC ENDPOINTS"))
 	lines = append(lines, endpoint("exec  ", e.ExecHTTP, reach(a, e.ExecReachable)+" "+a.gl.Sep+" "+chain)...)
 	lines = append(lines, endpoint("beacon", e.BeaconHTTP, reach(a, e.BeaconReachable))...)
 	if e.Access == "ssh" && e.TunnelHint != "" {

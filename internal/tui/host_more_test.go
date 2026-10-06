@@ -91,13 +91,13 @@ func TestMaskURL(t *testing.T) {
 		"https://eth-mainnet.g.alchemy.com/v2/Ab3_dEf-Gh1jKlMnOpQrStUv": "https://eth-mainnet.g.alchemy.com/v2/***",
 		"https://rpc.example.org/api/key/short":                         "https://rpc.example.org/api/key/***",
 		"https://rpc.example.org/369?apikey=abc&chain=1#frag":           "https://rpc.example.org/369?apikey=***&chain=***#***",
-		"https://rpc.example.org/execution-layer-endpoint-name":         "https://rpc.example.org/execution-layer-endpoint-name",
+		"https://rpc.example.org/execution-layer-endpoint-name":         "https://rpc.example.org/***",
 	} {
 		if got := maskURL(in); got != want {
 			t.Errorf("maskURL(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if got := maskText("see https://u:pw@h/p?k=v now"); got != "see https://u:***@h/p?k=*** now" {
+	if got := maskText("see https://u:pw@h/p?k=v now"); got != "see https://***@h/p?k=*** now" {
 		t.Errorf("maskText = %q", got)
 	}
 }
@@ -213,5 +213,24 @@ func TestScrollClampsWhenDataShrinksAndOnResize(t *testing.T) {
 	m, _ = tuitest.Send(m, gatewaysMsg{gws: f.GatewaysV[:1]})
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "rpc.example.org") {
 		t.Fatalf("shrunk gateways show nothing:\n%s", fr)
+	}
+}
+
+func TestEndpointsErrorAfterASuccessIsShownWithTheLastGoodData(t *testing.T) {
+	f := tuitest.NewFake()
+	f.EndpointsV["box"] = api.Endpoints{ExecHTTP: "http://127.0.0.1:8545", ExecReachable: true}
+	f.FirewallV["box"] = []api.CheckItem{{Title: "P2P port open", Status: "pass"}}
+	a := tab(t, openTestHost(t, f, "unicode"), 2)
+	h := a.detail.(*hostScreen)
+	m, _ := tuitest.Send(a, endpointsMsg{id: "box", gen: h.gen, err: &api.Error{Message: "probe timed out"}})
+	fr := tuitest.Frame(m)
+	if !strings.Contains(fr, "http://127.0.0.1:8545") || !strings.Contains(fr, "probe timed out") {
+		t.Fatalf("an endpoints error after a success is hidden or drops the data:\n%s", fr)
+	}
+	m = tab(t, m.(*App), 1)
+	m, _ = tuitest.Send(m, firewallMsg{id: "box", gen: h.gen, err: &api.Error{Message: "ssh dropped"}})
+	fr = tuitest.Frame(m)
+	if !strings.Contains(fr, "P2P port open") || !strings.Contains(fr, "ssh dropped") {
+		t.Fatalf("a firewall error after a success is hidden or drops the data:\n%s", fr)
 	}
 }

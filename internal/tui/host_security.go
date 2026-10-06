@@ -29,6 +29,9 @@ func (h *hostScreen) viewSecurity(a *App, w, hgt int) string {
 		return "\n " + a.th.Dim.Render("running the checklist"+a.gl.Ellipsis)
 	}
 	var lines []string
+	if h.fwErr != nil {
+		lines = append(lines, " "+a.th.Warn.Render("last check failed, showing the previous result: "+a.errText(h.fwErr)))
+	}
 	toFix := 0
 	for _, c := range h.fw {
 		lines = append(lines, " "+checkWord(a, c)+" "+sanitizeLine(c.Title))
