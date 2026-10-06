@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -609,6 +610,9 @@ func (e *trustExecutor) ran(sub string) bool {
 // gateway's own machine, against THIS gateway's exported internal root — the
 // derived rootCAPath — and report structured success.
 func TestGatewayTrustCert_InstallsTheGatewaysOwnInternalRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a Windows controller never runs the install itself; TestGatewayTrustCert_WindowsHandsBackTheElevatedCommand covers it")
+	}
 	root := issueLeaf(t, "root", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
 	var ex *trustExecutor
 	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) {
@@ -643,6 +647,46 @@ func TestGatewayTrustCert_InstallsTheGatewaysOwnInternalRoot(t *testing.T) {
 	// And it ran on the machine the gateway is placed on.
 	if ex == nil || !ex.ran("caddy-root.crt") {
 		t.Error("no trust command reached the gateway's machine")
+	}
+}
+
+// On a Windows controller the trust install needs an elevated prompt and
+// there is no shell to run certutil through, so the command comes back to
+// run by hand, naming "Run as administrator", even when id -u would say root.
+func TestGatewayTrustCert_WindowsHandsBackTheElevatedCommand(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the local target's OS is this machine's; the Windows branch needs a Windows host")
+	}
+	root := issueLeaf(t, "root", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	var ex *trustExecutor
+	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) {
+		if ex == nil {
+			ex = &trustExecutor{scriptedExecutor: fleetExecutor("true|0|img|sha256:abc\n"), cert: root}
+			// The home a Windows controller reports, ahead of the fleet's POSIX one.
+			ex.scripts = append([]struct {
+				substr string
+				res    executor.Result
+			}{{`"$HOME"`, executor.Result{Stdout: `C:\Users\ops` + "\n"}}}, ex.scripts...)
+			ex.script("id -u", executor.Result{Stdout: "0\n"})
+		}
+		return ex, nil
+	})
+	addTarget(t, a)
+	addGateway(t, a, "default", "local", internalTLSGateway(4100))
+
+	res := a.do(t, "POST", "/api/gateways/default/trust-cert", nil)
+	body := decode[trustCertResult](t, res)
+	if res.StatusCode != http.StatusOK || body.OK {
+		t.Fatalf("got %d %+v, want 200 with the command handed back", res.StatusCode, body)
+	}
+	if !strings.Contains(body.RanCommand, "certutil -addstore -f ROOT") || !strings.Contains(body.RanCommand, "caddy-root.crt") {
+		t.Errorf("command %q, want certutil on the gateway's own root", body.RanCommand)
+	}
+	if !strings.Contains(body.Message, "Run as administrator") {
+		t.Errorf("message %q, want the elevated-prompt instruction", body.Message)
+	}
+	if ex.ran("certutil") {
+		t.Error("certutil was run; Windows must only hand it back")
 	}
 }
 
