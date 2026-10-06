@@ -60,6 +60,12 @@ func pairedBox(t *testing.T, ex executor.Executor, setUp bool) (*httptest.Server
 
 func pairedBoxWith(t *testing.T, ex executor.Executor, o pairedOpts) (*httptest.Server, string) {
 	t.Helper()
+	// The agent persists replay and policy records (fsyncing directories) and
+	// refuses every peer outside Linux and macOS, as newRig in internal/agent
+	// does: skip explicitly rather than pass without running.
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("the agent cannot run on " + runtime.GOOS)
+	}
 	home := shortTempDir(t, "jgn")
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -72,8 +78,12 @@ func pairedBoxWith(t *testing.T, ex executor.Executor, o pairedOpts) (*httptest.
 	agentKey, _ := signer.GenerateKey()
 	controller, _ := signer.GenerateKey()
 	p := agent.Policy{Signers: []agent.SignerEntry{{Address: controller.Address().Hex(), Tier: agent.TierRoutine}}}
-	_ = p.Save(filepath.Join(home, "policy.json"))
-	_ = agent.InitReplay(filepath.Join(home, "replay.json"))
+	if err := p.Save(filepath.Join(home, "policy.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.InitReplay(filepath.Join(home, "replay.json")); err != nil {
+		t.Fatal(err)
+	}
 	a := agent.New(agent.Config{Key: agentKey, Exec: ex, PolicyPath: filepath.Join(home, "policy.json"),
 		ReplayPath: filepath.Join(home, "replay.json"), NodePath: filepath.Join(home, "node.json")})
 	sock := filepath.Join(home, "a.sock")

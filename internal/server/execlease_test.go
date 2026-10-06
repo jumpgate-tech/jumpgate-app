@@ -203,6 +203,12 @@ func TestLeaseKeepsTheExecutorsOptionalInterfaces(t *testing.T) {
 	if _, err := executor.Exec(context.Background(), l, executor.Command{Argv: []string{"docker", "--version"}, Shell: "command -v docker"}, nil); err != nil {
 		t.Errorf("argv through the lease: %v", err)
 	}
+	if got := fake.Argvs(); len(got) != 1 || len(got[0]) != 2 || got[0][0] != "docker" {
+		t.Errorf("Exec through the lease ran argv %v, want exactly the docker argv", got)
+	}
+	if calls := fake.ShellCalls(); len(calls) != 0 {
+		t.Errorf("Exec through the lease used the shell: %v", calls)
+	}
 
 	plain := lease(&autoSucceedExecutor{})
 	if _, ok := plain.(executor.ArgvRunner); ok {
@@ -213,5 +219,61 @@ func TestLeaseKeepsTheExecutorsOptionalInterfaces(t *testing.T) {
 	}
 	if err := executor.RequireShell(plain); err != nil {
 		t.Errorf("a leased shell executor fails RequireShell: %v", err)
+	}
+}
+
+// A retired lease refuses the argv path as it refuses the shell one: a closed
+// or evicted connection is never used by RunArgv, and Exec on it does not
+// fall back to a shell either.
+func TestRetiredLeaseRefusesRunArgv(t *testing.T) {
+	fake := argvfake.New()
+	l := lease(fake)
+	argv := l.(executor.ArgvRunner)
+	if _, err := argv.RunArgv(context.Background(), []string{"docker", "ps"}, nil); err != nil {
+		t.Fatalf("RunArgv before retirement: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := len(fake.Argvs())
+	_, err := argv.RunArgv(context.Background(), []string{"docker", "ps"}, nil)
+	if err == nil {
+		t.Fatal("RunArgv on a closed lease succeeded")
+	}
+	if _, e := apiErrorFor(err); e.Code != api.CodeUnreachable {
+		t.Fatalf("RunArgv on a closed lease: %v (%s), want unreachable", err, e.Code)
+	}
+	if _, err := executor.Exec(context.Background(), l, executor.Command{Argv: []string{"docker", "ps"}, Shell: "docker ps"}, nil); err == nil {
+		t.Error("Exec on a closed lease succeeded")
+	}
+	if len(fake.Argvs()) != before || len(fake.ShellCalls()) != 0 {
+		t.Errorf("a retired lease reached the executor: argv %v, shell %v", fake.Argvs(), fake.ShellCalls())
+	}
+}
+
+// Eviction retires the cached executor the same way: the stale lease's
+// RunArgv is refused.
+func TestEvictedLeaseRefusesRunArgv(t *testing.T) {
+	fake := argvfake.New()
+	fleetHome(t)
+	s := New(Config{Token: NewSessionToken(), UI: fstest.MapFS{},
+		NewExecutor: func(config.Target) (executor.Executor, error) { return fake, nil }})
+	tg := config.Target{ID: "a", Mode: "ssh", SSH: &executor.SSHConfig{Host: "a", User: "u"}, Wire: wired}
+	s.reg.get("a").tryBeginDiag(time.Now(), false)
+	t.Cleanup(func() { s.reg.remove("a") })
+	ex, err := s.getExecutor(tg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv, ok := ex.(executor.ArgvRunner)
+	if !ok {
+		t.Fatal("the registry's executor lost RunArgv")
+	}
+	s.reg.evictExecutor("a", ex)
+	if _, err := argv.RunArgv(context.Background(), []string{"docker", "ps"}, nil); err == nil {
+		t.Fatal("RunArgv on an evicted executor succeeded")
+	}
+	if len(fake.Argvs()) != 0 {
+		t.Errorf("an evicted executor ran %v", fake.Argvs())
 	}
 }
