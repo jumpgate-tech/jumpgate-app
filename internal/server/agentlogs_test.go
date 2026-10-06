@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -277,5 +280,122 @@ func TestFollowerStopsWhenTheBoxIsUnpaired(t *testing.T) {
 	time.Sleep(10 * agentLogsFollowInterval)
 	if j.calls.Load() != n || legacy.n.Load() != 0 {
 		t.Fatalf("after unpairing: agent calls %d -> %d, legacy executor opened %d times", n, j.calls.Load(), legacy.n.Load())
+	}
+}
+
+// staleCursorJournal answers a fresh read with history and fails every read
+// after a cursor, as journalctl does with a cursor from another journal (a
+// box re-paired onto a reinstalled system, a cursor that no longer seeks).
+type staleCursorJournal struct {
+	nopExec
+	fresh atomic.Int32
+}
+
+func (j *staleCursorJournal) Run(_ context.Context, cmd string, _ *executor.RunOpts) (executor.Result, error) {
+	if !strings.Contains(cmd, "-o json") {
+		return executor.Result{}, nil
+	}
+	if strings.Contains(cmd, "--after-cursor") {
+		return executor.Result{}, errors.New("Failed to seek to cursor: Invalid argument")
+	}
+	j.fresh.Add(1)
+	return executor.Result{Stdout: journalJSON("s=1", "one") + journalJSON("s=2", "two")}, nil
+}
+
+// After logsCursorRetries polls in a row fail after a cursor, the follower
+// drops the cursor and starts again from the newest lines: one coded error
+// says so, and a backlog viewer gets a fresh reset rather than the history
+// again as live lines.
+func TestFollowerDropsACursorThatKeepsFailing(t *testing.T) {
+	requireAgentPeer(t)
+	fastFollow(t)
+	j := &staleCursorJournal{}
+	ts, token := pairedBox(t, j, true)
+	r, stop := openSSE(t, &apiTestServer{ts: ts, token: token}, "/api/targets/box/logs/stream?backlog=5")
+	defer stop()
+	var frames []string
+	var cur strings.Builder
+	sawRestart := false
+	ok := readLines(r, 5*time.Second, func(l string) bool {
+		if l != "\n" {
+			cur.WriteString(l)
+			return false
+		}
+		f := cur.String()
+		cur.Reset()
+		if strings.HasPrefix(f, ": ") {
+			return false
+		}
+		frames = append(frames, f)
+		if strings.HasPrefix(f, "event: error\n") && strings.Contains(f, "newest lines") {
+			sawRestart = true
+			return false
+		}
+		return sawRestart && strings.HasPrefix(f, "event: reset\n")
+	})
+	if !ok {
+		t.Fatalf("frames %q", frames)
+	}
+	errs, restarts := 0, 0
+	for _, f := range frames {
+		switch {
+		case strings.Contains(f, "newest lines"):
+			restarts++
+			if !strings.Contains(f, `"code":"agent_failed"`) {
+				t.Errorf("restart error is not coded: %q", f)
+			}
+		case strings.HasPrefix(f, "event: error\n"):
+			errs++
+		case !strings.HasPrefix(f, "event: reset\n"):
+			t.Errorf("unexpected frame %q (history sent as live lines?)", f)
+		}
+	}
+	last := frames[len(frames)-1]
+	if restarts != 1 || errs != logsCursorRetries-1 || !strings.Contains(last, `"line":"two"`) || j.fresh.Load() < 2 {
+		t.Fatalf("%d restarts, %d errors, %d fresh reads; frames %q", restarts, errs, j.fresh.Load(), frames)
+	}
+}
+
+// A config the server cannot read stops the follower rather than leaving it
+// asking a target it can no longer confirm: the stream ends on a coded error.
+func TestFollowerStopsWhenTheConfigCannotBeRead(t *testing.T) {
+	requireAgentPeer(t)
+	fastFollow(t)
+	j := &cursorJournal{}
+	ts, token := pairedBox(t, j, true)
+	r, stop := openSSE(t, &apiTestServer{ts: ts, token: token}, "/api/targets/box/logs/stream?backlog=0")
+	defer stop()
+	if !readLines(r, 5*time.Second, func(l string) bool { return strings.Contains(l, `"three"`) }) {
+		t.Fatal("no live line")
+	}
+	home, _ := os.UserHomeDir()
+	if err := os.WriteFile(filepath.Join(home, ".jumpgate", "config.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		for {
+			l, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			lines = append(lines, l)
+		}
+	}()
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream outlived an unreadable config")
+	}
+	all := strings.Join(lines, "")
+	if !strings.Contains(all, "event: error\n") || !strings.Contains(all, `"code":"internal"`) || !strings.Contains(all, "config") {
+		t.Fatalf("stream ended without a coded error: %q", all)
+	}
+	n := j.settledCalls()
+	time.Sleep(10 * agentLogsFollowInterval)
+	if j.calls.Load() != n {
+		t.Fatalf("still polling after the config broke: %d -> %d", n, j.calls.Load())
 	}
 }

@@ -101,6 +101,12 @@ func readJournalJSON(out string) []journalEntry {
 			}
 			msg = string(bs)
 		}
+		// UNIT is not a trusted field: any process logging to the journal
+		// may set it. It can only relabel a line between the node's own
+		// units, since journalctl -u admitted the line by a trusted field
+		// (or by UNIT from pid 1), so it is taken as a label and nothing
+		// more. Taking it only when _SYSTEMD_UNIT is init.scope would close
+		// even that (review M3, left as is).
 		unit := e.Unit
 		if e.ForUnit != "" {
 			unit = e.ForUnit

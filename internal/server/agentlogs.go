@@ -27,14 +27,18 @@ var (
 const (
 	logRingSize = 1000
 	logsSinceN  = 500
-	noteUpgrade = "snapshot mode: this agent cannot follow logs; re-pair the box to upgrade it"
+	// logsCursorRetries is how many polls in a row may fail after a cursor
+	// before the follower drops it and reads the newest lines again.
+	logsCursorRetries = 3
+	noteUpgrade       = "snapshot mode: this agent cannot follow logs; re-pair the box to upgrade it"
 )
 
-// logEvent is one thing a follower publishes: a line, or the error that the
-// last poll ended in (the follower keeps polling).
+// logEvent is one thing a follower publishes: a line, the error that the
+// last poll ended in (the follower keeps polling), or a restart.
 type logEvent struct {
-	hit *logwatch.Hit
-	err *api.Error
+	hit   *logwatch.Hit
+	err   *api.Error
+	reset bool // the ring was refilled from the newest lines; backlog viewers resend it
 }
 
 // logSub is one viewer's subscription. dropped is set, under the follower's
@@ -60,7 +64,10 @@ type logFollower struct {
 	cursor      string
 	lastErr     *api.Error // the last poll's error; nil after a good poll
 	isReady     bool
-	unsupported bool // the agent predates logs.since
+	unsupported bool       // the agent predates logs.since
+	fatal       *api.Error // why the follower stopped, for its viewers; nil when it simply ended
+	cursorFails int        // polls in a row the agent refused or failed after a cursor
+	restarting  bool       // the cursor was dropped; the next good poll refills the ring
 	stopped     bool
 	lingerT     *time.Timer
 }
@@ -149,6 +156,20 @@ func (f *logFollower) isStopped() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.stopped
+}
+
+// stopErr is the error the follower stopped on, if it stopped on one.
+func (f *logFollower) stopErr() *api.Error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fatal
+}
+
+// tail is the newest n lines, for a backlog viewer's reset after a restart.
+func (f *logFollower) tail(n int) []logwatch.Hit {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tailLocked(n)
 }
 
 func (f *logFollower) isUnsupported() bool {
@@ -259,13 +280,21 @@ func (s *Server) followLogs(ctx context.Context, cfg config.Config, t config.Tar
 	defer tick.Stop()
 	for first := true; ; first = false {
 		if !first {
-			if c, err := s.loadConfig(); err == nil {
-				nt, ok := findTarget(c, t.ID)
-				if !ok || nt.Agent == nil {
-					return
-				}
-				cfg, t = c, nt
+			c, err := s.loadConfig()
+			if err != nil {
+				// Without the config the server cannot tell whether this is
+				// still a paired box, or at which address: stop rather than
+				// keep asking the target as it was.
+				f.mu.Lock()
+				f.fatal = &api.Error{Message: "jumpgate could not read its config, so it stopped following this box's logs: " + err.Error(), Code: api.CodeInternal}
+				f.mu.Unlock()
+				return
 			}
+			nt, ok := findTarget(c, t.ID)
+			if !ok || nt.Agent == nil {
+				return
+			}
+			cfg, t = c, nt
 		}
 		f.mu.Lock()
 		cursor := f.cursor
@@ -350,9 +379,37 @@ func (f *logFollower) apply(res logsSinceResult, err error) bool {
 		f.unsupported = true
 		return true
 	case err != nil:
-		f.failLocked(err)
+		// Only an answer from the agent counts against the cursor: a refusal
+		// or a failed journalctl is what a cursor from another journal (a box
+		// re-paired onto a reinstalled system) or a bogus one produces, while
+		// a transport outage says nothing about the cursor.
+		var fail *agentFailed
+		if f.cursor != "" && (errors.As(err, &rej) || errors.As(err, &fail)) {
+			f.cursorFails++
+		}
+		if f.cursorFails < logsCursorRetries {
+			f.failLocked(err)
+			break
+		}
+		f.cursor, f.cursorFails, f.restarting = "", 0, true
+		_, e := apiErrorFor(err)
+		e.Message += fmt.Sprintf(" (%d polls in a row failed after the journal cursor; following again from the newest lines)", logsCursorRetries)
+		f.lastErr = &e
+		f.publishLocked(logEvent{err: &e})
 	default:
 		f.lastErr = nil
+		f.cursorFails = 0
+		if f.restarting {
+			// The newest lines replace the ring rather than follow it: they
+			// may repeat it, or come from another journal altogether.
+			f.restarting = false
+			f.ring = f.ring[:0]
+			for _, h := range res.Hits {
+				f.append(h)
+			}
+			f.publishLocked(logEvent{reset: true})
+			break
+		}
 		for i := range res.Hits {
 			f.append(res.Hits[i])
 			f.publishLocked(logEvent{hit: &res.Hits[i]})
@@ -408,6 +465,10 @@ func (s *Server) streamAgentLogs(w http.ResponseWriter, r *http.Request, cfg con
 			conn.Ping()
 		}
 	}
+	if e := f.stopErr(); e != nil {
+		conn.SendNamed("error", e)
+		return
+	}
 	if f.isUnsupported() {
 		s.streamAgentLogSnapshots(r, conn, cfg, t, rawBacklog, noteUpgrade)
 		return
@@ -424,7 +485,9 @@ func (s *Server) streamAgentLogs(w http.ResponseWriter, r *http.Request, cfg con
 		case <-r.Context().Done():
 			return
 		case <-f.done:
-			if f.isUnsupported() {
+			if e := f.stopErr(); e != nil {
+				conn.SendNamed("error", e)
+			} else if f.isUnsupported() {
 				s.streamAgentLogSnapshots(r, conn, cfg, t, rawBacklog, noteUpgrade)
 			}
 			return
@@ -442,9 +505,16 @@ func (s *Server) streamAgentLogs(w http.ResponseWriter, r *http.Request, cfg con
 					continue
 				}
 			}
-			if ev.err != nil {
+			switch {
+			case ev.reset:
+				// A viewer without a backlog has its history from elsewhere
+				// and simply carries on with the lines that follow.
+				if resets {
+					conn.SendNamed("reset", f.tail(backlog))
+				}
+			case ev.err != nil:
 				conn.SendNamed("error", ev.err)
-			} else {
+			default:
 				conn.Send(ev.hit)
 			}
 		}
