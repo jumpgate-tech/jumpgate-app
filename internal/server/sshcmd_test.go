@@ -180,3 +180,43 @@ func TestSSHArgvKeyPathWithSpacesIsBare(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSSHArgvRefusesALeadingDashPath(t *testing.T) {
+	tg := sshTarget("10.0.0.5", "root", nil)
+	tg.SSH.KeyPath = "-oProxyCommand=x"
+	if _, err := sshArgv(tg, []string{"/h/known_hosts"}); err == nil {
+		t.Fatal("a key path starting with '-' was accepted")
+	}
+	tg = sshTarget("10.0.0.5", "root", nil)
+	if _, err := sshArgv(tg, []string{"-h/known_hosts"}); err == nil {
+		t.Fatal("a known_hosts path starting with '-' was accepted")
+	}
+}
+
+func TestSSHArgvAcceptsAMidPathTilde(t *testing.T) {
+	tg := sshTarget("10.0.0.5", "root", nil)
+	tg.SSH.KeyPath = `C:\Users\JOHNSM~1\.ssh\id_ed25519`
+	argv, err := sshArgv(tg, []string{`C:\Users\JOHNSM~1\.ssh\known_hosts`})
+	if err != nil {
+		t.Fatalf("an 8.3 short path was refused: %v", err)
+	}
+	if err := api.CheckSSHArgv(argv); err != nil {
+		t.Fatalf("client screen refused %q: %v", argv, err)
+	}
+}
+
+func TestSSHArgvUserAndSpacedKeyPassesTheClientScreen(t *testing.T) {
+	tg := sshTarget("10.0.0.5", "root", nil)
+	tg.SSH.KeyPath = `/home/john smith/.ssh/id_ed25519`
+	argv, err := sshArgv(tg, []string{"/h/known_hosts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(argv, "\x00")
+	if !strings.Contains(joined, "\x00-l\x00root\x00") || !strings.Contains(joined, "\x00-i\x00"+tg.SSH.KeyPath+"\x00") {
+		t.Fatalf("argv lacks -l or -i: %q", argv)
+	}
+	if err := api.CheckSSHArgv(argv); err != nil {
+		t.Fatalf("client screen refused %q: %v", argv, err)
+	}
+}

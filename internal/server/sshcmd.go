@@ -134,10 +134,14 @@ func checkPort(p int) (string, error) {
 
 // checkPath refuses what ssh would expand or what could not be one argv
 // element: control characters, "%" and "$" (ssh's token and environment
-// expansion) and a leading "~".
+// expansion), a leading "~", and a leading "-" (ssh would read it as an
+// option; the client screen refuses it too).
 func checkPath(p string) error {
 	if strings.HasPrefix(p, "~") {
 		return errors.New("starts with '~'")
+	}
+	if strings.HasPrefix(p, "-") {
+		return errors.New("starts with '-'")
 	}
 	for _, r := range p {
 		if r < 0x20 || r == 0x7f {
