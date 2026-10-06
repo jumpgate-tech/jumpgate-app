@@ -314,7 +314,7 @@ func TestCommandsKeepTheirContext(t *testing.T) {
 	a.ctx = context.WithValue(a.ctx, ctxKey{}, "old")
 
 	var got context.Context
-	work := a.do("work", func(ctx context.Context) tea.Msg { got = ctx; return nil })
+	work := a.do("work", func(ctx context.Context, _ Backend) tea.Msg { got = ctx; return nil })
 	restart := a.restart()
 	tuitest.Send(a, restartedMsg{be: f}) // replaces a.ctx
 	work()

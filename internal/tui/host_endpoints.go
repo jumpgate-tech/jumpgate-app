@@ -12,8 +12,8 @@ import (
 )
 
 func loadGateways(a *App) tea.Cmd {
-	return a.do("gateways", func(ctx context.Context) tea.Msg {
-		gws, err := a.be.Gateways(ctx)
+	return a.do("gateways", func(ctx context.Context, be Backend) tea.Msg {
+		gws, err := be.Gateways(ctx)
 		return gatewaysMsg{gws: gws, err: err}
 	})
 }

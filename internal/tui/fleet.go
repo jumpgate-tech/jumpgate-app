@@ -347,8 +347,8 @@ func (s *fleetScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		case key.Matches(msg, fleetKeys.Columns):
 			return a.openScreen(scrSettings)
 		case key.Matches(msg, fleetKeys.Refresh):
-			return a.do("refresh", func(ctx context.Context) tea.Msg {
-				if _, err := a.be.Fleet(ctx); err != nil {
+			return a.do("refresh", func(ctx context.Context, be Backend) tea.Msg {
+				if _, err := be.Fleet(ctx); err != nil {
 					return errMsg{what: "refresh", err: err}
 				}
 				return flashMsg("refreshing the fleet")

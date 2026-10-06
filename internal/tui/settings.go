@@ -102,8 +102,8 @@ func clonePrefs(p api.UIPrefs) api.UIPrefs {
 func savePrefs(a *App, p api.UIPrefs) tea.Cmd {
 	a.setPrefs(p)
 	a.prefsSeq++
-	seq, be := a.prefsSeq, a.be
-	return a.do("settings", func(ctx context.Context) tea.Msg {
+	seq := a.prefsSeq
+	return a.do("settings", func(ctx context.Context, be Backend) tea.Msg {
 		saved, err := be.SavePrefs(ctx, p)
 		return prefsMsg{p: saved, err: err, seq: seq, checked: true}
 	})

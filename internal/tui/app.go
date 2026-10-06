@@ -161,8 +161,8 @@ func (a *App) Init() tea.Cmd {
 }
 
 func (a *App) fetchPrefs() tea.Cmd {
-	return a.do("prefs", func(ctx context.Context) tea.Msg {
-		p, err := a.be.Prefs(ctx)
+	return a.do("prefs", func(ctx context.Context, be Backend) tea.Msg {
+		p, err := be.Prefs(ctx)
 		return prefsMsg{p: p, err: err}
 	})
 }
@@ -170,8 +170,8 @@ func (a *App) fetchPrefs() tea.Cmd {
 // refetchPrefs reads the server's prefs after a refused save.
 func (a *App) refetchPrefs() tea.Cmd {
 	seq := a.prefsSeq
-	return a.do("prefs", func(ctx context.Context) tea.Msg {
-		p, err := a.be.Prefs(ctx)
+	return a.do("prefs", func(ctx context.Context, be Backend) tea.Msg {
+		p, err := be.Prefs(ctx)
 		return prefsMsg{p: p, err: err, seq: seq, checked: true, refetch: true}
 	})
 }
@@ -189,13 +189,13 @@ func (a *App) watchFleet(ch <-chan apiclient.Update[api.Fleet]) tea.Cmd {
 	}
 }
 
-// do runs f off the update loop with the app's context as it is now: a
-// restart that replaces a.ctx cancels this one, so work started for the old
-// server stops, and the command goroutine never reads a field the update
-// loop writes.
-func (a *App) do(what string, f func(ctx context.Context) tea.Msg) tea.Cmd {
-	ctx := a.ctx
-	return func() tea.Msg { return f(ctx) }
+// do runs f off the update loop with the app's context and backend as they
+// are now: a restart that replaces a.ctx cancels this one, so work started
+// for the old server stops, and the command goroutine never reads a field
+// the update loop writes (a.be among them). f must use the be it is given.
+func (a *App) do(what string, f func(ctx context.Context, be Backend) tea.Msg) tea.Cmd {
+	ctx, be := a.ctx, a.be
+	return func() tea.Msg { return f(ctx, be) }
 }
 
 // errText is an error in one line, with the server's hint when it sent one,

@@ -32,8 +32,8 @@ type (
 )
 
 func loadTargets(a *App) tea.Cmd {
-	return a.do("hosts", func(ctx context.Context) tea.Msg {
-		ts, err := a.be.Targets(ctx)
+	return a.do("hosts", func(ctx context.Context, be Backend) tea.Msg {
+		ts, err := be.Targets(ctx)
 		return targetsMsg{ts: ts, err: err}
 	})
 }
@@ -169,8 +169,8 @@ func confirmRemove(a *App, id string) {
 	a.modal = newConfirm("remove "+id,
 		"This controller forgets "+id+" and its pairing. The box keeps running, and keeps this controller enrolled until it is revoked there.",
 		id, func() tea.Cmd {
-			return a.do("remove", func(ctx context.Context) tea.Msg {
-				return removedMsg{id: id, err: a.be.RemoveTarget(ctx, id)}
+			return a.do("remove", func(ctx context.Context, be Backend) tea.Msg {
+				return removedMsg{id: id, err: be.RemoveTarget(ctx, id)}
 			})
 		})
 }
