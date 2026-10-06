@@ -239,3 +239,35 @@ func TestForgetHostKeyMethods(t *testing.T) {
 		t.Fatalf("requests %q", reqs)
 	}
 }
+
+func TestWatchFleet(t *testing.T) {
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/fleet" {
+			fmt.Fprint(w, `{"rows":[{"id":"a","link":"agent"}]}`)
+			return
+		}
+		if r.URL.Path != "/api/fleet/stream" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"intervalSeconds\":15,\"rows\":[{\"id\":\"a\",\"link\":\"agent\"}]}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f, err := c.Fleet(ctx)
+	if err != nil || len(f.Rows) != 1 {
+		t.Fatalf("Fleet %+v %v", f, err)
+	}
+	for u := range c.WatchFleet(ctx) {
+		if u.Has {
+			if u.Value.IntervalSeconds != 15 || u.Value.Rows[0].Link != api.LinkAgent {
+				t.Fatalf("update %+v", u)
+			}
+			return
+		}
+	}
+	t.Fatal("the stream ended without a fleet")
+}

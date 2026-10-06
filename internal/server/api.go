@@ -595,6 +595,10 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/targets/{id}/monitor/stream", s.handleTargetMonitorStream)
 
+	// The fleet: every box's row, polled only while someone watches (fleet.go).
+	mux.HandleFunc("GET /api/fleet", s.handleFleet)
+	mux.HandleFunc("GET /api/fleet/stream", s.handleFleetStream)
+
 	mux.HandleFunc("GET /api/targets/{id}/logs", s.handleLogs)
 	mux.HandleFunc("GET /api/targets/{id}/logs/stream", s.handleLogsStream)
 

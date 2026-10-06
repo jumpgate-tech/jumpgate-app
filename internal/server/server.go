@@ -192,6 +192,9 @@ type Server struct {
 	// now is the server's clock, defaulting to time.Now. A test sets it to
 	// drive the update-check cache window without waiting real hours.
 	now func() time.Time
+
+	// fleet polls every box for /api/fleet while anyone watches (fleet.go).
+	fleet *fleetPoller
 }
 
 // New constructs a Server from the given Config.
@@ -221,6 +224,7 @@ func New(cfg Config) *Server {
 	if s.newLocalExecutor == nil {
 		s.newLocalExecutor = executor.NewLocal
 	}
+	s.fleet = newFleetPoller(s)
 	return s
 }
 

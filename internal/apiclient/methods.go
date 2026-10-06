@@ -132,3 +132,15 @@ func (c *Client) RecordedHostKeys(ctx context.Context, hostPort string) (api.Rec
 func (c *Client) ForgetHostKey(ctx context.Context, hostPort, fingerprint string) error {
 	return c.Do(ctx, http.MethodPost, "/api/hostkeys/forget", api.HostKeyForget{HostPort: hostPort, Fingerprint: fingerprint}, nil)
 }
+
+// Fleet is every box's row as the server last polled it.
+func (c *Client) Fleet(ctx context.Context) (api.Fleet, error) {
+	var f api.Fleet
+	err := c.Do(ctx, http.MethodGet, "/api/fleet", nil, &f)
+	return f, err
+}
+
+// WatchFleet streams the whole fleet after every poll round.
+func (c *Client) WatchFleet(ctx context.Context) <-chan Update[api.Fleet] {
+	return watch(ctx, c, "/api/fleet/stream", decodeJSON[api.Fleet])
+}
