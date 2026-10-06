@@ -223,15 +223,86 @@ func TestSettingsShowTheDisclosure(t *testing.T) {
 }
 
 func TestSettingsProviderListMatchesTheServer(t *testing.T) {
-	for _, p := range aiProviders {
-		if p != "" && !ai.Known(p) {
-			t.Errorf("%q is not a provider the server knows", p)
-		}
+	want := append([]string{""}, ai.Providers()...)
+	if !slices.Equal(aiProviders, want) {
+		t.Fatalf("TUI providers %q, server %q: update aiProviders", aiProviders, want)
 	}
-	for _, p := range []string{"gemini", "groq", "ollama"} {
-		if !slices.Contains(aiProviders, p) {
-			t.Errorf("provider %q is missing", p)
-		}
+}
+
+func TestSettingsUnknownProviderIsShownAndNotSilentlyCleared(t *testing.T) {
+	f := tuitest.NewFake()
+	a := settingsApp(t, f)
+	a.screens[scrSettings].(*settingsScreen).settings.AIProvider = "mystery\x1b[2J"
+	a = pick(t, a, "AI provider")
+	fr := tuitest.Frame(a)
+	if !strings.Contains(fr, "mystery") || !strings.Contains(fr, "unknown") || strings.Contains(fr, "\x1b") {
+		t.Fatalf("frame:\n%s", fr)
+	}
+	press(t, a, "space")
+	if p := f.LastUpdate.AIProvider; p == nil || *p == "" {
+		t.Fatalf("an unknown provider was moved to none: %+v", f.LastUpdate)
+	}
+}
+
+func TestSettingsKeyNeverShownInAnErrorHintOrMessage(t *testing.T) {
+	for name, err := range map[string]error{
+		"hint":    &api.Error{Code: "bad", Message: "refused", Hint: "the key " + secret + " is wrong"},
+		"message": &api.Error{Code: "bad", Message: "refused " + secret},
+		"code":    &api.Error{Code: api.Code("x" + secret), Message: "refused"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := tuitest.NewFake()
+			f.Err["SaveSettings"] = err
+			m := press(t, pick(t, settingsApp(t, f), "AI key"), "enter")
+			m = typed(t, m, secret)
+			m = press(t, m, "enter")
+			if fr := tuitest.Frame(m); strings.Contains(fr, "sekrit") || !strings.Contains(fr, "AI settings") {
+				t.Fatalf("frame:\n%s", fr)
+			}
+		})
+	}
+}
+
+func TestSettingsEarlierRefusedSaveDoesNotUndoALaterOne(t *testing.T) {
+	f := tuitest.NewFake()
+	m := tea.Model(pick(t, settingsApp(t, f), "JOBS"))
+	m, c1 := tuitest.Send(m, tuitest.Key("space"))
+	m = pick(t, m.(*App), "AGE")
+	m, c2 := tuitest.Send(m, tuitest.Key("space"))
+	f.Err["SavePrefs"] = &api.Error{Code: api.CodeInvalidPrefs, Message: "no"}
+	r1 := tuitest.Run(c1[0])
+	delete(f.Err, "SavePrefs")
+	r2 := tuitest.Run(c2[0])
+	m, _ = tuitest.Send(m, r2...)
+	m, _ = tuitest.Send(m, r1...) // the first one's refusal arrives after the second was answered
+	cols := m.(*App).prefs.FleetColumns
+	if !slices.Contains(cols, "age") {
+		t.Fatalf("the later change was lost: %v", cols)
+	}
+}
+
+func TestSettingsLatestRefusedSaveRefetchesFromTheServer(t *testing.T) {
+	f := tuitest.NewFake()
+	f.Err["SavePrefs"] = &api.Error{Code: api.CodeInvalidPrefs, Message: "no", Hint: "try again"}
+	m := press(t, pick(t, settingsApp(t, f), "JOBS"), "space")
+	if !f.Called("Prefs") || slices.Contains(m.(*App).prefs.FleetColumns, "jobs") {
+		t.Fatalf("calls %v cols %v", f.Calls, m.(*App).prefs.FleetColumns)
+	}
+	if !strings.Contains(tuitest.Frame(m), "try again") {
+		t.Fatal("hint missing")
+	}
+}
+
+func TestSettingsLateSuccessDoesNotOverwriteANewerChange(t *testing.T) {
+	f := tuitest.NewFake()
+	m := tea.Model(pick(t, settingsApp(t, f), "JOBS"))
+	m, c1 := tuitest.Send(m, tuitest.Key("space"))
+	r1 := tuitest.Run(c1[0])
+	m = pick(t, m.(*App), "AGE")
+	m, _ = tuitest.Send(m, tuitest.Key("space")) // newer local change, not yet answered
+	m, _ = tuitest.Send(m, r1...)
+	if cols := m.(*App).prefs.FleetColumns; !slices.Contains(cols, "age") {
+		t.Fatalf("a late reply overwrote the newer change: %v", cols)
 	}
 }
 

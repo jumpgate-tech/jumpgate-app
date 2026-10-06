@@ -63,9 +63,13 @@ type (
 	}
 	tickMsg  time.Time
 	prefsMsg struct {
-		p    api.UIPrefs
-		err  error
-		save bool // the reply to a save: p is what to go back to on err
+		p   api.UIPrefs
+		err error
+		// seq, with checked, marks the reply to a save (or to the re-read
+		// after a refused one): it counts only if no later save was sent.
+		seq     uint64
+		checked bool
+		refetch bool // this is the re-read
 	}
 	fleetMsg struct {
 		u  apiclient.Update[api.Fleet]
@@ -87,10 +91,11 @@ type App struct {
 	now    func() time.Time
 	loc    *time.Location // the zone log times are shown in
 
-	w, h  int
-	th    Theme
-	gl    Glyphs
-	prefs api.UIPrefs
+	w, h     int
+	th       Theme
+	gl       Glyphs
+	prefs    api.UIPrefs
+	prefsSeq uint64 // counts prefs saves; see prefsMsg.seq
 
 	fleet    api.Fleet
 	fleetHas bool
@@ -159,6 +164,15 @@ func (a *App) fetchPrefs() tea.Cmd {
 	return a.do("prefs", func(ctx context.Context) tea.Msg {
 		p, err := a.be.Prefs(ctx)
 		return prefsMsg{p: p, err: err}
+	})
+}
+
+// refetchPrefs reads the server's prefs after a refused save.
+func (a *App) refetchPrefs() tea.Cmd {
+	seq := a.prefsSeq
+	return a.do("prefs", func(ctx context.Context) tea.Msg {
+		p, err := a.be.Prefs(ctx)
+		return prefsMsg{p: p, err: err, seq: seq, checked: true, refetch: true}
 	})
 }
 
@@ -232,12 +246,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(a.watchFleet(msg.ch), a.broadcast(msg))
 	case prefsMsg:
-		if msg.err != nil && msg.save {
-			a.setPrefs(msg.p) // the server refused: show what it still has
+		if msg.checked && msg.seq != a.prefsSeq {
+			return a, nil // a newer save was sent since: this reply is about an older state
+		}
+		switch {
+		case msg.err != nil && msg.checked:
+			// Refused (or the re-read failed): say why, and ask the server what it
+			// really has rather than going back to a local snapshot.
 			a.flash = "could not save the display setting: " + a.errText(msg.err)
-		} else if msg.err != nil {
+			if !msg.refetch {
+				return a, a.refetchPrefs()
+			}
+			return a, nil
+		case msg.err != nil:
 			a.flash = "could not read display settings: " + a.errText(msg.err)
-		} else {
+		default:
 			a.setPrefs(msg.p)
 		}
 		return a, a.broadcast(msg)

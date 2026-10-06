@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -45,13 +46,13 @@ func New(id, apiKey, baseURL string) (Provider, error) {
 }
 
 // Known reports whether id names a provider New can build.
-func Known(id string) bool {
-	switch id {
-	case "gemini", "groq", "ollama":
-		return true
-	}
-	return false
-}
+func Known(id string) bool { return slices.Contains(providerIDs, id) }
+
+// providerIDs are the ids New builds, in the order front ends list them.
+var providerIDs = []string{"gemini", "groq", "ollama"}
+
+// Providers is every id Known accepts, in listing order.
+func Providers() []string { return slices.Clone(providerIDs) }
 
 func newHTTPClient() *http.Client {
 	return &http.Client{Timeout: httpTimeout}

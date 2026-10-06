@@ -95,19 +95,17 @@ func clonePrefs(p api.UIPrefs) api.UIPrefs {
 	return p
 }
 
-// savePrefs shows the change at once and saves it. If the server refuses
-// (invalid_prefs, with a hint, or any error) the screen goes back to what it
-// showed before and says why.
+// savePrefs shows the change at once and saves it. Each save has a number,
+// and only the reply to the latest one counts: if the server refuses it
+// (invalid_prefs, with a hint, or any error) the app says why and re-reads
+// what the server has; an older reply is dropped.
 func savePrefs(a *App, p api.UIPrefs) tea.Cmd {
-	old := clonePrefs(a.prefs)
 	a.setPrefs(p)
-	be := a.be
+	a.prefsSeq++
+	seq, be := a.prefsSeq, a.be
 	return a.do("settings", func(ctx context.Context) tea.Msg {
 		saved, err := be.SavePrefs(ctx, p)
-		if err != nil {
-			return prefsMsg{p: old, err: err, save: true}
-		}
-		return prefsMsg{p: saved}
+		return prefsMsg{p: saved, err: err, seq: seq, checked: true}
 	})
 }
 
@@ -145,10 +143,14 @@ func (s *settingsScreen) providerName() string {
 	if !s.settingsHas {
 		return "loading"
 	}
-	if s.settings.AIProvider == "" {
+	switch p := s.settings.AIProvider; {
+	case p == "":
 		return "none"
+	case !slices.Contains(aiProviders, p):
+		return sanitizeLine(p) + " (unknown)"
+	default:
+		return sanitizeLine(p)
 	}
-	return sanitizeLine(s.settings.AIProvider)
 }
 
 // disclosure is what Explain sends and to whom for the provider in use: the
@@ -270,7 +272,12 @@ func (s *settingsScreen) items(a *App) []settingItem {
 					a.flash = "the AI settings are still loading"
 					return nil
 				}
-				next := aiProviders[(slices.Index(aiProviders, s.settings.AIProvider)+1)%len(aiProviders)]
+				// An unknown provider (a newer server) goes to the first real
+				// one, never silently to none.
+				next := aiProviders[1]
+				if i := slices.Index(aiProviders, s.settings.AIProvider); i >= 0 {
+					next = aiProviders[(i+1)%len(aiProviders)]
+				}
 				return s.save(a, api.SettingsUpdate{AIProvider: &next}, "")
 			}},
 		settingItem{"AI EXPLAIN", "AI key",
@@ -331,11 +338,24 @@ func (s *settingsScreen) save(a *App, u api.SettingsUpdate, secret string) tea.C
 	gen, ctx, be := s.gen, s.ctx, a.be
 	return func() tea.Msg {
 		st, err := be.SaveSettings(ctx, u)
-		if err != nil && secret != "" && strings.Contains(err.Error(), secret) {
+		if err != nil && secret != "" && mentions(err, secret) {
 			err = errors.New("the server refused the AI key")
 		}
 		return settingsMsg{gen: gen, s: st, err: err}
 	}
+}
+
+// mentions reports whether any text of err that the screen could show (its
+// message, or an api.Error's message, code or hint) contains secret.
+func mentions(err error, secret string) bool {
+	if strings.Contains(err.Error(), secret) {
+		return true
+	}
+	var e *api.Error
+	if errors.As(err, &e) {
+		return strings.Contains(e.Message, secret) || strings.Contains(string(e.Code), secret) || strings.Contains(e.Hint, secret)
+	}
+	return false
 }
 
 // find is the index of the item with this label, or -1.

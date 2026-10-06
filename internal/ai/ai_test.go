@@ -291,3 +291,17 @@ func TestCapLinesCapsCountAndBytes(t *testing.T) {
 		t.Errorf("capLines returned %d bytes, want <= %d", total, MaxExplainBytes)
 	}
 }
+
+func TestProvidersAreExactlyWhatNewBuilds(t *testing.T) {
+	for _, id := range Providers() {
+		if !Known(id) {
+			t.Errorf("%q listed but not Known", id)
+		}
+		if _, err := New(id, "k", ""); err != nil {
+			t.Errorf("New(%q): %v", id, err)
+		}
+	}
+	if Known("") || Known("nope") {
+		t.Error("Known accepts an unknown id")
+	}
+}
