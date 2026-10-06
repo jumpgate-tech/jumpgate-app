@@ -64,7 +64,7 @@ func TestEveryControllerStateHasAHint(t *testing.T) {
 	}{
 		{api.ControllerView{State: "missing"}, []string{"no key yet", "jumpgate keys init"}},
 		{api.ControllerView{State: "unopened", Store: "1password", Recorded: "0xc0ffee00000000000000000000000000000000aa", Reason: "the vault is locked"}, []string{"not loaded", "vault is locked", "R"}},
-		{api.ControllerView{State: "unrecorded", Address: "0xc0ffee00000000000000000000000000000000aa", Store: "keychain"}, []string{"not recorded", "jumpgate keys init"}},
+		{api.ControllerView{State: "unrecorded", Address: "0xc0ffee00000000000000000000000000000000aa", Store: "keychain"}, []string{"not recorded", "Restore config.json from a backup", "different key"}},
 		{api.ControllerView{State: "mismatch", Address: "0xbbbb", Recorded: "0xaaaa", Store: "keychain"}, []string{"MISMATCH"}},
 		{api.ControllerView{State: "ok", Address: "0xc0ffee00000000000000000000000000000000aa", Store: "keychain"}, []string{"ok"}},
 	} {
@@ -72,7 +72,7 @@ func TestEveryControllerStateHasAHint(t *testing.T) {
 		f.ControllerV = c.v
 		a := signersApp(t, f)
 		a.o.Restart = func(context.Context) (Backend, error) { return f, nil }
-		fr := tuitest.Frame(a)
+		fr := strings.Join(strings.Fields(tuitest.Frame(a)), " ") // hints wrap
 		for _, w := range c.want {
 			if !strings.Contains(fr, w) {
 				t.Errorf("state %s lacks %q:\n%s", c.v.State, w, fr)
@@ -217,5 +217,41 @@ func TestSignersContextEndsWhenLeft(t *testing.T) {
 	press(t, a, "1")
 	if ctx.Err() == nil {
 		t.Fatal("the context outlived the screen")
+	}
+}
+
+// In unrecorded a key already exists, maybe at a non-default ref: keys init
+// would make a second one that the paired boxes refuse.
+func TestCreateKeyIsRefusedWhenUnrecorded(t *testing.T) {
+	f := tuitest.NewFake()
+	f.ControllerV = api.ControllerView{State: "unrecorded", Address: "0xc0ffee00000000000000000000000000000000aa", Store: "keychain"}
+	a := signersApp(t, f)
+	a.o.Self = "/usr/local/bin/jumpgate"
+	ran := false
+	a.o.Command = func(string, ...string) *exec.Cmd { ran = true; return exec.Command("true") }
+	m, cmds := tuitest.Send(a, tuitest.Key("K"))
+	if ran || len(cmds) != 0 {
+		t.Fatalf("K did something in unrecorded: ran=%v cmds=%d", ran, len(cmds))
+	}
+	fr := strings.Join(strings.Fields(tuitest.Frame(m)), " ")
+	for _, w := range []string{"Restore config.json from a backup", "won't accept"} {
+		if !strings.Contains(fr, w) {
+			t.Errorf("hint lacks %q:\n%s", w, fr)
+		}
+	}
+	if strings.Contains(fr, "keys init (K)") {
+		t.Errorf("still suggests keys init:\n%s", fr)
+	}
+}
+
+// A restart replaces the app's context and ends the old one, so nothing
+// started for the old server outlives it.
+func TestRestartEndsTheOldContext(t *testing.T) {
+	a := signersApp(t, tuitest.NewFake())
+	old := a.ctx
+	a.o.Restart = func(context.Context) (Backend, error) { return tuitest.NewFake(), nil }
+	press(t, a, "R")
+	if old.Err() == nil || a.ctx.Err() != nil {
+		t.Fatalf("old ctx err=%v, new ctx err=%v", old.Err(), a.ctx.Err())
 	}
 }

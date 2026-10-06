@@ -77,7 +77,7 @@ func (s *Server) handleController(w http.ResponseWriter, r *http.Request) {
 	case cfg.Controller == nil:
 		v.Address = s.cfg.Signer.Address().Hex()
 		v.State = "unrecorded"
-		v.Reason = "a key is loaded but no controller identity was recorded; run `jumpgate keys init` to record it"
+		v.Reason = "a signing key is loaded but config.json has no controller record; restore config.json from a backup (running `jumpgate keys init` would create a different key that your paired boxes won't accept)"
 	default:
 		v.Address = s.cfg.Signer.Address().Hex()
 		if strings.EqualFold(v.Address, v.Recorded) {

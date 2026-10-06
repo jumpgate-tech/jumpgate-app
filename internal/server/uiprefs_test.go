@@ -239,7 +239,7 @@ func TestControllerViewUnrecorded(t *testing.T) {
 	ts, token := controllerServer(t, "", k)
 	var v api.ControllerView
 	getJSON(t, ts.URL+"/api/controller", token, &v)
-	if v.State != "unrecorded" || v.Address != k.Address().Hex() || v.Recorded != "" || v.Reason == "" {
+	if v.State != "unrecorded" || v.Address != k.Address().Hex() || v.Recorded != "" || !strings.Contains(v.Reason, "restore config.json") || strings.Contains(v.Reason, "to record it") {
 		t.Fatalf("%+v", v)
 	}
 }

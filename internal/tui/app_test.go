@@ -30,7 +30,7 @@ var testNow = time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 func newTestApp(t *testing.T, f *tuitest.Fake, w, h int, glyphs string) *App {
 	t.Helper()
 	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" }, Hostname: "laptop", Now: func() time.Time { return testNow }, Location: time.UTC})
-	t.Cleanup(a.cancel)
+	t.Cleanup(func() { a.cancel() }) // a restart replaces a.cancel: read it at cleanup time
 	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: w, Height: h}, prefsMsg{p: api.UIPrefs{Glyphs: glyphs, ShowEstimates: true}})
 	return m.(*App)
 }
@@ -171,7 +171,7 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 	f.ServerVersion = "v0.8.0"
 	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" },
 		Restart: func(context.Context) (Backend, error) { return f, nil }})
-	t.Cleanup(a.cancel)
+	t.Cleanup(func() { a.cancel() }) // a restart replaces a.cancel: read it at cleanup time
 	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: 80, Height: 24}, prefsMsg{p: api.UIPrefs{Glyphs: "unicode"}}, tuitest.Key("5"), tuitest.Key("?"))
 	fr := tuitest.Frame(m)
 	all := bindings(globalKeys)
@@ -325,7 +325,7 @@ func TestInitFetchesPrefs(t *testing.T) {
 	f := tuitest.NewFake()
 	f.PrefsV = api.UIPrefs{Mouse: true, Units: "GiB"}
 	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" }, Now: func() time.Time { return testNow }})
-	t.Cleanup(a.cancel)
+	t.Cleanup(func() { a.cancel() }) // a restart replaces a.cancel: read it at cleanup time
 	var m tea.Model = a
 	for _, msg := range tuitest.Run(a.Init()) {
 		m, _ = m.Update(msg)

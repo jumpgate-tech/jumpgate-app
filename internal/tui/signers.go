@@ -7,6 +7,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/valve-tech/jumpgate/internal/api"
 )
@@ -103,11 +104,10 @@ func (s *signersScreen) paired() []api.TargetView {
 	return out
 }
 
-// canCreate: a key may be made when there is none, or when one is loaded
-// that was never recorded. Never over a recorded one.
-func (s *signersScreen) canCreate() bool {
-	return s.ctlHas && (s.ctl.State == "missing" || s.ctl.State == "unrecorded")
-}
+// canCreate: a key may be made only when there is none. In every other state
+// a key exists (maybe at a non-default ref), and keys init would make a
+// second one that the paired boxes refuse.
+func (s *signersScreen) canCreate() bool { return s.ctlHas && s.ctl.State == "missing" }
 
 func (s *signersScreen) update(a *App, msg tea.Msg) tea.Cmd {
 	s.canRestart = a.o.Restart != nil
@@ -179,6 +179,8 @@ func (s *signersScreen) update(a *App, msg tea.Msg) tea.Cmd {
 				a.flash = "this controller already has a key; jumpgate never replaces one"
 				if !s.ctlHas {
 					a.flash = "the controller's key state is not known yet"
+				} else if s.ctl.State == "unrecorded" {
+					a.flash = "a key exists but is not recorded; keys init would make a different key. Restore config.json from a backup"
 				}
 				return nil
 			}
@@ -226,7 +228,7 @@ func (s *signersScreen) view(a *App, w, h int) string {
 			}
 		case "unrecorded":
 			state = a.th.Warn.Render("not recorded")
-			hint = "a key is loaded but this controller never recorded one: run jumpgate keys init (K)"
+			hint = "A signing key is loaded but config.json has no controller record. Restore config.json from a backup. Running keys init would create a different key that your paired boxes won't accept."
 		default:
 			state = a.th.Warn.Render(sanitizeLine(s.ctl.State))
 		}
@@ -235,7 +237,9 @@ func (s *signersScreen) view(a *App, w, h int) string {
 			lines = append(lines, " "+a.th.Warn.Render(r))
 		}
 		if hint != "" {
-			lines = append(lines, " "+a.th.Dim.Render(hint))
+			for _, l := range strings.Split(ansi.Wrap(hint, max(w-2, 20), ""), "\n") {
+				lines = append(lines, " "+a.th.Dim.Render(l))
+			}
 		}
 	}
 	lines = append(lines, "", " "+a.th.Title.Render("BOXES THIS KEY SIGNS FOR"))
