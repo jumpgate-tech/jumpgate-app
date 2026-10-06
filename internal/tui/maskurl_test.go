@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 const k32 = "0123456789abcdef0123456789abcdef"
@@ -121,23 +122,150 @@ func TestMaskTextCapsItsInputWithoutExposingACutSecret(t *testing.T) {
 	for cut := 1; cut < len(secret); cut++ {
 		in := strings.Repeat("a ", (maxMaskText-cut)/2) + strings.Repeat("b", (maxMaskText-cut)%2) + secret
 		got := maskText(in)
-		if strings.Contains(got, "SEC") || !strings.HasSuffix(got, "\u2026") || len(got) > maxMaskText+4 {
+		if strings.Contains(got, "SEC") || !strings.HasSuffix(got, "\u2026") || len(got) > 2*maxMaskText+3 {
 			t.Fatalf("cut %d: tail %q len %d", cut, got[max(len(got)-40, 0):], len(got))
 		}
 	}
 }
 
-func TestMaskTextIsLinear(t *testing.T) {
+func TestMaskTextIsFastOnWorstCaseInput(t *testing.T) {
 	if raceEnabled {
 		t.Skip("timing is meaningless under the race detector")
 	}
-	for _, in := range []string{strings.Repeat("https:// ", 20000), strings.Repeat("https:// ", 20000) + "x@h", strings.Repeat("a @b ", 20000)} {
+	worst := []string{
+		strings.Repeat("@", maxMaskText),
+		strings.Repeat("@ ", maxMaskText/2),
+		strings.Repeat("https:// ", maxMaskText/9+1)[:maxMaskText],
+		strings.Repeat("\u00e9 ", maxMaskText/3),
+		strings.Repeat("a ", maxMaskText/2),
+		strings.Repeat("@ ", 100000), // capped first
+	}
+	for _, in := range worst {
 		start := time.Now()
-		maskTokens(in)
-		if d := time.Since(start); d > 50*time.Millisecond {
-			t.Errorf("maskTokens took %v on %d bytes", d, len(in))
+		maskText(in)
+		if d := time.Since(start); d > 5*time.Millisecond {
+			t.Errorf("maskText took %v on %d bytes", d, len(in))
 		}
 	}
+}
+
+// Round 4 leaks: each must be masked, raw and after sanitize.
+func TestMaskTextRound4Leaks(t *testing.T) {
+	ins := []string{
+		"u:SECRET %2540h", "u:SECRET%2540h", "u:SECRET \u0301@h",
+		"https://u:A SECRET B\uff20h/", "https://h/v3/ Zk9SECRETQx7",
+		"see https://h/v3/ SECRET now", "x SECRET \u00e9", "SECRET y %", "SECRET y z@h",
+	}
+	for _, ch := range []string{"\u034f", "\u115f", "\u3164", "\u2800"} {
+		ins = append(ins, "u:SECRET "+ch+"@h", "SECRET "+ch+"@h", "a SECRET b "+ch+"@h", "SECRET b "+ch)
+	}
+	for _, in := range ins {
+		if got := maskText(in); strings.Contains(got, "SECRET") {
+			t.Errorf("maskText(%q) = %q leaks", in, got)
+		}
+		if got := maskText(sanitizeLine(in)); strings.Contains(got, "SECRET") {
+			t.Errorf("sanitize+maskText(%q) = %q leaks", in, got)
+		}
+	}
+}
+
+// The blunt rule, exactly: suspicious tokens become ***, at-like tokens take
+// two before, "://" takes one after; whitespace is kept as it was.
+func TestMaskTextBluntOutput(t *testing.T) {
+	for in, want := range map[string]string{
+		"see https://u:pw@h/p?k=v now":    "*** *** ***",
+		"a b c d@e f":                     "a *** *** *** f",
+		"open TCP/UDP 30303, e.g. now":    "open *** 30303, e.g. now",
+		"key=v  x\ty":                     "***  x\ty",
+		"caf\u00e9 is open":               "*** is open",
+		"one two 50% three":               "*** *** *** three",
+		"see https://h/x next then":       "see *** *** then",
+		"\tleading and trailing \n":       "\tleading and trailing \n",
+		"plain words stay as they are 42": "plain words stay as they are 42",
+	} {
+		if got := maskText(in); got != want {
+			t.Errorf("maskText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The 4 KB cut: u:SECRET @h walks across every offset around the cut, and
+// the result is capped and ends in an ellipsis.
+func TestMaskTextCutWalk(t *testing.T) {
+	secret := "u:SECRET @h"
+	for off := -20; off <= len(secret)+20; off++ {
+		pad := maxMaskText - off
+		in := strings.Repeat("a ", pad/2) + strings.Repeat("b", pad%2) + secret + strings.Repeat(" tail", 20)
+		got := maskText(in)
+		if strings.Contains(got, "SECRET") {
+			t.Fatalf("offset %d leaks: %q", off, got[max(len(got)-30, 0):])
+		}
+		if len(in) > maxMaskText && !strings.HasSuffix(got, "\u2026") {
+			t.Fatalf("offset %d: cut without ellipsis: %q", off, got[max(len(got)-30, 0):])
+		}
+	}
+	// The cut lands on a rune boundary (one é of two survives) and masks
+	// the last two tokens; the é is at-like, so it takes two before it.
+	in := strings.Repeat("a ", maxMaskText/2-1) + "\u00e9\u00e9"
+	got := maskText(in)
+	if !strings.HasSuffix(got, " a *** *** ***\u2026") || !utf8.ValidString(got) {
+		t.Fatalf("cut tail %q", got[max(len(got)-30, 0):])
+	}
+}
+
+// Fuzz: random token sequences over a hostile alphabet, with SECRET planted
+// as a whole token within two tokens before, or one after, an at-like or
+// "://" token. sanitize then maskText must never show it.
+func FuzzMaskText(f *testing.F) {
+	f.Add([]byte("seed"), uint8(0), uint8(0))
+	f.Add([]byte{1, 2, 3, 4, 5, 6, 7, 8}, uint8(1), uint8(3))
+	f.Add([]byte{0xff, 0x10, 0x20}, uint8(2), uint8(7))
+	pieces := []string{
+		"a", "b", "Z", "k", "0", "9", "@", ":", "/", "%", "\uff20", "\ufe6b",
+		"\u0301", "\u034f", "\u200b", "\u200d", "\u2060", "\ufeff", "\u00ad", "\u00a0",
+		"\u115f", "\u3164", "\u2800", "%40", "%2540", "://", "x",
+	}
+	spaces := []string{" ", "  ", "\t", "\n", "\r", "\v", "\f", " \t "}
+	atLike := []string{"@h", "\uff20h", "\ufe6bh", "%40h", "%2540h", "\u0301@h", "\u034f@h", "\u115f@h", "\u3164@h", "\u2800@h", "\u00a0@h", "\u00e9", "\u200b@h"}
+	schemes := []string{"https://h/v3/", "x://y", "://", "wss://h:8546"}
+	f.Fuzz(func(t *testing.T, raw []byte, trig, where uint8) {
+		var toks []string
+		for i := 0; i+1 < len(raw) && len(toks) < 40; i += 2 {
+			n := int(raw[i]%4) + 1
+			var tok strings.Builder
+			for j := 0; j < n; j++ {
+				tok.WriteString(pieces[int(raw[i+1]+uint8(j)*7)%len(pieces)])
+			}
+			toks = append(toks, tok.String())
+		}
+		at := len(toks) / 2
+		trigger := atLike[int(trig)%len(atLike)]
+		var planted []string
+		switch where % 3 {
+		case 0: // right before an at-like token
+			planted = []string{"SECRET", trigger}
+		case 1: // two before an at-like token
+			planted = []string{"SECRET", "word", trigger}
+		default: // right after a "://" token
+			planted = []string{schemes[int(trig)%len(schemes)], "SECRET"}
+		}
+		toks = append(toks[:at], append(planted, toks[at:]...)...)
+		var b strings.Builder
+		for i, tok := range toks {
+			if i > 0 {
+				sp := 0
+				if len(raw) > 0 {
+					sp = int(raw[i%len(raw)])
+				}
+				b.WriteString(spaces[sp%len(spaces)])
+			}
+			b.WriteString(tok)
+		}
+		in := b.String()
+		if got := maskText(sanitize(in)); strings.Contains(got, "SECRET") {
+			t.Fatalf("sanitize+maskText(%q) = %q", in, got)
+		}
+	})
 }
 
 func FuzzMaskURL(f *testing.F) {

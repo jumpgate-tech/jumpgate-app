@@ -97,7 +97,7 @@ func TestMaskURL(t *testing.T) {
 			t.Errorf("maskURL(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if got := maskText("see https://u:pw@h/p?k=v now"); got != "see https://***/p?k=*** now" {
+	if got := maskText("see https://u:pw@h/p?k=v now"); got != "*** *** ***" {
 		t.Errorf("maskText = %q", got)
 	}
 }
