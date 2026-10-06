@@ -11,7 +11,10 @@
 // data in the monorepo (packages/web/src/learn/data/{networks,clients}.ts).
 package catalog
 
-import "fmt"
+import (
+	"fmt"
+	"path"
+)
 
 // Network describes one of the chains jumpgate can configure an
 // execution+beacon client pair for.
@@ -181,3 +184,18 @@ func ClientByID(id string) (Client, bool) {
 	c, ok := clients[id]
 	return c, ok
 }
+
+// FitMargin is the headroom a disk needs over the expected dataset size: the
+// setup preflight's floor and the fit verdict both use it, so a box that
+// passes preflight never reads "short" on the same numbers.
+const FitMargin = 1.10
+
+// DefaultDataDir is where a chain's data lives on a box by default. Target
+// paths are POSIX on every control-plane OS, so this uses package path, never
+// filepath. Sub-project 2's node.migrate-names changes the prefix here, once.
+func DefaultDataDir(chainID int) string {
+	return fmt.Sprintf("/var/lib/valve-node-app/%d", chainID)
+}
+
+// DefaultJWTPath is the engine-API secret beside the data.
+func DefaultJWTPath(dataDir string) string { return path.Join(dataDir, "jwt.hex") }

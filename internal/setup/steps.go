@@ -234,7 +234,7 @@ func minDiskBytesFor(w catalog.WireConfig) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("preflight: %w", err)
 	}
-	const safetyMargin = 1.10 // 10% headroom above the raw dataset size
+	const safetyMargin = catalog.FitMargin // 10% headroom above the raw dataset size
 	return uint64(float64(expected) * safetyMargin), nil
 }
 

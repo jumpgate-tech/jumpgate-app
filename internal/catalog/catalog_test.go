@@ -1079,3 +1079,15 @@ func TestDefaultUpstreams(t *testing.T) {
 		t.Errorf("DefaultUpstreams(unknown) = %v, want nil", got)
 	}
 }
+
+func TestDefaultPathsArePOSIX(t *testing.T) {
+	if got := DefaultDataDir(369); got != "/var/lib/valve-node-app/369" {
+		t.Fatalf("DefaultDataDir = %q (the rename is sub-project 2's node.migrate-names, not this)", got)
+	}
+	if got := DefaultJWTPath("/var/lib/x/1"); got != "/var/lib/x/1/jwt.hex" {
+		t.Fatalf("DefaultJWTPath = %q", got)
+	}
+	if FitMargin != 1.10 {
+		t.Fatalf("FitMargin = %v", FitMargin)
+	}
+}

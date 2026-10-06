@@ -6,6 +6,8 @@ import (
 	"go/token"
 	"strings"
 	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/catalog"
 )
 
 // Regression guard for target paths built with the control plane's LOCAL
@@ -29,16 +31,16 @@ func TestDefaultTargetPathsArePOSIX(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotDir := defaultDataDir(tt.chainID)
+			gotDir := catalog.DefaultDataDir(tt.chainID)
 			if gotDir != tt.wantDataDir {
-				t.Errorf("defaultDataDir(%d) = %q, want %q", tt.chainID, gotDir, tt.wantDataDir)
+				t.Errorf("catalog.DefaultDataDir(%d) = %q, want %q", tt.chainID, gotDir, tt.wantDataDir)
 			}
-			gotJWT := defaultJWTPath(gotDir)
+			gotJWT := catalog.DefaultJWTPath(gotDir)
 			if gotJWT != tt.wantJWTPath {
-				t.Errorf("defaultJWTPath(%q) = %q, want %q", gotDir, gotJWT, tt.wantJWTPath)
+				t.Errorf("catalog.DefaultJWTPath(%q) = %q, want %q", gotDir, gotJWT, tt.wantJWTPath)
 			}
 			if strings.Contains(gotJWT, `\`) {
-				t.Errorf("defaultJWTPath(%q) = %q contains a backslash — target paths must be POSIX on every control-plane OS", gotDir, gotJWT)
+				t.Errorf("catalog.DefaultJWTPath(%q) = %q contains a backslash — target paths must be POSIX on every control-plane OS", gotDir, gotJWT)
 			}
 		})
 	}
@@ -61,8 +63,8 @@ func TestDefaultJWTPath_CustomDataDir(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := defaultJWTPath(tt.dataDir); got != tt.want {
-				t.Errorf("defaultJWTPath(%q) = %q, want %q", tt.dataDir, got, tt.want)
+			if got := catalog.DefaultJWTPath(tt.dataDir); got != tt.want {
+				t.Errorf("catalog.DefaultJWTPath(%q) = %q, want %q", tt.dataDir, got, tt.want)
 			}
 		})
 	}

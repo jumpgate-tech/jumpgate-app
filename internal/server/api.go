@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -926,23 +925,6 @@ const (
 var snapshotKeyPattern = regexp.MustCompile(
 	fmt.Sprintf(`^vk_[A-Za-z0-9_-]{%d,%d}$`, snapshotKeyMinLen, snapshotKeyMaxLen))
 
-// defaultDataDir and defaultJWTPath name locations on the TARGET, which is
-// always a Linux host — never on the control plane, which may be macOS,
-// Windows, or Linux. Target paths are therefore POSIX and must be built with
-// "path": filepath.Join on a Windows control plane would yield
-// `\var\lib\valve-node-app\369\jwt.hex`, which then gets baked into the
-// systemd units and every remote `mkdir -p`, breaking setup on every target.
-// (Contrast HostKeyFile in handleAddTarget, which IS a control-plane path and
-// correctly uses filepath.) They are split out as functions so the rule is
-// unit-testable on any host OS.
-func defaultDataDir(chainID int) string {
-	return fmt.Sprintf("/var/lib/valve-node-app/%d", chainID)
-}
-
-func defaultJWTPath(dataDir string) string {
-	return path.Join(dataDir, "jwt.hex")
-}
-
 func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -956,10 +938,10 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wire.DataDir == "" {
-		wire.DataDir = defaultDataDir(wire.ChainID)
+		wire.DataDir = catalog.DefaultDataDir(wire.ChainID)
 	}
 	if wire.JWTPath == "" {
-		wire.JWTPath = defaultJWTPath(wire.DataDir)
+		wire.JWTPath = catalog.DefaultJWTPath(wire.DataDir)
 	}
 	if err := catalog.ValidateDataDir(wire.DataDir); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
