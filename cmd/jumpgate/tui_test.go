@@ -81,3 +81,27 @@ func TestAgentBuildLinksNoTUI(t *testing.T) {
 		}
 	}
 }
+
+// `jumpgate tui` without a terminal would write escape sequences into a pipe.
+func TestCmdTUIRefusesWithoutATerminal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	oldIn, oldOut, oldRun, oldConnect := stdinIsTerminal, stdoutIsTerminal, runTUIProgram, connectTUI
+	t.Cleanup(func() { stdinIsTerminal, stdoutIsTerminal, runTUIProgram, connectTUI = oldIn, oldOut, oldRun, oldConnect })
+	started := false
+	connectTUI = func(context.Context, string) (*apiclient.Client, error) {
+		started = true // not even a server may be started
+		return apiclient.New(daemon.Info{HTTPAddr: "127.0.0.1:1", Token: "tok"}), nil
+	}
+	runTUIProgram = func(context.Context, io.Reader, io.Writer, tui.Options) error { started = true; return nil }
+	for _, c := range []struct{ in, out bool }{{false, true}, {true, false}, {false, false}} {
+		stdinIsTerminal = func() bool { return c.in }
+		stdoutIsTerminal = func() bool { return c.out }
+		if code := cmdTUI(nil); code == 0 {
+			t.Errorf("in=%v out=%v: exit 0", c.in, c.out)
+		}
+	}
+	if started {
+		t.Fatal("the TUI started without a terminal")
+	}
+}

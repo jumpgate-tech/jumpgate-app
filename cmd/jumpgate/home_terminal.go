@@ -99,6 +99,9 @@ func cmdTUI([]string) int {
 	if !tuiBuilt {
 		return failed("this build has no terminal UI; run `jumpgate home`")
 	}
+	if !stdinIsTerminal() || !stdoutIsTerminal() {
+		return failed("jumpgate tui needs a terminal; use jumpgate home")
+	}
 	return runTUI(context.Background(), os.Stdin, os.Stdout)
 }
 

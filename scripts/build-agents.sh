@@ -28,7 +28,8 @@ for arch in amd64 arm64; do
     -o "$out/jumpgate-linux-$arch" ./cmd/jumpgate
 done
 # The agent runs as root on every box and must link no terminal UI (D23).
-if go list -tags notui -deps ./cmd/jumpgate | grep -qi charm; then
+deps="$(go list -tags notui -deps ./cmd/jumpgate)" || { echo "build-agents: go list failed" >&2; exit 1; }
+if printf '%s\n' "$deps" | grep -qi charm; then
   echo "build-agents: the notui build links charmbracelet" >&2
   exit 1
 fi
