@@ -134,6 +134,7 @@ func New(o Options) *App {
 	a.screens[scrJobs] = jobsScreen{}
 	a.screens[scrGateways] = &gatewaysScreen{}
 	a.screens[scrHosts] = &hostsScreen{}
+	a.screens[scrSigners] = &signersScreen{}
 	if server, mine, differs := a.be.Skew(); differs {
 		server, mine = sanitizeLine(server), sanitizeLine(mine)
 		// Offer R only where it works; otherwise the banner still says why
@@ -210,6 +211,7 @@ func (a *App) current() screen {
 // openScreen shows a top-level screen and tells it so.
 func (a *App) openScreen(id screenID) tea.Cmd {
 	a.closeDetail()
+	a.screens[a.active].update(a, leaveMsg{}) // its in-flight commands end; any cmd it returns is dropped
 	a.active = id
 	return a.screens[id].update(a, enterMsg{})
 }

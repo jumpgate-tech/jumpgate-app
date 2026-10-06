@@ -1,0 +1,24 @@
+ jumpgate  1 Fleet  2 Hosts  [3 Signers]  4 Gateways  5 Jobs  6 Settings  ? help
+ THIS CONTROLLER
+ address  0xc0ff…00aa   store keychain   ok
+
+ BOXES THIS KEY SIGNS FOR
+▸ box-a        agent 0x1234…5678  ssh    paired 2026-10-03  routine
+
+ Approval keys (browser and hardware wallets) arrive with the approval tier.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ t test signing  K create a key  r reload
+ no box selected · server connecting · jobs ⚑ –
