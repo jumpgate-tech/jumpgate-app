@@ -318,6 +318,11 @@ type Config struct {
 	// Controller is this machine's signing identity, set by `jumpgate keys
 	// init`. Nil until then.
 	Controller *Controller `json:"controller,omitempty"`
+
+	// UI is the display preferences block the server validates and serves
+	// at /api/ui-prefs (internal/api.UIPrefs). Kept raw here so config does
+	// not depend on the API package.
+	UI json.RawMessage `json:"ui,omitempty"`
 }
 
 // ValveKeyPlaceholder is the ${NAME} slot valve's own endpoints carry, and so

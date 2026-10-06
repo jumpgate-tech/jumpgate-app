@@ -18,9 +18,11 @@ import (
 	"github.com/valve-tech/jumpgate/internal/ops"
 )
 
-// Poller cadence (spec D12). Variables so tests can shorten them; Task 12
-// lets the operator's refresh preference override fleetStatusEvery. The
-// poller reads them under its lock, once per round.
+// Poller cadence (spec D12). Variables so tests can shorten them;
+// fleetStatusEvery is the fallback when no refresh preference is readable. The
+// per-box status sources run at agentStatusInterval (spec D31), which is
+// never longer than the shortest refresh choice, so they do not follow the
+// preference.
 var (
 	fleetStatusEvery   = 15 * time.Second
 	fleetDiskEvery     = 5 * time.Minute
@@ -156,9 +158,13 @@ type fleetPoller struct {
 	s     *Server
 	probe fleetProber
 	now   func() time.Time
-	// every is the status interval for a config; Task 12 makes it the
-	// operator's refresh preference. cur is the value of the last round.
+	// every is the status interval for a config: the operator's refresh
+	// preference. cur is the value of the last round.
 	every func(cfg config.Config) time.Duration
+	// reloadCh (capacity 1) tells the loop the preference changed, so it
+	// re-reads the interval and restarts its wait instead of finishing the
+	// old one.
+	reloadCh chan struct{}
 
 	// ctx ends with stop; the loop and every probe run under it, and wg
 	// counts them so stop can wait for all of them.
@@ -199,8 +205,14 @@ func newFleetPoller(s *Server) *fleetPoller {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &fleetPoller{
 		s: s, probe: serverProber{s}, now: time.Now,
-		every: func(config.Config) time.Duration { return fleetStatusEvery },
-		ctx:   ctx, cancel: cancel,
+		every: func(cfg config.Config) time.Duration {
+			if len(cfg.UI) == 0 {
+				return fleetStatusEvery // nothing chosen yet
+			}
+			return time.Duration(loadPrefs(cfg).RefreshSeconds) * time.Second
+		},
+		reloadCh: make(chan struct{}, 1),
+		ctx:      ctx, cancel: cancel,
 		rows: map[string]*fleetState{}, measures: map[string]*measureCall{}, statuses: map[string]*statusSource{}, subs: map[chan api.Fleet]struct{}{},
 	}
 }
@@ -299,19 +311,12 @@ func (p *fleetPoller) loop() {
 	}
 	for {
 		p.round(p.ctx)
-		p.mu.Lock()
-		every := p.interval()
-		p.mu.Unlock()
-		timer := time.NewTimer(every)
-		select {
-		case <-p.ctx.Done():
-			timer.Stop()
+		if !p.sleep() {
 			p.mu.Lock()
 			p.running = false
 			p.active--
 			p.mu.Unlock()
 			return
-		case <-timer.C:
 		}
 		p.mu.Lock()
 		idle := len(p.subs) == 0 && time.Since(p.lastWanted) > fleetIdleStop
@@ -326,6 +331,41 @@ func (p *fleetPoller) loop() {
 			}
 			return
 		}
+	}
+}
+
+// sleep waits one interval and reports false when the poller was stopped. A
+// preference change (reload) ends the wait early only to re-read the
+// interval: the old timer is stopped before the new one starts, so changing
+// the preference never leaves a ticker behind.
+func (p *fleetPoller) sleep() bool {
+	for {
+		p.mu.Lock()
+		every := p.interval()
+		p.mu.Unlock()
+		timer := time.NewTimer(every)
+		select {
+		case <-p.ctx.Done():
+			timer.Stop()
+			return false
+		case <-p.reloadCh:
+			timer.Stop()
+			if cfg, err := p.s.loadConfig(); err == nil {
+				p.mu.Lock()
+				p.cur = p.every(cfg)
+				p.mu.Unlock()
+			}
+		case <-timer.C:
+			return true
+		}
+	}
+}
+
+// reload tells the loop (if one is running) that the preference changed.
+func (p *fleetPoller) reload() {
+	select {
+	case p.reloadCh <- struct{}{}:
+	default:
 	}
 }
 

@@ -188,3 +188,41 @@ func (c *Client) SaveSettings(ctx context.Context, u api.SettingsUpdate) (api.Se
 	err := c.Do(ctx, http.MethodPut, "/api/settings", u, &s)
 	return s, err
 }
+func (c *Client) Prefs(ctx context.Context) (api.UIPrefs, error) {
+	var p api.UIPrefs
+	err := c.Do(ctx, http.MethodGet, "/api/ui-prefs", nil, &p)
+	return p, err
+}
+
+func (c *Client) SavePrefs(ctx context.Context, p api.UIPrefs) (api.UIPrefs, error) {
+	var out api.UIPrefs
+	err := c.Do(ctx, http.MethodPut, "/api/ui-prefs", p, &out)
+	return out, err
+}
+
+func (c *Client) Controller(ctx context.Context) (api.ControllerView, error) {
+	var v api.ControllerView
+	err := c.Do(ctx, http.MethodGet, "/api/controller", nil, &v)
+	return v, err
+}
+
+func (c *Client) CheckAgent(ctx context.Context, target string) (api.AgentCheck, error) {
+	var v api.AgentCheck
+	err := c.Do(ctx, http.MethodPost, fleetPath(target, "/check"), nil, &v)
+	return v, err
+}
+
+func (c *Client) SSHCommand(ctx context.Context, target string) (api.SSHCommand, error) {
+	var v api.SSHCommand
+	err := c.Do(ctx, http.MethodGet, fleetPath(target, "/ssh"), nil, &v)
+	return v, err
+}
+
+// Gateways lists the gateways, read-only (spec D28).
+func (c *Client) Gateways(ctx context.Context) ([]api.GatewaySummary, error) {
+	var out struct {
+		Gateways []api.GatewaySummary `json:"gateways"`
+	}
+	err := c.Do(ctx, http.MethodGet, "/api/gateways", nil, &out)
+	return out.Gateways, err
+}

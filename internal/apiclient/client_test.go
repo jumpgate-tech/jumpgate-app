@@ -354,3 +354,39 @@ func TestExplainAndSettings(t *testing.T) {
 		t.Fatalf("SaveSettings %+v %v", s, err)
 	}
 }
+
+func TestScreenMethods(t *testing.T) {
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/ui-prefs":
+			fmt.Fprint(w, `{"fleetColumns":["host"],"refreshSeconds":15}`)
+		case "/api/controller":
+			fmt.Fprint(w, `{"state":"ok","address":"0x1"}`)
+		case "/api/fleet/a/check":
+			fmt.Fprint(w, `{"agent":"0x2","setUp":true}`)
+		case "/api/fleet/a/ssh":
+			fmt.Fprint(w, `{"argv":["ssh","-l","root","h"]}`)
+		case "/api/gateways":
+			fmt.Fprint(w, `{"gateways":[{"id":"g","placement":{"targetId":"a"},"status":{"State":"running"},"networks":[{"chainId":369,"name":"PulseChain"}]}]}`)
+		}
+	})
+	ctx := context.Background()
+	if p, err := c.Prefs(ctx); err != nil || p.FleetColumns[0] != "host" {
+		t.Fatalf("Prefs %+v %v", p, err)
+	}
+	if v, err := c.Controller(ctx); err != nil || v.State != "ok" {
+		t.Fatalf("Controller %+v %v", v, err)
+	}
+	if v, err := c.CheckAgent(ctx, "a"); err != nil || !v.SetUp {
+		t.Fatalf("CheckAgent %+v %v", v, err)
+	}
+	if v, err := c.SSHCommand(ctx, "a"); err != nil || v.Argv[0] != "ssh" {
+		t.Fatalf("SSHCommand %+v %v", v, err)
+	}
+	if g, err := c.Gateways(ctx); err != nil || g[0].Placement.TargetID != "a" || g[0].Status.State != "running" {
+		t.Fatalf("Gateways %+v %v", g, err)
+	}
+	if _, err := Restart(ctx, c); err == nil {
+		t.Fatal("Restart without an executable must refuse")
+	}
+}

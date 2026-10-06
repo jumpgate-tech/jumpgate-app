@@ -14,9 +14,7 @@ import (
 
 // Backend is the server as the TUI uses it; *apiclient.Client is the real one.
 //
-// It lists the client methods that exist so far. The status stream, disk,
-// explain, SSH command, controller, agent check, gateways, prefs and settings
-// methods join it with the tasks that add them to apiclient.
+// It lists every client method a screen uses.
 type Backend interface {
 	Skew() (server, mine string, differs bool)
 	Fleet(ctx context.Context) (api.Fleet, error)
@@ -37,6 +35,12 @@ type Backend interface {
 	Explain(ctx context.Context, target string, lines []string) (api.Explain, error)
 	Settings(ctx context.Context) (api.Settings, error)
 	SaveSettings(ctx context.Context, u api.SettingsUpdate) (api.Settings, error)
+	Prefs(ctx context.Context) (api.UIPrefs, error)
+	SavePrefs(ctx context.Context, p api.UIPrefs) (api.UIPrefs, error)
+	Controller(ctx context.Context) (api.ControllerView, error)
+	CheckAgent(ctx context.Context, target string) (api.AgentCheck, error)
+	SSHCommand(ctx context.Context, target string) (api.SSHCommand, error)
+	Gateways(ctx context.Context) ([]api.GatewaySummary, error)
 }
 
 var _ Backend = (*apiclient.Client)(nil)
@@ -57,29 +61,4 @@ type Options struct {
 	Getenv   func(string) string // nil: os.Getenv
 	Hostname string              // the default name when pairing this machine
 	Now      func() time.Time    // nil: time.Now
-}
-
-// uiPrefs holds the display choices the shell reads. It stands in for
-// api.UIPrefs, which the server's prefs route brings (Task 12); the field
-// names match it, so the swap is a type change. Until then nothing fetches
-// prefs: the TUI starts on the defaults.
-type uiPrefs struct {
-	Units  string // "GB" | "GiB"
-	Mouse  bool
-	Glyphs string // "auto" | "unicode" | "ascii"
-}
-
-// defaultPrefs mirrors api.DefaultPrefs for the fields above.
-func defaultPrefs() uiPrefs { return uiPrefs{Units: "GB", Glyphs: "auto"} }
-
-// withDefaults fills every zero-valued field from defaultPrefs.
-func (p uiPrefs) withDefaults() uiPrefs {
-	d := defaultPrefs()
-	if p.Units == "" {
-		p.Units = d.Units
-	}
-	if p.Glyphs == "" {
-		p.Glyphs = d.Glyphs
-	}
-	return p
 }

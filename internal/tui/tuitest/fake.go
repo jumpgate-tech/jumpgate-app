@@ -13,10 +13,7 @@ import (
 // Fake is a scripted backend. Every method records a call line ("Method
 // arg arg") in Calls and returns the canned value, or Err[Method].
 //
-// It covers the apiclient methods that exist today (Tasks 2–9). The status
-// stream, disk, explain, SSH command, controller, agent check, gateways,
-// prefs and settings methods are added with the tasks that add them to
-// apiclient (10–12), together with their canned fields.
+// It covers every Backend method.
 type Fake struct {
 	mu    sync.Mutex
 	Calls []string
@@ -39,6 +36,13 @@ type Fake struct {
 	ExplainV   api.Explain
 	SettingsV  api.Settings
 	LastUpdate api.SettingsUpdate // what SaveSettings last received
+
+	PrefsV      api.UIPrefs // what Prefs answers (the defaults to start)
+	LastPrefs   api.UIPrefs // what SavePrefs last received
+	ControllerV api.ControllerView
+	CheckV      api.AgentCheck
+	SSHV        map[string]api.SSHCommand
+	GatewaysV   []api.GatewaySummary
 }
 
 // NewFake is a Fake with empty data and open stream channels.
@@ -47,6 +51,7 @@ func NewFake() *Fake {
 		Err: map[string]error{}, FleetCh: make(chan apiclient.Update[api.Fleet], 16),
 		LogsCh:     map[string]chan apiclient.Update[[]api.LogHit]{},
 		EndpointsV: map[string]api.Endpoints{}, FirewallV: map[string][]api.CheckItem{},
+		PrefsV: api.DefaultPrefs(), SSHV: map[string]api.SSHCommand{},
 		DiskV: map[string]api.DiskView{}, StatusCh: map[string]chan apiclient.Update[api.NodeStatus]{},
 	}
 }
@@ -233,4 +238,50 @@ func (f *Fake) SaveSettings(_ context.Context, u api.SettingsUpdate) (api.Settin
 	v := f.SettingsV
 	f.mu.Unlock()
 	return v, f.call("SaveSettings")
+}
+
+func (f *Fake) Prefs(context.Context) (api.UIPrefs, error) {
+	f.mu.Lock()
+	v := f.PrefsV
+	f.mu.Unlock()
+	return v, f.call("Prefs")
+}
+
+func (f *Fake) SavePrefs(_ context.Context, p api.UIPrefs) (api.UIPrefs, error) {
+	err := f.call("SavePrefs")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.LastPrefs = p
+	if err == nil {
+		f.PrefsV = p
+	}
+	return p, err
+}
+
+func (f *Fake) Controller(context.Context) (api.ControllerView, error) {
+	f.mu.Lock()
+	v := f.ControllerV
+	f.mu.Unlock()
+	return v, f.call("Controller")
+}
+
+func (f *Fake) CheckAgent(_ context.Context, target string) (api.AgentCheck, error) {
+	f.mu.Lock()
+	v := f.CheckV
+	f.mu.Unlock()
+	return v, f.call("CheckAgent", target)
+}
+
+func (f *Fake) SSHCommand(_ context.Context, target string) (api.SSHCommand, error) {
+	f.mu.Lock()
+	v := f.SSHV[target]
+	f.mu.Unlock()
+	return v, f.call("SSHCommand", target)
+}
+
+func (f *Fake) Gateways(context.Context) ([]api.GatewaySummary, error) {
+	f.mu.Lock()
+	v := f.GatewaysV
+	f.mu.Unlock()
+	return v, f.call("Gateways")
 }

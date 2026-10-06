@@ -31,7 +31,7 @@ func newTestApp(t *testing.T, f *tuitest.Fake, w, h int, glyphs string) *App {
 	t.Helper()
 	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" }, Hostname: "laptop", Now: func() time.Time { return testNow }})
 	t.Cleanup(a.cancel)
-	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: w, Height: h}, prefsMsg{p: uiPrefs{Glyphs: glyphs}})
+	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: w, Height: h}, prefsMsg{p: api.UIPrefs{Glyphs: glyphs}})
 	return m.(*App)
 }
 
@@ -172,7 +172,7 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" },
 		Restart: func(context.Context) (Backend, error) { return f, nil }})
 	t.Cleanup(a.cancel)
-	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: 80, Height: 24}, prefsMsg{p: uiPrefs{Glyphs: "unicode"}}, tuitest.Key("5"), tuitest.Key("?"))
+	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: 80, Height: 24}, prefsMsg{p: api.UIPrefs{Glyphs: "unicode"}}, tuitest.Key("5"), tuitest.Key("?"))
 	fr := tuitest.Frame(m)
 	all := bindings(globalKeys)
 	for n, b := range bindings(navKeys) {
@@ -238,7 +238,7 @@ func TestMouseOffByDefault(t *testing.T) {
 	if mm := a.View().MouseMode; mm != tea.MouseModeNone {
 		t.Fatalf("mouse mode %v by default", mm)
 	}
-	m, _ := tuitest.Send(a, prefsMsg{p: uiPrefs{Mouse: true}})
+	m, _ := tuitest.Send(a, prefsMsg{p: api.UIPrefs{Mouse: true}})
 	if mm := m.View().MouseMode; mm != tea.MouseModeCellMotion {
 		t.Fatalf("mouse mode %v with the pref on", mm)
 	}
@@ -317,5 +317,23 @@ func TestCommandsKeepTheirContext(t *testing.T) {
 	}
 	if restartCtx.Value(ctxKey{}) != "old" {
 		t.Fatal("restart ran with the new context")
+	}
+}
+
+// Init fetches the display prefs without blocking, and the answer applies.
+func TestInitFetchesPrefs(t *testing.T) {
+	f := tuitest.NewFake()
+	f.PrefsV = api.UIPrefs{Mouse: true, Units: "GiB"}
+	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" }, Now: func() time.Time { return testNow }})
+	t.Cleanup(a.cancel)
+	var m tea.Model = a
+	for _, msg := range tuitest.Run(a.Init()) {
+		m, _ = m.Update(msg)
+	}
+	if !f.Called("Prefs") {
+		t.Fatal("Init did not fetch prefs")
+	}
+	if got := m.(*App).prefs; !got.Mouse || got.Units != "GiB" || got.RefreshSeconds != 15 {
+		t.Fatalf("prefs %+v", got)
 	}
 }

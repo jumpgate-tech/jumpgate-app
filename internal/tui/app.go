@@ -63,7 +63,7 @@ type (
 	}
 	tickMsg  time.Time
 	prefsMsg struct {
-		p   uiPrefs
+		p   api.UIPrefs
 		err error
 	}
 	fleetMsg struct {
@@ -88,7 +88,7 @@ type App struct {
 	w, h  int
 	th    Theme
 	gl    Glyphs
-	prefs uiPrefs
+	prefs api.UIPrefs
 
 	fleet    api.Fleet
 	fleetHas bool
@@ -119,7 +119,7 @@ func New(o Options) *App {
 		o.Now = time.Now
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{o: o, be: o.Backend, ctx: ctx, cancel: cancel, now: o.Now, th: NewTheme(), prefs: defaultPrefs(), conn: apiclient.Connecting}
+	a := &App{o: o, be: o.Backend, ctx: ctx, cancel: cancel, now: o.Now, th: NewTheme(), prefs: api.DefaultPrefs(), conn: apiclient.Connecting}
 	a.gl = DetectGlyphs(a.prefs.Glyphs, o.GOOS, o.Getenv)
 	for i := range a.screens {
 		a.screens[i] = comingScreen{name: screenNames[i]}
@@ -137,11 +137,17 @@ func New(o Options) *App {
 	return a
 }
 
-// Init starts the fleet watch and the clock. Prefs are not fetched yet: the
-// client gains Prefs with the server's prefs route (Task 12), and until then
-// the TUI shows the defaults.
+// Init starts the fleet watch, the clock and a prefs fetch. The fetch does
+// not block the first frame: the TUI shows the defaults until prefsMsg lands.
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick())
+	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs())
+}
+
+func (a *App) fetchPrefs() tea.Cmd {
+	return a.do("prefs", func(ctx context.Context) tea.Msg {
+		p, err := a.be.Prefs(ctx)
+		return prefsMsg{p: p, err: err}
+	})
 }
 
 func tick() tea.Cmd { return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) }) }
@@ -179,8 +185,8 @@ func (a *App) errText(err error) string {
 	return sanitizeLine(err.Error())
 }
 
-func (a *App) setPrefs(p uiPrefs) {
-	a.prefs = p.withDefaults()
+func (a *App) setPrefs(p api.UIPrefs) {
+	a.prefs = p.WithDefaults()
 	a.gl = DetectGlyphs(a.prefs.Glyphs, a.o.GOOS, a.o.Getenv)
 }
 
