@@ -2,16 +2,23 @@
 # GitHub Release that the jumpgate.app landing page links to.
 #
 # Two flavors, per the product decision:
-#   - headless binary  (CGO off, cross-compiled) for mac/win/linux — goreleaser
-#   - desktop app       (CGO on, -tags tray, native runners) — the matrix below
-#       macOS  -> Jumpgate.app (tray + menubar), ad-hoc signed, zipped
-#       Windows-> jumpgate.exe (webview window; no tray icon yet, macOS-only)
-#       Linux  -> jumpgate     (webview window; no tray icon yet)
+#   - headless binaries (CGO off, cross-compiled, embedded agents) — goreleaser
+#   - desktop bundles   (native runners, embedded agents) — the matrix below
+#       macOS   -> Jumpgate-macos-<arch>.zip: Jumpgate.app (window + menubar)
+#                  and Jumpgate Terminal.app (opens a terminal running jumpgate)
+#       Windows -> jumpgate-windows-amd64.zip: jumpgate.exe (console) and
+#                  jumpgate-tray.exe (window + notification icon)
+#       Linux   -> jumpgate-linux-<arch>.tar.gz: window build on WebKitGTK
+#                  4.1, .desktop entries for a terminal and a window, install.sh
+#
+# This repository is the public, auditable release mirror: development and CI
+# live on the self-hosted GitLab. Tags are pushed here by the maintainer at
+# release time.
 #
 # Triggers:
 #   - push a tag v*      -> full build + attach to the Release
-#   - workflow_dispatch  -> build everything and expose it as run artifacts
-#                           (lets us exercise the workers without cutting a release)
+#   - workflow_dispatch  -> goreleaser snapshot (nothing published) and every
+#                           desktop bundle as run artifacts
 name: Release
 
 on:
@@ -43,6 +50,33 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # ---- goreleaser dry run (manual runs only) -------------------------------
+  # `binaries` is skipped on workflow_dispatch, so without this the goreleaser
+  # config would never be exercised outside a real release.
+  snapshot:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: GoReleaser snapshot (builds everything, publishes nothing)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish
+      - name: List dist and check the raw agents are checksummed
+        run: |
+          set -euo pipefail
+          ls -l dist
+          cat dist/checksums.txt
+          grep -q ' jumpgate-linux-amd64$' dist/checksums.txt
+          grep -q ' jumpgate-linux-arm64$' dist/checksums.txt
+
   # ---- desktop apps (always build; attach to Release on tags) --------------
   desktop:
     needs: [binaries]
@@ -59,8 +93,16 @@ jobs:
           - label: windows-amd64
             os: windows-latest
           - label: linux-amd64
-            os: ubuntu-22.04
+            os: ubuntu-24.04
+          - label: linux-arm64
+            os: ubuntu-24.04-arm
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      # The tag on a release; on a manual run, git describe inside the scripts.
+      VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,32 +111,22 @@ jobs:
         with:
           go-version: "1.25"
 
-      # macOS: full Jumpgate.app (tray + menubar) via the packaging script
-      - name: Build Jumpgate.app (macOS)
+      - name: Build both apps (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install librsvg >/dev/null
           bash cmd/jumpgate/build-macos-app.sh dist
-          cd dist && zip -qry "Jumpgate-${{ matrix.label }}.zip" Jumpgate.app
+          cd dist && zip -qry "Jumpgate-${{ matrix.label }}.zip" Jumpgate.app "Jumpgate Terminal.app"
 
-      # Linux: webview desktop binary (needs GTK + WebKitGTK for CGo webview)
-      - name: Build desktop binary (Linux)
+      - name: Build the desktop bundle (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
-          mkdir -p dist
-          CGO_ENABLED=1 go build -tags tray -ldflags "-s -w" -o dist/jumpgate ./cmd/jumpgate
-          tar -C dist -czf "dist/jumpgate-${{ matrix.label }}.tar.gz" jumpgate
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+          scripts/package-linux.sh dist
 
-      # Windows: webview desktop exe (-H windowsgui hides the console window)
-      - name: Build desktop exe (Windows)
+      - name: Build both exes (Windows)
         if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          mkdir -p dist
-          CGO_ENABLED=1 go build -tags tray -ldflags "-s -w -H windowsgui" -o dist/jumpgate.exe ./cmd/jumpgate
-          cd dist && 7z a "jumpgate-${{ matrix.label }}.zip" jumpgate.exe >/dev/null
+        run: scripts/package-windows.sh dist
 
       - name: Upload run artifact
         uses: actions/upload-artifact@v4

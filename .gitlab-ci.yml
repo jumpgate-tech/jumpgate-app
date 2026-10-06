@@ -190,3 +190,35 @@ e2e:
   script:
     - scripts/e2e-agent.sh
     - scripts/e2e-local.sh
+
+# A private dry run of the GitHub release's goreleaser half: the same config
+# (.goreleaser.yaml), snapshot mode, nothing published. The desktop bundles
+# need native runners and stay in .github/workflows/release.yml. Keep the
+# artifacts to inspect archives, checksums.txt and the raw agents.
+release-snapshot:
+  stage: test
+  image: golang:1.25-bookworm
+  timeout: 60m
+  when: manual
+  allow_failure: true
+  variables:
+    GIT_DEPTH: "0"
+  cache:
+    key:
+      files: [go.sum]
+    paths: [.cache/go-mod/, .cache/go-build/]
+  script:
+    - go install github.com/goreleaser/goreleaser/v2@latest
+    - export PATH="$(go env GOPATH)/bin:$PATH"
+    - goreleaser check
+    - goreleaser release --snapshot --clean --skip=publish
+    - ls -l dist
+    - cat dist/checksums.txt
+    - grep -q ' jumpgate-linux-amd64$' dist/checksums.txt
+    - grep -q ' jumpgate-linux-arm64$' dist/checksums.txt
+  artifacts:
+    paths:
+      - dist/*.tar.gz
+      - dist/*.zip
+      - dist/checksums.txt
+    expire_in: 2 weeks
