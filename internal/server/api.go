@@ -120,6 +120,9 @@ type targetEntry struct {
 
 	setup *setupRun
 
+	// logs follows a paired box's journal for its logs stream (agentlogs.go).
+	logs *logFollower
+
 	// opBusy is set while a destructive operation (wipe, reset, clear) is
 	// running against this target. See claimTargetOp.
 	opBusy bool
@@ -136,9 +139,10 @@ type targetEntry struct {
 	diagBusy   bool
 }
 
-// retireObserversLocked stops the target's monitor and log watcher, along
-// with the diagnostics goroutines tied to their contexts, and forgets them so
-// the next getMonitor or getWatcher builds new ones from the current Wire.
+// retireObserversLocked stops the target's monitor, log watcher and log
+// follower, along with the diagnostics goroutines tied to their contexts, and
+// forgets them so the next getMonitor or getWatcher builds new ones from the
+// current Wire.
 // The caller holds e.mu.
 func (e *targetEntry) retireObserversLocked() {
 	if e.monStop != nil {
@@ -147,8 +151,12 @@ func (e *targetEntry) retireObserversLocked() {
 	if e.watchStop != nil {
 		e.watchStop()
 	}
+	if e.logs != nil {
+		e.logs.stop()
+	}
 	e.mon, e.monStop, e.monDone = nil, nil, nil
 	e.watch, e.watchStop, e.watchDone = nil, nil, nil
+	e.logs = nil
 }
 
 // setExec caches ex as entry's executor under entry.mu. handleAddTarget
@@ -1270,7 +1278,7 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if target.Agent != nil {
-		s.streamAgentLogSnapshots(w, r, cfg, target, backlogParam(r.URL.Query().Get("backlog")))
+		s.streamAgentLogs(w, r, cfg, target, r.URL.Query().Get("backlog"))
 		return
 	}
 	if target.Wire == nil {

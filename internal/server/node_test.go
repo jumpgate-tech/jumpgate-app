@@ -33,6 +33,8 @@ type pairedOpts struct {
 	setUp  bool                 // write a node.json on the box
 	server func(*Config)        // adjust the server's Config (signer, executor seam)
 	target func(*config.Target) // adjust the saved target after it is paired
+	// onServer sees the server, for tests that look at its registry.
+	onServer func(*Server)
 }
 
 // requireAgentPeer skips a test that needs the agent to answer: it runs on
@@ -94,7 +96,15 @@ func pairedBoxWith(t *testing.T, ex executor.Executor, o pairedOpts) (*httptest.
 	if o.server != nil {
 		o.server(&cfg)
 	}
-	ts := httptest.NewServer(New(cfg).Handler())
+	srv := New(cfg)
+	if o.onServer != nil {
+		o.onServer(srv)
+	}
+	// Cleanups run last first: the server closes (its handlers have all
+	// returned), then its log followers stop, before the agent goes away
+	// and before any test restores the timing globals (Ruling T8).
+	t.Cleanup(srv.stopLogFollowers)
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, token
 }
@@ -272,7 +282,7 @@ func TestPairedFailuresNeverFallBackToSSH(t *testing.T) {
 					t.Errorf("%s %s: got %d %+v via %q", r.method, r.path, res.StatusCode, e, res.Header.Get("X-Jumpgate-Via"))
 				}
 			}
-			// The logs stream opens with its snapshot-mode note, then the error.
+			// The logs stream opens with its (empty) reset, then the error.
 			for path, n := range map[string]int{"/monitor/stream": 1, "/logs/stream?backlog=10": 2} {
 				frames, h := readFrames(t, ts, token, "/api/targets/box"+path, n)
 				last := frames[len(frames)-1]
@@ -467,15 +477,6 @@ func TestPairedMonitorStreamPollsTheAgent(t *testing.T) {
 		if !strings.HasPrefix(f, "data: {") || !strings.Contains(f, `"execHead"`) {
 			t.Fatalf("frame %q is not a snapshot", f)
 		}
-	}
-}
-
-func TestPairedLogsStreamSendsSnapshots(t *testing.T) {
-	requireAgentPeer(t)
-	ts, token := pairedBox(t, nopExec{}, true)
-	frames, _ := readFrames(t, ts, token, "/api/targets/box/logs/stream?backlog=10", 2)
-	if !strings.HasPrefix(frames[0], "event: note\n") || !strings.HasPrefix(frames[1], "event: reset\n") {
-		t.Fatalf("frames %q", frames)
 	}
 }
 

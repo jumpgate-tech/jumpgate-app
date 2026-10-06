@@ -468,24 +468,30 @@ func (s *Server) streamAgentStatus(w http.ResponseWriter, r *http.Request, cfg c
 	})
 }
 
-// streamAgentLogSnapshots serves a paired box's logs stream as a fresh window
-// of the last n lines every agentLogsSnapshotInterval, each a "reset", so a
-// snapshot never duplicates or loses a line the way a diff of windows would.
-// Task 8 replaces this with a follower for agents that know logs.since and
-// keeps it for those that do not.
-func (s *Server) streamAgentLogSnapshots(w http.ResponseWriter, r *http.Request, cfg config.Config, t config.Target, n int) {
-	setVia(w, viaAgent)
-	conn, ok := startSSE(w)
-	if !ok {
-		return
-	}
-	defer conn.Close()
-	writeSSENote(w, "snapshot mode: the last lines, refreshed every 10s")
+// streamAgentLogSnapshots serves a paired box's logs stream on conn as a
+// fresh window of the newest lines every agentLogsSnapshotInterval, each a
+// "reset", so a snapshot never duplicates or loses a line the way a diff of
+// windows would. It is the stream for an agent that predates logs.since, and
+// opens with note, which says so. rawBacklog keeps Task 3's meaning as far as
+// snapshots can: absent, each window is defaultRecentLogs lines; n, it is n
+// lines; 0, the first reset is empty and later windows are the default size.
+func (s *Server) streamAgentLogSnapshots(r *http.Request, conn *sseConn, cfg config.Config, t config.Target, rawBacklog string, note string) {
+	writeSSENote(conn.w, note)
 	conn.f.Flush()
-	if n <= 0 {
-		n = defaultRecentLogs
+	n, empty := defaultRecentLogs, false
+	if rawBacklog != "" {
+		if b := backlogParam(rawBacklog); b > 0 {
+			n = b
+		} else {
+			empty = true
+		}
 	}
 	pollAgentStream(r, conn, agentLogsSnapshotInterval, func(ctx context.Context) agentPoll {
+		if empty {
+			// Polls run one at a time, so this needs no lock.
+			empty = false
+			return agentPoll{name: "reset", v: []logwatch.Hit{}}
+		}
 		hits, _, err := s.nodeLogs(ctx, cfg, t, n)
 		if hits == nil {
 			hits = []logwatch.Hit{}
