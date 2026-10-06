@@ -33,6 +33,12 @@ type Fake struct {
 	ServiceV   api.ServiceResult
 	Probes     []api.HostKeyProbe // successive ProbeHostKeys answers; the last repeats
 	PairV      []api.PairEvent
+
+	DiskV      map[string]api.DiskView
+	StatusCh   map[string]chan apiclient.Update[api.NodeStatus]
+	ExplainV   api.Explain
+	SettingsV  api.Settings
+	LastUpdate api.SettingsUpdate // what SaveSettings last received
 }
 
 // NewFake is a Fake with empty data and open stream channels.
@@ -41,6 +47,7 @@ func NewFake() *Fake {
 		Err: map[string]error{}, FleetCh: make(chan apiclient.Update[api.Fleet], 16),
 		LogsCh:     map[string]chan apiclient.Update[[]api.LogHit]{},
 		EndpointsV: map[string]api.Endpoints{}, FirewallV: map[string][]api.CheckItem{},
+		DiskV: map[string]api.DiskView{}, StatusCh: map[string]chan apiclient.Update[api.NodeStatus]{},
 	}
 }
 
@@ -178,4 +185,52 @@ func (f *Fake) Pair(_ context.Context, target string, req api.PairRequest) (<-ch
 
 func (f *Fake) RemoveTarget(_ context.Context, target string) error {
 	return f.call("RemoveTarget", target)
+}
+
+func (f *Fake) Disk(_ context.Context, target string) (api.DiskView, error) {
+	f.mu.Lock()
+	v := f.DiskV[target]
+	f.mu.Unlock()
+	return v, f.call("Disk", target)
+}
+
+func (f *Fake) MeasureDisk(_ context.Context, target string) (api.DiskView, error) {
+	f.mu.Lock()
+	v := f.DiskV[target]
+	f.mu.Unlock()
+	return v, f.call("MeasureDisk", target)
+}
+
+// Status is the status channel for target, made on first use.
+func (f *Fake) Status(target string) chan apiclient.Update[api.NodeStatus] {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.StatusCh[target] == nil {
+		f.StatusCh[target] = make(chan apiclient.Update[api.NodeStatus], 16)
+	}
+	return f.StatusCh[target]
+}
+
+func (f *Fake) WatchStatus(ctx context.Context, target string) <-chan apiclient.Update[api.NodeStatus] {
+	_ = f.call("WatchStatus", target)
+	return relay(ctx, f.Status(target))
+}
+
+func (f *Fake) Explain(_ context.Context, target string, lines []string) (api.Explain, error) {
+	return f.ExplainV, f.call("Explain", target, len(lines))
+}
+
+func (f *Fake) Settings(context.Context) (api.Settings, error) {
+	f.mu.Lock()
+	v := f.SettingsV
+	f.mu.Unlock()
+	return v, f.call("Settings")
+}
+
+func (f *Fake) SaveSettings(_ context.Context, u api.SettingsUpdate) (api.Settings, error) {
+	f.mu.Lock()
+	f.LastUpdate = u
+	v := f.SettingsV
+	f.mu.Unlock()
+	return v, f.call("SaveSettings")
 }

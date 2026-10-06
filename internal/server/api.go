@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1420,6 +1421,9 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 // sent to the AI provider when the caller doesn't supply explicit lines.
 const maxDefaultExplainHits = 40
 
+// explainAgentLines is how far back explain looks on a box.
+const explainAgentLines = 400
+
 type explainRequest struct {
 	Lines []string `json:"lines,omitempty"`
 }
@@ -1430,23 +1434,16 @@ type explainResponse struct {
 	// the UI can show the operator what went out — whether that's the
 	// caller-supplied lines or the auto-selected recent error hits.
 	SentExcerpt []string `json:"sentExcerpt"`
+	Redacted    bool     `json:"redacted"`
 }
 
 func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	target, ok := findTarget(cfg, id)
+	cfg, target, ok := s.nodeTarget(w, r.PathValue("id"))
 	if !ok {
-		writeTargetNotFound(w)
 		return
 	}
 	if cfg.AIProvider == "" {
-		writeError(w, http.StatusConflict, "no AI provider is configured; set one in Settings first")
+		writeErrorDetail(w, http.StatusConflict, "no AI provider is configured; set one in Settings first", "", api.CodeAIUnconfigured)
 		return
 	}
 
@@ -1459,9 +1456,12 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lines := req.Lines
-	if len(lines) == 0 && target.Wire != nil {
-		if watch, _, err := s.getWatcher(target); err == nil {
-			for _, hit := range watch.Recent(0) {
+	if len(lines) == 0 && (target.Agent != nil || target.Wire != nil) {
+		// The default excerpt is the recent error and critical lines, read
+		// the way every other node operation is: through the agent on a
+		// paired box, so explain works with root SSH disabled.
+		if hits, _, err := s.nodeLogs(r.Context(), cfg, target, explainAgentLines); err == nil {
+			for _, hit := range hits {
 				if hit.Severity == "error" || hit.Severity == "critical" {
 					lines = append(lines, hit.Line)
 				}
@@ -1471,6 +1471,15 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// Redact here, immediately before the provider call, for every source of
+	// lines. Redact may drop lines (caps), so changed is a comparison of the
+	// whole excerpt, never an index-by-index one.
+	sent := lines
+	if !ai.Local(cfg.AIProvider) {
+		sent = ai.Redact(lines)
+	}
+	redacted := !slices.Equal(sent, lines)
 
 	provider, err := s.newAIProvider(cfg.AIProvider, cfg.AIKey, "")
 	if err != nil {
@@ -1496,14 +1505,14 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		ExecClient:   execID,
 		BeaconClient: beaconID,
 		Syncing:      syncing,
-		Lines:        lines,
+		Lines:        sent,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, explainResponse{Text: text, SentExcerpt: lines})
+	writeJSON(w, http.StatusOK, explainResponse{Text: text, SentExcerpt: sent, Redacted: redacted})
 }
 
 // ---------------------------------------------------------------------
@@ -1738,6 +1747,9 @@ type settingsResponse struct {
 	// shows a positive "notify me automatically" toggle, so the API speaks in
 	// the same direction.
 	UpdateNotifyEnabled bool `json:"updateNotifyEnabled"`
+
+	// AIDisclosure is the one line saying what Explain sends and to whom.
+	AIDisclosure string `json:"aiDisclosure"`
 }
 
 // placeholderNamePattern is the name shape chainlist's ${...} slot accepts. It
@@ -1755,6 +1767,7 @@ func settingsResponseFrom(c config.Config) settingsResponse {
 		// able to iterate the field without a guard.
 		ProviderKeysSet:     []string{},
 		UpdateNotifyEnabled: !c.UpdateNotifyDisabled,
+		AIDisclosure:        ai.Disclosure(c.AIProvider),
 	}
 	for name, v := range c.ProviderKeys {
 		if strings.TrimSpace(v) != "" {

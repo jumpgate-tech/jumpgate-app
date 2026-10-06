@@ -332,3 +332,25 @@ func TestWatchStatusClosesOnCancel(t *testing.T) {
 		}
 	}
 }
+
+func TestExplainAndSettings(t *testing.T) {
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/targets/a/explain":
+			fmt.Fprint(w, `{"text":"t","sentExcerpt":["<ip-1>"],"redacted":true}`)
+		default:
+			fmt.Fprint(w, `{"aiProvider":"groq","aiKeySet":true,"aiDisclosure":"d"}`)
+		}
+	})
+	ctx := context.Background()
+	if e, err := c.Explain(ctx, "a", nil); err != nil || !e.Redacted {
+		t.Fatalf("Explain %+v %v", e, err)
+	}
+	if s, err := c.Settings(ctx); err != nil || !s.AIKeySet {
+		t.Fatalf("Settings %+v %v", s, err)
+	}
+	p := "groq"
+	if s, err := c.SaveSettings(ctx, api.SettingsUpdate{AIProvider: &p}); err != nil || s.AIDisclosure != "d" {
+		t.Fatalf("SaveSettings %+v %v", s, err)
+	}
+}

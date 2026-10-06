@@ -76,6 +76,9 @@ const (
 	CodeGatewayNotFound   Code = "gateway_not_found"
 	CodeVPNNotFound       Code = "vpn_not_found"
 	CodeVPNServerNotFound Code = "vpn_server_not_found"
+
+	// Explain has no provider to ask.
+	CodeAIUnconfigured Code = "ai_unconfigured"
 )
 
 // Exit classes: the CLI's process exit statuses, published in the README.
@@ -142,6 +145,7 @@ var registry = map[Code]codeInfo{
 	CodeGatewayNotFound:   {"", ExitFailed},
 	CodeVPNNotFound:       {"", ExitFailed},
 	CodeVPNServerNotFound: {"", ExitFailed},
+	CodeAIUnconfigured:    {"choose an AI provider in Settings first", ExitFailed},
 }
 
 // Known reports whether c is in the registry.

@@ -166,3 +166,25 @@ func (c *Client) MeasureDisk(ctx context.Context, target string) (api.DiskView, 
 func (c *Client) WatchStatus(ctx context.Context, target string) <-chan Update[api.NodeStatus] {
 	return watch(ctx, c, fleetPath(target, "/status/stream"), decodeJSON[api.NodeStatus])
 }
+
+// Explain asks the configured AI provider about lines (or, with none, the
+// box's recent error lines).
+func (c *Client) Explain(ctx context.Context, target string, lines []string) (api.Explain, error) {
+	var e api.Explain
+	err := c.Do(ctx, http.MethodPost, targetPath(target, "/explain"), map[string]any{"lines": lines}, &e)
+	return e, err
+}
+
+// Settings reads the provider settings and the AI disclosure line.
+func (c *Client) Settings(ctx context.Context) (api.Settings, error) {
+	var s api.Settings
+	err := c.Do(ctx, http.MethodGet, "/api/settings", nil, &s)
+	return s, err
+}
+
+// SaveSettings changes the provider settings and returns the new state.
+func (c *Client) SaveSettings(ctx context.Context, u api.SettingsUpdate) (api.Settings, error) {
+	var s api.Settings
+	err := c.Do(ctx, http.MethodPut, "/api/settings", u, &s)
+	return s, err
+}

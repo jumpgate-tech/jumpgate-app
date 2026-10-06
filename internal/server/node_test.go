@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/agent"
+	"github.com/valve-tech/jumpgate/internal/ai"
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
@@ -35,6 +36,9 @@ type pairedOpts struct {
 	target func(*config.Target) // adjust the saved target after it is paired
 	// onServer sees the server, for tests that look at its registry.
 	onServer func(*Server)
+	// ai, when set, is the provider the server's NewAIProvider seam hands
+	// out, so no test dials a real one (Ruling T11).
+	ai *fakeAIProvider
 }
 
 // requireAgentPeer skips a test that needs the agent to answer: it runs on
@@ -93,6 +97,9 @@ func pairedBoxWith(t *testing.T, ex executor.Executor, o pairedOpts) (*httptest.
 	}
 	token := NewSessionToken()
 	cfg := Config{Token: token, UI: fstest.MapFS{}, Signer: controller}
+	if o.ai != nil {
+		cfg.NewAIProvider = func(id, _, _ string) (ai.Provider, error) { o.ai.id = id; return o.ai, nil }
+	}
 	if o.server != nil {
 		o.server(&cfg)
 	}

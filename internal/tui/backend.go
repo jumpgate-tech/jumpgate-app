@@ -31,6 +31,12 @@ type Backend interface {
 	AddTarget(ctx context.Context, req api.AddTarget) error
 	Pair(ctx context.Context, target string, req api.PairRequest) (<-chan api.PairEvent, error)
 	RemoveTarget(ctx context.Context, target string) error
+	Disk(ctx context.Context, target string) (api.DiskView, error)
+	MeasureDisk(ctx context.Context, target string) (api.DiskView, error)
+	WatchStatus(ctx context.Context, target string) <-chan apiclient.Update[api.NodeStatus]
+	Explain(ctx context.Context, target string, lines []string) (api.Explain, error)
+	Settings(ctx context.Context) (api.Settings, error)
+	SaveSettings(ctx context.Context, u api.SettingsUpdate) (api.Settings, error)
 }
 
 var _ Backend = (*apiclient.Client)(nil)
