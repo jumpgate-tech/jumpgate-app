@@ -1,8 +1,10 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -218,5 +220,34 @@ func TestSSHArgvUserAndSpacedKeyPassesTheClientScreen(t *testing.T) {
 	}
 	if err := api.CheckSSHArgv(argv); err != nil {
 		t.Fatalf("client screen refused %q: %v", argv, err)
+	}
+}
+
+// Ruling T12a: the shell checks the host key against the very files pairing
+// and the executor's Strict check trust, so a box jumpgate trusts is one the
+// shell connects to. One list, from config, for both.
+func TestSSHCommandUsesTheStrictHostFiles(t *testing.T) {
+	ts, token := contractServer(t, config.Target{ID: "box", Mode: "ssh", SSH: &executor.SSHConfig{Host: "10.0.0.5", User: "root"}})
+	req, _ := http.NewRequest("GET", ts.URL+"/api/fleet/box/ssh", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var cmd api.SSHCommand
+	if err := json.NewDecoder(res.Body).Decode(&cmd); err != nil || res.StatusCode != http.StatusOK {
+		t.Fatalf("%d %v", res.StatusCode, err)
+	}
+	files, err := config.StrictHostFilesForSSH()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := sshArgv(config.Target{SSH: &executor.SSHConfig{Host: "10.0.0.5", User: "root"}}, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cmd.Argv, want) {
+		t.Fatalf("argv\n got %q\nwant %q", cmd.Argv, want)
 	}
 }

@@ -48,12 +48,8 @@ func defaultSystemKnownHosts() string {
 // only while it builds a checker, and removes that file before returning.
 func OpenSSHKnownHosts(home string) []string {
 	files := []string{filepath.Join(home, ".ssh", "known_hosts")}
-	if _, err := os.Stat(systemKnownHosts); err != nil {
-		return files
-	}
-	f, err := openTrustedKnownHosts(systemKnownHosts)
-	if err != nil {
-		log.Printf("jumpgate: ignoring %s: %v", systemKnownHosts, err)
+	f := openTrustedSystemKnownHosts()
+	if f == nil {
 		return files
 	}
 	defer f.Close()
@@ -63,6 +59,36 @@ func OpenSSHKnownHosts(home string) []string {
 		return files
 	}
 	return append(files, registerKnownHostsBytes(data))
+}
+
+// OpenSSHKnownHostsPaths is the same set as OpenSSHKnownHosts, decided by the
+// same trust check, as paths for an ssh child process (the TUI and CLI shell),
+// which cannot read the in-memory snapshot. The child re-opens the system
+// file by name, so unlike Strict it reads whatever is there then; the check
+// it passed means only a trusted account could have changed it since.
+func OpenSSHKnownHostsPaths(home string) []string {
+	files := []string{filepath.Join(home, ".ssh", "known_hosts")}
+	f := openTrustedSystemKnownHosts()
+	if f == nil {
+		return files
+	}
+	f.Close()
+	return append(files, systemKnownHosts)
+}
+
+// openTrustedSystemKnownHosts opens the system-wide file when it exists and
+// passes the trusted-writable check, or returns nil (with a warning when it
+// exists but is not trusted).
+func openTrustedSystemKnownHosts() *os.File {
+	if _, err := os.Stat(systemKnownHosts); err != nil {
+		return nil
+	}
+	f, err := openTrustedKnownHosts(systemKnownHosts)
+	if err != nil {
+		log.Printf("jumpgate: ignoring %s: %v", systemKnownHosts, err)
+		return nil
+	}
+	return f
 }
 
 // memTokenPrefix starts a known_hosts entry that stands for in-memory bytes.

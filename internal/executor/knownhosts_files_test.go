@@ -175,3 +175,36 @@ func TestSystemKnownHostsSurviveTheTempAreaBeingTamperedWith(t *testing.T) {
 		t.Error("the algorithms of a system-file key were lost")
 	}
 }
+
+// The files an ssh child is pointed at are the same set strict checking
+// uses: the user's file, and the system file when it passes the same trust
+// check, by its path (an ssh child cannot read the in-memory snapshot).
+func TestOpenSSHKnownHostsPathsMatchTheStrictSet(t *testing.T) {
+	home := t.TempDir()
+	sys := filepath.Join(t.TempDir(), "ssh_known_hosts")
+	oldSys, oldOpen := systemKnownHosts, openTrustedKnownHosts
+	systemKnownHosts = sys
+	t.Cleanup(func() { systemKnownHosts, openTrustedKnownHosts = oldSys, oldOpen })
+	user := filepath.Join(home, ".ssh", "known_hosts")
+
+	if got := OpenSSHKnownHostsPaths(home); !slices.Equal(got, []string{user}) {
+		t.Fatalf("without a system file: %v", got)
+	}
+	if err := os.WriteFile(sys, []byte("host ssh-ed25519 AAAA\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openTrustedKnownHosts = func(p string) (*os.File, error) { return os.Open(p) }
+	if got := OpenSSHKnownHostsPaths(home); !slices.Equal(got, []string{user, sys}) {
+		t.Fatalf("with a trusted system file: %v", got)
+	}
+	if n := len(OpenSSHKnownHosts(home)); n != 2 {
+		t.Fatalf("strict set has %d entries", n)
+	}
+	openTrustedKnownHosts = func(string) (*os.File, error) { return nil, errors.New("writable by Everyone") }
+	if got := OpenSSHKnownHostsPaths(home); !slices.Equal(got, []string{user}) {
+		t.Fatalf("untrusted system file kept: %v", got)
+	}
+	if n := len(OpenSSHKnownHosts(home)); n != 1 {
+		t.Fatalf("strict set has %d entries", n)
+	}
+}

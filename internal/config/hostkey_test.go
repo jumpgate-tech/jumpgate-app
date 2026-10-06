@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -45,5 +46,25 @@ func TestRecordedHostKeysSeparatesTheStores(t *testing.T) {
 	}
 	if c, o, err := RecordedHostKeys("198.51.100.1:22"); err != nil || len(c)+len(o) != 0 {
 		t.Fatalf("unknown host: %v %v %v", c, o, err)
+	}
+}
+
+// The ssh child's list is the strict set: the confirmed store first, then
+// the OpenSSH files the same trust check admits, as paths.
+func TestStrictHostFilesForSSHIsTheStrictSet(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	got, err := StrictHostFilesForSSH()
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, known, err := strictFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append([]string{confirmed}, executor.OpenSSHKnownHostsPaths(home)...)
+	if !slices.Equal(got, want) || len(got) != 1+len(known) {
+		t.Fatalf("got %q, want %q (strict has %d OpenSSH entries)", got, want, len(known))
 	}
 }

@@ -190,17 +190,3 @@ func (s configSeqs) Set(agent eip712.Address, next uint64) error {
 	})
 	return err
 }
-
-// strictHostFiles are the host-key files a person vouched for: the
-// confirmed-only store and the operator's OpenSSH known_hosts.
-func strictHostFiles() (confirmed string, openssh []string, err error) {
-	confirmed, err = config.ConfirmedHostsFile()
-	if err != nil {
-		return "", nil, err
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", nil, err
-	}
-	return confirmed, []string{filepath.Join(home, ".ssh", "known_hosts")}, nil
-}

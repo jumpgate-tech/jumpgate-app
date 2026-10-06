@@ -23,6 +23,22 @@ func strictFiles() (confirmed string, known []string, err error) {
 	return confirmed, executor.OpenSSHKnownHosts(home), nil
 }
 
+// StrictHostFilesForSSH is the strict set as paths for an ssh child (the
+// TUI's and CLI's shell, as UserKnownHostsFile): the confirmed store, then
+// the operator's OpenSSH files that the same trust check admits. A box that
+// StrictHostKey trusts is one that shell can verify, and no other.
+func StrictHostFilesForSSH() ([]string, error) {
+	confirmed, err := ConfirmedHostsFile()
+	if err != nil {
+		return nil, err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	return append([]string{confirmed}, executor.OpenSSHKnownHostsPaths(home)...), nil
+}
+
 // StrictHostKey is the one Strict host-key policy: keys a person confirmed
 // (ConfirmedHostsFile, never written by trust-on-first-use) or listed in the
 // operator's OpenSSH ~/.ssh/known_hosts. The CLI's pairing, the server's agent

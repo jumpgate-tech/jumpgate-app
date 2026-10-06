@@ -124,12 +124,14 @@ func (s *Server) handleFleetSSH(w http.ResponseWriter, r *http.Request) {
 		writeErrorDetail(w, http.StatusConflict, "this target has no SSH address", "", api.CodeNoSSH)
 		return
 	}
-	confirmed, openssh, err := strictHostFiles()
+	// The same files pairing and the executor's Strict check trust (ruling
+	// T12a), so the shell verifies exactly the boxes jumpgate trusts.
+	files, err := config.StrictHostFilesForSSH()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	argv, err := sshArgv(t, append([]string{confirmed}, openssh...))
+	argv, err := sshArgv(t, files)
 	if errors.Is(err, errSSHJump) {
 		writeErrorDetail(w, http.StatusUnprocessableEntity, err.Error(), "", api.CodeSSHJumpUnsupported)
 		return
