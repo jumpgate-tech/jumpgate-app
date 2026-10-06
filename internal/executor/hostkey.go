@@ -103,3 +103,101 @@ func RecordHostKey(hostKeyFile, hostname string, key ssh.PublicKey) error {
 func TOFUHostKeyCallback(hostKeyFile string) ssh.HostKeyCallback {
 	return tofuHostKeyCallback(hostKeyFile)
 }
+
+// ErrHostKeyNotRecorded means hostKeyFile has no line for the host whose key
+// has the given fingerprint.
+var ErrHostKeyNotRecorded = errors.New("no such host key on record")
+
+// HostKeysOnRecord lists every key hostKeyFile holds for hostname, in file
+// order. A missing file holds none.
+func HostKeysOnRecord(hostKeyFile, hostname string) ([]ssh.PublicKey, error) {
+	data, err := os.ReadFile(hostKeyFile)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read host key file %s: %w", hostKeyFile, err)
+	}
+	var keys []ssh.PublicKey
+	for _, line := range strings.Split(string(data), "\n") {
+		if key, ok := parseHostKeyLine(line, hostname); ok {
+			keys = append(keys, key)
+		}
+	}
+	return keys, nil
+}
+
+// parseHostKeyLine is the key of a "host:port keytype base64key" line for
+// hostname; ok is false for any other line, or one that does not parse.
+func parseHostKeyLine(line, hostname string) (ssh.PublicKey, bool) {
+	fields := strings.Fields(line)
+	if len(fields) != 3 || fields[0] != hostname {
+		return nil, false
+	}
+	b, err := base64.StdEncoding.DecodeString(fields[2])
+	if err != nil {
+		return nil, false
+	}
+	key, err := ssh.ParsePublicKey(b)
+	if err != nil {
+		return nil, false
+	}
+	return key, true
+}
+
+// ForgetHostKey removes from hostKeyFile the one line for hostname whose key
+// has fingerprint (OpenSSH SHA256 form), leaving every other line, including
+// the host's keys of other types, byte for byte. The file is replaced
+// atomically: a new file, owner-only like RecordHostKey's, renamed over the
+// old one, so a reader sees the old store or the new one and never a partial
+// write. No such line is ErrHostKeyNotRecorded and changes nothing. Callers
+// serialise ForgetHostKey with RecordHostKey on the same file.
+func ForgetHostKey(hostKeyFile, hostname, fingerprint string) error {
+	data, err := os.ReadFile(hostKeyFile)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrHostKeyNotRecorded
+		}
+		return fmt.Errorf("read host key file %s: %w", hostKeyFile, err)
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	removed := -1
+	for i, line := range lines {
+		if key, ok := parseHostKeyLine(line, hostname); ok && Fingerprint(key) == fingerprint {
+			removed = i
+			break
+		}
+	}
+	if removed < 0 {
+		return ErrHostKeyNotRecorded
+	}
+	out := strings.Join(append(lines[:removed:removed], lines[removed+1:]...), "")
+
+	// Local path: filepath is correct here (see the file comment above).
+	tmp, err := os.CreateTemp(filepath.Dir(hostKeyFile), "."+filepath.Base(hostKeyFile)+"-*")
+	if err != nil {
+		return fmt.Errorf("rewrite host key file %s: %w", hostKeyFile, err)
+	}
+	defer os.Remove(tmp.Name()) // a no-op once renamed
+	// CreateTemp already makes it 0600 on Unix; say so explicitly, as
+	// RecordHostKey does. (On Windows only the read-only bit exists.)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("rewrite host key file %s: %w", hostKeyFile, err)
+	}
+	if _, err := tmp.WriteString(out); err != nil {
+		tmp.Close()
+		return fmt.Errorf("rewrite host key file %s: %w", hostKeyFile, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("rewrite host key file %s: %w", hostKeyFile, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("rewrite host key file %s: %w", hostKeyFile, err)
+	}
+	if err := os.Rename(tmp.Name(), hostKeyFile); err != nil {
+		return fmt.Errorf("rewrite host key file %s: %w", hostKeyFile, err)
+	}
+	return nil
+}

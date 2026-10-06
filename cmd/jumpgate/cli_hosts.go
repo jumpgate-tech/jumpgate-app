@@ -23,13 +23,15 @@ import (
 
 func cmdHosts(args []string) int {
 	if len(args) == 0 {
-		return usage("usage: jumpgate hosts add|list")
+		return usage("usage: jumpgate hosts add|list|forget-key")
 	}
 	switch args[0] {
 	case "list":
 		return hostsList(context.Background(), os.Stdout)
 	case "add":
 		return hostsAdd(args[1:])
+	case "forget-key":
+		return hostsForgetKey(context.Background(), args[1:], newConsentReader(os.Stdin), os.Stdout, os.Stderr)
 	}
 	return usage("unknown hosts subcommand %q", args[0])
 }
@@ -319,6 +321,111 @@ func confirmHostKeys(ctx context.Context, hk hostKeyAPI, addr api.SSHView, in *b
 	}
 	fmt.Fprintln(errw, "jumpgate: the host keys did not settle after confirming every hop; run hosts add again")
 	return exitCode("failed")
+}
+
+// hostsForgetKey removes a box's confirmed host key (or, with --jump, its
+// jump host's), the deliberate step before trusting a key that legitimately
+// changed: confirm never replaces a key on record. The operator retypes the
+// recorded fingerprint; that is the consent, so it must come from a terminal.
+// Keys in ~/.ssh/known_hosts are the operator's own and are never removed.
+func hostsForgetKey(ctx context.Context, args []string, in *bufio.Reader, out, errw io.Writer) int {
+	const usageText = "usage: jumpgate hosts forget-key NAME [--jump]"
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return usage(usageText)
+	}
+	name := args[0]
+	fset := flag.NewFlagSet("hosts forget-key", flag.ContinueOnError)
+	fset.SetOutput(io.Discard)
+	jump := fset.Bool("jump", false, "forget the jump host's key instead of the box's")
+	if err := fset.Parse(args[1:]); err != nil || fset.NArg() != 0 {
+		return usage(usageText)
+	}
+	fail := func(format string, a ...any) int {
+		fmt.Fprintf(errw, "jumpgate: "+format+"\n", a...)
+		return exitCode("failed")
+	}
+	if !stdinIsTerminal() {
+		return fail("forgetting a host key must be confirmed by a person at a terminal; stdin is not one, so nothing was changed")
+	}
+	c, err := connect(ctx)
+	if err != nil {
+		return fail("%v", err)
+	}
+	report := func(what string, err error) int {
+		var e *api.Error
+		if errors.As(err, &e) {
+			return reportServerErrorFrom(errw, what, c.Info(), *e)
+		}
+		return fail("%s: %v", what, err)
+	}
+	ts, err := c.Targets(ctx)
+	if err != nil {
+		return report("hosts forget-key", err)
+	}
+	var addr *api.SSHView
+	for _, t := range ts {
+		if t.ID == name {
+			addr = t.SSH
+			if addr == nil {
+				return fail("%s is not reached over SSH; it has no host key", name)
+			}
+		}
+	}
+	if addr == nil {
+		return fail("no target named %s; run `jumpgate hosts list`", name)
+	}
+	if *jump {
+		if addr.Jump == nil {
+			return fail("%s has no jump host", name)
+		}
+		addr = addr.Jump
+	}
+	port := addr.Port
+	if port == 0 {
+		port = 22
+	}
+	hp := net.JoinHostPort(addr.Host, strconv.Itoa(port)) // as the confirmed store records it
+
+	rec, err := c.RecordedHostKeys(ctx, hp)
+	if err != nil {
+		return report("host keys of "+hp, err)
+	}
+	var mine []api.RecordedHostKey
+	openssh := false
+	for _, k := range rec.Keys {
+		switch k.Store {
+		case api.HostKeyStoreJumpgate:
+			mine = append(mine, k)
+		case api.HostKeyStoreOpenSSH:
+			openssh = true
+		}
+	}
+	if len(mine) == 0 {
+		if openssh {
+			return fail("%s's key is in your OpenSSH ~/.ssh/known_hosts, not jumpgate's confirmed store; jumpgate never edits known_hosts, so remove it there yourself (ssh-keygen -R)", hp)
+		}
+		return fail("jumpgate has no confirmed host key for %s; nothing to forget", hp)
+	}
+	fmt.Fprintf(out, "jumpgate trusts these host keys for %s:\n", hp)
+	for _, k := range mine {
+		fmt.Fprintf(out, "  %s %s\n", k.KeyType, k.Fingerprint)
+	}
+	fmt.Fprint(out, "Type the fingerprint of the key to forget, exactly as shown: ")
+	// Only a complete line naming a key on record is consent.
+	answer, rerr := in.ReadString('\n')
+	typed := strings.TrimSpace(answer)
+	known := false
+	for _, k := range mine {
+		known = known || k.Fingerprint == typed
+	}
+	if rerr != nil || !known {
+		return fail("that is not one of the fingerprints shown; nothing was changed")
+	}
+	if err := c.ForgetHostKey(ctx, hp, typed); err != nil {
+		return report("forget "+hp, err)
+	}
+	fmt.Fprintf(out, "forgot %s for %s. Run `jumpgate hosts add %s` with the same address to compare and confirm its new key.\n", typed, hp, name)
+	return 0
 }
 
 // call POSTs body to the local server and decodes a success into out. It

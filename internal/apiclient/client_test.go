@@ -214,3 +214,28 @@ func TestHostKeyMethods(t *testing.T) {
 		t.Fatalf("bodies %q", bodies)
 	}
 }
+
+func TestForgetHostKeyMethods(t *testing.T) {
+	var reqs []string
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		reqs = append(reqs, r.Method+" "+r.URL.RequestURI()+" "+string(b))
+		if r.URL.Path == "/api/hostkeys" {
+			fmt.Fprint(w, `{"hostPort":"[::1]:22","keys":[{"fingerprint":"SHA256:x","keyType":"ssh-ed25519","store":"jumpgate"}]}`)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	ctx := context.Background()
+	rec, err := c.RecordedHostKeys(ctx, "[::1]:22")
+	if err != nil || len(rec.Keys) != 1 || rec.Keys[0].Store != api.HostKeyStoreJumpgate {
+		t.Fatalf("recorded %+v %v", rec, err)
+	}
+	if err := c.ForgetHostKey(ctx, "[::1]:22", "SHA256:x"); err != nil {
+		t.Fatal(err)
+	}
+	if len(reqs) != 2 || !strings.HasPrefix(reqs[0], "GET /api/hostkeys?hostPort=%5B%3A%3A1%5D%3A22 ") ||
+		!strings.HasPrefix(reqs[1], "POST /api/hostkeys/forget ") || !strings.Contains(reqs[1], `"hostPort":"[::1]:22","fingerprint":"SHA256:x"`) {
+		t.Fatalf("requests %q", reqs)
+	}
+}

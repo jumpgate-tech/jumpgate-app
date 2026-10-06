@@ -603,6 +603,8 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// check, since confirming decides which hosts Strict trusts.
 	mux.HandleFunc("POST /api/hostkeys/probe", s.handleHostKeyProbe)
 	mux.HandleFunc("POST /api/hostkeys/confirm", s.handleHostKeyConfirm)
+	mux.HandleFunc("GET /api/hostkeys", s.handleRecordedHostKeys)
+	mux.HandleFunc("POST /api/hostkeys/forget", s.handleHostKeyForget)
 
 	// The literal "clear" segment is more specific than the {action}
 	// wildcard below it and wins for an exact match — Go 1.22+ ServeMux

@@ -56,6 +56,8 @@ const (
 	// Host-key confirmation (POST /api/hostkeys/confirm).
 	CodeProbeExpired        Code = "probe_expired"
 	CodeFingerprintMismatch Code = "fingerprint_mismatch"
+	CodeTooManyProbes       Code = "too_many_probes"
+	CodeHostKeyNotOurs      Code = "host_key_not_ours"
 
 	// The pairing stream's own failures.
 	CodeStepFailed   Code = "step_failed"
@@ -106,7 +108,7 @@ var registry = map[Code]codeInfo{
 	CodeTargetExists:    {"", ExitFailed},
 	CodeTargetNotSetUp:  {"set the node up first (the web app's setup wizard), or pair the box so its own agent answers", ExitFailed},
 	CodeUnreachable:     {"check that the box is up and reachable over SSH", ExitUnreachable},
-	CodeHostKey:         {"the box's SSH host key does not match the one on record: possibly a man-in-the-middle, or the box was rebuilt. Check the key on the box's console; only if it legitimately changed, remove the old line from ~/.jumpgate/confirmed_hosts (and ~/.ssh/known_hosts) and confirm the new one", ExitSecurity},
+	CodeHostKey:         {"the box's SSH host key does not match the one on record: possibly a man-in-the-middle, or the box was rebuilt. Check the key on the box's console; only if it legitimately changed, forget the old one (`jumpgate hosts forget-key NAME`, or ssh-keygen -R if it is in ~/.ssh/known_hosts) and confirm the new one", ExitSecurity},
 	CodeUnknownHost:     {"nobody has confirmed this box's SSH host key; compare its fingerprint with the box's console and confirm it (`jumpgate hosts add`, or Hosts in the TUI)", ExitSecurity},
 	CodeBadReceipt:      {"the answer was not signed by this box's paired agent; do not trust this box until you re-pair it", ExitSecurity},
 	CodeAgentHTTP:       {"the agent socket refused the request before reading it: this connection is not allowed on the socket (the tunnel user is not in the jumpgate group, or a local uid is not enrolled), or the request was too large", ExitFailed},
@@ -121,6 +123,8 @@ var registry = map[Code]codeInfo{
 
 	CodeProbeExpired:        {"probe the host again; a probe is good for 5 minutes and one confirmation", ExitFailed},
 	CodeFingerprintMismatch: {"the fingerprint you confirmed is not the key the box presented; probe again and compare carefully", ExitSecurity},
+	CodeTooManyProbes:       {"too many host-key probes are waiting for a confirmation; confirm them or wait up to 5 minutes for them to expire, then probe again", ExitFailed},
+	CodeHostKeyNotOurs:      {"that key is in your OpenSSH ~/.ssh/known_hosts, which jumpgate reads but never edits; remove it there yourself (`ssh-keygen -R HOST`)", ExitFailed},
 
 	CodeStepFailed:   {"", ExitFailed},
 	CodeVerifyFailed: {"", ExitFailed},

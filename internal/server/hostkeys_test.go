@@ -1,16 +1,24 @@
 package server
 
 import (
+	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -292,5 +300,315 @@ func TestHostKeyRoutesNeedTheTokenAndThisOrigin(t *testing.T) {
 		if r.StatusCode != http.StatusForbidden {
 			t.Errorf("%s cross-origin: %d", path, r.StatusCode)
 		}
+	}
+}
+
+// ---- fix round 1: probe bounds (M1) and forget (Ruling T6b) ----
+
+// hostKeyServer is contractServer that also returns the *Server, for tests
+// that reach into its probe store.
+func hostKeyServer(t *testing.T) (*httptest.Server, string, *Server) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	token := NewSessionToken()
+	s := New(Config{Token: token, UI: fstest.MapFS{}})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	return ts, token, s
+}
+
+func TestProbesAreCappedWith429(t *testing.T) {
+	old := maxLiveProbes
+	maxLiveProbes = 2
+	t.Cleanup(func() { maxLiveProbes = old })
+	ts, token := contractServer(t)
+	host, port, _ := testSSHD(t)
+	addr := api.HostKeyProbeRequest{SSH: api.SSHView{Host: host, Port: port, User: "root"}}
+	for i := 0; i < 2; i++ {
+		var p api.HostKeyProbe
+		if res := postJSON(t, ts.URL+"/api/hostkeys/probe", token, addr, &p); res.StatusCode != http.StatusOK || p.Pending() == nil || p.Pending().ProbeID == "" {
+			t.Fatalf("probe %d: %d %+v", i, res.StatusCode, p)
+		}
+	}
+	var e api.Error
+	if res := postJSON(t, ts.URL+"/api/hostkeys/probe", token, addr, &e); res.StatusCode != http.StatusTooManyRequests || e.Code != api.CodeTooManyProbes {
+		t.Fatalf("third probe: %d %+v", res.StatusCode, e)
+	}
+}
+
+// A probe waits for a free dial slot and gives up with its request: when
+// every slot is taken, no connection is made.
+func TestProbeDialsAreBounded(t *testing.T) {
+	ts, token, s := hostKeyServer(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	var accepted atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			c.Close()
+		}
+	}()
+	a := ln.Addr().(*net.TCPAddr)
+	body := `{"ssh":{"Host":"127.0.0.1","Port":` + strconv.Itoa(a.Port) + `,"User":"root"}}`
+
+	for i := 0; i < cap(s.probes.dials); i++ {
+		s.probes.dials <- struct{}{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/hostkeys/probe", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	if res, err := http.DefaultClient.Do(req); err == nil {
+		res.Body.Close()
+		t.Fatalf("a probe ran with every dial slot taken: %d", res.StatusCode)
+	}
+	if n := accepted.Load(); n != 0 {
+		t.Fatalf("%d connections with every dial slot taken", n)
+	}
+	for i := 0; i < cap(s.probes.dials); i++ {
+		<-s.probes.dials
+	}
+	res, _ := do(t, ts, token, http.MethodPost, "/api/hostkeys/probe", body)
+	if res.StatusCode != http.StatusOK || accepted.Load() == 0 {
+		t.Fatalf("after freeing the slots: %d, %d connections", res.StatusCode, accepted.Load())
+	}
+}
+
+// signerKey is a fresh host key of the given kind.
+func signerKey(t *testing.T, kind string) ssh.PublicKey {
+	t.Helper()
+	var priv any
+	var err error
+	switch kind {
+	case "ecdsa":
+		priv, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	default:
+		_, priv, err = ed25519.GenerateKey(rand.Reader)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s.PublicKey()
+}
+
+func forget(t *testing.T, ts *httptest.Server, token, hp, fp string) (*http.Response, api.Error) {
+	t.Helper()
+	var e api.Error
+	res := postJSON(t, ts.URL+"/api/hostkeys/forget", token, api.HostKeyForget{HostPort: hp, Fingerprint: fp}, &e)
+	return res, e
+}
+
+func TestRecordedHostKeysListsBothStores(t *testing.T) {
+	ts, token := contractServer(t)
+	hp := "203.0.113.5:22"
+	k1, k2 := signerKey(t, "ed25519"), signerKey(t, "ecdsa")
+	confirmed, _ := config.ConfirmedHostsFile()
+	if err := executor.RecordHostKey(confirmed, hp, k1); err != nil {
+		t.Fatal(err)
+	}
+	home, _ := os.UserHomeDir()
+	writeKnownHosts(t, home, "203.0.113.5 "+strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k2))))
+	res, err := http.NewRequest(http.MethodGet, ts.URL+"/api/hostkeys?hostPort="+hp, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Header.Set("Authorization", "Bearer "+token)
+	r, err := http.DefaultClient.Do(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	var got api.RecordedHostKeys
+	_ = json.NewDecoder(r.Body).Decode(&got)
+	if r.StatusCode != http.StatusOK || len(got.Keys) != 2 ||
+		got.Keys[0] != (api.RecordedHostKey{Fingerprint: executor.Fingerprint(k1), KeyType: k1.Type(), Store: api.HostKeyStoreJumpgate}) ||
+		got.Keys[1] != (api.RecordedHostKey{Fingerprint: executor.Fingerprint(k2), KeyType: k2.Type(), Store: api.HostKeyStoreOpenSSH}) {
+		t.Fatalf("%d %+v", r.StatusCode, got)
+	}
+}
+
+// Forget removes the one line whose key has the typed fingerprint; the
+// host's other key types and other hosts stay.
+func TestForgetRemovesOneKeyAndKeepsTheRest(t *testing.T) {
+	ts, token := contractServer(t)
+	hp := "203.0.113.5:22"
+	k1, k2, k3 := signerKey(t, "ed25519"), signerKey(t, "ecdsa"), signerKey(t, "ed25519")
+	confirmed, _ := config.ConfirmedHostsFile()
+	for _, r := range []struct {
+		hp  string
+		key ssh.PublicKey
+	}{{hp, k1}, {hp, k2}, {"198.51.100.1:22", k3}} {
+		if err := executor.RecordHostKey(confirmed, r.hp, r.key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if res, e := forget(t, ts, token, hp, executor.Fingerprint(k1)); res.StatusCode != http.StatusNoContent {
+		t.Fatalf("forget: %d %+v", res.StatusCode, e)
+	}
+	b, _ := os.ReadFile(confirmed)
+	got := string(b)
+	if strings.Contains(got, base64Key(k1)) || !strings.Contains(got, base64Key(k2)) || !strings.Contains(got, base64Key(k3)) {
+		t.Fatalf("confirmed_hosts after forget:\n%s", got)
+	}
+	if runtime.GOOS != "windows" {
+		if fi, err := os.Stat(confirmed); err != nil || fi.Mode().Perm() != 0o600 {
+			t.Fatalf("confirmed_hosts mode %v, %v", fi.Mode(), err)
+		}
+	}
+}
+
+func base64Key(k ssh.PublicKey) string {
+	return strings.Fields(string(ssh.MarshalAuthorizedKey(k)))[1]
+}
+
+func TestForgetRefusals(t *testing.T) {
+	ts, token := contractServer(t)
+	hp := "203.0.113.5:22"
+	k1 := signerKey(t, "ed25519")
+	confirmed, _ := config.ConfirmedHostsFile()
+	if err := executor.RecordHostKey(confirmed, hp, k1); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(confirmed)
+
+	// A fingerprint that is not the one on record removes nothing.
+	if res, e := forget(t, ts, token, hp, executor.Fingerprint(signerKey(t, "ed25519"))); res.StatusCode != http.StatusConflict || e.Code != api.CodeFingerprintMismatch {
+		t.Fatalf("wrong fingerprint: %d %+v", res.StatusCode, e)
+	}
+	// A host with nothing on record anywhere.
+	if res, e := forget(t, ts, token, "198.51.100.9:22", executor.Fingerprint(k1)); res.StatusCode != http.StatusNotFound || e.Code != api.CodeNotFound {
+		t.Fatalf("unknown host: %d %+v", res.StatusCode, e)
+	}
+	// Malformed requests.
+	for _, req := range []api.HostKeyForget{{HostPort: hp}, {Fingerprint: executor.Fingerprint(k1)}, {HostPort: "no-port", Fingerprint: executor.Fingerprint(k1)}} {
+		if res, e := forget(t, ts, token, req.HostPort, req.Fingerprint); res.StatusCode != http.StatusBadRequest {
+			t.Errorf("%+v: %d %+v", req, res.StatusCode, e)
+		}
+	}
+	if after, _ := os.ReadFile(confirmed); string(after) != string(before) {
+		t.Fatalf("confirmed_hosts changed:\n%q\n%q", before, after)
+	}
+}
+
+// A key only in the operator's OpenSSH known_hosts is not jumpgate's to
+// remove: a clear error, and known_hosts is never touched.
+func TestForgetLeavesOpenSSHKnownHostsAlone(t *testing.T) {
+	ts, token := contractServer(t)
+	k := signerKey(t, "ed25519")
+	home, _ := os.UserHomeDir()
+	line := "203.0.113.5 " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k)))
+	writeKnownHosts(t, home, line)
+	kh, content := filepath.Join(home, ".ssh", "known_hosts"), line+"\n"
+	res, e := forget(t, ts, token, "203.0.113.5:22", executor.Fingerprint(k))
+	if res.StatusCode != http.StatusConflict || e.Code != api.CodeHostKeyNotOurs || !strings.Contains(e.Message, "known_hosts") {
+		t.Fatalf("forget of an OpenSSH key: %d %+v", res.StatusCode, e)
+	}
+	if b, _ := os.ReadFile(kh); string(b) != content {
+		t.Fatalf("known_hosts changed: %q", b)
+	}
+	confirmed, _ := config.ConfirmedHostsFile()
+	if _, err := os.Stat(confirmed); err == nil {
+		t.Fatal("confirmed_hosts was created")
+	}
+}
+
+// A probe issued before a forget cannot be confirmed after it: forgetting a
+// key drops every held probe for that host.
+func TestStaleProbeIsRejectedAfterAForget(t *testing.T) {
+	ts, token := contractServer(t)
+	host, port, key := testSSHD(t)
+	hp := net.JoinHostPort(host, strconv.Itoa(port))
+	addr := api.HostKeyProbeRequest{SSH: api.SSHView{Host: host, Port: port, User: "root"}}
+	var stale, fresh api.HostKeyProbe
+	postJSON(t, ts.URL+"/api/hostkeys/probe", token, addr, &stale)
+	postJSON(t, ts.URL+"/api/hostkeys/probe", token, addr, &fresh)
+	if res := postJSON(t, ts.URL+"/api/hostkeys/confirm", token, api.HostKeyConfirm{ProbeID: fresh.Pending().ProbeID, Fingerprint: fresh.Pending().Fingerprint}, nil); res.StatusCode != http.StatusNoContent {
+		t.Fatalf("confirm: %d", res.StatusCode)
+	}
+	if res, e := forget(t, ts, token, hp, executor.Fingerprint(key)); res.StatusCode != http.StatusNoContent {
+		t.Fatalf("forget: %d %+v", res.StatusCode, e)
+	}
+	var e api.Error
+	if res := postJSON(t, ts.URL+"/api/hostkeys/confirm", token, api.HostKeyConfirm{ProbeID: stale.Pending().ProbeID, Fingerprint: stale.Pending().Fingerprint}, &e); res.StatusCode != http.StatusGone || e.Code != api.CodeProbeExpired {
+		t.Fatalf("stale probe after forget: %d %+v", res.StatusCode, e)
+	}
+	confirmed, _ := config.ConfirmedHostsFile()
+	if b, _ := os.ReadFile(confirmed); strings.Contains(string(b), hp) {
+		t.Fatalf("the stale probe re-recorded the key: %q", b)
+	}
+}
+
+// A forget racing a confirmation of an older probe: whichever runs first,
+// the key is not on record once both are done.
+func TestForgetThenConfirmRace(t *testing.T) {
+	ts, token := contractServer(t)
+	host, port, key := testSSHD(t)
+	hp := net.JoinHostPort(host, strconv.Itoa(port))
+	addr := api.HostKeyProbeRequest{SSH: api.SSHView{Host: host, Port: port, User: "root"}}
+	confirmed, _ := config.ConfirmedHostsFile()
+	for i := 0; i < 10; i++ {
+		var older, first api.HostKeyProbe
+		postJSON(t, ts.URL+"/api/hostkeys/probe", token, addr, &older)
+		postJSON(t, ts.URL+"/api/hostkeys/probe", token, addr, &first)
+		if older.Pending() == nil || first.Pending() == nil {
+			t.Fatalf("round %d: probes %+v %+v", i, older, first)
+		}
+		if res := postJSON(t, ts.URL+"/api/hostkeys/confirm", token, api.HostKeyConfirm{ProbeID: first.Pending().ProbeID, Fingerprint: first.Pending().Fingerprint}, nil); res.StatusCode != http.StatusNoContent {
+			t.Fatalf("round %d: confirm %d", i, res.StatusCode)
+		}
+		var wg sync.WaitGroup
+		var forgetStatus, confirmStatus int
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			res, _ := forget(t, ts, token, hp, executor.Fingerprint(key))
+			forgetStatus = res.StatusCode
+		}()
+		go func() {
+			defer wg.Done()
+			res := postJSON(t, ts.URL+"/api/hostkeys/confirm", token, api.HostKeyConfirm{ProbeID: older.Pending().ProbeID, Fingerprint: older.Pending().Fingerprint}, nil)
+			confirmStatus = res.StatusCode
+		}()
+		wg.Wait()
+		if forgetStatus != http.StatusNoContent || (confirmStatus != http.StatusNoContent && confirmStatus != http.StatusGone) {
+			t.Fatalf("round %d: forget %d, confirm %d", i, forgetStatus, confirmStatus)
+		}
+		if b, _ := os.ReadFile(confirmed); strings.Contains(string(b), hp) {
+			t.Fatalf("round %d: key on record after forget and confirm (%d): %q", i, confirmStatus, b)
+		}
+	}
+}
+
+func TestForgetAndRecordedNeedTheTokenAndThisOrigin(t *testing.T) {
+	ts, token := contractServer(t)
+	for _, c := range []struct{ method, path string }{{http.MethodPost, "/api/hostkeys/forget"}, {http.MethodGet, "/api/hostkeys?hostPort=h:22"}} {
+		if res, e := do(t, ts, "", c.method, c.path, `{}`); res.StatusCode != http.StatusUnauthorized || e.Code != api.CodeUnauthorized {
+			t.Errorf("%s without a token: %d %+v", c.path, res.StatusCode, e)
+		}
+	}
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/hostkeys/forget", strings.NewReader(`{}`))
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: token})
+	req.Header.Set("Origin", "http://evil.example")
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusForbidden {
+		t.Errorf("forget cross-origin: %d", r.StatusCode)
 	}
 }

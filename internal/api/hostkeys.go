@@ -50,3 +50,33 @@ type HostKeyConfirm struct {
 	ProbeID     string `json:"probeId"`
 	Fingerprint string `json:"fingerprint"`
 }
+
+// HostKeyStore names where a recorded key lives.
+type HostKeyStore string
+
+const (
+	HostKeyStoreJumpgate HostKeyStore = "jumpgate" // ~/.jumpgate/confirmed_hosts: jumpgate can forget it
+	HostKeyStoreOpenSSH  HostKeyStore = "openssh"  // ~/.ssh/known_hosts: read only, never edited
+)
+
+// RecordedHostKey is one key a store holds for a host.
+type RecordedHostKey struct {
+	Fingerprint string       `json:"fingerprint"` // OpenSSH SHA256 form
+	KeyType     string       `json:"keyType"`
+	Store       HostKeyStore `json:"store"`
+}
+
+// RecordedHostKeys is GET /api/hostkeys?hostPort=…'s answer: every key the
+// Strict policy trusts for the host, jumpgate's store first.
+type RecordedHostKeys struct {
+	HostPort string            `json:"hostPort"`
+	Keys     []RecordedHostKey `json:"keys"`
+}
+
+// HostKeyForget is POST /api/hostkeys/forget's body: the host and the
+// fingerprint of the one confirmed key to remove, as the person typed it.
+// Replacing a key that changed is forget, then probe and confirm.
+type HostKeyForget struct {
+	HostPort    string `json:"hostPort"`
+	Fingerprint string `json:"fingerprint"`
+}

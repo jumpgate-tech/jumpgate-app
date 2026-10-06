@@ -118,3 +118,17 @@ func (c *Client) ConfirmHostKey(ctx context.Context, probeID, fingerprint string
 func (c *Client) AddTarget(ctx context.Context, req api.AddTarget) error {
 	return c.Do(ctx, http.MethodPost, "/api/targets", req, nil)
 }
+
+// RecordedHostKeys lists every key the server's Strict policy trusts for
+// hostPort, by store.
+func (c *Client) RecordedHostKeys(ctx context.Context, hostPort string) (api.RecordedHostKeys, error) {
+	var r api.RecordedHostKeys
+	err := c.Do(ctx, http.MethodGet, "/api/hostkeys?hostPort="+url.QueryEscape(hostPort), nil, &r)
+	return r, err
+}
+
+// ForgetHostKey removes the one confirmed key for hostPort whose fingerprint
+// is fingerprint. Keys in OpenSSH's known_hosts are never removed.
+func (c *Client) ForgetHostKey(ctx context.Context, hostPort, fingerprint string) error {
+	return c.Do(ctx, http.MethodPost, "/api/hostkeys/forget", api.HostKeyForget{HostPort: hostPort, Fingerprint: fingerprint}, nil)
+}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -23,6 +24,15 @@ import (
 // hostKeyProbeTTL is how long a probed key waits for a person's confirmation.
 var hostKeyProbeTTL = 5 * time.Minute
 
+// maxLiveProbes bounds the keys held for confirmation; past it a probe is
+// refused (429) rather than letting the store grow. A person confirms one
+// key at a time, so 64 is far more than any real use. A var for tests.
+var maxLiveProbes = 64
+
+// maxProbeDials bounds the outbound handshakes all probes make at once, so
+// a burst of probe requests cannot turn the server into a port scanner.
+const maxProbeDials = 8
+
 // hostKeyProbes holds keys captured by a probe until a person confirms one.
 // Recording the held key, not a fresh capture and never a key a client sends,
 // means what the person compared is exactly what is written.
@@ -30,10 +40,13 @@ type hostKeyProbes struct {
 	mu sync.Mutex
 	m  map[string]heldKey
 
-	// record serialises the check-then-append in confirm, so two
-	// confirmations for one host cannot both find it unknown and append two
-	// different keys.
+	// record serialises every write of the confirmed store: confirm's
+	// check-then-append, so two confirmations for one host cannot both find
+	// it unknown and append two different keys, and forget's rewrite.
 	record sync.Mutex
+
+	// dials holds one token per outbound probe handshake in flight.
+	dials chan struct{}
 }
 
 type heldKey struct {
@@ -42,14 +55,17 @@ type heldKey struct {
 	expires  time.Time
 }
 
-func newHostKeyProbes() *hostKeyProbes { return &hostKeyProbes{m: map[string]heldKey{}} }
+func newHostKeyProbes() *hostKeyProbes {
+	return &hostKeyProbes{m: map[string]heldKey{}, dials: make(chan struct{}, maxProbeDials)}
+}
 
 // put holds key for hostPort and returns its probe id: 128 random bits, so an
-// id cannot be guessed, only read from the probe's answer.
-func (p *hostKeyProbes) put(hostPort string, key ssh.PublicKey) string {
+// id cannot be guessed, only read from the probe's answer. ok is false when
+// maxLiveProbes keys are already waiting.
+func (p *hostKeyProbes) put(hostPort string, key ssh.PublicKey) (id string, ok bool) {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b) // never fails (crypto/rand, Go 1.24+)
-	id := hex.EncodeToString(b)
+	id = hex.EncodeToString(b)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := time.Now()
@@ -58,8 +74,35 @@ func (p *hostKeyProbes) put(hostPort string, key ssh.PublicKey) string {
 			delete(p.m, k)
 		}
 	}
+	if len(p.m) >= maxLiveProbes {
+		return "", false
+	}
 	p.m[id] = heldKey{hostPort: hostPort, key: key, expires: now.Add(hostKeyProbeTTL)}
-	return id
+	return id, true
+}
+
+// dropHost forgets every held probe for hostPort, so a key probed before a
+// forget can never be confirmed after it.
+func (p *hostKeyProbes) dropHost(hostPort string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for k, v := range p.m {
+		if v.hostPort == hostPort {
+			delete(p.m, k)
+		}
+	}
+}
+
+// capture is executor.CaptureHostKey within a dial slot. It waits for a free
+// slot for as long as the request lasts.
+func (p *hostKeyProbes) capture(ctx context.Context, c executor.SSHConfig) (ssh.PublicKey, error) {
+	select {
+	case p.dials <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-p.dials }()
+	return executor.CaptureHostKey(ctx, c)
 }
 
 // take removes and returns a live probe: every probe id is single use, and a
@@ -125,6 +168,12 @@ func (s *Server) handleHostKeyProbe(w http.ResponseWriter, r *http.Request) {
 	// Every hop carries Strict: CaptureHostKey dials (and authenticates to)
 	// the jump hosts with it and refuses a jump without a policy. The last
 	// hop's own callback is not consulted by the capture; check below is.
+	//
+	// KeyPath comes from the client, and the server reads that private key to
+	// authenticate to a jump host. That is the token-holder trust model every
+	// route shares (add target sends the same field): whoever holds the
+	// session token is the operator, running as this same user. The key is
+	// only offered to a jump host Strict has confirmed, never returned.
 	target := sshConfig(&req.SSH, check)
 	for h := target; h != nil; h = h.Jump {
 		h.HostKeyAlgorithms = algos
@@ -134,7 +183,10 @@ func (s *Server) handleHostKeyProbe(w http.ResponseWriter, r *http.Request) {
 	out := api.HostKeyProbe{Hops: []api.HostKeyHop{}}
 	for _, h := range hops {
 		hp := hostPortOf(h)
-		key, err := executor.CaptureHostKey(r.Context(), h)
+		key, err := s.probes.capture(r.Context(), h)
+		if r.Context().Err() != nil {
+			return // the client went away; nobody reads an answer
+		}
 		if err != nil {
 			// A host that no longer offers any key type on record is a
 			// mismatch, not an outage.
@@ -151,7 +203,12 @@ func (s *Server) handleHostKeyProbe(w http.ResponseWriter, r *http.Request) {
 		case err == nil:
 			hop.State = api.HostKeyConfirmed
 		case errors.As(err, &unknown):
-			hop.State, hop.ProbeID = api.HostKeyUnknown, s.probes.put(hp, key)
+			id, ok := s.probes.put(hp, key)
+			if !ok {
+				writeErrorDetail(w, http.StatusTooManyRequests, "too many host-key probes are waiting for a confirmation", "", api.CodeTooManyProbes)
+				return
+			}
+			hop.State, hop.ProbeID = api.HostKeyUnknown, id
 		case errors.Is(err, executor.ErrHostKeyMismatch):
 			// No probe id: a key that contradicts one on record is never
 			// offered for confirmation.
@@ -181,6 +238,12 @@ func (s *Server) handleHostKeyConfirm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	// Take the probe under the record lock: forget drops a host's probes
+	// under the same lock, so a probe taken here was not issued before a
+	// forget that has already run, and a forget cannot run between this take
+	// and the write below.
+	s.probes.record.Lock()
+	defer s.probes.record.Unlock()
 	held, ok := s.probes.take(req.ProbeID)
 	if !ok {
 		writeErrorDetail(w, http.StatusGone, "that probe expired or was already used", "", api.CodeProbeExpired)
@@ -191,8 +254,6 @@ func (s *Server) handleHostKeyConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.probes.record.Lock()
-	defer s.probes.record.Unlock()
 	check, _, err := config.StrictHostKey()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -219,4 +280,99 @@ func (s *Server) handleHostKeyConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// canonicalHostPort reports whether hp is a host:port exactly as DialSSH
+// writes it (and so as the confirmed store records it).
+func canonicalHostPort(hp string) bool {
+	host, port, err := net.SplitHostPort(hp)
+	if err != nil || host == "" {
+		return false
+	}
+	n, err := strconv.Atoi(port)
+	return err == nil && n > 0 && n < 65536 && net.JoinHostPort(host, strconv.Itoa(n)) == hp
+}
+
+// handleRecordedHostKeys lists every key Strict trusts for ?hostPort=, by
+// store, so a person can see (and type) the fingerprint before forgetting it.
+func (s *Server) handleRecordedHostKeys(w http.ResponseWriter, r *http.Request) {
+	hp := r.URL.Query().Get("hostPort")
+	if !canonicalHostPort(hp) {
+		writeError(w, http.StatusBadRequest, "want ?hostPort=host:port")
+		return
+	}
+	confirmed, openssh, err := config.RecordedHostKeys(hp)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := api.RecordedHostKeys{HostPort: hp, Keys: []api.RecordedHostKey{}}
+	for _, k := range confirmed {
+		out.Keys = append(out.Keys, api.RecordedHostKey{Fingerprint: executor.Fingerprint(k), KeyType: k.Type(), Store: api.HostKeyStoreJumpgate})
+	}
+	for _, k := range openssh {
+		out.Keys = append(out.Keys, api.RecordedHostKey{Fingerprint: executor.Fingerprint(k), KeyType: k.Type(), Store: api.HostKeyStoreOpenSSH})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleHostKeyForget removes one confirmed key: the line for hostPort whose
+// key has exactly the fingerprint the person typed. It is the deliberate act
+// that replacing a changed key needs (forget, then probe and confirm); a
+// mismatch is never resolved by confirm. Only jumpgate's confirmed store is
+// edited: a key in the operator's OpenSSH known_hosts is theirs to remove.
+func (s *Server) handleHostKeyForget(w http.ResponseWriter, r *http.Request) {
+	var req api.HostKeyForget
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&req); err != nil || !canonicalHostPort(req.HostPort) || strings.TrimSpace(req.Fingerprint) == "" {
+		writeError(w, http.StatusBadRequest, `want {"hostPort": "host:port", "fingerprint": "SHA256:…"}`)
+		return
+	}
+	fp := strings.TrimSpace(req.Fingerprint)
+	confirmedFile, err := config.ConfirmedHostsFile()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.probes.record.Lock()
+	defer s.probes.record.Unlock()
+	err = executor.ForgetHostKey(confirmedFile, req.HostPort, fp)
+	if err == nil {
+		// Under the record lock, so no confirmation of an earlier probe can
+		// slip in between the rewrite and the drop.
+		s.probes.dropHost(req.HostPort)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if !errors.Is(err, executor.ErrHostKeyNotRecorded) {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	confirmed, openssh, err := config.RecordedHostKeys(req.HostPort)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	inOpenSSH := false
+	for _, k := range openssh {
+		inOpenSSH = inOpenSSH || executor.Fingerprint(k) == fp
+	}
+	switch {
+	case inOpenSSH || (len(confirmed) == 0 && len(openssh) > 0):
+		writeErrorDetail(w, http.StatusConflict, "the key for "+req.HostPort+" is in your OpenSSH ~/.ssh/known_hosts, not jumpgate's confirmed store; jumpgate never edits known_hosts. Remove it there yourself: ssh-keygen -R "+knownHostsName(req.HostPort), "", api.CodeHostKeyNotOurs)
+	case len(confirmed) > 0:
+		writeErrorDetail(w, http.StatusConflict, "that fingerprint is not the key jumpgate has on record for "+req.HostPort+"; nothing was removed", "", api.CodeFingerprintMismatch)
+	default:
+		writeErrorDetail(w, http.StatusNotFound, "no confirmed host key for "+req.HostPort, "", api.CodeNotFound)
+	}
+}
+
+// knownHostsName is hp as OpenSSH's known_hosts names it: bare for port 22,
+// [host]:port otherwise.
+func knownHostsName(hp string) string {
+	host, port, _ := net.SplitHostPort(hp)
+	if port == "22" {
+		return host
+	}
+	return "'[" + host + "]:" + port + "'"
 }

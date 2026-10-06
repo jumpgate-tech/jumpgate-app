@@ -12,6 +12,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -249,5 +250,51 @@ func TestAppendHostKey_ReportsAPathItCannotWrite(t *testing.T) {
 	err := RecordHostKey(filepath.Join(blocker, "sub", "known_hosts"), "10.0.0.9:22", testHostKey(t))
 	if err == nil {
 		t.Fatal("recording a host key under a regular file reported success")
+	}
+}
+
+// ForgetHostKey removes exactly one line, by fingerprint, and keeps every
+// other line (other key types for the host, other hosts, even lines it does
+// not understand) byte for byte.
+func TestForgetHostKeyRemovesOneLine(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "confirmed_hosts")
+	key := func() ssh.PublicKey {
+		_, priv, _ := ed25519.GenerateKey(rand.Reader)
+		s, _ := ssh.NewSignerFromKey(priv)
+		return s.PublicKey()
+	}
+	k1, k2, k3 := key(), key(), key()
+	for _, r := range []struct {
+		h string
+		k ssh.PublicKey
+	}{{"h:22", k1}, {"h:22", k2}, {"other:22", k3}} {
+		if err := RecordHostKey(f, r.h, r.k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	junk := "# a comment jumpgate does not write\n"
+	b, _ := os.ReadFile(f)
+	if err := os.WriteFile(f, append([]byte(junk), b...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ForgetHostKey(f, "h:22", Fingerprint(k3)); !errors.Is(err, ErrHostKeyNotRecorded) {
+		t.Fatalf("another host's fingerprint: %v", err)
+	}
+	if err := ForgetHostKey(f, "h:22", Fingerprint(k1)); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := HostKeysOnRecord(f, "h:22")
+	if err != nil || len(keys) != 1 || Fingerprint(keys[0]) != Fingerprint(k2) {
+		t.Fatalf("left for h:22: %v %v", keys, err)
+	}
+	after, _ := os.ReadFile(f)
+	if !strings.HasPrefix(string(after), junk) || !strings.Contains(string(after), "other:22 ") {
+		t.Fatalf("other lines were changed: %q", after)
+	}
+	if err := ForgetHostKey(filepath.Join(t.TempDir(), "missing"), "h:22", Fingerprint(k1)); !errors.Is(err, ErrHostKeyNotRecorded) {
+		t.Fatalf("missing file: %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(f), ".confirmed_hosts-*")); len(left) != 0 {
+		t.Fatalf("temp files left: %v", left)
 	}
 }

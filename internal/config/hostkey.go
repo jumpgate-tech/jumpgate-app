@@ -49,3 +49,17 @@ func HostOnRecord(hostport string) (bool, error) {
 	}
 	return len(executor.KnownHostKeyAlgorithms(confirmed, known)(hostport)) > 0, nil
 }
+
+// RecordedHostKeys lists the keys Strict trusts for hostport, by store: the
+// confirmed store, which jumpgate writes and can forget from, and the
+// operator's OpenSSH known_hosts, which jumpgate only ever reads.
+func RecordedHostKeys(hostport string) (confirmed, openssh []ssh.PublicKey, err error) {
+	confirmedFile, known, err := strictFiles()
+	if err != nil {
+		return nil, nil, err
+	}
+	if confirmed, err = executor.HostKeysOnRecord(confirmedFile, hostport); err != nil {
+		return nil, nil, err
+	}
+	return confirmed, executor.OpenSSHHostKeys(hostport, known), nil
+}

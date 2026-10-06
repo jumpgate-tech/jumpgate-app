@@ -325,3 +325,9 @@ func CaptureHostKey(ctx context.Context, cfg SSHConfig) (ssh.PublicKey, error) {
 	}
 	return got, nil
 }
+
+// OpenSSHHostKeys lists the plain (non-@cert-authority) keys the OpenSSH
+// known_hosts files hold for hostport, the ones Strict would accept there.
+func OpenSSHHostKeys(hostport string, opensshFiles ...string) []ssh.PublicKey {
+	return opensshHostKeys(hostport, opensshFiles)
+}

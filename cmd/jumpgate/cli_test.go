@@ -566,6 +566,97 @@ func TestHostsAddConfirmsThroughTheServerFirst(t *testing.T) {
 	}
 }
 
+// forgetKeyServer answers hosts forget-key's requests for target box at
+// 203.0.113.5:2200 (via a jump at jump.example), with keys as the recorded
+// keys, and records each forget body.
+func forgetKeyServer(t *testing.T, keys string) *[]string {
+	t.Helper()
+	var forgets []string
+	withServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/targets":
+			fmt.Fprint(w, `[{"id":"box","mode":"ssh","ssh":{"Host":"203.0.113.5","User":"root","Port":2200,"jump":{"Host":"jump.example","User":"ops"}},"agent":null}]`)
+		case r.URL.Path == "/api/hostkeys":
+			fmt.Fprintf(w, `{"hostPort":%q,"keys":%s}`, r.URL.Query().Get("hostPort"), keys)
+		case r.URL.Path == "/api/hostkeys/forget":
+			b, _ := io.ReadAll(r.Body)
+			forgets = append(forgets, string(b))
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	return &forgets
+}
+
+func terminalStdin(t *testing.T) {
+	old := stdinIsTerminal
+	t.Cleanup(func() { stdinIsTerminal = old })
+	stdinIsTerminal = func() bool { return true }
+}
+
+// forget-key shows the recorded fingerprint and forgets only on an exact
+// retyping of it, for the box or (with --jump) its jump host.
+func TestHostsForgetKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	terminalStdin(t)
+	forgets := forgetKeyServer(t, `[{"fingerprint":"SHA256:abc","keyType":"ssh-ed25519","store":"jumpgate"}]`)
+	ctx := context.Background()
+
+	for _, typed := range []string{"SHA256:ab\n", "yes\n", "\n", "SHA256:abc"} {
+		var out strings.Builder
+		if code := hostsForgetKey(ctx, []string{"box"}, bufio.NewReader(strings.NewReader(typed)), &out, io.Discard); code != 1 {
+			t.Fatalf("typed %q: exit %d", typed, code)
+		}
+		if !strings.Contains(out.String(), "SHA256:abc") || !strings.Contains(out.String(), "203.0.113.5:2200") {
+			t.Fatalf("the recorded fingerprint was not shown: %q", out.String())
+		}
+	}
+	if len(*forgets) != 0 {
+		t.Fatalf("forgot without the exact fingerprint: %q", *forgets)
+	}
+	if code := hostsForgetKey(ctx, []string{"box"}, bufio.NewReader(strings.NewReader(" SHA256:abc \n")), io.Discard, io.Discard); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if code := hostsForgetKey(ctx, []string{"box", "--jump"}, bufio.NewReader(strings.NewReader("SHA256:abc\n")), io.Discard, io.Discard); code != 0 {
+		t.Fatalf("--jump: exit %d", code)
+	}
+	want := []string{`{"hostPort":"203.0.113.5:2200","fingerprint":"SHA256:abc"}`, `{"hostPort":"jump.example:22","fingerprint":"SHA256:abc"}`}
+	if len(*forgets) != 2 || strings.TrimSpace((*forgets)[0]) != want[0] || strings.TrimSpace((*forgets)[1]) != want[1] {
+		t.Fatalf("forgets %q", *forgets)
+	}
+}
+
+// A key only in ~/.ssh/known_hosts is not jumpgate's: forget-key says so and
+// sends nothing; unknown names and non-terminals are refused.
+func TestHostsForgetKeyRefusals(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	terminalStdin(t)
+	forgets := forgetKeyServer(t, `[{"fingerprint":"SHA256:abc","keyType":"ssh-ed25519","store":"openssh"}]`)
+	ctx := context.Background()
+	var errw strings.Builder
+	if code := hostsForgetKey(ctx, []string{"box"}, bufio.NewReader(strings.NewReader("SHA256:abc\n")), io.Discard, &errw); code != 1 || !strings.Contains(errw.String(), "known_hosts") {
+		t.Fatalf("openssh-only: exit %d, %q", code, errw.String())
+	}
+	if code := hostsForgetKey(ctx, []string{"nope"}, bufio.NewReader(strings.NewReader("")), io.Discard, io.Discard); code != 1 {
+		t.Fatalf("unknown name: exit %d", code)
+	}
+	if code := hostsForgetKey(ctx, nil, bufio.NewReader(strings.NewReader("")), io.Discard, io.Discard); code != 2 {
+		t.Fatalf("no name: exit %d", code)
+	}
+	stdinIsTerminal = func() bool { return false }
+	if code := hostsForgetKey(ctx, []string{"box"}, bufio.NewReader(strings.NewReader("SHA256:abc\n")), io.Discard, io.Discard); code != 1 {
+		t.Fatalf("not a terminal: exit %d", code)
+	}
+	if len(*forgets) != 0 {
+		t.Fatalf("forgot: %q", *forgets)
+	}
+}
+
 // ---- keys init ----
 
 func TestKeysInitRefusesAnExistingController(t *testing.T) {
