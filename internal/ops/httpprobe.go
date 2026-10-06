@@ -134,7 +134,14 @@ func (p HTTPProbe) local(ctx context.Context, h executor.LocalHost, roots *x509.
 	if p.Body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := (&http.Client{Transport: tr, Timeout: p.MaxTime}).Do(req)
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   p.MaxTime,
+		// `curl -s` without -L answers a redirect with the redirect itself;
+		// the probe reads what this port serves, not where it points.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

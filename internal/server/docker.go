@@ -36,7 +36,14 @@ type dockerStatusResponse struct {
 	WindowsContainers bool `json:"windowsContainers,omitempty"`
 }
 
-const dockerStartHint = "Docker is installed but not running. Start Docker Desktop, OrbStack or colima (`colima start`)."
+// dockerStartHintFor is the stopped-engine hint for goos. Windows has
+// neither OrbStack nor colima, so it names Docker Desktop alone.
+func dockerStartHintFor(goos string) string {
+	if goos == "windows" {
+		return "Docker is installed but not running. Start Docker Desktop and retry."
+	}
+	return "Docker is installed but not running. Start Docker Desktop, OrbStack or colima (`colima start`)."
+}
 
 func (s *Server) handleDockerStatus(w http.ResponseWriter, r *http.Request) {
 	info, err := ops.ProbeDocker(r.Context(), s.newLocalExecutor())
@@ -59,7 +66,7 @@ func (s *Server) handleDockerStatus(w http.ResponseWriter, r *http.Request) {
 		case resp.WindowsContainers:
 			resp.Hint = info.WindowsContainersHint()
 		case resp.Present && !resp.Running:
-			resp.Hint = dockerStartHint
+			resp.Hint = dockerStartHintFor(runtime.GOOS)
 		}
 	}
 	resp.CanStart = runtime.GOOS == "darwin" && resp.Present && !resp.Running && !resp.WindowsContainers

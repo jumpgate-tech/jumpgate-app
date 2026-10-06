@@ -152,9 +152,11 @@ func TrustVerifyCommand(goos, certPath string) (string, error) {
 // trust-store commands rely on. It is deliberately strict: the path is one this
 // app derived (rootCAPath), so a metacharacter in it is far likelier a bug than
 // a real filename, and a root-CA install is the wrong place to be lenient.
+//
+// The RAW path is checked, never a trimmed copy: a leading or trailing line
+// break is exactly what would split a pasted command in two.
 func validateCertPath(goos, p string) error {
-	p = strings.TrimSpace(p)
-	if p == "" {
+	if strings.TrimSpace(p) == "" {
 		return fmt.Errorf("trust: empty certificate path")
 	}
 	if goos == "windows" {
@@ -173,18 +175,20 @@ func validateCertPath(goos, p string) error {
 }
 
 // validateWindowsCertPath is validateCertPath for the Windows command, which
-// a person pastes into an elevated cmd.exe with the path double-quoted. A
-// Windows path is drive-absolute (C:\…) and its separator is a backslash,
-// which cmd.exe does not treat specially. Inside double quotes cmd.exe still
-// expands %VAR% (and !VAR! with delayed expansion), and ^ escapes; those, a
-// double quote, and a line break are refused.
+// a person pastes, with the path double-quoted, into an elevated prompt: a
+// cmd.exe one, or PowerShell, which is what Windows 11's "Terminal (Admin)"
+// opens. A Windows path is drive-absolute (C:\…) and its separator is a
+// backslash, which neither shell treats specially. Inside double quotes
+// cmd.exe still expands %VAR% (and !VAR! with delayed expansion) and honours
+// ^; PowerShell expands $var and $(…) and treats ` as its escape. Those, a
+// double quote, and a line break are refused, so the string is inert in both.
 func validateWindowsCertPath(p string) error {
 	if len(p) < 3 || !(('A' <= p[0] && p[0] <= 'Z') || ('a' <= p[0] && p[0] <= 'z')) || p[1] != ':' || p[2] != '\\' {
 		return fmt.Errorf("trust: certificate path %q is not an absolute Windows path", p)
 	}
 	for _, r := range p {
 		switch r {
-		case '"', '%', '!', '^', '\n', '\r', 0:
+		case '"', '%', '!', '^', '$', '`', '\n', '\r', 0:
 			return fmt.Errorf("trust: certificate path %q contains an unsafe character %q", p, string(r))
 		}
 	}

@@ -153,3 +153,15 @@ func TestDefaultExecutorBuildsALocalTargetEverywhere(t *testing.T) {
 		t.Fatalf("RequireShell on %s = %v", runtime.GOOS, shellErr)
 	}
 }
+
+// Windows has neither OrbStack nor colima; its stopped-engine hint names
+// Docker Desktop alone.
+func TestDockerStartHintPerOS(t *testing.T) {
+	win := dockerStartHintFor("windows")
+	if !strings.Contains(win, "Docker Desktop") || strings.Contains(win, "OrbStack") || strings.Contains(win, "colima") {
+		t.Errorf("windows hint %q", win)
+	}
+	if mac := dockerStartHintFor("darwin"); !strings.Contains(mac, "colima") {
+		t.Errorf("darwin hint %q", mac)
+	}
+}

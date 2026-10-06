@@ -211,9 +211,9 @@ func (d DockerInfo) WindowsContainersHint() string {
 func ProbeDocker(ctx context.Context, e executor.Executor) (DockerInfo, error) {
 	var info DockerInfo
 
-	presence := dockerPresenceProbe
+	presence := dockerPresenceCmd.Shell
 	if _, ok := e.(executor.ArgvRunner); ok {
-		presence = "docker --version"
+		presence = strings.Join(dockerPresenceCmd.Argv, " ")
 	}
 	res, err := executor.Exec(ctx, e, dockerPresenceCmd, nil)
 	if err != nil {

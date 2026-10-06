@@ -125,3 +125,23 @@ func unrelatedCA(t *testing.T) []byte {
 	}
 	return der
 }
+
+// A redirect is answered as is, like `curl -s` without -L: a probe of a
+// gateway must read what the port itself serves, not wherever it points.
+func TestHTTPProbeDoLocalDoesNotFollowRedirects(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/elsewhere" {
+			_, _ = w.Write([]byte("followed"))
+			return
+		}
+		http.Redirect(w, r, "/elsewhere", http.StatusFound)
+	}))
+	defer ts.Close()
+	f := argvfake.New()
+	u, _ := url.Parse(ts.URL)
+	f.Route(u.Host, u.Host)
+	got, err := HTTPProbe{URL: ts.URL + "/", MaxTime: 5 * time.Second}.Do(context.Background(), f)
+	if err != nil || strings.Contains(got, "followed") {
+		t.Fatalf("got %q, %v; want the redirect response itself", got, err)
+	}
+}

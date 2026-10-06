@@ -156,6 +156,7 @@ func TestTrustStoreCommand_RejectsUnsafePaths(t *testing.T) {
 		"/x/root`id`.crt",                               // backtick substitution
 		"/x/root\\.crt",                                 // backslash → breaks the AppleScript literal
 		"/x/root\n.crt",                                 // newline
+		"\n/x/root.crt",                                 // a leading newline: the raw path is checked
 	} {
 		for _, goos := range []string{"darwin", "linux", "windows"} {
 			if _, err := TrustStoreCommand(goos, bad, "default"); err == nil {
@@ -177,6 +178,14 @@ func TestTrustStoreCommandWindowsRefusesCmdMetacharacters(t *testing.T) {
 		`C:\Users\a^b\root.crt`,
 		`C:\Users\a" & calc & "\root.crt`,
 		"C:\\x\nroot.crt",
+		// PowerShell (Windows Terminal's admin default) expands these inside
+		// double quotes; the pasted command must be inert there too.
+		`C:\Users\$env:USERNAME\root.crt`,
+		`C:\Users\$(calc)\root.crt`,
+		"C:\\Users\\a`b\\root.crt",
+		// The raw path is checked: a leading line break would run the line
+		// before it.
+		"\nC:\\Users\\dev\\root.crt",
 	} {
 		if _, err := TrustStoreCommand("windows", bad, "default"); err == nil {
 			t.Errorf("unsafe Windows path %q was accepted", bad)

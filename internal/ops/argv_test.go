@@ -88,3 +88,13 @@ func TestProbeDocker_RecognisesDockerDesktopInWindowsMode(t *testing.T) {
 		t.Fatalf("got %+v, %v", info, err)
 	}
 }
+
+// The absence error names the probe that actually ran: the argv form here.
+func TestProbeDocker_AbsentNamesTheArgvProbe(t *testing.T) {
+	f := argvfake.New().Script("docker --version", executor.Result{ExitCode: 127})
+	_, err := ProbeDocker(context.Background(), f)
+	var ab *DockerAbsentError
+	if !errors.As(err, &ab) || ab.Probe != strings.Join(dockerPresenceCmd.Argv, " ") {
+		t.Fatalf("got %v", err)
+	}
+}
