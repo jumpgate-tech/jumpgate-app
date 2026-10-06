@@ -111,6 +111,9 @@ type App struct {
 	skew    string
 	sel     string // the box the status bar names
 	sidebar bool   // the host list beside an open host, below the width that shows it anyway
+	// restarting: a restart is under way. A second one would race the first
+	// over which server is current, so R does nothing until it lands.
+	restarting bool
 }
 
 // New builds the root model.
@@ -271,6 +274,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.flash = sanitizeLine(msg.what) + ": " + a.errText(msg.err)
 		return a, nil
 	case restartedMsg:
+		a.restarting = false
 		if msg.err != nil {
 			a.flash = "restart failed: " + a.errText(msg.err)
 			return a, nil
@@ -363,6 +367,11 @@ func (a *App) canRestart() bool { return a.skew != "" && a.o.Restart != nil }
 
 // restart replaces the server on the person's request (spec D30).
 func (a *App) restart() tea.Cmd {
+	if a.restarting {
+		a.flash = "already restarting the server" + a.gl.Ellipsis
+		return nil
+	}
+	a.restarting = true
 	a.flash = "restarting the server" + a.gl.Ellipsis
 	ctx, restart := a.ctx, a.o.Restart // captured, as in do
 	return func() tea.Msg {

@@ -427,3 +427,18 @@ func TestRestartWithNoServerOnRecord(t *testing.T) {
 		t.Fatalf("err %v stopped %v", err, stopped)
 	}
 }
+
+// The wait for the old server ends with the caller's context, not only at
+// restartWait.
+func TestRestartWaitStopsWithItsContext(t *testing.T) {
+	var stopped bool
+	c := restartFixture(t, daemon.Info{PID: 10, Socket: "/s/a.sock"}, &stopped, func() bool { return true })
+	restartWait = 10 * time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start := time.Now()
+	_, err := Restart(ctx, c)
+	if !errors.Is(err, context.Canceled) || time.Since(start) > 3*time.Second {
+		t.Fatalf("err %v after %s", err, time.Since(start))
+	}
+}

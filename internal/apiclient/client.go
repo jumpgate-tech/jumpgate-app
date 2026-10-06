@@ -281,12 +281,17 @@ func Restart(ctx context.Context, c *Client) (*Client, error) {
 	if err := daemonStop(ctx); err != nil {
 		return nil, err
 	}
-	for deadline := time.Now().Add(restartWait); ; time.Sleep(50 * time.Millisecond) {
+	for deadline := time.Now().Add(restartWait); ; {
 		if _, ok, _ := daemonFind(ctx); !ok {
 			break
 		}
 		if !time.Now().Before(deadline) {
 			return nil, fmt.Errorf("the old server did not exit within %s", restartWait)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
 		}
 	}
 	return Connect(ctx, Options{Start: true, Exe: c.opts.Exe})
