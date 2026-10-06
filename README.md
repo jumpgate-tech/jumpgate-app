@@ -83,7 +83,7 @@ a trusted, private network.
 ## Command line
 
 The `jumpgate` binary also has a command line for managing boxes from a
-terminal. Run `jumpgate` with no arguments in a terminal for the terminal home: status, a menu, and the command list (`jumpgate help`). `jumpgate open` opens the web app in your browser, starting the background server if needed; `jumpgate serve` runs the server in the foreground. The desktop launchers on each OS open a terminal running `jumpgate`. Flags such as `--bind`, or no terminal (a pipe, the app bundle), start the web app as before. The web app and `jumpgate serve` share one server per
+terminal. Run `jumpgate` with no arguments in a terminal to open the terminal UI (see Terminal UI below); `jumpgate help` lists the commands. `jumpgate open` opens the web app in your browser, starting the background server if needed; `jumpgate serve` runs the server in the foreground. The desktop launchers on each OS open a terminal running `jumpgate`. Flags such as `--bind`, or no terminal (a pipe, the app bundle), start the web app as before. The web app and `jumpgate serve` share one server per
 user: if one is already running, launching the app opens it instead of
 starting a second.
 
@@ -245,13 +245,23 @@ tar xzf jumpgate_<os>_<arch>.tar.gz   # the Windows archive is a .zip
 ./jumpgate
 ```
 
-In a terminal, bare `jumpgate` opens the terminal home: status and a menu, where `o` opens the web app in your browser. `jumpgate serve` runs the server in the foreground; `jumpgate open` starts it if needed and signs your browser in with a one-time login link, which works once, within 60 seconds, from this computer only. The link reaches the browser through a private file under `~/.jumpgate/run/login`, never on a command line. When no browser can be opened, or with `jumpgate open --print` (for a sandboxed snap or flatpak browser that cannot read `~/.jumpgate`, or a system where `.html` files open in an editor rather than a browser), it prints the link instead:
+In a terminal, bare `jumpgate` opens the terminal UI. `jumpgate serve` runs the server in the foreground; `jumpgate open` starts it if needed and signs your browser in with a one-time login link, which works once, within 60 seconds, from this computer only. The link reaches the browser through a private file under `~/.jumpgate/run/login`, never on a command line. When no browser can be opened, or with `jumpgate open --print` (for a sandboxed snap or flatpak browser that cannot read `~/.jumpgate`, or a system where `.html` files open in an editor rather than a browser), it prints the link instead:
 
 ```
 http://127.0.0.1:8799/login?code=<one-time code>
 ```
 
 Without a terminal (a pipe, the app bundle) or with flags such as `--bind`, the app behaves as before: it starts the server and opens it in your browser.
+
+### Terminal UI
+
+Run `jumpgate` with no arguments in a terminal (or double-click the launcher for your OS) to open the terminal UI: every box at once, each box's status, disk, endpoints, firewall, live logs and services, adding and pairing boxes, and the signing key. It starts the background server if none is running; quitting leaves the server running (`jumpgate stop` ends it).
+
+- Keys: `1`-`6` switch screens, arrows or `hjkl` move, `enter` opens, `esc` goes back, `/` filters, `x` lists a box's actions, `:` takes a command (`:logs box-a`, `:restart beacon box-a`), `?` shows every key. Stopping or restarting a service asks you to type its name.
+- Needs 80x24. Mouse support is off by default so you can select text; turn it on in Settings.
+- `NO_COLOR=1` drops colour; `JUMPGATE_ASCII=1` uses plain ASCII drawing (automatic on the classic Windows console and the Linux virtual console).
+- `jumpgate home` (or `JUMPGATE_PLAIN=1`, or `TERM=dumb`) shows the plain line-based screen instead. `jumpgate tui` opens the TUI explicitly and refuses to run without a terminal; agent builds (`-tags notui`) have no TUI.
+- `jumpgate ssh HOST` opens a shell on a box with the system OpenSSH client, under the host keys you confirmed. A box reached through a jump host is refused for now: use the TUI or the other commands (`jumpgate status`, `logs`, `service`) for it.
 
 Pass `--bind` to change the listen address, or `--no-open` to skip opening a
 browser automatically. Login links are accepted only over loopback, so to use
@@ -297,6 +307,8 @@ Requirements above); the node services it installs run unprivileged.
 This repository is the public, auditable copy of the code and the home of the
 releases. Development and CI run on the maintainers' own self-hosted GitLab, so
 changes are not developed or tested here.
+
+**Platform coverage.** Dev CI runs on the self-hosted GitLab (`.gitlab-ci.yml`): the `go-linux` job vets and tests with `-race` and checks that the `notui` agent build links no TUI, and `cross` vets and compiles the tests for macOS, Windows and Linux arm64. The macOS and Windows test jobs there are manual until a runner is registered, so those platforms are covered locally: `scripts/test-linux.sh` (Linux container, unprivileged user), `scripts/test-windows-vm.sh` (the Windows VM in `scripts/windows-vm/`) and `go test ./...` on a Mac. The TUI's end-to-end test (`internal/tui/e2e_test.go`) runs against a real in-process server on a local socket under a temporary home.
 
 **Manual checks.** Some things only a person on the real desktop can confirm.
 Before a release, someone checks:

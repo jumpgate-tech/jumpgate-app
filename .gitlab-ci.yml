@@ -53,6 +53,14 @@ go-linux:
     - GOOS=linux go vet -tags realsecret ./internal/signer/
     - CGO_ENABLED=1 go test -race -p 2 ./...
     - CGO_ENABLED=0 go build -o /dev/null ./cmd/jumpgate
+    # The agent build (no TUI) must not link Bubble Tea or any charm package.
+    - go build -tags notui -o /dev/null ./cmd/jumpgate
+    - |
+      if go list -tags notui -deps ./cmd/jumpgate | grep -Ei '^(charm\.land/|github\.com/charmbracelet/)'; then
+        echo "the notui build links Bubble Tea" >&2
+        exit 1
+      fi
+    - go vet -tags notui ./...
 
 cross:
   stage: test
