@@ -247,8 +247,9 @@ The server computes what both front ends display, from the raw readings:
   `firewall` (`api.FirewallSummary` or null), `jobs` (null until sub-project 2),
   `error` (the last probe's `api.Error`, or null), and per-section `stale`
   flags.
-- `GET /api/fleet/stream` sends the whole `Fleet` on connect and after every
-  poll round.
+- `GET /api/fleet/stream` sends the whole `Fleet` on connect and then as boxes
+  finish their probes, debounced to about 250 ms (boxes that finish together
+  share a frame; a slow client gets only the latest).
 - A server-side poller refreshes rows while anyone watches: status every
   `interval` (15 s default, from the UI prefs), disk every 5 min, firewall every
   10 min; four targets in parallel; each probe bounded to 20 s. It stops 2

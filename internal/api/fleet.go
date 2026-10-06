@@ -37,7 +37,18 @@ type FleetRow struct {
 	FirewallAt  *time.Time       `json:"firewallAt,omitempty"`
 	Jobs        *JobsSummary     `json:"jobs"`
 	Error       *Error           `json:"error"`
-	Stale       Stale            `json:"stale"`
+	// Each section's last failure, with when it happened. A section's
+	// error is cleared only by that section's own next good reading.
+	StatusError   *ProbeError `json:"statusError"`
+	DiskError     *ProbeError `json:"diskError"`
+	FirewallError *ProbeError `json:"firewallError"`
+	Stale         Stale       `json:"stale"`
+}
+
+// ProbeError is one probe's failure and when it happened.
+type ProbeError struct {
+	Error
+	At time.Time `json:"at"`
 }
 
 // Fleet is GET /api/fleet and each /api/fleet/stream event.

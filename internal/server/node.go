@@ -41,6 +41,9 @@ func setVia(w http.ResponseWriter, v via) {
 var (
 	errNotSetUp     = errors.New("target has not completed setup")
 	errNoController = errors.New("this server has no controller key")
+	// errConnectionLost is a legacy executor whose SSH connection no longer
+	// opens a session: the box is unreachable until it is dialled again.
+	errConnectionLost = errors.New("the SSH connection to the box is gone")
 )
 
 // noControllerKey is errNoController with the reason the key did not open
@@ -198,6 +201,9 @@ func (s *Server) nodeStatus(ctx context.Context, cfg config.Config, t config.Tar
 	if t.Wire == nil {
 		return monitor.Snapshot{}, viaSSH, errNotSetUp
 	}
+	// The monitor reads a failed command as a stopped client, so a dead
+	// connection can show as "stopped" here; the fleet checks the connection
+	// first (serverProber.status). Fixing this route is left for later.
 	mon, _, err := s.getMonitor(t, cfg.RefRPCBase)
 	if err != nil {
 		return monitor.Snapshot{}, viaSSH, &dialError{err}
@@ -344,7 +350,7 @@ func classifyNodeError(err error) (int, api.Error) {
 		return http.StatusInternalServerError, api.Error{Message: msg, Code: api.CodeInternal}
 	case errors.Is(err, executor.ErrNoPOSIXShell):
 		return http.StatusConflict, api.Error{Message: msg, Code: api.CodeLocalUnsupported}
-	case errors.As(err, &dial) && (errors.As(err, &op) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded)):
+	case errors.As(err, &dial) && (errors.As(err, &op) || errors.Is(err, errConnectionLost) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded)):
 		return http.StatusGatewayTimeout, api.Error{Message: msg, Code: api.CodeUnreachable}
 	}
 	return http.StatusBadGateway, api.Error{Message: msg}

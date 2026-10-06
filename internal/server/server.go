@@ -332,6 +332,7 @@ func tokensEqual(a, b string) bool {
 // ListenAndServe runs the server until ctx is canceled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	err := serveUntil(ctx, newHTTPServer(s.cfg.Bind, s.Handler()), shutdownGrace)
+	s.fleet.stopWithin(fleetStopWait)
 	s.waitCritical()
 	return err
 }
@@ -362,6 +363,7 @@ func (s *Server) ServeUnix(ctx context.Context, path string) error {
 	}
 	srv := newHTTPServer("", s.Handler())
 	err = serveWith(ctx, srv, shutdownGrace, func() error { return srv.Serve(ln) })
+	s.fleet.stopWithin(fleetStopWait)
 	s.waitCritical()
 	return err
 }

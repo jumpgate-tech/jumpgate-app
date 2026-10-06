@@ -70,6 +70,35 @@ func (r *registry) get(id string) *targetEntry {
 	return e
 }
 
+// evictExecutor forgets id's cached executor if it is still ex, so the next
+// operation dials the box again: the way a box whose connection dropped
+// recovers without a server restart. It touches nothing else in the entry. ex
+// is closed only when no monitor, log watcher or setup run holds it; one that
+// does keeps its reference until it is retired.
+func (r *registry) evictExecutor(id string, ex executor.Executor) {
+	r.mu.Lock()
+	e, ok := r.entries[id]
+	r.mu.Unlock()
+	if !ok {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.exec != ex {
+		return
+	}
+	e.exec = nil
+	held := e.mon != nil || e.watch != nil
+	if run := e.setup; run != nil {
+		run.mu.Lock()
+		held = held || run.running
+		run.mu.Unlock()
+	}
+	if !held {
+		ex.Close()
+	}
+}
+
 // setupCancelWait bounds how long registry.remove waits for an in-flight
 // setup run to observe cancellation and stop touching the target's
 // executor before remove closes that executor out from under it.

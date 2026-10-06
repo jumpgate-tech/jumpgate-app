@@ -34,6 +34,10 @@ type fakeProber struct {
 	hang      map[string]bool
 	release   chan struct{}
 	delay     time.Duration
+	slow      map[string]time.Duration // per-box delay, on top of delay
+	diskFail  bool
+	fwFail    bool
+	hung      chan string // when set, receives a box's id as its hung probe starts
 	diskCalls int
 	fwCalls   int
 	calls     map[string]int
@@ -58,9 +62,12 @@ func (f *fakeProber) status(ctx context.Context, _ config.Config, t config.Targe
 	f.enter(t.ID)
 	defer f.inFlight.Add(-1)
 	f.mu.Lock()
-	down, hang, delay := f.down[t.ID], f.hang[t.ID], f.delay
+	down, hang, delay, hung := f.down[t.ID], f.hang[t.ID], f.delay+f.slow[t.ID], f.hung
 	f.mu.Unlock()
 	if hang {
+		if hung != nil {
+			hung <- t.ID
+		}
 		<-f.release
 		return monitor.Snapshot{}, errors.New("released")
 	}
@@ -81,6 +88,9 @@ func (f *fakeProber) disk(context.Context, config.Config, config.Target) (ops.DU
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.diskCalls++
+	if f.diskFail {
+		return ops.DU{}, errors.New("du: cannot access")
+	}
 	return ops.DU{ExecBytes: 1e12, BeaconBytes: 1e11, DiskFreeBytes: 2e12, DiskFreeKnown: true, ExpectedExecBytes: 2e12}, nil
 }
 
@@ -88,6 +98,9 @@ func (f *fakeProber) firewall(context.Context, config.Config, config.Target) ([]
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fwCalls++
+	if f.fwFail {
+		return nil, errors.New("ss: not found")
+	}
 	return []ops.CheckItem{{Status: "pass"}, {Status: "warn"}}, nil
 }
 
@@ -96,6 +109,10 @@ func (f *fakeProber) chainID(_ context.Context, _ config.Config, t config.Target
 		return t.Wire.ChainID, nil
 	}
 	return 369, nil
+}
+
+func newFakeProber() *fakeProber {
+	return &fakeProber{down: map[string]bool{}, hang: map[string]bool{}, slow: map[string]time.Duration{}, release: make(chan struct{}), calls: map[string]int{}}
 }
 
 func (f *fakeProber) callsFor(id string) int {
@@ -120,7 +137,7 @@ func fleetServer(t *testing.T, targets ...config.Target) (*Server, *fakeProber, 
 	}
 	token := NewSessionToken()
 	s := New(Config{Token: token, UI: fstest.MapFS{}})
-	fp := &fakeProber{down: map[string]bool{}, hang: map[string]bool{}, release: make(chan struct{}), calls: map[string]int{}}
+	fp := newFakeProber()
 	s.fleet.probe = fp
 	// Cleanups run last first: the HTTP server closes, then the poller stops
 	// and waits for its goroutines, before any test restores the timing
@@ -369,9 +386,11 @@ func TestFleetPollerStopsWhenNobodyWatches(t *testing.T) {
 // A stream subscriber keeps the poller running past the idle time; once the
 // last one leaves, it stops and leaves no goroutine behind.
 func TestFleetPollerRunsWhileAStreamWatches(t *testing.T) {
-	oldEvery, oldIdle, oldPing := fleetStatusEvery, fleetIdleStop, ssePingInterval
-	fleetStatusEvery, fleetIdleStop, ssePingInterval = 10*time.Millisecond, 30*time.Millisecond, time.Hour
-	t.Cleanup(func() { fleetStatusEvery, fleetIdleStop, ssePingInterval = oldEvery, oldIdle, oldPing })
+	oldEvery, oldIdle, oldPing, oldDebounce := fleetStatusEvery, fleetIdleStop, ssePingInterval, fleetPublishDebounce
+	fleetStatusEvery, fleetIdleStop, ssePingInterval, fleetPublishDebounce = 10*time.Millisecond, 30*time.Millisecond, time.Hour, time.Millisecond
+	t.Cleanup(func() {
+		fleetStatusEvery, fleetIdleStop, ssePingInterval, fleetPublishDebounce = oldEvery, oldIdle, oldPing, oldDebounce
+	})
 	s, _, ts, token := fleetServer(t, config.Target{ID: "a", Mode: "ssh", Agent: paired})
 	// Six frames at 10 ms per round span well over the 30 ms idle time.
 	if frames, _ := readFrames(t, ts, token, "/api/fleet/stream", 6); len(frames) != 6 {
@@ -521,4 +540,209 @@ type brokenExec struct{ nopExec }
 
 func (brokenExec) Run(context.Context, string, *executor.RunOpts) (executor.Result, error) {
 	return executor.Result{}, errors.New("new ssh session: EOF")
+}
+
+// Shutting the server down stops the poller within fleetStopWait, even when
+// a probe is stuck where its context cannot reach it (an SSH NewSession).
+func TestFleetStopsWhenTheServerShutsDown(t *testing.T) {
+	oldWait := fleetStopWait
+	fleetStopWait = 200 * time.Millisecond
+	t.Cleanup(func() { fleetStopWait = oldWait })
+	fleetHome(t)
+	if _, err := config.Update(func(c *config.Config) error {
+		c.Targets = []config.Target{{ID: "a", Mode: "ssh", Agent: paired}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, _, errCh := startServing(t, ctx, NewSessionToken(), nil)
+	fp := newFakeProber()
+	fp.hang["a"], fp.hung = true, make(chan string, 1)
+	t.Cleanup(func() { close(fp.release); requireNoFleetGoroutines(t) })
+	s.fleet.probe = fp
+	s.fleet.want()
+	<-fp.hung // mid-round, with a probe that ignores its context
+	start := time.Now()
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the server did not shut down")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("shutdown took %s, want about fleetStopWait", d)
+	}
+	if s.fleet.isRunning() || loopGoroutines() != 0 {
+		t.Fatalf("the poller outlived shutdown: running %v, %d loops", s.fleet.isRunning(), loopGoroutines())
+	}
+	s.fleet.want()
+	if s.fleet.isRunning() {
+		t.Fatal("a request after shutdown restarted the poller")
+	}
+}
+
+// loopGoroutines counts running poller loops.
+func loopGoroutines() int {
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	n := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "server.(*fleetPoller).loop") {
+			n++
+		}
+	}
+	return n
+}
+
+// A want() that lands while a loop is deciding to stop starts exactly one
+// new loop, never two: the old loop's exit must not clear the new loop's
+// running flag.
+func TestFleetWantRacingTheIdleStopRunsOneLoop(t *testing.T) {
+	oldEvery, oldIdle := fleetStatusEvery, fleetIdleStop
+	fleetStatusEvery, fleetIdleStop = 5*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { fleetStatusEvery, fleetIdleStop = oldEvery, oldIdle })
+	s, _, _, _ := fleetServer(t, config.Target{ID: "a", Mode: "ssh", Agent: paired})
+	var once sync.Once
+	var unsub func()
+	exited := make(chan struct{})
+	s.fleet.testIdleStopped = func() {
+		// Between the first loop's decision to stop and its exit, a stream
+		// arrives and keeps a new loop running.
+		once.Do(func() { _, unsub = s.fleet.subscribe() })
+	}
+	s.fleet.testLoopDone = func() {
+		select {
+		case <-exited:
+		default:
+			close(exited)
+		}
+	}
+	s.fleet.want()
+	select {
+	case <-exited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first loop never stopped")
+	}
+	s.fleet.want() // the new loop is running; this must not start a third
+	time.Sleep(30 * time.Millisecond)
+	if m := s.fleet.maxActiveLoops(); m != 1 {
+		t.Fatalf("%d loops ran at once, want 1", m)
+	}
+	unsub()
+}
+
+// Frames go out as boxes finish, not only when the slowest one does.
+func TestFleetStreamSendsEachBoxAsItFinishes(t *testing.T) {
+	old := fleetPublishDebounce
+	fleetPublishDebounce = 20 * time.Millisecond
+	t.Cleanup(func() { fleetPublishDebounce = old })
+	s, fp, _, _ := fleetServer(t, config.Target{ID: "fast", Mode: "ssh", Agent: paired}, config.Target{ID: "slow", Mode: "ssh", Agent: paired})
+	fp.slow["slow"] = 500 * time.Millisecond
+	ch, unsub := s.fleet.subscribe()
+	defer unsub()
+	deadline := time.After(400 * time.Millisecond)
+	for {
+		select {
+		case f := <-ch:
+			fast, _ := f.Row("fast")
+			slow, _ := f.Row("slow")
+			if fast.Status != nil && slow.CheckedAt == nil {
+				return // the fast box was sent while the slow one was still being probed
+			}
+		case <-deadline:
+			t.Fatal("no frame carried the fast box before the slow one finished")
+		}
+	}
+}
+
+// Each section keeps its own error with its age: a status that succeeds does
+// not clear a firewall failure, and a disk that succeeds has no error.
+func TestFleetProbeErrorsAreKeptPerSection(t *testing.T) {
+	s, fp, _, _ := fleetServer(t, config.Target{ID: "a", Mode: "ssh", Agent: paired})
+	fp.fwFail = true
+	t0 := time.Unix(1_800_000_000, 0)
+	now := t0
+	s.fleet.now = func() time.Time { return now }
+	s.fleet.round(context.Background())
+	now = t0.Add(15 * time.Second)
+	s.fleet.round(context.Background()) // status only: disk and firewall are not due
+	a, _ := s.fleet.snapshot().Row("a")
+	if a.FirewallError == nil || !a.FirewallError.At.Equal(t0) || a.FirewallError.Message == "" {
+		t.Fatalf("firewall error %+v", a.FirewallError)
+	}
+	if a.StatusError != nil || a.DiskError != nil || a.Error != nil || a.Disk == nil || a.Firewall != nil {
+		t.Fatalf("row %+v status %+v disk %+v", a, a.StatusError, a.DiskError)
+	}
+	fp.down["a"] = true
+	now = t0.Add(30 * time.Second)
+	s.fleet.round(context.Background())
+	a, _ = s.fleet.snapshot().Row("a")
+	if a.StatusError == nil || !a.StatusError.At.Equal(now) || a.StatusError.Code != api.CodeUnreachable || a.Error == nil || a.FirewallError == nil {
+		t.Fatalf("status error %+v firewall error %+v", a.StatusError, a.FirewallError)
+	}
+}
+
+// An SSH-only box whose cached connection dropped is dialled again on the
+// next poll, so it recovers without restarting the server.
+func TestFleetSSHOnlyBoxRecoversAfterTheConnectionDrops(t *testing.T) {
+	fleetHome(t)
+	if _, err := config.Update(func(c *config.Config) error {
+		c.Targets = []config.Target{{ID: "a", Mode: "ssh", SSH: &executor.SSHConfig{Host: "a", User: "u"}, Wire: wired}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	opened := 0
+	s := New(Config{Token: NewSessionToken(), UI: fstest.MapFS{}, NewExecutor: func(config.Target) (executor.Executor, error) {
+		opened++
+		if opened == 1 {
+			return brokenExec{}, nil
+		}
+		return &autoSucceedExecutor{}, nil
+	}})
+	t.Cleanup(s.fleet.stop)
+	s.fleet.round(context.Background())
+	if row, _ := s.fleet.snapshot().Row("a"); row.Reachable {
+		t.Fatalf("a dead connection read reachable: %+v", row)
+	}
+	s.fleet.round(context.Background())
+	row, _ := s.fleet.snapshot().Row("a")
+	if !row.Reachable || row.Status == nil || opened != 2 {
+		t.Fatalf("after the connection came back: opened %d, row %+v", opened, row)
+	}
+}
+
+// closeCounter is an executor that counts Close calls.
+type closeCounter struct {
+	nopExec
+	closed atomic.Int32
+}
+
+func (c *closeCounter) Close() error { c.closed.Add(1); return nil }
+
+// evictExecutor drops only the executor it was shown, and closes it only
+// when nothing else in the entry holds it.
+func TestEvictExecutorDropsOnlyThatExecutor(t *testing.T) {
+	r := newRegistry()
+	cur, other := &closeCounter{}, &closeCounter{}
+	r.get("a").setExec(cur)
+	r.evictExecutor("a", other) // a newer dial already replaced it: keep cur
+	if r.get("a").exec != cur || cur.closed.Load() != 0 {
+		t.Fatal("evicted an executor it was not shown")
+	}
+	r.evictExecutor("a", cur)
+	if r.get("a").exec != nil || cur.closed.Load() != 1 {
+		t.Fatalf("exec %v closed %d", r.get("a").exec, cur.closed.Load())
+	}
+	held := &closeCounter{}
+	e := r.get("b")
+	e.setExec(held)
+	e.mon = monitor.New(monitor.Config{Exec: held})
+	r.evictExecutor("b", held)
+	if e.exec != nil || held.closed.Load() != 0 {
+		t.Fatalf("an executor a monitor holds was closed (%d) or kept", held.closed.Load())
+	}
+	r.evictExecutor("missing", held) // no entry: nothing happens
 }

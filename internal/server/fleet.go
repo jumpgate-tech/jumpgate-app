@@ -26,6 +26,11 @@ var (
 	fleetFirewallEvery = 10 * time.Minute
 	fleetIdleStop      = 2 * time.Minute
 	fleetProbeTimeout  = 20 * time.Second
+	// fleetStopWait bounds how long server shutdown waits for the poller.
+	fleetStopWait = 3 * time.Second
+	// fleetPublishDebounce gathers the boxes that finish close together into
+	// one stream frame.
+	fleetPublishDebounce = 250 * time.Millisecond
 )
 
 const (
@@ -53,7 +58,14 @@ type serverProber struct{ s *Server }
 // box's background monitor, which getMonitor starts for good (it would keep
 // probing after nobody watches, against D12) and which reads a dropped
 // connection as a stopped node. The fleet polls such a box once instead,
-// after checking that the connection answers at all.
+// after checking that the connection answers at all. The node status route
+// still reads the monitor, so it can show "stopped" for a dead connection;
+// that is left for a later fix in nodeStatus.
+//
+// A connection that fails the check is dropped from the registry, so the
+// next poll dials the box again and a box that comes back recovers without a
+// server restart. A check that ran out of time drops nothing: a slow box is
+// not a dead connection.
 func (p serverProber) status(ctx context.Context, cfg config.Config, t config.Target) (monitor.Snapshot, error) {
 	if t.Agent != nil || t.Wire == nil {
 		snap, _, err := p.s.nodeStatus(ctx, cfg, t)
@@ -64,7 +76,10 @@ func (p serverProber) status(ctx context.Context, cfg config.Config, t config.Ta
 		return monitor.Snapshot{}, err
 	}
 	if _, err := ex.Run(ctx, "true", nil); err != nil {
-		return monitor.Snapshot{}, fmt.Errorf("%w: %v", agentclient.ErrUnreachable, err)
+		if ctx.Err() == nil {
+			p.s.reg.evictExecutor(t.ID, ex)
+		}
+		return monitor.Snapshot{}, &dialError{fmt.Errorf("%w: %v", errConnectionLost, err)}
 	}
 	refRPC := ""
 	if cfg.RefRPCBase != "" {
@@ -157,6 +172,21 @@ type fleetPoller struct {
 	running    bool
 	stopped    bool
 	lastWanted time.Time
+	// pubTimer is the pending debounced publish, nil when none is pending.
+	pubTimer *time.Timer
+
+	// active counts loops that have not decided to stop, and maxActive its
+	// high-water mark, for the test that no two loops ever run at once.
+	active, maxActive int
+	// Test hooks: testIdleStopped runs after a loop decides to stop and
+	// before it returns; testLoopDone as it returns.
+	testIdleStopped, testLoopDone func()
+}
+
+func (p *fleetPoller) maxActiveLoops() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.maxActive
 }
 
 func newFleetPoller(s *Server) *fleetPoller {
@@ -201,6 +231,10 @@ func (p *fleetPoller) want() {
 		return
 	}
 	p.running = p.goLocked(p.loop)
+	if p.running {
+		p.active++
+		p.maxActive = max(p.maxActive, p.active)
+	}
 }
 
 func (p *fleetPoller) isRunning() bool {
@@ -210,24 +244,53 @@ func (p *fleetPoller) isRunning() bool {
 }
 
 // stop ends the poller for good and waits for the loop and every probe it
-// started. Probes see their context end; one that ignores it is waited for.
-func (p *fleetPoller) stop() {
+// started, however long a probe that ignores its context takes. Tests use
+// it; server shutdown uses stopWithin.
+func (p *fleetPoller) stop() { p.stopWithin(0) }
+
+// stopWithin ends the poller for good and waits at most d (no limit when d
+// is 0) for its goroutines; it reports whether they all finished. The loop
+// and the round end as soon as the context does. Only a probe stuck where
+// its context cannot reach it (an SSH NewSession, a target's intent lock)
+// can outlast the wait, and once the poller is stopped it changes nothing
+// in the poller when it returns.
+func (p *fleetPoller) stopWithin(d time.Duration) bool {
 	p.mu.Lock()
 	p.stopped = true
+	if p.pubTimer != nil && p.pubTimer.Stop() {
+		p.pubTimer = nil
+		p.wg.Done() // the publish it would have run never will
+	}
 	p.mu.Unlock()
 	p.cancel()
-	p.wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+	if d <= 0 {
+		<-done
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 // loop polls a round, sleeps one interval, and ends once nobody has watched
 // for fleetIdleStop. Lifecycle time is the real clock, not p.now, which only
-// dates readings.
+// dates readings. running is cleared in the same critical section that
+// decides to stop, never later: a want() that arrives after the decision
+// starts a new loop, and this one's exit must not then mark that one idle.
 func (p *fleetPoller) loop() {
-	defer func() {
-		p.mu.Lock()
-		p.running = false
-		p.mu.Unlock()
-	}()
+	if p.testLoopDone != nil {
+		defer p.testLoopDone()
+	}
 	for {
 		p.round(p.ctx)
 		p.mu.Lock()
@@ -237,18 +300,24 @@ func (p *fleetPoller) loop() {
 		select {
 		case <-p.ctx.Done():
 			timer.Stop()
+			p.mu.Lock()
+			p.running = false
+			p.active--
+			p.mu.Unlock()
 			return
 		case <-timer.C:
 		}
 		p.mu.Lock()
 		idle := len(p.subs) == 0 && time.Since(p.lastWanted) > fleetIdleStop
 		if idle {
-			// Cleared here, under the same lock as the check, so a want()
-			// that arrives now starts a new loop instead of trusting this one.
 			p.running = false
+			p.active--
 		}
 		p.mu.Unlock()
 		if idle {
+			if p.testIdleStopped != nil {
+				p.testIdleStopped()
+			}
 			return
 		}
 	}
@@ -335,7 +404,9 @@ fanOut:
 		}(t)
 	}
 	wg.Wait()
-	p.publish()
+	p.mu.Lock()
+	p.notifyLocked()
+	p.mu.Unlock()
 }
 
 // pollOne probes one box and applies what it found. The probe runs in its
@@ -353,7 +424,9 @@ func (p *fleetPoller) pollOne(ctx context.Context, cfg config.Config, t config.T
 	}
 	if t.Agent == nil && t.Wire == nil {
 		e := api.Error{Message: "this box is not set up and not paired", Code: api.CodeTargetNotSetUp, Hint: api.HintFor(api.CodeTargetNotSetUp)}
-		st.row.Error, st.row.Reachable, st.row.CheckedAt = &e, false, &now
+		st.setStatusError(e, now)
+		st.row.Reachable, st.row.CheckedAt = false, &now
+		p.notifyLocked()
 		p.mu.Unlock()
 		return
 	}
@@ -368,7 +441,9 @@ func (p *fleetPoller) pollOne(ctx context.Context, cfg config.Config, t config.T
 		r := p.read(probeCtx, cfg, t, needChain, diskDue, fwDue)
 		done <- r
 		p.mu.Lock()
-		st.busy = false
+		if !p.stopped {
+			st.busy = false
+		}
 		p.mu.Unlock()
 	})
 	started := st.busy
@@ -386,7 +461,9 @@ func (p *fleetPoller) pollOne(ctx context.Context, cfg config.Config, t config.T
 		}
 		_, e := apiErrorFor(fmt.Errorf("%w: the box did not answer within %s", agentclient.ErrUnreachable, timeout))
 		p.mu.Lock()
-		st.row.Error, st.row.Reachable, st.row.CheckedAt = &e, false, &now
+		st.setStatusError(e, now)
+		st.row.Reachable, st.row.CheckedAt = false, &now
+		p.notifyLocked()
 		p.mu.Unlock()
 	}
 }
@@ -426,10 +503,15 @@ func boxAnswered(c api.Code) bool {
 func (p *fleetPoller) apply(st *fleetState, now time.Time, r fleetReading) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.stopped {
+		return
+	}
+	defer p.notifyLocked()
 	st.row.CheckedAt = &now
 	if r.statusErr != nil {
 		_, e := apiErrorFor(r.statusErr)
-		st.row.Error, st.row.Reachable = &e, boxAnswered(e.Code)
+		st.setStatusError(e, now)
+		st.row.Reachable = boxAnswered(e.Code)
 		if st.row.Reachable {
 			st.row.LastSeen = &now
 		}
@@ -439,7 +521,7 @@ func (p *fleetPoller) apply(st *fleetState, now time.Time, r fleetReading) {
 	if view.At.IsZero() {
 		view.At = now
 	}
-	st.row.Status, st.row.Error, st.row.Reachable, st.row.LastSeen = &view, nil, true, &now
+	st.row.Status, st.row.Error, st.row.StatusError, st.row.Reachable, st.row.LastSeen = &view, nil, nil, true, &now
 	st.statusAt = now
 	if r.chainTried {
 		st.chainTried = now
@@ -455,9 +537,10 @@ func (p *fleetPoller) apply(st *fleetState, now time.Time, r fleetReading) {
 		st.diskTried = now
 		if r.diskErr == nil {
 			p.recordDiskLocked(st, now, r.du)
+			st.row.DiskError = nil
 		} else {
 			_, e := apiErrorFor(r.diskErr)
-			st.row.Error = &e
+			st.row.DiskError = &api.ProbeError{Error: e, At: now}
 		}
 	}
 	if r.fwTried {
@@ -466,12 +549,19 @@ func (p *fleetPoller) apply(st *fleetState, now time.Time, r fleetReading) {
 			sum := firewallSummary(r.items)
 			st.row.Firewall, st.firewallAt = &sum, now
 			at := now
-			st.row.FirewallAt = &at
+			st.row.FirewallAt, st.row.FirewallError = &at, nil
 		} else {
 			_, e := apiErrorFor(r.fwErr)
-			st.row.Error = &e
+			st.row.FirewallError = &api.ProbeError{Error: e, At: now}
 		}
 	}
+}
+
+// setStatusError records a failed status probe: the row's error, which says
+// why the box could not be read, is the status probe's.
+func (st *fleetState) setStatusError(e api.Error, at time.Time) {
+	st.row.Error = &e
+	st.row.StatusError = &api.ProbeError{Error: e, At: at}
 }
 
 // recordDisk adds a reading to the box's history and refreshes its view.
@@ -528,6 +618,23 @@ func (p *fleetPoller) snapshot() api.Fleet {
 		f.Rows = append(f.Rows, row)
 	}
 	return f
+}
+
+// notifyLocked schedules a publish fleetPublishDebounce from now, unless one
+// is already pending, so boxes reach the stream as they finish while those
+// that finish together share a frame. Callers hold p.mu.
+func (p *fleetPoller) notifyLocked() {
+	if p.stopped || p.pubTimer != nil || len(p.subs) == 0 {
+		return
+	}
+	p.wg.Add(1)
+	p.pubTimer = time.AfterFunc(fleetPublishDebounce, func() {
+		defer p.wg.Done()
+		p.mu.Lock()
+		p.pubTimer = nil
+		p.mu.Unlock()
+		p.publish()
+	})
 }
 
 // publish sends the fleet to every subscriber, replacing any snapshot it has
