@@ -203,6 +203,57 @@ func (h *hostScreen) visibleLogs() []api.LogHit {
 	return out
 }
 
+// logAnchor is the index in h.logs of the newest visible line in view, or -1
+// when none shows. It is what a frozen view stays on when the filter changes.
+func (h *hostScreen) logAnchor() int {
+	q := h.query()
+	n := 0
+	for _, l := range h.logs {
+		if h.shows(l, q) {
+			n++
+		}
+	}
+	want := n - 1 - h.logBack // position in the visible list
+	if want < 0 {
+		return -1
+	}
+	i := 0
+	for idx, l := range h.logs {
+		if h.shows(l, q) {
+			if i == want {
+				return idx
+			}
+			i++
+		}
+	}
+	return -1
+}
+
+// keepAnchor recomputes logBack after the filter or level changed, so the
+// line at anchor (an index in h.logs) stays at the bottom of the view, or the
+// nearest older line that still shows when that one is now hidden. With follow
+// on there is nothing to keep: the view is at the newest line.
+func (h *hostScreen) keepAnchor(anchor int) {
+	if h.follow || anchor < 0 {
+		h.logBack = 0
+		return
+	}
+	q := h.query()
+	n, pos := 0, -1 // pos: position of the nearest visible line at or before anchor
+	for idx, l := range h.logs {
+		if h.shows(l, q) {
+			if idx <= anchor {
+				pos = n
+			}
+			n++
+		}
+	}
+	if pos < 0 {
+		pos = 0 // everything shown is newer than the anchor: show from the oldest
+	}
+	h.logBack = max(n-1-pos, 0)
+}
+
 func (h *hostScreen) query() string {
 	return strings.ToLower(strings.TrimSpace(h.logFilter.Value()))
 }
@@ -217,6 +268,7 @@ func (h *hostScreen) shows(l api.LogHit, q string) bool {
 
 func (h *hostScreen) logsKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 	if h.logEditing {
+		anchor := h.logAnchor()
 		switch k.String() {
 		case "enter":
 			h.logEditing = false
@@ -230,6 +282,7 @@ func (h *hostScreen) logsKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 			// field. The field's own commands (cursor blink) are dropped.
 			h.logFilter, _ = h.logFilter.Update(k)
 		}
+		h.keepAnchor(anchor)
 		return nil, true
 	}
 	switch {
@@ -237,8 +290,9 @@ func (h *hostScreen) logsKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 		h.logEditing = true
 		_ = h.logFilter.Focus()
 	case key.Matches(k, logKeys.Level):
+		anchor := h.logAnchor()
 		h.logMin = (h.logMin + 1) % len(levelNames)
-		h.logBack = 0
+		h.keepAnchor(anchor)
 	case key.Matches(k, logKeys.Follow):
 		h.follow, h.logBack = !h.follow, 0
 	case key.Matches(k, navKeys.Up):
