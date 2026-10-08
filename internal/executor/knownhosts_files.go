@@ -128,3 +128,11 @@ func memKnownHostsBytes(entry string) ([]byte, bool) {
 	b, ok := memKnownHosts[entry]
 	return b, ok
 }
+
+// SetSystemKnownHostsForTest points the system-wide known_hosts at path, for
+// tests in other packages, and returns the function that restores it.
+func SetSystemKnownHostsForTest(path string) (restore func()) {
+	old := systemKnownHosts
+	systemKnownHosts = path
+	return func() { systemKnownHosts = old }
+}

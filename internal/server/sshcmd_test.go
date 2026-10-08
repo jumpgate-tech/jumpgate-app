@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -274,5 +277,66 @@ func TestSSHArgvRefusesKnownHostsPathsSSHWouldReinterpret(t *testing.T) {
 		if err := api.CheckSSHArgv(argv); err != nil {
 			t.Fatalf("client screen refused %q: %v", argv, err)
 		}
+	}
+}
+
+// The route offers ssh a trusted system known_hosts file (as the resolved path
+// the trust check judged) and leaves out one others can write.
+func TestSSHRouteIncludesOnlyATrustedSystemKnownHosts(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real_known_hosts")
+	if err := os.WriteFile(real, []byte("h ssh-ed25519 AAAA\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sys := filepath.Join(dir, "ssh_known_hosts")
+	if err := os.Symlink(real, sys); err != nil {
+		sys = real // no symlinks here; the plain file does as well
+	}
+	resolved, err := filepath.EvalSymlinks(sys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore := executor.SetSystemKnownHostsForTest(sys)
+	t.Cleanup(restore)
+
+	ts, token := contractServer(t, config.Target{ID: "box", Mode: "ssh", SSH: &executor.SSHConfig{Host: "10.0.0.5", User: "root"}})
+	argvOf := func() []string {
+		t.Helper()
+		req, _ := http.NewRequest("GET", ts.URL+"/api/fleet/box/ssh", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var cmd api.SSHCommand
+		if err := json.NewDecoder(res.Body).Decode(&cmd); err != nil || res.StatusCode != http.StatusOK {
+			t.Fatalf("%d %v", res.StatusCode, err)
+		}
+		if err := api.CheckSSHArgv(cmd.Argv); err != nil {
+			t.Fatalf("client screen refused %q: %v", cmd.Argv, err)
+		}
+		return cmd.Argv
+	}
+	has := func(argv []string) bool {
+		for _, a := range argv {
+			if strings.HasPrefix(a, api.SSHOptKnownHostsPrefix) && strings.Contains(a, resolved) {
+				return true
+			}
+		}
+		return false
+	}
+	if argv := argvOf(); !has(argv) {
+		t.Fatalf("trusted system file missing from %q", argv)
+	}
+
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if err := os.Chmod(real, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if argv := argvOf(); has(argv) {
+		t.Fatalf("untrusted system file offered to ssh in %q", argv)
 	}
 }
