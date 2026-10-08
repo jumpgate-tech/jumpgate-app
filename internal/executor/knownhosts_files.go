@@ -73,7 +73,14 @@ func OpenSSHKnownHostsPaths(home string) []string {
 		return files
 	}
 	f.Close()
-	return append(files, systemKnownHosts)
+	// The check followed any symlink, so hand ssh the file it judged, not the
+	// link, which could be retargeted before ssh reads it.
+	resolved, err := filepath.EvalSymlinks(systemKnownHosts)
+	if err != nil {
+		log.Printf("jumpgate: ignoring %s: %v", systemKnownHosts, err)
+		return files
+	}
+	return append(files, resolved)
 }
 
 // openTrustedSystemKnownHosts opens the system-wide file when it exists and

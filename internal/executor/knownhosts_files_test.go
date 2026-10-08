@@ -194,7 +194,11 @@ func TestOpenSSHKnownHostsPathsMatchTheStrictSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	openTrustedKnownHosts = func(p string) (*os.File, error) { return os.Open(p) }
-	if got := OpenSSHKnownHostsPaths(home); !slices.Equal(got, []string{user, sys}) {
+	resolved, err := filepath.EvalSymlinks(sys) // ssh gets the resolved path (a temp dir may itself sit behind a link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := OpenSSHKnownHostsPaths(home); !slices.Equal(got, []string{user, resolved}) {
 		t.Fatalf("with a trusted system file: %v", got)
 	}
 	if n := len(OpenSSHKnownHosts(home)); n != 2 {
@@ -206,5 +210,32 @@ func TestOpenSSHKnownHostsPathsMatchTheStrictSet(t *testing.T) {
 	}
 	if n := len(OpenSSHKnownHosts(home)); n != 1 {
 		t.Fatalf("strict set has %d entries", n)
+	}
+}
+
+// The path handed to an ssh child is the file the trust check judged: when the
+// system file is a symlink, ssh gets the resolved target, not the link.
+func TestOpenSSHKnownHostsPathsGivesSSHTheResolvedPath(t *testing.T) {
+	home := t.TempDir()
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real_known_hosts")
+	if err := os.WriteFile(real, []byte("h ssh-ed25519 AAAA\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "ssh_known_hosts")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("cannot symlink here: %v", err)
+	}
+	oldSys := systemKnownHosts
+	systemKnownHosts = link
+	t.Cleanup(func() { systemKnownHosts = oldSys })
+
+	want, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := OpenSSHKnownHostsPaths(home)
+	if len(got) != 2 || got[1] != want {
+		t.Fatalf("got %q, want the resolved %q", got, want)
 	}
 }
