@@ -7,6 +7,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
@@ -79,5 +80,17 @@ func TestJobKindsAreRoutineByDefault(t *testing.T) {
 		if got := DefaultRequirements[k]; len(got) != 1 || got[0] != TierRoutine {
 			t.Errorf("%s requires %v", k, got)
 		}
+	}
+}
+
+func TestAuthoriseWithAnExtraApprovalTier(t *testing.T) {
+	ctl, _ := signer.GenerateKey()
+	wallet, _ := signer.GenerateKey()
+	p := Policy{Signers: []SignerEntry{{Address: ctl.Address().Hex(), Tier: TierRoutine}, {Address: wallet.Address().Hex(), Tier: TierApproval}}}
+	if err := p.Authorise(intent.KindJobDecide, ctl.Address(), []eip712.Address{ctl.Address()}, TierApproval); err == nil {
+		t.Fatal("an approval question passed with only the controller's signature")
+	}
+	if err := p.Authorise(intent.KindJobDecide, ctl.Address(), []eip712.Address{ctl.Address(), wallet.Address()}, TierApproval); err != nil {
+		t.Fatal(err)
 	}
 }

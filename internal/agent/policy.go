@@ -120,8 +120,13 @@ func (p Policy) tierOf(a eip712.Address) (Tier, bool) {
 }
 
 // Authorise checks that controller is an enrolled routine signer that signed,
-// and that every tier the kind requires is covered by a distinct signer.
-func (p Policy) Authorise(kind string, controller eip712.Address, signers []eip712.Address) error {
+// and that every tier the kind requires, plus each of extra, is covered by a
+// distinct signer. extra is what this one request needs beyond its kind: a
+// decision on a question of the approval tier needs an approval signature
+// whatever the policy asks of job.decide (Q5). A job kind with neither a
+// default requirement nor a policy entry stays unknown: registering a plan
+// does not authorise anyone to start it.
+func (p Policy) Authorise(kind string, controller eip712.Address, signers []eip712.Address, extra ...Tier) error {
 	req, ok := p.Kinds[kind]
 	if !ok {
 		req, ok = DefaultRequirements[kind]
@@ -129,6 +134,7 @@ func (p Policy) Authorise(kind string, controller eip712.Address, signers []eip7
 	if !ok {
 		return reject(intent.ReasonUnknownKind, fmt.Sprintf("this agent does not know %q", kind))
 	}
+	req = append(append([]Tier{}, req...), extra...)
 	if tier, enrolled := p.tierOf(controller); !enrolled || tier != TierRoutine {
 		return reject(intent.ReasonUnauthorizedKind, fmt.Sprintf("controller %s is not enrolled on this box", controller.Hex()))
 	}

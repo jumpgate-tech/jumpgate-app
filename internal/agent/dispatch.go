@@ -11,7 +11,9 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/jobs"
 	"github.com/valve-tech/jumpgate/internal/logwatch"
 	"github.com/valve-tech/jumpgate/internal/monitor"
 	"github.com/valve-tech/jumpgate/internal/ops"
@@ -29,21 +31,21 @@ type FirewallReadPayload struct {
 	OverlayCIDRs []string `json:"overlayCidrs"`
 }
 
-// PlanVersions lists the plan versions this agent can run. Sub-project 1 runs
-// no plans; sub-project 2 adds the first.
-var PlanVersions = []string{}
-
+// loadNode is the node config every node kind acts on: node.json with the
+// names marker applied over it (jobs.ReadNodeConfig, D-J10), so a re-pair
+// that rewrote node.json with a controller's stale wire cannot point the
+// agent back at units, an account or a data root a migration replaced. It is
+// the agent's only reader of node.json.
 func (a *Agent) loadNode() (catalog.WireConfig, *Reject) {
-	var w catalog.WireConfig
-	b, err := os.ReadFile(a.cfg.NodePath)
-	if errors.Is(err, os.ErrNotExist) {
+	w, err := jobs.ReadNodeConfig(a.cfg.NodePath, a.cfg.NamesPath)
+	var marker *jobs.MarkerError
+	switch {
+	case errors.As(err, &marker):
+		return w, reject(intent.ReasonValidation, "names.json: "+err.Error())
+	case errors.Is(err, os.ErrNotExist):
 		return w, reject(intent.ReasonNotSetUp, "this box has no node set up yet")
-	}
-	if err != nil {
+	case err != nil:
 		return w, reject(intent.ReasonValidation, err.Error())
-	}
-	if err := json.Unmarshal(b, &w); err != nil {
-		return w, reject(intent.ReasonValidation, "node.json does not parse: "+err.Error())
 	}
 	if err := catalog.ValidateDataDir(w.DataDir); err != nil {
 		return w, reject(intent.ReasonValidation, err.Error())
@@ -64,17 +66,25 @@ func decode[T any](payload []byte) (T, *Reject) {
 
 // dispatch runs one admitted intent. An operation error is a signed failure
 // receipt (StatusFailed), distinct from a rejection.
-func (a *Agent) dispatch(ctx context.Context, i intent.Intent, payload []byte, p Policy) ([]byte, uint8, *Reject) {
+func (a *Agent) dispatch(ctx context.Context, i intent.Intent, env intent.Envelope, signers []eip712.Address, p Policy) ([]byte, uint8, *Reject) {
+	payload := env.Payload
 	if i.Kind == intent.KindAgentInfo {
 		w, notSetUp := a.loadNode()
 		info := intent.AgentInfo{
 			Version: buildinfo.Version(), Address: a.Address().Hex(), LastSeq: a.replay.LastSeq(i.Controller),
-			PlanVersions: PlanVersions, Signers: len(p.Signers), SetUp: notSetUp == nil,
+			PlanVersions: jobs.Versions(), Signers: len(p.Signers), SetUp: notSetUp == nil,
 		}
 		if notSetUp == nil {
-			info.ChainID = w.ChainID
+			// After the names marker: a migrated box reports its new names
+			// and data dir even when its node.json is stale.
+			info.ChainID, info.Names, info.DataDir = w.ChainID, w.Names, w.DataDir
 		}
 		return mustJSON(info), intent.StatusOK, nil
+	}
+	// A job kind needs no node set up: node.migrate-names reports a missing
+	// node.json itself, in its preflight.
+	if isJobKind(i.Kind) {
+		return a.dispatchJob(ctx, i, env, signers)
 	}
 
 	w, rej := a.loadNode()
@@ -158,14 +168,15 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, payload []byte, p
 		if rej != nil {
 			return nil, 0, rej
 		}
-		res, rej, err := logsSince(ctx, ex, w, pl, a.cfg.Now())
+		hits, cursor, rej, err := logsSince(ctx, ex, ops.NodeUnits(w.NodeNames()), pl.Cursor, pl.N, a.cfg.Now(),
+			func(e journalEntry) logwatch.Hit { return classifyLine(e.unit, e.line, e.at) })
 		if rej != nil {
 			return nil, 0, rej
 		}
 		if err != nil {
 			return failed(err)
 		}
-		return mustJSON(res), intent.StatusOK, nil
+		return mustJSON(LogsSinceResult{Hits: hits, Cursor: cursor}), intent.StatusOK, nil
 
 	case intent.KindServiceAction:
 		pl, rej := decode[intent.ServiceActionPayload](payload)
@@ -174,6 +185,12 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, payload []byte, p
 		}
 		if (pl.Service != "exec" && pl.Service != "beacon") || (pl.Action != "start" && pl.Action != "stop" && pl.Action != "restart") {
 			return nil, 0, reject(intent.ReasonInvalidPayload, fmt.Sprintf("service %q / action %q", pl.Service, pl.Action))
+		}
+		// J1: the node services belong to a running job until it ends.
+		if j, busy, err := a.activeJob(); err != nil {
+			return failed(err)
+		} else if busy {
+			return nil, 0, reject(intent.ReasonJobActive, fmt.Sprintf("job %s (%s) is %s and owns the node services until it ends", j.ID, j.Kind, j.State))
 		}
 		active, err := ops.ServiceAction(ctx, ex, w.NodeNames(), pl.Service, pl.Action)
 		if err != nil {

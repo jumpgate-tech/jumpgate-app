@@ -10,11 +10,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/logwatch"
-	"github.com/valve-tech/jumpgate/internal/ops"
 )
 
 // LogsSinceResult answers logs.since: the new lines and where to resume.
@@ -38,12 +36,14 @@ const (
 // command line, even though it is also quoted there.
 var cursorRE = regexp.MustCompile(`^[A-Za-z0-9=;_-]{1,512}$`)
 
-// logsSinceCommand is one journalctl call over both node units, interleaved
-// by time, as JSON so each line keeps its timestamp and the cursor. The units
-// are the node's own (ops.NodeUnits, under the box's names), as for logs.read: nothing in the
+// logsSinceCommand is one journalctl call over units, interleaved by time, as
+// JSON so each line keeps its timestamp and the cursor. The units are the
+// agent's own: the node's (ops.NodeUnits, under the box's names, as for
+// logs.read) or a job's pattern built from a validated job id. Each is quoted,
+// because a job's pattern is a glob the shell must not expand. Nothing in the
 // payload reaches the command line except a validated cursor and a number.
-// After a cursor, journalctl reads forward, so -n bounds the lines read and
-// a caller that falls behind catches up over several calls.
+// After a cursor, journalctl reads forward, so -n bounds the lines read and a
+// caller that falls behind catches up over several calls.
 func logsSinceCommand(units []string, cursor string, n int) (string, error) {
 	if n <= 0 {
 		n = intent.LogsDefaultN
@@ -54,7 +54,7 @@ func logsSinceCommand(units []string, cursor string, n int) (string, error) {
 	var b strings.Builder
 	b.WriteString("journalctl")
 	for _, u := range units {
-		b.WriteString(" -u " + u)
+		b.WriteString(" -u '" + u + "'")
 	}
 	if cursor != "" {
 		if !cursorRE.MatchString(cursor) {
@@ -138,44 +138,46 @@ func classifyLine(unit, line string, at time.Time) logwatch.Hit {
 	return logwatch.Hit{Unit: unit, Line: line, At: at, Severity: "info"}
 }
 
-// logsSince runs logs.since. The answer is bounded three ways: journalctl
-// reads at most intent.LogsMaxN lines; each line is cut to logsSinceMaxLine
-// and the answer stops near logsSinceMaxBytes, its cursor at the last line
-// sent so the next call resumes there; and after a cursor, lines older than
-// logsSinceMaxAge are passed over, so a cursor cannot page back through the
-// box's history (without one the answer is the last n lines, as logs.read).
-func logsSince(ctx context.Context, ex executor.Executor, w catalog.WireConfig, pl intent.LogsSincePayload, now time.Time) (LogsSinceResult, *Reject, error) {
-	cmd, err := logsSinceCommand(ops.NodeUnits(w.NodeNames()), pl.Cursor, pl.N)
+// logsSince is the one bounded journal read, behind logs.since and job.output
+// (D-J8). The answer is bounded three ways: journalctl reads at most
+// intent.LogsMaxN lines; each line is cut to logsSinceMaxLine and the answer
+// stops near logsSinceMaxBytes, its cursor at the last line sent so the next
+// call resumes there; and after a cursor, lines older than logsSinceMaxAge
+// are passed over, so a cursor cannot page back through the box's history
+// (without one the answer is the last n lines, as logs.read). item turns one
+// journal line, already cut, into what the answer carries; the byte bound is
+// measured on item's encoding, since escaping can make a line several times
+// longer on the wire than in the journal.
+func logsSince[T any](ctx context.Context, ex executor.Executor, units []string, cursor string, n int, now time.Time, item func(journalEntry) T) ([]T, string, *Reject, error) {
+	cmd, err := logsSinceCommand(units, cursor, n)
 	if err != nil {
-		return LogsSinceResult{}, reject(intent.ReasonInvalidPayload, err.Error()), nil
+		return nil, "", reject(intent.ReasonInvalidPayload, err.Error()), nil
 	}
 	res, err := ex.Run(ctx, cmd, nil)
 	if err != nil {
-		return LogsSinceResult{}, nil, err
+		return nil, "", nil, err
 	}
-	out := LogsSinceResult{Hits: []logwatch.Hit{}, Cursor: pl.Cursor}
-	oldest := now.Add(-logsSinceMaxAge)
-	size := 0
+	out, next := []T{}, cursor
+	oldest, size := now.Add(-logsSinceMaxAge), 0
 	for _, e := range readJournalJSON(res.Stdout) {
-		if pl.Cursor != "" && e.at.Before(oldest) {
-			out.Cursor = e.cursor
+		if cursor != "" && e.at.Before(oldest) {
+			next = e.cursor
 			continue
 		}
-		h := classifyLine(e.unit, cutLine(e.line, logsSinceMaxLine), e.at)
-		// Measured as encoded: escaping can make a line several times
-		// longer on the wire than in the journal.
-		b, _ := json.Marshal(h)
-		n := len(b) + 1
-		if size+n > logsSinceMaxBytes && len(out.Hits) > 0 {
+		e.line = cutLine(e.line, logsSinceMaxLine)
+		it := item(e)
+		b, _ := json.Marshal(it)
+		sz := len(b) + 1
+		if size+sz > logsSinceMaxBytes && len(out) > 0 {
 			break // the rest waits for the next call
 		}
-		size += n
-		out.Hits = append(out.Hits, h)
+		size += sz
+		out = append(out, it)
 		if e.cursor != "" {
-			out.Cursor = e.cursor
+			next = e.cursor
 		}
 	}
-	return out, nil, nil
+	return out, next, nil, nil
 }
 
 // cutLine shortens s to at most max bytes without splitting a character.

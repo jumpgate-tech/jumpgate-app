@@ -15,8 +15,10 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/agent"
 	"github.com/valve-tech/jumpgate/internal/agentclient"
+	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/jobs"
 	"github.com/valve-tech/jumpgate/internal/signer"
 )
 
@@ -31,7 +33,7 @@ func cmdAgent(args []string) int {
 		return failed("`jumpgate agent` runs on the Linux boxes jumpgate manages, not on Windows")
 	}
 	if len(args) == 0 {
-		return usage("usage: jumpgate agent init|enroll|run|reset-replay")
+		return usage("usage: jumpgate agent init|enroll|run|reset-replay|job-step")
 	}
 	fset := flag.NewFlagSet("agent "+args[0], flag.ContinueOnError)
 	state := fset.String("state-dir", defaultStateDir, "agent state directory")
@@ -42,6 +44,11 @@ func cmdAgent(args []string) int {
 	localUID := fset.Int("local-uid", -1, "also allow this local uid on the socket")
 	yes := fset.Bool("yes", false, "confirm reset-replay")
 	resetReplay := fset.Bool("reset-replay", false, "init: start an empty replay record when the key exists but the record is gone")
+	// job-step's own arguments are read by jobs.ParseStepArgs, which checks
+	// every one; they are declared here only so the flag set accepts them.
+	fset.String("job", "", "job id (job-step)")
+	fset.String("step", "", "step id (job-step)")
+	fset.String("attempt", "", "attempt (job-step)")
 	if err := fset.Parse(args[1:]); err != nil {
 		return exitCode("usage")
 	}
@@ -53,6 +60,11 @@ func cmdAgent(args []string) int {
 		err = agentEnroll(*conf, agentclient.DefaultSocket, *address, *tier, *label, *localUID)
 	case "run":
 		err = agentRun(*state, *conf)
+	case "job-step":
+		var a jobs.StepArgs
+		if a, err = jobs.ParseStepArgs(args[1:]); err == nil {
+			err = agentJobStep(*state, *conf, a)
+		}
 	case "reset-replay":
 		if !*yes {
 			return usage("reset-replay reopens a replay window for intents captured before now; re-run with --yes once you know why the record broke")
@@ -144,6 +156,37 @@ func agentResetReplay(stateDir string) error {
 	return agent.InitReplay(path)
 }
 
+// agentJobStep is the body of a job step's transient unit. It holds no key
+// and never opens the job store, whose lock the running agent holds: it
+// reads its manifest and writes one result file (spec D-J4). Its arguments
+// were checked by jobs.ParseStepArgs.
+func agentJobStep(stateDir, configDir string, a jobs.StepArgs) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return jobs.RunStep(ctx, filepath.Join(stateDir, "jobs"), a, jobs.Env{
+		Exec: executor.NewLocal(), NodePath: filepath.Join(configDir, "node.json"),
+		NamesPath: filepath.Join(configDir, "names.json"), Out: os.Stdout,
+	})
+}
+
+// openJobManager opens the job store, which it locks until Close. A second
+// agent on the box fails here, saying so, before it could touch the running
+// agent's socket.
+func openJobManager(stateDir, configDir string, k signer.Signer, ex executor.Executor) (*jobs.Manager, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	mgr, err := jobs.NewManager(jobs.ManagerConfig{
+		Dir: filepath.Join(stateDir, "jobs"), Key: k, Runner: jobs.DefaultRunner(ex), Version: buildinfo.Version(),
+		StepArgv: func(a jobs.StepArgs) []string { return jobs.StepArgv(self, stateDir, configDir, a) },
+	})
+	if errors.Is(err, jobs.ErrStoreInUse) {
+		return nil, fmt.Errorf("another jumpgate agent is already running on this box: %w", err)
+	}
+	return mgr, err
+}
+
 // agentRun serves until SIGTERM. systemd hands the key in through
 // LoadCredential; outside systemd it is read from the state directory.
 func agentRun(stateDir, configDir string) error {
@@ -155,11 +198,20 @@ func agentRun(stateDir, configDir string) error {
 	if err != nil {
 		return err
 	}
+	ex := executor.NewLocal()
+	// The job store first: its lock is what tells a second agent to stop,
+	// and Listen below replaces whatever socket is at the path.
+	mgr, err := openJobManager(stateDir, configDir, k, ex)
+	if err != nil {
+		return err
+	}
+	defer mgr.Close()
 	a := agent.New(agent.Config{
-		Key: k, Exec: executor.NewLocal(),
+		Key: k, Exec: ex, Jobs: mgr, Log: os.Stderr,
 		PolicyPath: filepath.Join(configDir, "policy.json"),
 		ReplayPath: filepath.Join(stateDir, "replay.json"),
 		NodePath:   filepath.Join(configDir, "node.json"),
+		NamesPath:  filepath.Join(configDir, "names.json"),
 	})
 	// The policy only sets the socket mode here; Handle re-reads it for every
 	// intent. An unreadable policy keeps the stricter 0660.
@@ -173,6 +225,7 @@ func agentRun(stateDir, configDir string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go a.RunJobs(ctx)
 	fmt.Fprintf(os.Stderr, "jumpgate agent %s listening on %s\n", a.Address().Hex(), agentclient.DefaultSocket)
 	return agent.Serve(ctx, a, ln)
 }

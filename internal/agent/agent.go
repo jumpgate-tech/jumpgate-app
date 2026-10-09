@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/jobs"
 	"github.com/valve-tech/jumpgate/internal/signer"
 )
 
@@ -23,14 +25,23 @@ const (
 )
 
 // Config wires an Agent. Paths are /etc/jumpgate/policy.json,
-// /var/lib/jumpgate/replay.json and /etc/jumpgate/node.json in production.
+// /var/lib/jumpgate/replay.json, /etc/jumpgate/node.json and
+// /etc/jumpgate/names.json in production.
 type Config struct {
 	Key        *signer.Key
 	PolicyPath string
 	ReplayPath string
 	NodePath   string
-	Exec       executor.Executor
-	Now        func() time.Time
+	// NamesPath is the names marker node.migrate-names writes. It is
+	// applied over node.json on every read (D-J10); empty reads none.
+	NamesPath string
+	Exec      executor.Executor
+	Now       func() time.Time
+	// Jobs runs durable jobs; nil refuses every job kind (jobs_unsupported).
+	Jobs *jobs.Manager
+	// Log takes what the agent reports outside any answer, such as a failed
+	// reconcile pass; nil discards it.
+	Log io.Writer
 }
 
 // Agent handles intents. It is safe for concurrent use.
@@ -112,7 +123,7 @@ func (a *Agent) Handle(ctx context.Context, env intent.Envelope) intent.ReceiptE
 	if err != nil {
 		return a.answerReject(i, reqHash, reject(intent.ReasonUnauthorizedKind, err.Error()))
 	}
-	if err := policy.Authorise(i.Kind, i.Controller, signers); err != nil {
+	if err := policy.Authorise(i.Kind, i.Controller, signers, a.decisionTiers(i, env)...); err != nil {
 		return a.answerReject(i, reqHash, asReject(err))
 	}
 
@@ -129,11 +140,38 @@ func (a *Agent) Handle(ctx context.Context, env intent.Envelope) intent.ReceiptE
 		return a.answerReject(i, reqHash, asReject(err))
 	}
 
-	result, status, rej := a.dispatch(ctx, i, env.Payload, policy)
+	result, status, rej := a.dispatch(ctx, i, env, signers, policy)
 	if rej != nil {
 		return a.answerReject(i, reqHash, rej)
 	}
 	return a.answer(i, reqHash, status, result)
+}
+
+// decisionTiers is what a job.decide needs beyond the policy's requirement
+// for its kind: the tier of the question it answers (spec: "a signed
+// decision of the tier the policy requires", Q5). The question is the
+// agent's own, read before admission so a refused decision does not consume
+// the controller's sequence. Any tier but routine is required as named, so a
+// tier no signer holds is never satisfied rather than read as routine.
+func (a *Agent) decisionTiers(i intent.Intent, env intent.Envelope) []Tier {
+	if i.Kind != intent.KindJobDecide || a.cfg.Jobs == nil {
+		return nil
+	}
+	pl, rej := decode[intent.JobDecidePayload](env.Payload)
+	if rej != nil || !jobs.ValidID(pl.ID) {
+		return nil // dispatch refuses the payload itself
+	}
+	if t := a.cfg.Jobs.QuestionTier(pl.ID, pl.Decision); t != intent.TierRoutine {
+		return []Tier{Tier(t)}
+	}
+	return nil
+}
+
+// logf writes one line to the agent's log.
+func (a *Agent) logf(format string, args ...any) {
+	if a.cfg.Log != nil {
+		fmt.Fprintf(a.cfg.Log, "jumpgate agent: "+format+"\n", args...)
+	}
 }
 
 // currentReplay returns the replay record. While the record is failed it is

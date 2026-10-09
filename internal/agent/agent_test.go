@@ -104,6 +104,62 @@ func (r *rig) send(t *testing.T, kind string, payload any, mutate func(*intent.I
 	return rc, out.Result
 }
 
+// sendSignedBy is send with extra's signature appended to the controller's.
+func (r *rig) sendSignedBy(t *testing.T, kind string, payload any, extra *signer.Key) (intent.Receipt, []byte) {
+	t.Helper()
+	body, _ := json.Marshal(payload)
+	r.seq++
+	n, _ := intent.NewNonce()
+	i := intent.Intent{Agent: r.agentKey.Address(), Controller: r.controller.Address(), Seq: r.seq, Nonce: n,
+		IssuedAt: uint64(r.now.Unix()), Expiry: uint64(r.now.Unix() + 120), Kind: kind, PayloadHash: intent.Hash(body)}
+	sig, _ := r.controller.SignTypedData(context.Background(), i.TypedData())
+	sig2, _ := extra.SignTypedData(context.Background(), i.TypedData())
+	out := r.a.Handle(context.Background(), intent.Envelope{Intent: i.JSON(), Payload: body, Sigs: []string{sig.Hex(), sig2.Hex()}})
+	rc, err := out.Receipt.Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rc, out.Result
+}
+
+// enroll adds k to the rig's policy at tier.
+func enroll(t *testing.T, r *rig, k *signer.Key, tier Tier) {
+	t.Helper()
+	path := filepath.Join(r.dir, "policy.json")
+	p, err := LoadPolicy(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.AddSigner(SignerEntry{Address: k.Address().Hex(), Tier: tier, Label: "test " + string(tier)})
+	if err := p.Save(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setQuestionTier raises the open question of job id to tier on disk. The
+// manifest is not signed, so this is a legal shortcut; the log is untouched.
+func setQuestionTier(t *testing.T, r *rig, id, tier string) {
+	t.Helper()
+	path := filepath.Join(r.dir, "jobs", id+".json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	q, ok := m["question"].(map[string]any)
+	if !ok {
+		t.Fatalf("job %s has no open question", id)
+	}
+	q["tier"] = tier
+	b, _ = json.Marshal(m)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func rejection(t *testing.T, rc intent.Receipt, result []byte) intent.Rejection {
 	t.Helper()
 	if rc.Status != intent.StatusRejected {

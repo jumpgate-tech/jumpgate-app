@@ -43,7 +43,7 @@ func TestLogsSinceCommandReadsOnlyTheNodeUnits(t *testing.T) {
 	}
 	want := "journalctl"
 	for _, u := range ops.NodeUnits(catalog.LegacyNames) {
-		want += " -u " + u
+		want += " -u '" + u + "'"
 	}
 	want += " -n " + fmt.Sprint(intent.LogsDefaultN) + " --no-pager -o json"
 	if cmd != want {
