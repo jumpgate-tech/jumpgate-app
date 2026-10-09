@@ -104,3 +104,30 @@ func SnapshotMarkerPath(w WireConfig) string {
 func OwnerMarkerPath(w WireConfig) string {
 	return fmt.Sprintf("%s/%d.owner", MarkersDir, w.ChainID)
 }
+
+// SnapshotMarkerCommand writes the snapshot marker for w: it records which
+// data dir the finished restore populated. Setup writes it when a restore
+// ends; node.migrate-names rewrites it when the data dir moves.
+func SnapshotMarkerCommand(w WireConfig) string {
+	return writeMarkerCommand(SnapshotMarkerPath(w), w.DataDir)
+}
+
+// OwnerMarkerCommand writes the owner marker for w: it records which account
+// chown -R of w's data dir finished for. Setup writes it after the walk;
+// node.migrate-names rewrites it when it renames that account in place.
+func OwnerMarkerCommand(w WireConfig) string {
+	return writeMarkerCommand(OwnerMarkerPath(w), w.NodeNames().User)
+}
+
+// writeMarkerCommand writes value to target, a marker in MarkersDir. The
+// directory is root-only, so nothing in it can be planted by the service
+// account; the value goes to a fresh temp file and mv -f renames it into
+// place, which replaces whatever is at the target (a symlink included)
+// rather than writing through it. A marker is never chowned: it stays
+// root's. It is unexported so every marker is written for a path the two
+// commands above derive from the chain id, never for a caller's path.
+func writeMarkerCommand(target, value string) string {
+	dir := shQuote(MarkersDir)
+	return fmt.Sprintf(`install -d -m 0755 %s && umask 077 && mkdir -p %s && chmod 0700 %s && t=$(mktemp %s) && printf '%%s\n' %s > "$t" && mv -f "$t" %s`,
+		shQuote(path.Dir(MarkersDir)), dir, dir, shQuote(MarkersDir+"/.tmp.XXXXXX"), shQuote(value), shQuote(target))
+}

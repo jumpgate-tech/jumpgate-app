@@ -515,26 +515,12 @@ func snapshotStep() Step {
 }
 
 // snapshotMarkerCmd records which data dir the finished restore populated.
-func snapshotMarkerCmd(w catalog.WireConfig) string {
-	return writeMarkerCmd(shQuote(w.DataDir), catalog.SnapshotMarkerPath(w))
-}
+// The writer lives in catalog so node.migrate-names, which moves the data
+// dir, rewrites the marker the same way.
+func snapshotMarkerCmd(w catalog.WireConfig) string { return catalog.SnapshotMarkerCommand(w) }
 
 // ownerMarkerCmd records which account chown -R finished for.
-func ownerMarkerCmd(w catalog.WireConfig) string {
-	return writeMarkerCmd(shQuote(w.NodeNames().User), catalog.OwnerMarkerPath(w))
-}
-
-// writeMarkerCmd writes value (an already shell-quoted word) to a marker in
-// catalog.MarkersDir. The directory is root-only, so nothing in it can be
-// planted by the service account; the value goes to a fresh temp file and
-// mv -f renames it into place, which replaces whatever is at the target (a
-// symlink included) rather than writing through it. A marker is never chowned:
-// it stays root's.
-func writeMarkerCmd(value, target string) string {
-	dir := shQuote(catalog.MarkersDir)
-	return fmt.Sprintf(`install -d -m 0755 %s && umask 077 && mkdir -p %s && chmod 0700 %s && t=$(mktemp %s) && printf '%%s\n' %s > "$t" && mv -f "$t" %s`,
-		shQuote(path.Dir(catalog.MarkersDir)), dir, dir, shQuote(catalog.MarkersDir+"/.tmp.XXXXXX"), value, shQuote(target))
-}
+func ownerMarkerCmd(w catalog.WireConfig) string { return catalog.OwnerMarkerCommand(w) }
 
 // ---------------------------------------------------------------------
 // wire

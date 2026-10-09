@@ -79,3 +79,27 @@ func TestLegacyUnitsRenderAsBefore(t *testing.T) {
 		}
 	}
 }
+
+// Both markers go through one writer: a fresh temp file in the root-only
+// markers dir, renamed over the target, never chowned. The value is quoted
+// here, so a data dir with a quote in it cannot break out of the command.
+func TestMarkerCommandsWriteThroughATempFileInTheMarkersDir(t *testing.T) {
+	w := WireConfig{ChainID: 369, DataDir: "/data/it's", Names: NamesCurrent}
+	for _, c := range []struct{ cmd, target, value string }{
+		{SnapshotMarkerCommand(w), SnapshotMarkerPath(w), `'/data/it'\''s'`},
+		{OwnerMarkerCommand(w), OwnerMarkerPath(w), "'jumpgate-node'"},
+	} {
+		want := `install -d -m 0755 '/var/lib/jumpgate' && umask 077 && mkdir -p '/var/lib/jumpgate/markers' && chmod 0700 '/var/lib/jumpgate/markers' && t=$(mktemp '/var/lib/jumpgate/markers/.tmp.XXXXXX') && printf '%s\n' ` +
+			c.value + ` > "$t" && mv -f "$t" '` + c.target + `'`
+		if c.cmd != want {
+			t.Errorf("marker command\n got %s\nwant %s", c.cmd, want)
+		}
+		if strings.Contains(c.cmd, "chown") {
+			t.Errorf("a marker is chowned: %s", c.cmd)
+		}
+	}
+	w.Names = NamesLegacy
+	if !strings.Contains(OwnerMarkerCommand(w), "'valve-node-app' >") {
+		t.Errorf("the owner marker does not follow the names: %s", OwnerMarkerCommand(w))
+	}
+}
