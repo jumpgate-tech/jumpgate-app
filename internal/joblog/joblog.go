@@ -74,6 +74,11 @@ func Sign(ctx context.Context, s signer.Signer, job string, index uint64, prev [
 // Verify checks entries as positions start, start+1, … of job's log, the
 // first chained to prev, every one signed by agent. It returns the last
 // digest, which a caller keeps to verify the next page without the first.
+//
+// A nil error proves only that entries are a valid prefix of a log: a log cut
+// short still verifies. The caller must compare the returned head (or the
+// entry count) with a length it recorded independently, such as the
+// manifest's, to detect truncation.
 func Verify(agent eip712.Address, job string, entries []Entry, start uint64, prev [32]byte) ([32]byte, error) {
 	for k, e := range entries {
 		want := start + uint64(k)
@@ -96,11 +101,16 @@ func Verify(agent eip712.Address, job string, entries []Entry, start uint64, pre
 	return prev, nil
 }
 
-// VerifyIntents checks every entry that records a request: the controller the
-// intent names signed it, over exactly the payload recorded. The agent
-// checked this when it admitted the intent; a controller checks it again
-// because the log is how it learns who asked for what.
-func VerifyIntents(entries []Entry) error {
+// VerifyIntents checks every entry that records a request: the intent was
+// addressed to this agent, the controller it names signed it over exactly the
+// payload recorded, and (for a later request) the payload names this job.
+// Without those bindings a genuine intent signed for another agent or job
+// would pass and wrongly credit its controller. A created entry's payload
+// (node.migrate-names) carries no job id, so for it the agent binding and the
+// log's own signature are what tie it to the job. The agent checked all this
+// when it admitted the intent; a controller checks it again because the log
+// is how it learns who asked for what.
+func VerifyIntents(agent eip712.Address, job string, entries []Entry) error {
 	for _, e := range entries {
 		if e.Kind != KindCreated && e.Kind != KindIntent {
 			continue
@@ -112,6 +122,17 @@ func VerifyIntents(entries []Entry) error {
 		in, err := b.Envelope.Intent.Parse()
 		if err != nil {
 			return fmt.Errorf("%w: entry %d: %v", ErrBroken, e.Index, err)
+		}
+		if in.Agent != agent {
+			return fmt.Errorf("%w: entry %d: the intent was addressed to agent %s", ErrBroken, e.Index, in.Agent.Hex())
+		}
+		if e.Kind == KindIntent {
+			var p struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(b.Envelope.Payload, &p); err != nil || p.ID != job {
+				return fmt.Errorf("%w: entry %d: the intent is not for job %s", ErrBroken, e.Index, job)
+			}
 		}
 		if intent.Hash(b.Envelope.Payload) != in.PayloadHash {
 			return fmt.Errorf("%w: entry %d: the payload is not the one signed", ErrBroken, e.Index)

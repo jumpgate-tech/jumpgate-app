@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/valve-tech/jumpgate/internal/intent"
 )
@@ -57,6 +58,22 @@ type FinishedBody struct {
 // Describe is an entry as one line for a person. It reads only verified
 // entries' bodies; an unreadable body says so rather than guessing.
 func Describe(e Entry) string {
+	return clean(describe(e))
+}
+
+// clean drops control characters. A step's error text comes from unsigned
+// step output and reaches a terminal, where an escape sequence could rewrite
+// what the person sees.
+func clean(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+func describe(e Entry) string {
 	bad := fmt.Sprintf("%s (unreadable body)", e.Kind)
 	switch e.Kind {
 	case KindCreated, KindIntent:

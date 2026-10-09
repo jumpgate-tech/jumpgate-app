@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,12 +65,18 @@ func TestVerifyRejectsEditsReordersAndForeignSigners(t *testing.T) {
 		"dropped middle": func(es []Entry) []Entry { return append(es[:1], es[2:]...) },
 		"reordered":      func(es []Entry) []Entry { es[1], es[2] = es[2], es[1]; return es },
 		"foreign signer": func(es []Entry) []Entry {
-			e, _, _ := Sign(context.Background(), other, job, 3, es[3].Prev, es[3].Kind, es[3].Body, time.Unix(int64(es[3].At), 0))
+			e, _, err := Sign(context.Background(), other, job, 3, es[3].Prev, es[3].Kind, es[3].Body, time.Unix(int64(es[3].At), 0))
+			if err != nil {
+				t.Fatal(err)
+			}
 			es[3] = e
 			return es
 		},
 		"other job": func(es []Entry) []Entry {
-			e, _, _ := Sign(context.Background(), k, "fedcba9876543210", 3, es[3].Prev, es[3].Kind, es[3].Body, time.Unix(int64(es[3].At), 0))
+			e, _, err := Sign(context.Background(), k, "fedcba9876543210", 3, es[3].Prev, es[3].Kind, es[3].Body, time.Unix(int64(es[3].At), 0))
+			if err != nil {
+				t.Fatal(err)
+			}
 			es[3] = e
 			return es
 		},
@@ -98,34 +105,84 @@ func TestJSONRoundTripKeepsTheSignature(t *testing.T) {
 	}
 }
 
-func signedEnvelope(t *testing.T, controller, signs *signer.Key) intent.Envelope {
+// signedEnvelope is an advance request addressed to agent, for job id, that
+// controller's intent is signed by signs.
+func signedEnvelope(t *testing.T, agent eip712.Address, id string, controller, signs *signer.Key) intent.Envelope {
 	t.Helper()
-	body := []byte(`{"id":"` + job + `"}`)
-	n, _ := intent.NewNonce()
-	in := intent.Intent{Controller: controller.Address(), Seq: 1, Nonce: n, IssuedAt: 1, Expiry: 2, Kind: intent.KindJobAdvance, PayloadHash: intent.Hash(body)}
-	sig, _ := signs.SignTypedData(context.Background(), in.TypedData())
+	body := []byte(`{"id":"` + id + `"}`)
+	n, err := intent.NewNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := intent.Intent{Agent: agent, Controller: controller.Address(), Seq: 1, Nonce: n, IssuedAt: 1, Expiry: 2, Kind: intent.KindJobAdvance, PayloadHash: intent.Hash(body)}
+	sig, err := signs.SignTypedData(context.Background(), in.TypedData())
+	if err != nil {
+		t.Fatal(err)
+	}
 	return intent.Envelope{Intent: in.JSON(), Payload: body, Sigs: []string{sig.Hex()}}
 }
 
 // Review Focus 5: an intent entry proves who asked only if the controller it
-// names signed it, over exactly the payload it carries.
+// names signed it, over exactly the payload it carries, for this agent and job.
 func TestVerifyIntentsNeedsTheNamedController(t *testing.T) {
 	agentKey, _ := signer.GenerateKey()
+	otherAgent, _ := signer.GenerateKey()
 	ctl, _ := signer.GenerateKey()
 	mallory, _ := signer.GenerateKey()
-	good := signedEnvelope(t, ctl, ctl)
-	forged := signedEnvelope(t, ctl, mallory)
+	a := agentKey.Address()
+	good := signedEnvelope(t, a, job, ctl, ctl)
 	swapped := good
 	swapped.Payload = []byte(`{"id":"ffffffffffffffff"}`)
 	for name, c := range map[string]struct {
 		env intent.Envelope
 		ok  bool
-	}{"good": {good, true}, "signed by someone else": {forged, false}, "payload swapped": {swapped, false}} {
-		body, _ := json.Marshal(IntentBody{Envelope: c.env, Outcome: "advance"})
-		e, _, _ := Sign(context.Background(), agentKey, job, 0, [32]byte{}, KindIntent, body, time.Unix(1, 0))
-		if err := VerifyIntents([]Entry{e}); (err == nil) != c.ok {
+	}{
+		"good":                              {good, true},
+		"signed by someone else":            {signedEnvelope(t, a, job, ctl, mallory), false},
+		"payload swapped":                   {swapped, false},
+		"intent addressed to another agent": {signedEnvelope(t, otherAgent.Address(), job, ctl, ctl), false},
+		"intent for another job":            {signedEnvelope(t, a, "fedcba9876543210", ctl, ctl), false},
+	} {
+		body, err := json.Marshal(IntentBody{Envelope: c.env, Outcome: "advance"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, _, err := Sign(context.Background(), agentKey, job, 0, [32]byte{}, KindIntent, body, time.Unix(1, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := VerifyIntents(a, job, []Entry{e}); (err == nil) != c.ok {
 			t.Errorf("%s: VerifyIntents = %v", name, err)
 		}
+	}
+}
+
+// A log cut short still verifies; only its head gives the cut away.
+func TestVerifyOfATruncatedLogReturnsADifferentHead(t *testing.T) {
+	k, _ := signer.GenerateKey()
+	es := chain(t, k, 4)
+	full, err := Verify(k.Address(), job, es, 0, [32]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, err := Verify(k.Address(), job, es[:3], 0, [32]byte{})
+	if err != nil {
+		t.Fatalf("a valid prefix must verify: %v", err)
+	}
+	if short == full {
+		t.Fatal("a truncated log returned the full chain's head")
+	}
+}
+
+func TestDescribeStripsControlCharacters(t *testing.T) {
+	got := Describe(Entry{Kind: KindStepFinished, Body: []byte(`{"step":"s","attempt":1,"error":"boom\u001b[2J\u001b]0;x\u0007\r\nbad"}`)})
+	for _, r := range got {
+		if r < 0x20 || r == 0x7f {
+			t.Fatalf("Describe kept a control character: %q", got)
+		}
+	}
+	if !strings.Contains(got, "boom") {
+		t.Fatalf("Describe lost the text: %q", got)
 	}
 }
 
