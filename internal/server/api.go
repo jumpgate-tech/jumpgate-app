@@ -1071,8 +1071,8 @@ func setupWire(req catalog.WireConfig, existing *catalog.WireConfig) catalog.Wir
 }
 
 // setupExisting is the wire setup keeps a box's names and paths from. For a
-// paired box it is always what the box's agent reports in agent.info, after
-// the names marker (D-J10): the controller's copy may predate a migration it
+// paired box it is what the box's agent reports in agent.info, after the
+// names marker (D-J10): the controller's copy may predate a migration it
 // missed, or be absent (a box paired from another controller, or a config
 // restored from before the box was set up), and setup renders units as root
 // from these names. Review Focus 4: without this a legacy box would be
@@ -1080,6 +1080,13 @@ func setupWire(req catalog.WireConfig, existing *catalog.WireConfig) catalog.Wir
 // account that does not exist. A box that cannot answer, or whose node config
 // it refuses, refuses the setup rather than guess. An unpaired target has
 // only the controller's copy.
+//
+// A released agent (before sub-project 2) reports only setUp and chainId.
+// For such a box the controller's copy fills in what the agent does not say,
+// and a box it reports as not set up while the controller holds a config
+// for it is refused (setupConflict): an older agent says the same of a node
+// config it cannot read, and taking that box for a new one would give it
+// units for an account that does not exist.
 func (s *Server) setupExisting(ctx context.Context, cfg config.Config, t config.Target) (*catalog.WireConfig, error) {
 	if t.Agent == nil {
 		return t.Wire, nil
@@ -1088,25 +1095,52 @@ func (s *Server) setupExisting(ctx context.Context, cfg config.Config, t config.
 	if err != nil {
 		return nil, fmt.Errorf("ask the box which names its node uses: %w", err)
 	}
+	return setupExistingFrom(info, t)
+}
+
+// setupExistingFrom is setupExisting's decision for a paired box, from the
+// box's agent.info and the controller's target.
+func setupExistingFrom(info intent.AgentInfo, t config.Target) (*catalog.WireConfig, error) {
 	if info.SetUpError != nil {
 		return nil, &agentRejected{*info.SetUpError}
 	}
-	var box *catalog.WireConfig
-	if info.SetUp {
-		// An agent from before sub-project 2 sends no names: every box it
-		// set up is legacy, which Names "" already says.
-		box = &catalog.WireConfig{ChainID: info.ChainID, Names: info.Names, DataDir: info.DataDir, JWTPath: info.JWTPath}
-	}
-	if w := t.Wire; w != nil && (box == nil || w.ChainID != box.ChainID || w.Names != box.Names || w.DataDir != box.DataDir || w.JWTPath != box.JWTPath) {
-		got := "no node"
-		if box != nil {
-			got = fmt.Sprintf("chain %d, names %q, data dir %s, jwt %s", box.ChainID, box.Names, box.DataDir, box.JWTPath)
+	w := t.Wire
+	if !info.SetUp {
+		if w != nil {
+			return nil, &setupConflict{fmt.Sprintf("box %s reports no node set up, but this controller holds a node config for it (chain %d, data dir %s). "+
+				"Its agent may be older than this controller and not say why, or unable to read its config: upgrade the agent (re-pair the box) or fix its node config, then run setup again",
+				t.ID, w.ChainID, w.DataDir)}
 		}
-		log.Printf("jumpgate: setup %s: the controller's copy of the node config (chain %d, names %q, data dir %s, jwt %s) is stale; the box reports %s, and setup uses the box's",
-			t.ID, w.ChainID, w.Names, w.DataDir, w.JWTPath, got)
+		return nil, nil
+	}
+	box := &catalog.WireConfig{ChainID: info.ChainID, Names: info.Names, DataDir: info.DataDir, JWTPath: info.JWTPath}
+	if w != nil {
+		// A current agent always reports the data dir of a node it has set
+		// up, and its names with it ("" being legacy). Without a data dir the
+		// agent is older and said neither, so both come from the controller's
+		// copy (a data dir only for the same chain); names it did send win.
+		if info.DataDir == "" {
+			box.Names = w.Names
+			if w.ChainID == box.ChainID {
+				box.DataDir = w.DataDir
+			}
+		}
+		if box.JWTPath == "" && box.DataDir != "" && box.DataDir == w.DataDir {
+			box.JWTPath = w.JWTPath
+		}
+		if w.ChainID != box.ChainID || w.Names != box.Names || w.DataDir != box.DataDir || w.JWTPath != box.JWTPath {
+			log.Printf("jumpgate: setup %s: the controller's copy of the node config (chain %d, names %q, data dir %s, jwt %s) is stale; the box reports chain %d, names %q, data dir %s, jwt %s, and setup uses the box's",
+				t.ID, w.ChainID, w.Names, w.DataDir, w.JWTPath, box.ChainID, box.Names, box.DataDir, box.JWTPath)
+		}
 	}
 	return box, nil
 }
+
+// setupConflict is a setup refused because the box and the controller
+// disagree in a way setup must not guess past.
+type setupConflict struct{ msg string }
+
+func (e *setupConflict) Error() string { return e.msg }
 
 func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -1131,6 +1165,11 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	existing, err := s.setupExisting(r.Context(), cfg, target)
+	var conflict *setupConflict
+	if errors.As(err, &conflict) {
+		writeErrorDetail(w, http.StatusConflict, err.Error(), "", api.CodeConflict)
+		return
+	}
 	if err != nil {
 		writeNodeError(w, err)
 		return

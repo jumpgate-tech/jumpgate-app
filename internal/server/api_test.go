@@ -1900,6 +1900,76 @@ func TestSetupTrustsThePairedBoxOverAStaleWire(t *testing.T) {
 	}
 }
 
+// A released agent (main, v0.4.x) answers agent.info with setUp and chainId
+// only. Setup must neither drop the custom data dir the controller holds for
+// it nor take a box it reports as not set up for a new one.
+func TestSetupWithAnOlderAgentFallsBackToTheControllersWire(t *testing.T) {
+	paired := func(w *catalog.WireConfig) config.Target {
+		return config.Target{ID: "box", Agent: &config.AgentPairing{Transport: "local"}, Wire: w}
+	}
+	custom := &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/srv/pulse", JWTPath: "/srv/pulse/jwt.hex"}
+	older := intent.AgentInfo{SetUp: true, ChainID: 369} // what a released agent sends
+
+	existing, err := setupExistingFrom(older, paired(custom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := setupWire(catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse"}, existing)
+	if got.Names != catalog.NamesLegacy || got.DataDir != "/srv/pulse" || got.JWTPath != "/srv/pulse/jwt.hex" {
+		t.Fatalf("an older agent: setup would use names %q dir %s jwt %s", got.Names, got.DataDir, got.JWTPath)
+	}
+	// The wire's names are kept too, when the agent cannot say them.
+	migrated := *custom
+	migrated.Names = catalog.NamesCurrent
+	if existing, err := setupExistingFrom(older, paired(&migrated)); err != nil || existing.Names != catalog.NamesCurrent || existing.DataDir != "/srv/pulse" {
+		t.Fatalf("an older agent on a migrated box: %+v %v", existing, err)
+	}
+	// A data dir for another chain is not this node's.
+	if existing, err := setupExistingFrom(intent.AgentInfo{SetUp: true, ChainID: 943}, paired(custom)); err != nil || existing.DataDir != "" {
+		t.Fatalf("another chain: %+v %v", existing, err)
+	}
+	// What a current agent sends wins over the wire, field by field.
+	current := intent.AgentInfo{SetUp: true, ChainID: 369, Names: catalog.NamesCurrent, DataDir: "/var/lib/jumpgate-node/369"}
+	if existing, err := setupExistingFrom(current, paired(custom)); err != nil || existing.Names != catalog.NamesCurrent ||
+		existing.DataDir != "/var/lib/jumpgate-node/369" || existing.JWTPath != "" {
+		t.Fatalf("a current agent: %+v %v", existing, err)
+	}
+
+	// Not set up, no reason given, and the controller holds a wire: refused.
+	_, err = setupExistingFrom(intent.AgentInfo{}, paired(custom))
+	var conflict *setupConflict
+	if !errors.As(err, &conflict) || !strings.Contains(err.Error(), "upgrade the agent") {
+		t.Fatalf("not set up, with a wire: %v", err)
+	}
+	// Not set up and no wire: a new box.
+	if existing, err := setupExistingFrom(intent.AgentInfo{}, paired(nil)); err != nil || existing != nil {
+		t.Fatalf("a new box: %+v %v", existing, err)
+	}
+}
+
+// End to end: a paired box with no node.json while the controller holds a
+// wire for it is refused as a conflict, never set up as new.
+func TestSetupRefusesAPairedBoxThatLostItsNode(t *testing.T) {
+	requireAgentPeer(t)
+	ts, token := pairedBoxWith(t, nopExec{}, pairedOpts{target: func(tg *config.Target) {
+		tg.Wire = &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/srv/pulse"}
+	}})
+	body := strings.NewReader(`{"chainId":369,"execId":"reth","beaconId":"lighthouse-pulse"}`)
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/targets/box/setup", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var e api.Error
+	_ = json.NewDecoder(res.Body).Decode(&e)
+	if res.StatusCode != http.StatusConflict || e.Code != api.CodeConflict || !strings.Contains(e.Message, "reports no node set up") {
+		t.Fatalf("status %d %+v", res.StatusCode, e)
+	}
+}
+
 // I2: a box whose node config exists but is refused is not a new box: setup
 // refuses, with the box's reason, rather than give it the new names.
 func TestSetupRefusesABoxWhoseNodeConfigIsBroken(t *testing.T) {
