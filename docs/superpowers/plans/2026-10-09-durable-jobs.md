@@ -45,6 +45,24 @@ These are not open. Each one is recorded so a reviewer can object, together with
 | J11 | A job log that fails verification makes the server answer `502 job_log_invalid` (CLI exit 4). The detail route then shows none of that log. | Unverified history must never read as history. | An operator with a damaged box sees an error, not a partial log; the message names the first bad entry. |
 | J12 | The TUI's host-detail Jobs tab stays out of v1 (TUI spec: "Diagnostics and Jobs tabs are not in v1"). The fleet-wide inbox, the ⚑ count, the bell and the fleet `jobs` column ship here. | The inbox already filters by box with `/`. | A per-box tab is an additive screen later. |
 
+### Rulings applied
+
+The pre-flight scan (`.superpowers/sdd/2026-10-09-durable-jobs/preflight-scan.md`) raised these; each ruling is decided and is already written into the task it names.
+
+- **P1** Task 5 `TestPruneKeepsRecentAndUnfinishedJobs` moves the store's clock 31 days on after creating the old jobs (D-J6 ages from the last change).
+- **P2** Task 5 `TestLoadDetectsATruncatedLog` writes one whole entry without an extra `"\n"`, so the length check fires; a torn line has its own test.
+- **P3** Task 8 `TestRenameAccountRenamesUserThenGroup` scripts `id -u jumpgate-node` as `fail1, idOK("998")`; `mnRenameAccount` probes the new account before and after the rename.
+- **P4** Task 12 `TestARestartedServerResumesItsOwnJobs` makes no HTTP request and checks that only `sweep` started the driver.
+- **P5** Task 12 adds the test-only `Config.noJobsDriver` and `newBoxRig(t, withoutDriver)` for Task 11's two mid-job tests.
+- **P6** Execution is sequential; every commit step adds exact paths, never `-A`, `.` or a directory.
+- **P7** Task 12's `POST /api/jobs/{target}` starts only `jobStartKinds` (`node.migrate-names` in v1); others get 400 `job_kind_not_allowed` (Task 10).
+- **P8** Task 5 creates `internal/fsatomic` and moves the agent's `writeAtomic`/`syncDir` into it; agent, store and plan share one copy.
+- **P9** Task 9 generalises `logsSince` over units and an item type; `job.output` reads through it.
+- **P10** Tasks 15 and 16 build the user-facing names from `catalog.LegacyNames`/`CurrentNames`, never a literal.
+- **P11** Task 9 adds `setupExisting`: with no controller wire, setup asks a paired box's `agent.info` for its names and keeps legacy ones.
+- **P12** Task 10 adds `unknown_plan`; Files lists, Task 12 imports and the stale `cachedRecord` comment are fixed.
+- **P13** Task 16 adds `jumpgate jobs output JOB`, the first consumer of the output stream; the TUI follows later (J12).
+
 ## Preconditions
 
 - Branch `feat/durable-jobs` from `main` at or after `b3eeb71`. Baseline: `go test ./...` green on macOS; record it.
@@ -73,7 +91,7 @@ These five input classes or failure modes are the ones most likely to bite a per
 1. **The data root, or something under it, is a mount point** (a second disk at `/var/lib/valve-node-app`, listed in `/etc/fstab`). Expected: the job never runs `mv`. It asks "keep the data where it is" or "check again", and the node keeps working with its data at the old path. Test: Task 8 `TestMoveDataNeverMovesAMountedTree`.
 2. **The agent restarts, or the box reboots, while a step runs.** Expected: a step that finished leaves its result file, and the restarted agent folds it into the signed log exactly once. A step that never reported becomes `step.lost` and a question. Nothing reruns on its own. Tests: Task 7 `TestReconcileFoldsAResultWrittenWhileTheAgentWasDown` and `TestLostStepAsksBeforeRerunning`; Task 17 `TestE2EMigrateNamesSurvivesAnAgentRestart`.
 3. **Two controllers.** B lists the job while A holds a fresh lease, so B watches read-only and B's decide is `409 lease_held`. Once A has been silent for 90 s, B can adopt; A's driver then stops on `lease_held` instead of fighting. Tests: Task 7 `TestLeaseFreshRefusesAnotherController`; Task 12 `TestSecondControllerWatchesThenAdoptsAStaleJob`.
-4. **Setup re-run from the web UI**, which sends no data dir. On a legacy box it must keep the legacy names and `/var/lib/valve-node-app/<chain>`; on a migrated box, the new ones. It must never render units for an account that does not exist. Test: Task 1 `TestSetupKeepsTheBoxNames`.
+4. **Setup re-run from the web UI**, which sends no data dir. On a legacy box it must keep the legacy names and `/var/lib/valve-node-app/<chain>`; on a migrated box, the new ones. It must never render units for an account that does not exist, including on a paired box the controller keeps no wire for. Tests: Task 1 `TestSetupKeepsTheBoxNames`; Task 9 `TestSetupAsksAPairedBoxForItsNames`.
 5. **A tampered or truncated job log**: an edited body, a dropped tail, a reordered entry, an entry signed by another key, an intent entry not signed by the controller it names. The controller refuses with `job_log_invalid`, and the agent notices a log shorter than its manifest says. Tests: Task 3 `TestVerifyRejectsEditsReordersAndForeignSigners` and `TestVerifyIntentsNeedsTheNamedController`; Task 5 `TestLoadDetectsATruncatedLog`; Task 11 `TestJobDetailRefusesABrokenLog`.
 
 Also pinned, though less likely: another unit (a gateway) running as `valve-node-app` blocks the migration before any change (Task 8 `TestPreflightRefusesOtherUnitsOfTheLegacyUser`). A process that ignores SIGTERM is killed only after the operator chooses so (Task 8 `TestStopUnitsAsksBeforeKillingProcesses`).
@@ -108,7 +126,7 @@ Task 6 runners ─┼───────────────────�
 | 8 | 12 | 11 |
 | 9 | 18 | all |
 
-Within a wave the tasks touch disjoint files. Task 13 is the only one that changes `internal/tui/backend.go` and `internal/tui/tuitest/fake.go`; Tasks 14–16 only read them. Task 4 edits `internal/api/errors.go` (rejection hints) and Task 10 edits it again (codes), so 10 waits for 4.
+The waves show what may start when. Execution is sequential, one task at a time, in the order 1, 4, 6, 2, 3, 10, 5, 13, 7, 14, 15, 16, 8, 9, 11, 17, 12, 18 (ruling: parallel implementers must not share a branch). Some tasks in one wave touch the same files: Task 15 edits `internal/tui/app.go`, `jobs.go` and `backend.go` after Tasks 13 and 14; Task 4 edits `internal/api/errors.go` (rejection hints) and Task 10 edits it again (codes); Task 5 edits `internal/agent/policy.go` after Task 4. So every commit step names exact paths and never runs `git add -A`, `git add .` or `git add <directory>` (ruling P6).
 
 ## File Structure
 
@@ -117,10 +135,11 @@ Created:
 | Path | Responsibility |
 |---|---|
 | `internal/catalog/names.go`, `names_test.go` | `NodeNames`, `LegacyNames`, `CurrentNames`, `NamesByID`, `UnderRoot`, `Rebase`, marker file names |
+| `internal/fsatomic/fsatomic.go`, `fsatomic_test.go` | The one atomic file write and directory fsync, moved out of `internal/agent` (ruling P8) |
 | `internal/intent/jobs.go`, `jobs_test.go` | Job intent kinds, reasons, states, payloads, `JobRecord`, `JobLogEntryJSON` |
 | `internal/joblog/joblog.go`, `bodies.go`, `joblog_test.go` | Signed, hash-chained entries; `Verify`; `VerifyIntents`; body types; `Describe` |
 | `internal/jobs/manifest.go`, `store.go`, `lease.go`, `store_test.go`, `lease_test.go` | Manifest, atomic store, log append, truncation check, prune, leases |
-| `internal/jobs/runner.go`, `runner_linux.go`, `runner_other.go`, `runner_test.go` | `Runner`, `SystemdRunner`, `DefaultRunner`, unit names |
+| `internal/jobs/runner.go`, `runner_linux.go`, `runner_other.go`, `runner_test.go`, `runner_other_test.go` | `Runner`, `SystemdRunner`, `DefaultRunner`, unit names |
 | `internal/jobs/plan.go`, `step.go`, `manager.go`, `manager_test.go`, `step_test.go`, `fakes_test.go` | Plan registry, `RunStep`, `Manager` (start, lease, advance, decide, reconcile, prune) |
 | `internal/jobs/migratenames.go`, `marker.go`, `migratenames_test.go`, `scriptexec_test.go` | The `node.migrate-names` plan and the names marker |
 | `internal/jobs/jobstest/jobstest.go` | In-process runner and a test plan, for agent and server tests |
@@ -132,7 +151,7 @@ Created:
 | `cmd/jumpgate/cli_jobs.go`, `cli_jobs_test.go` | `jumpgate jobs …`, `jumpgate migrate-names HOST` |
 | `internal/bootstrap/e2e_jobs_test.go` | Real systemd: migrate-names across an agent restart |
 
-Modified: `internal/catalog/{units.go,catalog.go}`, `internal/ops/{ops.go,diagnose.go}`, `internal/monitor/monitor.go`, `internal/setup/{steps.go,gateway.go}`, `internal/intent/kinds.go`, `internal/agent/{agent.go,dispatch.go,policy.go,logs.go}`, `internal/api/{errors.go,errors_test.go}`, `internal/server/{server.go,api.go,node.go,fleet.go,freeze_test.go,node_test.go,fleet_test.go}`, `internal/apiclient/methods.go`, `internal/tui/{backend.go,app.go,jobs.go,fleet.go,palette.go,settings.go}`, `internal/tui/tuitest/fake.go`, `cmd/jumpgate/{cli.go,cli_agent.go,help.go,tui_on.go}`, `README.md`.
+Modified: `internal/catalog/{units.go,catalog.go}`, `internal/ops/{ops.go,diagnose.go}`, `internal/monitor/monitor.go`, `internal/setup/{steps.go,gateway.go}`, `internal/intent/kinds.go`, `internal/agent/{agent.go,dispatch.go,policy.go,replay.go,logs.go,agent_test.go,replay_test.go,logs_test.go}`, `internal/api/{errors.go,errors_test.go,fleet.go}`, `internal/server/{server.go,api.go,api_test.go,node.go,fleet.go,node_test.go}`, `internal/apiclient/methods.go`, `internal/tui/{backend.go,app.go,jobs.go,fleet.go,palette.go,settings.go}`, `internal/tui/testdata/shell_jobs_{80x24,ascii}.golden`, `internal/tui/tuitest/fake.go`, `cmd/jumpgate/{cli.go,cli_agent.go,help.go,tui_on.go}`, `README.md`.
 
 ---
 
@@ -464,7 +483,15 @@ Expected: PASS. A test that asserted a literal `valve-node-app-exec.service` kee
 - [ ] **Step 10: Commit**
 
 ```bash
-git add internal/catalog internal/ops internal/monitor internal/setup internal/agent internal/server
+git add internal/catalog/names.go internal/catalog/names_test.go internal/catalog/units.go internal/catalog/catalog.go \
+  internal/ops/ops.go internal/ops/diagnose.go internal/monitor/monitor.go \
+  internal/setup/steps.go internal/setup/gateway.go \
+  internal/agent/dispatch.go internal/agent/logs.go \
+  internal/server/node.go internal/server/api.go internal/server/api_test.go
+# Then each existing test Steps 4, 5 and 9 changed, one path per argument as
+# `git status --short` lists them (for example internal/catalog/catalog_test.go).
+# Never `git add -A`, `.` or a directory: another task's work may be in the tree.
+git status --short
 git commit -m "feat(catalog): accept both node name sets; new setups get jumpgate-node
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -476,7 +503,7 @@ Covers spec "Durable jobs": "This requires completion markers where `Verify` is 
 
 **Files:**
 - Modify: `internal/catalog/names.go` (two marker names), `internal/setup/steps.go` (`snapshotStep` Run and Verify; `wireStep` Run and Verify)
-- Test: `internal/setup/snapshot_test.go`, `internal/setup/wire_test.go`
+- Test: `internal/setup/snapshot_test.go`, `internal/setup/wire_test.go`, `internal/setup/fake_executor_test.go` (adds the `indexContaining` helper)
 
 **Interfaces:**
 - Consumes: Task 1's `st.Wire.NodeNames()`.
@@ -610,7 +637,9 @@ Expected: PASS. Existing wire Verify tests that script only the `stat` check now
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/catalog/names.go internal/setup
+git add internal/catalog/names.go internal/setup/steps.go internal/setup/snapshot_test.go internal/setup/wire_test.go internal/setup/fake_executor_test.go
+# Plus each existing setup test Step 4 updated to script the marker `cat`, by path.
+git status --short
 git commit -m "feat(setup): completion markers for the snapshot restore and the data-dir chown
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -1075,7 +1104,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/joblog
+git add internal/joblog/joblog.go internal/joblog/bodies.go internal/joblog/joblog_test.go
 git commit -m "feat(joblog): signed, hash-chained job log with controller-side verification
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -1379,7 +1408,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/intent internal/agent/policy.go internal/agent/policy_test.go internal/api/errors.go internal/api/errors_test.go
+git add internal/intent/jobs.go internal/intent/jobs_test.go internal/intent/kinds.go \
+  internal/agent/policy.go internal/agent/policy_test.go internal/api/errors.go internal/api/errors_test.go
 git commit -m "feat(intent): job intent kinds, records and reasons; routine by default
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -1390,10 +1420,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 Covers spec "A manifest on the box (`/var/lib/jumpgate/jobs/<id>.json`) records the job's kind, its inputs, the current step, a `driver` field, a version stamp, and a lease (owner and heartbeat)", and J5, J6, J7. Review Focus 5 (agent side).
 
 **Files:**
-- Create: `internal/jobs/manifest.go`, `internal/jobs/store.go`, `internal/jobs/lease.go`, `internal/jobs/store_test.go`, `internal/jobs/lease_test.go`
+- Create: `internal/fsatomic/fsatomic.go`, `internal/fsatomic/fsatomic_test.go` (ruling P8: the one copy of the atomic write and the directory fsync), `internal/jobs/manifest.go`, `internal/jobs/store.go`, `internal/jobs/lease.go`, `internal/jobs/store_test.go`, `internal/jobs/lease_test.go`
+- Modify: `internal/agent/policy.go` (delete `writeAtomic` and `syncDir` at lines 157-205; `Save` calls `fsatomic.WriteFile`), `internal/agent/replay.go:43,100` (`fsatomic.WriteFile`), `internal/agent/agent_test.go:274-277` and `internal/agent/replay_test.go:109-111` (stub `fsatomic.SyncDir`)
+- Test: `internal/fsatomic/fsatomic_test.go`, `internal/jobs/store_test.go`, `internal/jobs/lease_test.go`; these agent tests must still pass unchanged in meaning: `TestAdmissionPersistFailureRefusesAndRunsNothing` (`agent_test.go`), `TestAdmitFailsWhenTheDirectorySyncFails` (`replay_test.go`), `TestPolicyAddSignerIsIdempotentAndSaveRoundTrips` (`policy_test.go`), and the rest of `go test ./internal/agent/`.
 
 **Interfaces:**
 - Consumes: Task 3 (`joblog.Sign`, `joblog.ToJSON`, `joblog.FromJSON`, `joblog.Verify`, kinds and bodies), Task 4 (`intent.JobRecord`, states, reasons, `intent.JobLease`).
+- Produces (package `fsatomic`): `func WriteFile(path string, b []byte) error` (0600 through a fsynced temp file, rename, then a directory fsync); `var SyncDir func(dir string) error` (a variable so a test can make the directory fsync fail). Tasks 7 and 8 call `fsatomic.WriteFile` too (step results, the names marker, `node.json`).
 - Produces (package `jobs`):
   - `const FormatVersion = 1`, `const DriverController = "controller"`, `const DriverAgent = "agent"`;
   - `type Manifest struct { intent.JobRecord; Inputs json.RawMessage; Results map[string]json.RawMessage; Decisions map[string]string; Answer *Answer }`, with `type Answer struct { Key, Option string; Step, Attempt int }`;
@@ -1485,7 +1518,27 @@ func TestLoadDetectsATruncatedLog(t *testing.T) {
 	logPath := filepath.Join(s.Dir(), m.ID+".log")
 	b, _ := os.ReadFile(logPath)
 	lines := strings.SplitAfter(strings.TrimSpace(string(b)), "\n")
-	_ = os.WriteFile(logPath, []byte(lines[0]+"\n"), 0o600)
+	// lines[0] already ends in "\n": the file keeps one whole, valid entry, so
+	// the parse and the chain check pass and only the length check (one entry
+	// where the manifest expects two) can refuse it.
+	_ = os.WriteFile(logPath, []byte(lines[0]), 0o600)
+	_, err := s.Load(m.ID)
+	if !errors.Is(err, ErrDamaged) || !strings.Contains(err.Error(), "its manifest expects 2") {
+		t.Fatalf("Load of a truncated log = %v, want ErrDamaged from the length check", err)
+	}
+}
+
+func TestLoadDetectsALogCutMidEntry(t *testing.T) {
+	s, _, _ := testStore(t)
+	m := newManifest(t)
+	ctx := context.Background()
+	_ = s.Create(ctx, &m, joblog.IntentBody{})
+	_ = s.Append(ctx, &m, joblog.KindStepStarted, joblog.StepBody{Step: "one"})
+	_ = s.Save(&m)
+
+	logPath := filepath.Join(s.Dir(), m.ID+".log")
+	b, _ := os.ReadFile(logPath)
+	_ = os.WriteFile(logPath, b[:len(b)-10], 0o600) // a torn last line
 	if _, err := s.Load(m.ID); !errors.Is(err, ErrDamaged) {
 		t.Fatalf("Load of a truncated log = %v, want ErrDamaged", err)
 	}
@@ -1524,12 +1577,20 @@ func TestListIsNewestFirstAndShowsDamagedJobs(t *testing.T) {
 func TestPruneKeepsRecentAndUnfinishedJobs(t *testing.T) {
 	s, _, now := testStore(t)
 	ctx := context.Background()
+	// Age is judged from a job's last change (D-J6), and every append stamps
+	// UpdatedAt with the store's clock. So the test writes the old jobs first
+	// and then moves the store's clock on 31 days, instead of presetting
+	// UpdatedAt (Create would overwrite it).
 	old := newManifest(t)
-	old.State, old.UpdatedAt = intent.JobSucceeded, now.Add(-31*24*time.Hour).Unix()
+	old.State = intent.JobSucceeded
 	_ = s.Create(ctx, &old, joblog.IntentBody{})
 	running := newManifest(t)
-	running.State, running.UpdatedAt = intent.JobRunning, now.Add(-90*24*time.Hour).Unix()
+	running.State = intent.JobRunning
 	_ = s.Create(ctx, &running, joblog.IntentBody{})
+	*now = now.Add(31 * 24 * time.Hour)
+	recent := newManifest(t)
+	recent.State = intent.JobSucceeded
+	_ = s.Create(ctx, &recent, joblog.IntentBody{})
 	if err := s.Prune(30*24*time.Hour, 100); err != nil {
 		t.Fatal(err)
 	}
@@ -1538,6 +1599,9 @@ func TestPruneKeepsRecentAndUnfinishedJobs(t *testing.T) {
 	}
 	if _, err := s.Load(running.ID); err != nil {
 		t.Errorf("an unfinished job was pruned: %v", err)
+	}
+	if _, err := s.Load(recent.ID); err != nil {
+		t.Errorf("a recent finished job was pruned: %v", err)
 	}
 }
 
@@ -1613,7 +1677,7 @@ func TestLeaseIsFreshWhenTheClockStepsBack(t *testing.T) {
 Run: `go test ./internal/jobs/ -count=1`
 Expected: FAIL to compile (package has no non-test files).
 
-- [ ] **Step 3: Implement `manifest.go`, `lease.go` and `store.go`**
+- [ ] **Step 3: Implement `manifest.go`, `lease.go` and `store.go`, and move the atomic write into `internal/fsatomic`**
 
 ```go
 // internal/jobs/manifest.go
@@ -1793,6 +1857,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/joblog"
 	"github.com/valve-tech/jumpgate/internal/signer"
@@ -1898,7 +1963,7 @@ func (s *Store) Save(m *Manifest) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(manifestPath(s.dir, m.ID), b)
+	return fsatomic.WriteFile(manifestPath(s.dir, m.ID), b)
 }
 
 // LoadManifest reads a manifest without checking its log: for step processes,
@@ -2037,21 +2102,144 @@ func (s *Store) Prune(maxAge time.Duration, keep int) error {
 			return err
 		}
 	}
-	return syncDir(s.dir)
+	return fsatomic.SyncDir(s.dir)
 }
 ```
 
-Copy `writeAtomic` and `syncDir` from `internal/agent/policy.go:157-205` into `internal/jobs/store.go` unchanged except the package. They are about 40 lines, and the agent package cannot be imported here: the agent imports jobs. Note in a comment that the two copies must stay alike.
+Move `writeAtomic` and `syncDir` out of `internal/agent/policy.go:157-205` into a package of their own (ruling P8). The jobs store cannot import the agent (the agent imports jobs), and two copies that "must stay alike" drift. After the move there is one copy:
+
+```go
+// internal/fsatomic/fsatomic.go
+
+// Package fsatomic writes a file so that a crash leaves either the old
+// contents or the new, never a torn mix, and the new name is durable once
+// WriteFile returns. The agent's policy and replay record and the jobs store
+// all persist through it.
+package fsatomic
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// WriteFile writes b to path (0600) through a fsynced temp file and a rename,
+// then fsyncs the directory so the rename itself survives a power cut.
+func WriteFile(path string, b []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	return SyncDir(dir)
+}
+
+// SyncDir fsyncs a directory. It is a variable so a test can make the
+// directory fsync fail.
+var SyncDir = func(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("fsatomic: open %s to sync it: %w", dir, err)
+	}
+	if err := d.Sync(); err != nil {
+		d.Close()
+		return fmt.Errorf("fsatomic: sync directory %s: %w", dir, err)
+	}
+	if err := d.Close(); err != nil {
+		return fmt.Errorf("fsatomic: close directory %s: %w", dir, err)
+	}
+	return nil
+}
+```
+
+```go
+// internal/fsatomic/fsatomic_test.go
+package fsatomic
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/testutil"
+)
+
+func TestWriteFileReplacesAtomicallyAt0600(t *testing.T) {
+	testutil.RequireUnix(t) // directories are fsynced, which Windows cannot do
+	path := filepath.Join(t.TempDir(), "sub", "f.json")
+	for _, body := range []string{"one", "two"} {
+		if err := WriteFile(path, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil || string(b) != body {
+			t.Fatalf("after writing %q: %q, %v", body, b, err)
+		}
+		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+			t.Fatalf("mode after writing %q: %v, %v", body, fi, err)
+		}
+	}
+	if ents, _ := os.ReadDir(filepath.Dir(path)); len(ents) != 1 {
+		t.Fatalf("temp files left behind: %v", ents)
+	}
+}
+
+// If the directory fsync fails the rename is not known to be durable, so the
+// caller must hear about it.
+func TestWriteFileReportsAFailedDirectorySync(t *testing.T) {
+	testutil.RequireUnix(t)
+	orig := SyncDir
+	SyncDir = func(string) error { return errors.New("injected dir sync failure") }
+	defer func() { SyncDir = orig }()
+	if err := WriteFile(filepath.Join(t.TempDir(), "f"), []byte("x")); err == nil {
+		t.Fatal("WriteFile succeeded although the directory sync failed")
+	}
+}
+```
+
+Then point the agent at it:
+- `internal/agent/policy.go`: delete `writeAtomic` and `syncDir` (lines 157-205). In `Save` (line 78), `return writeAtomic(path, b)` becomes `return fsatomic.WriteFile(path, b)`. Import `github.com/valve-tech/jumpgate/internal/fsatomic` and drop `path/filepath`, which nothing else in the file uses.
+- `internal/agent/replay.go:43,100`: `writeAtomic(` becomes `fsatomic.WriteFile(`; add the import.
+- `internal/agent/agent_test.go:274-277` (`TestAdmissionPersistFailureRefusesAndRunsNothing`) and `internal/agent/replay_test.go:109-111` (`TestAdmitFailsWhenTheDirectorySyncFails`): `orig := syncDir` / `syncDir = …` become `orig := fsatomic.SyncDir` / `fsatomic.SyncDir = …`; add the import. The tests' meaning does not change: a failed directory fsync still refuses admission and runs nothing.
 
 - [ ] **Step 4: Run the tests**
 
-Run: `go test ./internal/jobs/ -count=1 -race`
+Run: `go test ./internal/fsatomic/ ./internal/jobs/ -count=1 -race`
 Expected: PASS.
+
+Run: `go test ./internal/agent/ -run 'TestAdmissionPersistFailureRefusesAndRunsNothing|TestAdmitFailsWhenTheDirectorySyncFails|TestPolicyAddSignerIsIdempotentAndSaveRoundTrips' -count=1 -v`
+Expected: PASS, all three listed. Then `go test ./internal/agent/ -count=1` passes whole, and `grep -rn 'func writeAtomic\|var syncDir' internal` prints nothing.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/jobs
+git add internal/fsatomic/fsatomic.go internal/fsatomic/fsatomic_test.go \
+  internal/jobs/manifest.go internal/jobs/store.go internal/jobs/lease.go internal/jobs/store_test.go internal/jobs/lease_test.go \
+  internal/agent/policy.go internal/agent/replay.go internal/agent/agent_test.go internal/agent/replay_test.go
 git commit -m "feat(jobs): job manifests, signed append-only logs and leases on the box
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -2062,7 +2250,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 Covers spec "Each long operation runs as a transient systemd unit `jumpgate-job-<id>[-<step>]` started by the agent with `systemd-run`", plus J3 and J9 (what jobs do on other OSes).
 
 **Files:**
-- Create: `internal/jobs/runner.go`, `internal/jobs/runner_linux.go`, `internal/jobs/runner_other.go`, `internal/jobs/runner_test.go`, `internal/jobs/jobstest/jobstest.go` (the runner half; Task 7 adds the plan half)
+- Create: `internal/jobs/runner.go`, `internal/jobs/runner_linux.go`, `internal/jobs/runner_other.go`, `internal/jobs/runner_test.go`, `internal/jobs/runner_other_test.go` (`//go:build !linux`), `internal/jobs/jobstest/jobstest.go` (the runner half; Task 7 adds the plan half)
 
 **Interfaces:**
 - Consumes: `executor.Executor`.
@@ -2445,7 +2633,8 @@ Expected: PASS, and both vets clean.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/jobs
+git add internal/jobs/runner.go internal/jobs/runner_linux.go internal/jobs/runner_other.go \
+  internal/jobs/runner_test.go internal/jobs/runner_other_test.go internal/jobs/jobstest/jobstest.go
 git commit -m "feat(jobs): systemd-run step runner; jobs refused off Linux and without systemd
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -3057,6 +3246,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/valve-tech/jumpgate/internal/fsatomic"
 )
 
 // StepArgs names one attempt of one step of one job.
@@ -3136,7 +3327,7 @@ func RunStep(ctx context.Context, dir string, a StepArgs, base Env) error {
 		}
 	}
 	b, _ := json.Marshal(res)
-	return writeAtomic(ResultPath(dir, a.Job, a.Step, a.Attempt), b)
+	return fsatomic.WriteFile(ResultPath(dir, a.Job, a.Step, a.Attempt), b)
 }
 ```
 
@@ -3648,7 +3839,8 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add internal/jobs
+git add internal/jobs/plan.go internal/jobs/step.go internal/jobs/manager.go \
+  internal/jobs/manager_test.go internal/jobs/step_test.go internal/jobs/fakes_test.go internal/jobs/jobstest/jobstest.go
 git commit -m "feat(jobs): plan registry, step runner and job manager with decisions, leases and reconcile
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -3917,7 +4109,9 @@ func TestStopUnitsAsksBeforeKillingProcesses(t *testing.T) {
 }
 
 func TestRenameAccountRenamesUserThenGroup(t *testing.T) {
-	ex := legacyBox()
+	// The new account is absent before the rename and present after it:
+	// rename-account probes it on both sides of the usermod.
+	ex := legacyBox().on("id -u jumpgate-node", fail1, idOK("998"))
 	if _, err := step(t, "rename-account").Run(context.Background(), mnEnv(t, ex, legacyWire())); err != nil {
 		t.Fatal(err)
 	}
@@ -4081,6 +4275,7 @@ import (
 	"os"
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/fsatomic"
 )
 
 // NamesMarker is /etc/jumpgate/names.json, written by node.migrate-names when
@@ -4114,7 +4309,7 @@ func ReadNamesMarker(path string) (NamesMarker, bool, error) {
 
 func writeNamesMarker(path string, m NamesMarker) error {
 	b, _ := json.Marshal(m)
-	return writeAtomic(path, b)
+	return fsatomic.WriteFile(path, b)
 }
 
 // Apply rewrites a node config the marker post-dates.
@@ -4150,6 +4345,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/intent"
 )
 
@@ -4231,7 +4427,7 @@ func writeNode(env Env, w catalog.WireConfig) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(env.NodePath, b)
+	return fsatomic.WriteFile(env.NodePath, b)
 }
 
 // sh runs cmd and turns a non-zero exit into an error quoting the box.
@@ -4389,6 +4585,16 @@ func mnRenameAccount(ctx context.Context, env Env) (Outcome, error) {
 	hasLegacy, err := userExists(ctx, env, legacy.User)
 	if err != nil {
 		return Outcome{}, err
+	}
+	hasCurrent, err := userExists(ctx, env, current.User)
+	if err != nil {
+		return Outcome{}, err
+	}
+	// Preflight refused a box with both accounts. One that has both now got
+	// the second from something other than this job (an operator, between a
+	// failed attempt and its retry): usermod onto it would fail half-way.
+	if hasLegacy && hasCurrent {
+		return Outcome{}, fmt.Errorf("both accounts exist (%s and %s); remove the one the node does not use, then retry", legacy.User, current.User)
 	}
 	// The user first: it is the call that fails while a process still runs as
 	// the account, and then nothing at all has changed.
@@ -4608,7 +4814,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add internal/jobs
+git add internal/jobs/migratenames.go internal/jobs/marker.go internal/jobs/migratenames_test.go internal/jobs/scriptexec_test.go
 git commit -m "feat(jobs): node.migrate-names renames the node account, units and data root
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -4620,13 +4826,15 @@ Covers spec "Durable jobs" on the agent, "Policy (on the agent)" for decisions (
 
 **Files:**
 - Create: `internal/agent/jobs.go`, `internal/agent/jobs_test.go`
-- Modify: `internal/agent/agent.go` (`Config.Jobs`, `Config.NamesPath`; `Handle` passes `env` and `signers`; the decision tier check), `internal/agent/dispatch.go` (`dispatch` signature; `PlanVersions`; `loadNode` applies the names marker; `service.action` refused while a job runs; `agent.info` names and data dir), `internal/agent/policy.go` (`Authorise` takes extra tiers), `internal/agent/logs.go` (`readJournalJSON` reused by `job.output`), `cmd/jumpgate/cli_agent.go` (`job-step` subcommand; the manager and the reconcile loop in `agentRun`)
-- Test: `internal/agent/jobs_test.go`, `internal/agent/policy_test.go`, `cmd/jumpgate/cli_test.go`
+- Modify: `internal/agent/agent.go` (`Config.Jobs`, `Config.NamesPath`; `Handle` passes `env` and `signers`; the decision tier check), `internal/agent/dispatch.go` (`dispatch` signature; `PlanVersions`; `loadNode` applies the names marker; `service.action` refused while a job runs; `agent.info` names and data dir), `internal/agent/policy.go` (`Authorise` takes extra tiers), `internal/agent/logs.go` (ruling P9: `logsSince` generalised over a unit list and an item type, so `logs.since` and `job.output` share one bounded read), `internal/agent/logs_test.go` (units are quoted), `internal/agent/agent_test.go` (the `sendSignedBy`, `enroll` and `setQuestionTier` helpers), `cmd/jumpgate/cli_agent.go` (`job-step` subcommand; the manager and the reconcile loop in `agentRun`), `internal/server/api.go` (ruling P11: `setupExisting` asks a paired box's `agent.info` for its names when the controller keeps no wire)
+- Test: `internal/agent/jobs_test.go`, `internal/agent/policy_test.go`, `internal/agent/logs_test.go`, `cmd/jumpgate/cli_test.go`, `internal/server/api_test.go`
 
 **Interfaces:**
 - Consumes: Tasks 4–8.
 - Produces (package `agent`): `Config.Jobs *jobs.Manager`; `Config.NamesPath string`; `func (a *Agent) RunJobs(ctx context.Context)` (reconciles at once, then every `ReconcileEvery = 5 * time.Second`, and prunes daily); `func (p Policy) Authorise(kind string, controller eip712.Address, signers []eip712.Address, extra ...Tier) error`.
 - Produces (CLI): `jumpgate agent job-step --state-dir D --config-dir C --job ID --step S --attempt N`.
+- Changes (package `agent`, ruling P9): `func logsSinceCommand(units []string, cursor string, n int) (string, error)` quotes each unit (a job's unit pattern is a glob the shell must not expand); `func logsSince[T any](ctx context.Context, ex executor.Executor, units []string, cursor string, n int, now time.Time, item func(journalEntry) T) ([]T, string, *Reject, error)` is the one bounded journal read (D-J8) behind both `logs.since` and `job.output`.
+- Produces (package `server`, ruling P11): `func (s *Server) setupExisting(ctx context.Context, cfg config.Config, t config.Target) (*catalog.WireConfig, error)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4807,6 +5015,18 @@ func TestJobOutputReadsTheJobsUnitsOnly(t *testing.T) {
 	}
 }
 
+// D-J8 through the shared read (ruling P9): a job's output line is cut to
+// logsSinceMaxLine exactly as a logs.since line is.
+func TestJobOutputIsBoundedLikeLogsSince(t *testing.T) {
+	r, _ := jobsRig(t)
+	rec := okResult[intent.JobRecord](t, r.send(t, jobstest.TestKind, map[string]string{}, nil))
+	r.exec.res = executor.Result{Stdout: `{"__CURSOR":"s=1","__REALTIME_TIMESTAMP":"1800000000000000","_SYSTEMD_UNIT":"jumpgate-job-` + rec.ID + `-one-0.service","MESSAGE":"` + strings.Repeat("x", 2*logsSinceMaxLine) + `"}` + "\n"}
+	out := okResult[intent.JobOutputResult](t, r.send(t, intent.KindJobOutput, intent.JobOutputPayload{ID: rec.ID}, nil))
+	if len(out.Lines) != 1 || len(out.Lines[0].Line) != logsSinceMaxLine {
+		t.Fatalf("output %d lines, want 1 of %d bytes", len(out.Lines), logsSinceMaxLine)
+	}
+}
+
 func TestAgentInfoListsPlanVersions(t *testing.T) {
 	r, _ := jobsRig(t)
 	info := okResult[intent.AgentInfo](t, r.send(t, intent.KindAgentInfo, struct{}{}, nil))
@@ -4819,6 +5039,55 @@ func TestAgentInfoListsPlanVersions(t *testing.T) {
 	}
 }
 ```
+
+In `internal/agent/logs_test.go`, `TestLogsSinceCommandReadsOnlyTheNodeUnits` builds `want` with `" -u '" + u + "'"`: units are quoted now (ruling P9). Every other logs test (`TestLogsSinceRefusesABadCursor`, `TestLogsSinceKeepsTheCursorWhenNothingIsNew`, `TestLogsSinceIsBoundedInBytes`, `TestLogsSinceAfterACursorSkipsOldLines`) passes unchanged: they go through the `logs.since` intent, whose answer does not change.
+
+```go
+// internal/server/api_test.go — add
+// Review Focus 4, ruling P11: a paired box the controller keeps no wire for
+// says in agent.info which names its node uses. A legacy box keeps them, so
+// setup never renders units for a jumpgate-node account that does not exist;
+// a box with no node yet starts with the new names.
+func TestSetupAsksAPairedBoxForItsNames(t *testing.T) {
+	requireAgentPeer(t)
+	for _, c := range []struct {
+		name      string
+		node      *catalog.WireConfig // the box's node.json; nil: not set up
+		wantNames string
+		wantDir   string
+	}{
+		{"legacy box", &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369"}, catalog.NamesLegacy, "/var/lib/valve-node-app/369"},
+		{"migrated box", &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", Names: catalog.NamesCurrent, DataDir: "/var/lib/jumpgate-node/369"}, catalog.NamesCurrent, "/var/lib/jumpgate-node/369"},
+		{"no node yet", nil, catalog.NamesCurrent, "/var/lib/jumpgate-node/369"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var srv *Server
+			pairedBoxWith(t, nopExec{}, pairedOpts{onServer: func(s *Server) { srv = s }})
+			if c.node != nil {
+				b, _ := json.Marshal(*c.node)
+				if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), "node.json"), b, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg, err := config.Load()
+			if err != nil || cfg.Targets[0].Wire != nil {
+				t.Fatalf("the controller must keep no wire for this box: %v", err)
+			}
+			existing, err := srv.setupExisting(context.Background(), cfg, cfg.Targets[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The request asks for the new names; only the box decides.
+			got := setupWire(catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", Names: catalog.NamesCurrent}, existing)
+			if got.Names != c.wantNames || got.DataDir != c.wantDir {
+				t.Fatalf("setup would use names %q dir %s", got.Names, got.DataDir)
+			}
+		})
+	}
+}
+```
+
+Add `"context"`, `"encoding/json"`, `"os"`, `"path/filepath"` and `internal/config` to `api_test.go`'s imports where they are missing.
 
 Add these helpers to `agent_test.go`:
 - `sendSignedBy(t, kind, payload, extra *signer.Key)`: `send` with the extra key's signature appended to `Sigs`.
@@ -4844,6 +5113,9 @@ func TestAuthoriseWithAnExtraApprovalTier(t *testing.T) {
 
 Run: `go test ./internal/agent/ -count=1`
 Expected: FAIL to compile (undefined `cfg.Jobs`, `cfg.NamesPath`, `jobstest`, …).
+
+Run: `go test ./internal/server/ -run TestSetupAsksAPairedBoxForItsNames -count=1`
+Expected: FAIL to compile with "srv.setupExisting undefined".
 
 - [ ] **Step 3: Implement the agent side**
 
@@ -4871,7 +5143,20 @@ Expected: FAIL to compile (undefined `cfg.Jobs`, `cfg.NamesPath`, `jobstest`, �
 - Change the dispatch call to `a.dispatch(ctx, i, env, signers, policy)`.
 
 `internal/agent/dispatch.go`:
-- Delete `var PlanVersions = []string{}`; `agent.info` sets `PlanVersions: jobs.Versions()`, `Names: w.Names`, `DataDir: w.DataDir` (when set up).
+- Delete `var PlanVersions = []string{}`; `agent.info` sets `PlanVersions: jobs.Versions()`, `Names: w.Names`, `DataDir: w.DataDir` (when set up, and after the names marker is applied, so a migrated box reports the new names even if its `node.json` is stale).
+- In the `KindLogsSince` case, call the generalised read and wrap its answer (ruling P9):
+
+  ```go
+  hits, cursor, rej, err := logsSince(ctx, ex, ops.NodeUnits(w.NodeNames()), pl.Cursor, pl.N, a.cfg.Now(),
+  	func(e journalEntry) logwatch.Hit { return classifyLine(e.unit, e.line, e.at) })
+  if rej != nil {
+  	return nil, 0, rej
+  }
+  if err != nil {
+  	return failed(err)
+  }
+  return mustJSON(LogsSinceResult{Hits: hits, Cursor: cursor}), intent.StatusOK, nil
+  ```
 - `dispatch(ctx context.Context, i intent.Intent, env intent.Envelope, signers []eip712.Address, p Policy)`; `payload := env.Payload`.
 - Before the `loadNode` that gates node kinds: `if isJobKind(i.Kind) { return a.dispatchJob(ctx, i, env, signers) }`. A job kind does not need a set-up node: `node.migrate-names` reports a missing node.json itself, in preflight.
 - In `KindServiceAction`, before running: `if a.cfg.Jobs != nil { if j, busy := a.cfg.Jobs.Active(); busy { return nil, 0, reject(intent.ReasonJobActive, fmt.Sprintf("job %s (%s) is %s and owns the node services until it ends", j.ID, j.Kind, j.State)) } }`.
@@ -4898,8 +5183,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
@@ -5026,45 +5309,16 @@ func (a *Agent) dispatchJob(ctx context.Context, i intent.Intent, env intent.Env
 	return mustJSON(rec), intent.StatusOK, nil
 }
 
-// jobOutput is a job's journal, bounded as logs.since is (D-J8). The units
-// are matched by the job's own pattern, built from a validated id.
+// jobOutput is a job's journal through logsSince, the one bounded read
+// (D-J8, ruling P9). The units are matched by the job's own pattern, built
+// from a validated id.
 func jobOutput(ctx context.Context, ex executor.Executor, pl intent.JobOutputPayload, now time.Time) (intent.JobOutputResult, *Reject, error) {
-	n := pl.N
-	if n <= 0 {
-		n = intent.LogsDefaultN
+	lines, cursor, rej, err := logsSince(ctx, ex, []string{jobs.UnitPattern(pl.ID)}, pl.Cursor, pl.N, now,
+		func(e journalEntry) intent.JobOutputLine { return intent.JobOutputLine{Unit: e.unit, Line: e.line, At: e.at} })
+	if rej != nil || err != nil {
+		return intent.JobOutputResult{}, rej, err
 	}
-	n = min(n, intent.LogsMaxN)
-	var b strings.Builder
-	b.WriteString("journalctl -u '" + jobs.UnitPattern(pl.ID) + "'")
-	if pl.Cursor != "" {
-		if !cursorRE.MatchString(pl.Cursor) {
-			return intent.JobOutputResult{}, reject(intent.ReasonInvalidPayload, "not a journal cursor"), nil
-		}
-		b.WriteString(" --after-cursor '" + pl.Cursor + "'")
-	}
-	b.WriteString(" -n " + strconv.Itoa(n) + " --no-pager -o json")
-	res, err := ex.Run(ctx, b.String(), nil)
-	if err != nil {
-		return intent.JobOutputResult{}, nil, err
-	}
-	out := intent.JobOutputResult{Lines: []intent.JobOutputLine{}, Cursor: pl.Cursor}
-	oldest, size := now.Add(-logsSinceMaxAge), 0
-	for _, e := range readJournalJSON(res.Stdout) {
-		if pl.Cursor != "" && e.at.Before(oldest) {
-			out.Cursor = e.cursor
-			continue
-		}
-		line := intent.JobOutputLine{Unit: e.unit, Line: cutLine(e.line, logsSinceMaxLine), At: e.at}
-		size += len(line.Line) + len(line.Unit) + 64
-		if size > logsSinceMaxBytes && len(out.Lines) > 0 {
-			break
-		}
-		out.Lines = append(out.Lines, line)
-		if e.cursor != "" {
-			out.Cursor = e.cursor
-		}
-	}
-	return out, nil, nil
+	return intent.JobOutputResult{Lines: lines, Cursor: cursor}, nil, nil
 }
 
 // RunJobs reconciles at once (an agent restart folds what finished while it
@@ -5094,6 +5348,92 @@ func (a *Agent) RunJobs(ctx context.Context) {
 ```
 
 The journal unit label for a step line is `_SYSTEMD_UNIT`. The `UNIT` override in `readJournalJSON` applies to systemd's own "Started …" lines, which is what we want here too.
+
+In `internal/agent/logs.go`, generalise the read that Task 1 left taking the node's units (ruling P9). `logsSinceCommand` keeps Task 1's signature and quotes each unit: change `b.WriteString(" -u " + u)` to `b.WriteString(" -u '" + u + "'")`, and say in its comment that the units are the agent's own (the node's units, or a job's pattern from a validated id) and quoted because a pattern is a glob. Replace `logsSince` with:
+
+```go
+// logsSince is the one bounded journal read, behind logs.since and job.output
+// (D-J8). The answer is bounded three ways: journalctl reads at most
+// intent.LogsMaxN lines; each line is cut to logsSinceMaxLine and the answer
+// stops near logsSinceMaxBytes, its cursor at the last line sent so the next
+// call resumes there; and after a cursor, lines older than logsSinceMaxAge
+// are passed over, so a cursor cannot page back through the box's history
+// (without one the answer is the last n lines, as logs.read). item turns one
+// journal line, already cut, into what the answer carries; the byte bound is
+// measured on item's encoding, since escaping can make a line several times
+// longer on the wire than in the journal.
+func logsSince[T any](ctx context.Context, ex executor.Executor, units []string, cursor string, n int, now time.Time, item func(journalEntry) T) ([]T, string, *Reject, error) {
+	cmd, err := logsSinceCommand(units, cursor, n)
+	if err != nil {
+		return nil, "", reject(intent.ReasonInvalidPayload, err.Error()), nil
+	}
+	res, err := ex.Run(ctx, cmd, nil)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	out, next := []T{}, cursor
+	oldest, size := now.Add(-logsSinceMaxAge), 0
+	for _, e := range readJournalJSON(res.Stdout) {
+		if cursor != "" && e.at.Before(oldest) {
+			next = e.cursor
+			continue
+		}
+		e.line = cutLine(e.line, logsSinceMaxLine)
+		it := item(e)
+		b, _ := json.Marshal(it)
+		sz := len(b) + 1
+		if size+sz > logsSinceMaxBytes && len(out) > 0 {
+			break // the rest waits for the next call
+		}
+		size += sz
+		out = append(out, it)
+		if e.cursor != "" {
+			next = e.cursor
+		}
+	}
+	return out, next, nil, nil
+}
+```
+
+`logs.go` no longer names the node's units (the dispatch case passes them), so drop the `ops` and `catalog` imports Task 1 left there; it keeps `logwatch` for `LogsSinceResult` and `classifyLine`.
+
+In `internal/server/api.go`, ask the box when the controller keeps no wire for it (ruling P11). Task 1's `setupWire` stays as it is:
+
+```go
+// setupExisting is the wire setup keeps a box's names and data dir from: the
+// controller's own copy, or, when it keeps none, what a paired box's agent
+// reports in agent.info (a box paired from another controller, or a config
+// restored from before the box was set up). Review Focus 4: without this a
+// legacy box would be treated as new, given the jumpgate-node names, and set
+// up with units for an account that does not exist. A box that cannot answer
+// refuses the setup rather than guess.
+func (s *Server) setupExisting(ctx context.Context, cfg config.Config, t config.Target) (*catalog.WireConfig, error) {
+	if t.Wire != nil || t.Agent == nil {
+		return t.Wire, nil
+	}
+	info, err := decodeResult[intent.AgentInfo](s.agentResult(ctx, cfg, t, intent.KindAgentInfo, struct{}{}))
+	if err != nil {
+		return nil, fmt.Errorf("ask the box which names its node uses: %w", err)
+	}
+	if !info.SetUp {
+		return nil, nil
+	}
+	// An agent from before sub-project 2 sends no names: every box it set up
+	// is legacy, which Names "" already says.
+	return &catalog.WireConfig{ChainID: info.ChainID, Names: info.Names, DataDir: info.DataDir}, nil
+}
+```
+
+In `handleStartSetup`, replace Task 1's `wire = setupWire(wire, target.Wire)` with:
+
+```go
+existing, err := s.setupExisting(r.Context(), cfg, target)
+if err != nil {
+	writeError(w, http.StatusBadGateway, err.Error())
+	return
+}
+wire = setupWire(wire, existing)
+```
 
 - [ ] **Step 4: Wire the CLI**
 
@@ -5135,13 +5475,15 @@ A test in `cmd/jumpgate/cli_test.go` checks that `cmdAgent([]string{"job-step", 
 
 - [ ] **Step 5: Run the tests and cross-compile**
 
-Run: `go test ./internal/agent/ ./internal/jobs/... ./cmd/jumpgate/ -count=1 -race && GOOS=linux GOARCH=arm64 go build ./... && GOOS=windows go vet ./...`
-Expected: PASS; both cross builds clean.
+Run: `go test ./internal/agent/ ./internal/jobs/... ./cmd/jumpgate/ ./internal/server/ -count=1 -race && GOOS=linux GOARCH=arm64 go build ./... && GOOS=windows go vet ./...`
+Expected: PASS, including Task 1's `TestSetupKeepsTheBoxNames` and every `TestLogsSince*`; both cross builds clean.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add internal/agent cmd/jumpgate
+git add internal/agent/jobs.go internal/agent/jobs_test.go internal/agent/agent.go internal/agent/agent_test.go \
+  internal/agent/dispatch.go internal/agent/policy.go internal/agent/policy_test.go internal/agent/logs.go internal/agent/logs_test.go \
+  cmd/jumpgate/cli_agent.go cmd/jumpgate/cli_test.go internal/server/api.go internal/server/api_test.go
 git commit -m "feat(agent): durable job intents, decision tiers, job output and the reconcile loop
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -5174,7 +5516,7 @@ Covers the TUI spec's reserved `jobs` field (D27) and the error contract for the
   - `type JobOutputLine struct { Unit, Line string; At time.Time }`;
   - `type JobDecision struct { Decision, Option string }`;
   - `type JobStart struct { Kind string; Inputs json.RawMessage }`;
-  - codes `CodeJobNotFound = "job_not_found"`, `CodeLeaseHeld = "lease_held"`, `CodeJobActive = "job_active"`, `CodeJobsUnsupported = "jobs_unsupported"`, `CodeJobState = "job_state"`, `CodeApprovalUnavailable = "approval_unavailable"`, `CodeJobLogInvalid = "job_log_invalid"`.
+  - codes `CodeJobNotFound = "job_not_found"`, `CodeLeaseHeld = "lease_held"`, `CodeJobActive = "job_active"`, `CodeJobsUnsupported = "jobs_unsupported"`, `CodeJobState = "job_state"`, `CodeApprovalUnavailable = "approval_unavailable"`, `CodeJobLogInvalid = "job_log_invalid"`, `CodeUnknownPlan = "unknown_plan"` (ruling P12: Task 4's sixth reason gets its own code instead of the generic `rejected`), `CodeJobKindNotAllowed = "job_kind_not_allowed"` (ruling P7: `POST /api/jobs/{target}` refuses a kind outside its allowlist, 400).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5209,6 +5551,7 @@ func TestJobCodesAreRegisteredWithTheirExitClass(t *testing.T) {
 	for c, exit := range map[Code]int{
 		CodeJobNotFound: ExitFailed, CodeLeaseHeld: ExitFailed, CodeJobActive: ExitFailed, CodeJobsUnsupported: ExitFailed,
 		CodeJobState: ExitFailed, CodeApprovalUnavailable: ExitUsage, CodeJobLogInvalid: ExitSecurity,
+		CodeUnknownPlan: ExitFailed, CodeJobKindNotAllowed: ExitUsage,
 	} {
 		if !Known(c) || c.Exit() != exit || HintFor(c) == "" {
 			t.Errorf("%s: known %v exit %d hint %q", c, Known(c), c.Exit(), HintFor(c))
@@ -5352,6 +5695,8 @@ In `internal/api/errors.go`, add the constants under a `// Durable jobs.` commen
 	CodeJobState:            {"the job moved on since you looked; reload it", ExitFailed},
 	CodeApprovalUnavailable: {"this decision needs an approval-tier signature (a hardware or browser wallet), which this jumpgate cannot make yet", ExitUsage},
 	CodeJobLogInvalid:       {"this job's history on the box does not verify against the box's agent key: do not act on it; inspect /var/lib/jumpgate/jobs on the box, and re-pair the box if its key changed", ExitSecurity},
+	CodeUnknownPlan:         {"this box's agent does not know that job's plan (it was downgraded?); re-pair the box to upgrade its agent", ExitFailed},
+	CodeJobKindNotAllowed:   {"this server starts only the jobs it knows (for example `jumpgate migrate-names HOST`); other node operations have their own commands", ExitUsage},
 ```
 
 In `internal/api/fleet.go`, change the `JobsSummary` comment to: "counts a box's durable jobs. Null when the box is SSH-only, its agent cannot run jobs, or it has not been asked yet; `Running` counts waiting and running jobs."
@@ -5364,7 +5709,7 @@ Expected: PASS (including `TestEveryCodeIsSnakeCaseAndRegistered`).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/api
+git add internal/api/jobs.go internal/api/jobs_test.go internal/api/errors.go internal/api/fleet.go
 git commit -m "feat(api): job inbox, detail and decision wire types; job error codes
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -5376,8 +5721,8 @@ Covers spec "Adoption: any paired controller lists jobs, reads the manifest and 
 
 **Files:**
 - Create: `internal/server/jobs.go`, `internal/server/jobs_test.go`
-- Modify: `internal/server/server.go` (`jobs *jobsHub` field; `New`; stop it in `ListenAndServe`/`ServeUnix`), `internal/server/api.go` (routes), `internal/server/node.go` (`classifyNodeError`: job reasons and `errJobLogInvalid`), `internal/server/fleet.go` (`snapshot` fills `row.Jobs`; `round` asks the hub to refresh; `jobsChanged`), `internal/server/node_test.go` (`pairedOpts.agent` hook), `internal/server/fleet_test.go` (the two `a.Jobs != nil` assertions stay; add a new test)
-- Test: `internal/server/jobs_test.go`, `internal/server/freeze_test.go` (unchanged, must pass)
+- Modify: `internal/server/server.go` (`jobs *jobsHub` field; `New`; stop it in `ListenAndServe`/`ServeUnix`), `internal/server/api.go` (routes), `internal/server/node.go` (`classifyNodeError`: job reasons and `errJobLogInvalid`), `internal/server/fleet.go` (`snapshot` fills `row.Jobs`; `round` asks the hub to refresh; `jobsChanged`), `internal/server/node_test.go` (`pairedOpts.agent` hook)
+- Test: `internal/server/jobs_test.go` (the new tests, `TestFleetRowsCarryJobCounts` among them), `internal/server/freeze_test.go` and `internal/server/fleet_test.go` (both unchanged, must pass; the fleet test's `Jobs == nil` assertions stay true)
 
 **Interfaces:**
 - Consumes: Tasks 3, 4, 9, 10; `sendIntent`, `agentResult`, `decodeResult`, `startSSE`, `writeNodeError`, `findTarget`, `loadConfig`.
@@ -6134,7 +6479,7 @@ with
 var jobRejectionCodes = map[string]api.Code{
 	intent.ReasonLeaseHeld: api.CodeLeaseHeld, intent.ReasonJobNotFound: api.CodeJobNotFound,
 	intent.ReasonJobActive: api.CodeJobActive, intent.ReasonJobsUnsupported: api.CodeJobsUnsupported,
-	intent.ReasonJobState: api.CodeJobState,
+	intent.ReasonJobState: api.CodeJobState, intent.ReasonUnknownPlan: api.CodeUnknownPlan,
 }
 ```
 
@@ -6163,7 +6508,8 @@ Expected: PASS, including `TestLegacyTargetRoutesAreFrozen` with no change to it
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/server
+git add internal/server/jobs.go internal/server/jobs_test.go internal/server/server.go internal/server/api.go \
+  internal/server/node.go internal/server/fleet.go internal/server/node_test.go
 git commit -m "feat(server): jobs hub with verified logs, inbox and output streams, and job counts on fleet rows
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -6175,11 +6521,11 @@ Covers spec "v1 driver is step-level: the controller drives a multi-step plan �
 
 **Files:**
 - Create: `internal/server/jobsdrive.go`, `internal/server/jobsdrive_test.go`
-- Modify: `internal/server/server.go` (start the sweep in `ListenAndServe` and `ServeUnix`), `internal/server/api.go` (routes)
+- Modify: `internal/server/server.go` (start the sweep in `ListenAndServe` and `ServeUnix`; the test-only `Config.noJobsDriver`, ruling P5), `internal/server/api.go` (routes), `internal/server/jobs_test.go` (ruling P5: `newBoxRig` takes server options and allows the test kind to start; `TestInboxListsEveryPairedBoxsJobs` and `TestFleetRowsCarryJobCounts` run without the driver)
 
 **Interfaces:**
-- Consumes: Task 11's hub; `jobs.MigrateNamesResult` (Task 8); `updateConfig`.
-- Produces (package `server`, unexported): `(h) drive(target, id string)`, `(h) driveLoop(ctx context.Context, k jobKey)`, `(h) sweep(ctx context.Context)`, `(h) finished(t config.Target, rec intent.JobRecord)`. Routes: `POST /api/jobs/{target}` (body `api.JobStart`, answers `api.JobView`), `POST /api/jobs/{target}/{job}/decide` (body `api.JobDecision`), `POST /api/jobs/{target}/{job}/adopt`.
+- Consumes: Task 11's hub; `jobs.MigrateNamesResult` (Task 8); `updateConfig`; Task 10's `api.CodeJobKindNotAllowed`.
+- Produces (package `server`, unexported): `(h) drive(target, id string)`, `(h) driveLoop(ctx context.Context, k jobKey)`, `(h) sweep(ctx context.Context)`, `(h) finished(t config.Target, rec intent.JobRecord)`; `var jobStartKinds map[string]bool` (ruling P7: the only kinds the start route sends, `node.migrate-names` in v1); `Config.noJobsDriver bool` (ruling P5, tests only). Routes: `POST /api/jobs/{target}` (body `api.JobStart`, answers `api.JobView`), `POST /api/jobs/{target}/{job}/decide` (body `api.JobDecision`), `POST /api/jobs/{target}/{job}/adopt`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -6191,15 +6537,18 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"testing/fstest"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/agent"
+	"github.com/valve-tech/jumpgate/internal/agentclient"
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/jobs/jobstest"
 	"github.com/valve-tech/jumpgate/internal/signer"
@@ -6310,13 +6659,60 @@ func TestSecondControllerWatchesThenAdoptsAStaleJob(t *testing.T) {
 	waitJob(t, b, v.ID, intent.JobSucceeded)
 }
 
+// readOnBox reads a job straight from the agent, past the hub: nothing is
+// listed, so nothing resumes as a side effect (GET /api/jobs would).
+func (b *boxRig) readOnBox(t *testing.T, id string) intent.JobRecord {
+	t.Helper()
+	cfg, _ := b.srv.loadConfig()
+	tg, _ := findTarget(cfg, "box")
+	res, err := decodeResult[intent.JobReadResult](b.srv.agentResult(context.Background(), cfg, tg, intent.KindJobRead, intent.JobReadPayload{ID: id}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res.Job
+}
+
 // Q4: after a restart a controller drives its own jobs again, by itself.
+// Ruling P4: the test makes no HTTP request, because GET /api/jobs resumes
+// jobs on its own; only sweep can have started this driver.
 func TestARestartedServerResumesItsOwnJobs(t *testing.T) {
 	requireAgentPeer(t)
 	b := newBoxRig(t)
 	rec := b.startJob(t, `{}`) // created, never driven: the old server "died" at once
+	time.Sleep(5 * jobsDriveEvery)
+	b.srv.jobs.mu.Lock()
+	n := len(b.srv.jobs.driving)
+	b.srv.jobs.mu.Unlock()
+	if got := b.readOnBox(t, rec.ID); n != 0 || got.State != intent.JobWaiting || got.Step != 0 {
+		t.Fatalf("before the sweep: %d drivers, job %s at step %d", n, got.State, got.Step)
+	}
 	b.srv.jobs.sweep(context.Background())
-	waitJob(t, b, rec.ID, intent.JobSucceeded)
+	deadline := time.Now().Add(10 * time.Second)
+	for b.readOnBox(t, rec.ID).State != intent.JobSucceeded {
+		if time.Now().After(deadline) {
+			t.Fatal("the sweep did not resume the job")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Ruling P7: the start route is not a generic intent proxy. A kind outside
+// jobStartKinds is refused before anything is signed or sent.
+func TestStartRefusesKindsThatAreNotJobs(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	before, _ := config.Load()
+	for _, kind := range []string{intent.KindServiceAction, intent.KindJobDecide, "test.unlisted"} {
+		var e api.Error
+		in := api.JobStart{Kind: kind, Inputs: json.RawMessage(`{"service":"exec","action":"stop"}`)}
+		if code := b.do(t, "POST", "/api/jobs/box", in, &e); code != 400 || e.Code != api.CodeJobKindNotAllowed {
+			t.Fatalf("start of %s = %d %+v", kind, code, e)
+		}
+	}
+	after, _ := config.Load()
+	if after.Targets[0].Agent.NextSeq != before.Targets[0].Agent.NextSeq {
+		t.Fatalf("an intent was signed and sent (next seq %d -> %d)", before.Targets[0].Agent.NextSeq, after.Targets[0].Agent.NextSeq)
+	}
 }
 
 func TestADriverStopsWhenItsLeaseIsTaken(t *testing.T) {
@@ -6355,14 +6751,64 @@ func TestMigrateNamesSuccessUpdatesTheTargetsWire(t *testing.T) {
 }
 ```
 
-Write `raiseQuestionTier` and `takeLeaseAsAnotherController` in `jobsdrive_test.go`:
+Write `raiseQuestionTier` and `takeLeaseAsAnotherController` in `jobsdrive_test.go` (the import block above already carries `os`, `agentclient` and `eip712` for them):
 - `raiseQuestionTier` edits `<home>/jobs/<id>.json` with `os.ReadFile`/`json`/`os.WriteFile(…, 0o600)`, setting `question.tier` to `"approval"`.
-- `takeLeaseAsAnotherController` generates a key and enrolls it in `policy.json`, calls `b.advance(91*time.Second)`, then sends `job.lease take` with `agentclient.Dial` over the box's local socket (the target's `Agent.Socket`) and a memory seq store.
+- `takeLeaseAsAnotherController` generates a key and enrolls it in `policy.json`, calls `b.advance(91*time.Second)`, then sends `job.lease take` with `agentclient.Dial` over the box's local socket (`agentclient.Target{Agent: <the target's Agent.Address via eip712.ParseAddress>, Socket: <its Agent.Socket>, Local: true}`) and `agentclient.NewMemorySeqStore()`.
+
+Then update Task 11's rig and two of its tests in `internal/server/jobs_test.go` (ruling P5). Once `wireDriver` is in, every list drives this controller's own jobs, so a test that looks at a job mid-way races a driver that finishes the in-process job in about 40 ms. Those tests turn the driver off; Q4 itself does not change. Replace `newBoxRig` with:
+
+```go
+// newBoxRig is a paired box whose agent runs jobs in-process. server adjusts
+// the server's Config (withoutDriver, for one). The test kind may be started
+// through POST /api/jobs/{target} for as long as the test runs.
+func newBoxRig(t *testing.T, server ...func(*Config)) *boxRig {
+	t.Helper()
+	jobstest.RegisterPlan(t)
+	b := &boxRig{now: time.Now()}
+	prevDrive, prevList, prevKinds := jobsDriveEvery, jobsListEvery, jobStartKinds
+	jobsDriveEvery, jobsListEvery = 20*time.Millisecond, 0
+	jobStartKinds = map[string]bool{intent.KindNodeMigrateNames: true, jobstest.TestKind: true}
+	t.Cleanup(func() { jobsDriveEvery, jobsListEvery, jobStartKinds = prevDrive, prevList, prevKinds })
+	ts, token := pairedBoxWith(t, nopExec{}, pairedOpts{
+		setUp: true,
+		agent: func(home string, c *agent.Config) {
+			b.home = home
+			dir := filepath.Join(home, "jobs")
+			run := &jobstest.Runner{}
+			run.Run = jobstest.InProcess(dir, jobs.Env{Exec: c.Exec, NodePath: c.NodePath, Out: io.Discard})
+			m, err := jobs.NewManager(jobs.ManagerConfig{Dir: dir, Key: c.Key, Runner: run, Now: b.clock,
+				StepArgv: func(a jobs.StepArgs) []string { return jobs.StepArgv("/jumpgate", home, home, a) }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.Jobs, c.Now = m, b.clock
+			p, _ := agent.LoadPolicy(c.PolicyPath)
+			p.Kinds = map[string][]agent.Tier{jobstest.TestKind: {agent.TierRoutine}}
+			_ = p.Save(c.PolicyPath)
+		},
+		server: func(c *Config) {
+			for _, f := range server {
+				f(c)
+			}
+		},
+		onServer: func(s *Server) { b.srv = s },
+	})
+	b.ts, b.token = ts, token
+	t.Cleanup(func() { b.srv.jobs.stopWithin(time.Second) })
+	return b
+}
+
+// withoutDriver keeps the hub listing and verifying but never driving, so a
+// test can look at a job that stays where it was put.
+func withoutDriver(c *Config) { c.noJobsDriver = true }
+```
+
+In `TestInboxListsEveryPairedBoxsJobs` and `TestFleetRowsCarryJobCounts`, change `b := newBoxRig(t)` to `b := newBoxRig(t, withoutDriver)`. Every other Task 11 test keeps `newBoxRig(t)`: none of them depends on where the job stands.
 
 - [ ] **Step 2: Run them to make sure they fail**
 
-Run: `go test ./internal/server/ -run 'Driven|DecisionPoint|ApprovalQuestions|SecondController|ResumesItsOwn|DriverStops|MigrateNamesSuccess' -count=1`
-Expected: FAIL to compile (undefined `sweep`, `drive`, `finished`, route 404s).
+Run: `go test ./internal/server/ -run 'Driven|DecisionPoint|ApprovalQuestions|SecondController|ResumesItsOwn|StartRefuses|DriverStops|MigrateNamesSuccess' -count=1`
+Expected: FAIL to compile (undefined `sweep`, `drive`, `finished`, `jobStartKinds`, `noJobsDriver`).
 
 - [ ] **Step 3: Implement `internal/server/jobsdrive.go`**
 
@@ -6374,6 +6820,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -6383,6 +6830,14 @@ import (
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/jobs"
 )
+
+// jobStartKinds are the kinds POST /api/jobs/{target} starts (ruling P7).
+// The route signs nothing but a kind from this list, so it never becomes a
+// way to send an arbitrary intent ("intents, not commands"; a new node
+// operation is a new intent kind, not a new route). A new job kind is added
+// here on purpose, with its plan on the agent. A variable so tests can add
+// jobstest.TestKind.
+var jobStartKinds = map[string]bool{intent.KindNodeMigrateNames: true}
 
 // The v1 driver is step-level (spec): the agent runs each step to its end on
 // its own, and the lease holder starts the next one. A job whose controller
@@ -6507,7 +6962,8 @@ func (h *jobsHub) finished(t config.Target, rec intent.JobRecord) {
 	})
 }
 
-// cachedRecord is the hub's last record of a job, read fresh when it has none.
+// record reads a job fresh from the box and verifies its log, so a decision
+// is checked against what the box says now, never against a cached record.
 func (h *jobsHub) record(ctx context.Context, cfg config.Config, t config.Target, id string) (intent.JobRecord, int64, error) {
 	rec, _, agentTime, err := h.readVerified(ctx, cfg, t, id)
 	return rec, agentTime, err
@@ -6521,6 +6977,10 @@ func (s *Server) handleJobStart(w http.ResponseWriter, r *http.Request) {
 	var in api.JobStart
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxIntentBody)).Decode(&in); err != nil || in.Kind == "" {
 		writeError(w, http.StatusBadRequest, "want {\"kind\": …, \"inputs\": …}")
+		return
+	}
+	if !jobStartKinds[in.Kind] {
+		writeErrorDetail(w, http.StatusBadRequest, fmt.Sprintf("%q is not a job this server starts", in.Kind), "", api.CodeJobKindNotAllowed)
 		return
 	}
 	if len(in.Inputs) == 0 {
@@ -6585,7 +7045,17 @@ func (s *Server) handleJobDecide(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-In `New`, after `s.jobs = newJobsHub(s)`, call `s.jobs.wireDriver()`.
+In `server.go`, add to `Config`:
+
+```go
+	// noJobsDriver keeps the jobs hub listing and verifying but never
+	// driving. Tests only (ruling P5): a test that inspects a job mid-way
+	// must not race the driver. Unexported, so no caller outside the
+	// package can turn the driver off.
+	noJobsDriver bool
+```
+
+In `New`, after `s.jobs = newJobsHub(s)`, add `if !cfg.noJobsDriver { s.jobs.wireDriver() }`.
 
 Routes in `api.go`:
 
@@ -6602,12 +7072,12 @@ The `view` calls pass the lease heartbeat as the agent time right after a mutati
 - [ ] **Step 4: Run the server suite**
 
 Run: `go test ./internal/server/ -count=1 -race`
-Expected: PASS.
+Expected: PASS, including Task 11's `TestInboxListsEveryPairedBoxsJobs` and `TestFleetRowsCarryJobCounts` under `-count=20` (`go test ./internal/server/ -run 'InboxListsEvery|FleetRowsCarryJobCounts' -count=20 -race`), which shows the driver no longer races them.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/server
+git add internal/server/jobsdrive.go internal/server/jobsdrive_test.go internal/server/jobs_test.go internal/server/server.go internal/server/api.go
 git commit -m "feat(server): drive held jobs step by step, resume them after a restart, adopt and decide
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -6795,7 +7265,7 @@ Expected: PASS. `var _ Backend = (*apiclient.Client)(nil)` compiles, which prove
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/apiclient internal/tui/backend.go internal/tui/tuitest
+git add internal/apiclient/methods.go internal/apiclient/client_test.go internal/tui/backend.go internal/tui/tuitest/fake.go
 git commit -m "feat(apiclient): job inbox, detail, decide, adopt and migrate-names methods
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -6808,7 +7278,7 @@ Covers umbrella screen 3 ("Jobs inbox — fleet-wide running, paused and needs-d
 **Files:**
 - Modify: `internal/tui/jobs.go` (rewrite), `internal/tui/app.go:143` (`a.screens[scrJobs] = &jobsScreen{}`)
 - Create: `internal/tui/jobs_test.go`, `internal/tui/testdata/jobs_80x24.golden`, `internal/tui/testdata/jobs_ascii.golden`
-- Test: also regenerate `internal/tui/testdata/shell_jobs_80x24.golden` (it showed the placeholder)
+- Test: also regenerate `internal/tui/testdata/shell_jobs_80x24.golden` and `internal/tui/testdata/shell_jobs_ascii.golden` (both showed the placeholder; `-update` rewrites both)
 
 **Interfaces:**
 - Consumes: Task 13's `Backend` methods and `Fake` fields; `confirmModal` (`newConfirm`); `visit`; `navKeys`; `a.do`; `a.errText`; `sanitizeLine`, `truncate`, `formatAge`.
@@ -7274,12 +7744,14 @@ In `app.go:143`, use `a.screens[scrJobs] = &jobsScreen{}`. `shortAddr(addr strin
 - [ ] **Step 4: Regenerate the goldens this task changes, then run the TUI suite**
 
 Run: `go test ./internal/tui/ -run 'TestShellFrame|TestInboxShowsWhatNeedsYouFirst' -update -count=1 && go test ./internal/tui/... -count=1 -race`
-Expected: PASS. Open `internal/tui/testdata/jobs_80x24.golden`, `jobs_ascii.golden` and `shell_jobs_80x24.golden` and read them: 24 lines, nothing cut mid-word that matters, ASCII only in the ascii golden.
+Expected: PASS. Open `internal/tui/testdata/jobs_80x24.golden`, `jobs_ascii.golden`, `shell_jobs_80x24.golden` and `shell_jobs_ascii.golden` and read them: 24 lines, nothing cut mid-word that matters, ASCII only in the ascii golden.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/tui
+git add internal/tui/jobs.go internal/tui/app.go internal/tui/jobs_test.go \
+  internal/tui/testdata/jobs_80x24.golden internal/tui/testdata/jobs_ascii.golden \
+  internal/tui/testdata/shell_jobs_80x24.golden internal/tui/testdata/shell_jobs_ascii.golden
 git commit -m "feat(tui): the jobs inbox shows questions, the signed log, decisions and adoption
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -7290,7 +7762,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 Covers umbrella "status bar with … a fleet-wide ⚑ count of jobs needing a decision", Settings "bell on ⚑", fleet column "jobs (running, ⚑)", the TUI spec's reserved `jobs` field and its `–` until now, and the command palette (`:resync beacon box-a` style) for the first job.
 
 **Files:**
-- Modify: `internal/tui/app.go` (`statusBar`; the bell on `fleetMsg`), `internal/tui/backend.go` (`Options.Bell`), `internal/tui/fleet.go:246-247` (the `jobs` column), `internal/tui/palette.go` (`migrate-names NAME`; `paletteHelp`), `internal/tui/settings.go:258` (the label), `cmd/jumpgate/tui_on.go` (pass `Bell`)
+- Modify: `internal/tui/app.go` (`statusBar`; the bell on `fleetMsg`; `openJobsMsg` in `Update`), `internal/tui/backend.go` (`Options.Bell`), `internal/tui/jobs.go` (`openJobsMsg`; runs after Task 14 rewrote it), `internal/tui/fleet.go:246-247` (the `jobs` column), `internal/tui/palette.go` (`migrate-names NAME`; `paletteHelp`; names from `catalog`), `internal/tui/settings.go:258` (the label), `cmd/jumpgate/tui_on.go` (pass `Bell`)
 - Test: `internal/tui/app_test.go`, `internal/tui/fleet_test.go`, `internal/tui/palette_test.go`
 
 **Interfaces:**
@@ -7471,7 +7943,8 @@ Expected: FAIL (`Options.Bell` undefined, then the assertions).
 	case boxCmd("migrate-names"):
 		id := f[1]
 		a.modal = newConfirm("Rename the node on "+id,
-			"Starts the node.migrate-names job: it stops the node services, renames the valve-node-app account, units and data root to jumpgate-node, and starts the services again. It asks you before anything it cannot undo.",
+			"Starts the node.migrate-names job: it stops the node services, renames the "+catalog.LegacyNames.Prefix+
+				" account, units and data root to "+catalog.CurrentNames.Prefix+", and starts the services again. It asks you before anything it cannot undo.",
 			id, func() tea.Cmd {
 				return a.do("migrate-names", func(ctx context.Context, be Backend) tea.Msg {
 					v, err := be.MigrateNames(ctx, id)
@@ -7483,6 +7956,8 @@ Expected: FAIL (`Options.Bell` undefined, then the assertions).
 			})
 		return false, nil
 ```
+
+Import `github.com/valve-tech/jumpgate/internal/catalog` in `palette.go`. The names come from `catalog.LegacyNames` and `catalog.CurrentNames`, never a literal (Global Constraint 1, ruling P10); `catalog` imports nothing else in the module, so the TUI gains no dependency.
 
 Add `type openJobsMsg struct{ flash string }` in `jobs.go`, and handle it in `App.Update`: `case openJobsMsg: a.flash = sanitizeLine(msg.flash); return a, a.openScreen(scrJobs)`.
 
@@ -7498,7 +7973,10 @@ Expected: PASS without `-update`. Rows in `sampleFleet` have no `Jobs`, so exist
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/tui cmd/jumpgate/tui_on.go
+git add internal/tui/app.go internal/tui/backend.go internal/tui/jobs.go internal/tui/fleet.go internal/tui/palette.go internal/tui/settings.go \
+  internal/tui/app_test.go internal/tui/fleet_test.go internal/tui/palette_test.go cmd/jumpgate/tui_on.go
+# Plus internal/tui/testdata/settings.golden, by path, if Step 4 regenerated it.
+git status --short
 git commit -m "feat(tui): fleet-wide ⚑ count, the bell, the jobs column and :migrate-names
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -7510,11 +7988,11 @@ Covers the terminal success criterion ("An operator can run the whole fleet from
 
 **Files:**
 - Create: `cmd/jumpgate/cli_jobs.go`, `cmd/jumpgate/cli_jobs_test.go`
-- Modify: `cmd/jumpgate/cli.go` (`subcommands`), `cmd/jumpgate/help.go` (`commandHelp`)
+- Modify: `cmd/jumpgate/cli.go` (`subcommands`), `cmd/jumpgate/help.go` (`commandHelp`), and `cmd/jumpgate/help_test.go` only if it pins the help text
 
 **Interfaces:**
-- Consumes: Task 13's client methods; `connect`, `reportServerErrorFrom`, `failed`, `usage`, `exitCode`.
-- Produces: `cmdJobs(args []string) int` with subcommands `jobs [HOST]`, `jobs show HOST JOB`, `jobs decide HOST JOB DECISION OPTION`, `jobs adopt HOST JOB`; `cmdMigrateNames(args []string) int` (`migrate-names HOST --yes`); `printInbox(w io.Writer, in api.JobsInbox, host string, now time.Time)`, `printJobDetail(w io.Writer, d api.JobDetail)`.
+- Consumes: Task 13's client methods, including `WatchJobOutput` (ruling P13: the CLI is its first consumer; the TUI follows later, J12); `connect`, `reportServerErrorFrom`, `failed`, `usage`, `exitCode`.
+- Produces: `cmdJobs(args []string) int` with subcommands `jobs [HOST]`, `jobs show HOST JOB`, `jobs decide HOST JOB DECISION OPTION`, `jobs adopt HOST JOB`, `jobs output JOB` (follows the job's journal until Ctrl-C; the host is found from the inbox); `cmdMigrateNames(args []string) int` (`migrate-names HOST --yes`); `printInbox(w io.Writer, in api.JobsInbox, host string, now time.Time)`, `printJobDetail(w io.Writer, d api.JobDetail)`, `followOutput(w io.Writer, ch <-chan apiclient.Update[[]api.JobOutputLine]) error`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -7524,11 +8002,14 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/api"
+	"github.com/valve-tech/jumpgate/internal/apiclient"
+	"github.com/valve-tech/jumpgate/internal/catalog"
 )
 
 func TestPrintInboxPutsQuestionsUnderTheirJob(t *testing.T) {
@@ -7564,9 +8045,46 @@ func TestMigrateNamesWantsYes(t *testing.T) {
 	}
 }
 
+// Global Constraint 1, ruling P10: the legacy name reaches the help text only
+// through catalog.LegacyNames.
+func TestMigrateNamesHelpNamesBothSets(t *testing.T) {
+	for _, h := range commandHelp {
+		if strings.HasPrefix(h.name, "migrate-names") {
+			if !strings.Contains(h.text, catalog.LegacyNames.Prefix) || !strings.Contains(h.text, catalog.CurrentNames.Prefix) {
+				t.Fatalf("help %q", h.text)
+			}
+			return
+		}
+	}
+	t.Fatal("no migrate-names help")
+}
+
+// Ruling P13: jobs output prints each journal line as it arrives, without
+// the control bytes a step's output may carry, and stops when the server
+// refuses the job.
+func TestFollowOutputPrintsLinesAndStopsOnARefusal(t *testing.T) {
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	ch := make(chan apiclient.Update[[]api.JobOutputLine], 3)
+	ch <- apiclient.Update[[]api.JobOutputLine]{Has: true, Value: []api.JobOutputLine{
+		{Unit: "jumpgate-job-0123456789abcdef-stop-units-0.service", Line: "stopping\x1b[2J the units", At: at}}}
+	ch <- apiclient.Update[[]api.JobOutputLine]{Err: &api.Error{Message: "no such job", Code: api.CodeJobNotFound}}
+	ch <- apiclient.Update[[]api.JobOutputLine]{Has: true, Value: []api.JobOutputLine{{Line: "after the refusal", At: at}}}
+	close(ch)
+	var b bytes.Buffer
+	err := followOutput(&b, ch)
+	var e *api.Error
+	if !errors.As(err, &e) || e.Code != api.CodeJobNotFound {
+		t.Fatalf("followOutput = %v", err)
+	}
+	out := b.String()
+	if !strings.Contains(out, "stop-units-0") || !strings.Contains(out, "stopping[2J the units") || strings.Contains(out, "\x1b") || strings.Contains(out, "after the refusal") {
+		t.Fatalf("output:\n%q", out)
+	}
+}
+
 func TestJobsUsage(t *testing.T) {
 	// Only malformed verbs: a bare HOST would connect to (and maybe start) a server.
-	for _, args := range [][]string{{"show", "box-a"}, {"decide", "box-a", "j", "q"}, {"adopt"}, {"adopt", "box-a"}} {
+	for _, args := range [][]string{{"show", "box-a"}, {"decide", "box-a", "j", "q"}, {"adopt"}, {"adopt", "box-a"}, {"output"}, {"output", "box-a", "0123456789abcdef"}} {
 		if code := cmdJobs(args); code != exitCode("usage") {
 			t.Errorf("jobs %v: exit %d", args, code)
 		}
@@ -7576,7 +8094,7 @@ func TestJobsUsage(t *testing.T) {
 
 - [ ] **Step 2: Run them to make sure they fail**
 
-Run: `go test ./cmd/jumpgate/ -run 'PrintInbox|MigrateNamesWantsYes|JobsUsage' -count=1`
+Run: `go test ./cmd/jumpgate/ -run 'PrintInbox|MigrateNamesWantsYes|MigrateNamesHelp|FollowOutput|JobsUsage' -count=1`
 Expected: FAIL to compile.
 
 - [ ] **Step 3: Implement**
@@ -7591,15 +8109,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/apiclient"
+	"github.com/valve-tech/jumpgate/internal/catalog"
 )
 
-const jobsUsage = "usage: jumpgate jobs [HOST] | jobs show HOST JOB | jobs decide HOST JOB DECISION OPTION | jobs adopt HOST JOB"
+const jobsUsage = "usage: jumpgate jobs [HOST] | jobs show HOST JOB | jobs decide HOST JOB DECISION OPTION | jobs adopt HOST JOB | jobs output JOB"
 
 func cmdJobs(args []string) int {
 	switch {
@@ -7639,17 +8159,81 @@ func cmdJobs(args []string) int {
 			}
 			return err
 		})
+	case args[0] == "output" && len(args) == 2:
+		return withClient(func(ctx context.Context, c *apiclient.Client) error {
+			ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
+			defer stop()
+			host, err := jobHost(ctx, c, args[1])
+			if err != nil {
+				return err
+			}
+			return followOutput(os.Stdout, c.WatchJobOutput(ctx, host, args[1]))
+		})
 	}
 	return usage(jobsUsage)
 }
 
-func isJobsVerb(s string) bool { return s == "show" || s == "decide" || s == "adopt" }
+func isJobsVerb(s string) bool { return s == "show" || s == "decide" || s == "adopt" || s == "output" }
+
+// jobHost finds the box that runs job id, so `jobs output` takes only the id
+// `jumpgate jobs` prints (ruling P13). Ids are 64 random bits; an id on two
+// boxes is refused rather than guessed.
+func jobHost(ctx context.Context, c *apiclient.Client, id string) (string, error) {
+	in, err := c.Jobs(ctx)
+	if err != nil {
+		return "", err
+	}
+	var hosts []string
+	for _, j := range in.Jobs {
+		if j.ID == id {
+			hosts = append(hosts, j.Target)
+		}
+	}
+	switch len(hosts) {
+	case 0:
+		return "", fmt.Errorf("no box that answered has a job %s (`jumpgate jobs` lists them)", id)
+	case 1:
+		return hosts[0], nil
+	}
+	return "", fmt.Errorf("job %s is on more than one box (%s); use `jumpgate jobs show HOST %s`", id, strings.Join(hosts, ", "), id)
+}
+
+// followOutput prints a job's journal as it arrives, until the stream ends
+// (Ctrl-C) or the server refuses the job. Other stream errors are the
+// connection's, which watch retries by itself.
+func followOutput(w io.Writer, ch <-chan apiclient.Update[[]api.JobOutputLine]) error {
+	for u := range ch {
+		var e *api.Error
+		if errors.As(u.Err, &e) {
+			return e
+		}
+		if !u.Has {
+			continue
+		}
+		for _, l := range u.Value {
+			fmt.Fprintf(w, "%s %s %s\n", l.At.Format(time.RFC3339), l.Unit, terminalSafe(l.Line))
+		}
+	}
+	return nil
+}
+
+// terminalSafe drops control bytes (but tab) from a line a step wrote, so a
+// journal line cannot move the cursor or retitle the operator's terminal.
+func terminalSafe(s string) string {
+	return strings.Map(func(r rune) rune {
+		if (r < 0x20 && r != '\t') || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+}
 
 // cmdMigrateNames starts node.migrate-names. It stops the node's services
 // for the length of the job, so it wants --yes, as reset-replay does.
 func cmdMigrateNames(args []string) int {
 	if len(args) != 2 || args[1] != "--yes" {
-		return usage("usage: jumpgate migrate-names HOST --yes  (stops the node services on HOST while it renames the valve-node-app account, units and data root to jumpgate-node)")
+		return usage("usage: jumpgate migrate-names HOST --yes  (stops the node services on HOST while it renames the " +
+			catalog.LegacyNames.Prefix + " account, units and data root to " + catalog.CurrentNames.Prefix + ")")
 	}
 	return withClient(func(ctx context.Context, c *apiclient.Client) error {
 		v, err := c.MigrateNames(ctx, args[0])
@@ -7741,11 +8325,11 @@ func printJobDetail(w io.Writer, d api.JobDetail) {
 
 If `cmd/jumpgate` already has a duration formatter (`grep -n "func.*Age\|func ago" cmd/jumpgate/*.go`), use it instead of adding `ago`.
 
-In `cli.go`, add `"jobs": cmdJobs, "migrate-names": cmdMigrateNames` to `subcommands`. In `help.go` `commandHelp`, after `service`:
+In `cli.go`, add `"jobs": cmdJobs, "migrate-names": cmdMigrateNames` to `subcommands`. In `help.go` `commandHelp`, after `service` (import `internal/catalog` there; the names come from it, never a literal, ruling P10):
 
 ```go
-	{"jobs [HOST]", "list durable jobs; `jobs show|decide|adopt …` to act on one"},
-	{"migrate-names HOST --yes", "rename HOST's valve-node-app account, units and data to jumpgate-node (a durable job)"},
+	{"jobs [HOST]", "list durable jobs; `jobs show|decide|adopt …` to act on one, `jobs output JOB` to follow its output"},
+	{"migrate-names HOST --yes", "rename HOST's " + catalog.LegacyNames.Prefix + " account, units and data to " + catalog.CurrentNames.Prefix + " (a durable job)"},
 ```
 
 - [ ] **Step 4: Run the tests**
@@ -7756,7 +8340,9 @@ Expected: PASS, including `help_test.go`. If it pins the help text, update it in
 - [ ] **Step 5: Commit**
 
 ```bash
-git add cmd/jumpgate
+git add cmd/jumpgate/cli_jobs.go cmd/jumpgate/cli_jobs_test.go cmd/jumpgate/cli.go cmd/jumpgate/help.go
+# Plus cmd/jumpgate/help_test.go, by path, if Step 4 had to update it.
+git status --short
 git commit -m "feat(cli): jumpgate jobs and jumpgate migrate-names
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -8034,7 +8620,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 |---|---|
 | Transient unit `jumpgate-job-<id>[-<step>]` via `systemd-run`, survives agent restarts and controller disconnects | 6, 7, 17 |
 | Manifest at `/var/lib/jumpgate/jobs/<id>.json`: kind, inputs (never rendered commands), current step, `driver`, version stamp, lease | 5, 7 |
-| Output to the journal; resume with `--after-cursor` | 9 (`job.output`), 11 (stream) |
+| Output to the journal; resume with `--after-cursor` | 9 (`job.output`), 11 (stream), 16 (`jumpgate jobs output`) |
 | Signed, append-only log of every intent and step outcome; adopter verifies | 3, 5, 7, 11, 17 (renewals excluded: Q7) |
 | Autonomy: the agent runs as far as it can, stops only at a signed question; decision of the policy's tier | 7, 9 (Q5) |
 | Adoption: list, read, watch read-only (fresh) or take over (stale) | 7, 11, 12 (Q4) |
