@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/filelock"
 	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/joblog"
@@ -25,13 +26,19 @@ import (
 // Store is the jobs directory. Every write is the agent's: Save replaces a
 // manifest atomically, Append adds one signed line to a log and fsyncs it.
 type Store struct {
-	dir string
-	key signer.Signer
-	now func() time.Time
-	mu  sync.Mutex
+	dir  string
+	key  signer.Signer
+	now  func() time.Time
+	mu   sync.Mutex
+	lock *filelock.Handle // held for the Store's lifetime: one store per directory
 }
 
-// OpenStore creates dir (0700) if absent.
+// ErrStoreInUse means another Store holds the directory. Two stores would each
+// believe they are the only writer and could sign the same index.
+var ErrStoreInUse = errors.New("jobs: another store already has this directory open")
+
+// OpenStore creates dir (0700) if absent and takes an exclusive advisory lock
+// on dir/.lock until Close.
 func OpenStore(dir string, key signer.Signer, now func() time.Time) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -42,7 +49,26 @@ func OpenStore(dir string, key signer.Signer, now func() time.Time) (*Store, err
 	if now == nil {
 		now = time.Now
 	}
-	return &Store{dir: dir, key: key, now: now}, nil
+	h, err := filelock.TryLock(filepath.Join(dir, ".lock"))
+	if errors.Is(err, filelock.ErrLocked) {
+		return nil, fmt.Errorf("%w: %s", ErrStoreInUse, dir)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &Store{dir: dir, key: key, now: now, lock: h}, nil
+}
+
+// Close releases the directory lock. The Store must not be used afterwards.
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lock == nil {
+		return nil
+	}
+	err := s.lock.Unlock()
+	s.lock = nil
+	return err
 }
 
 func (s *Store) Dir() string { return s.dir }
@@ -80,6 +106,8 @@ var ErrStale = errors.New("jobs: stale manifest, reload the job and try again")
 var (
 	closeFile  = func(f *os.File) error { return f.Close() }
 	removeFile = os.Remove
+	// writeManifestFile persists a manifest; a test makes it fail.
+	writeManifestFile = fsatomic.WriteFile
 )
 
 // checkFresh refuses m when its log length or head differ from the manifest
@@ -163,6 +191,21 @@ func (s *Store) Append(ctx context.Context, m *Manifest, kind string, body any) 
 func (s *Store) appendLocked(ctx context.Context, m *Manifest, kind string, body any) error {
 	if err := s.checkFresh(m, false); err != nil {
 		return err
+	}
+	// The manifest can lag the log: an earlier Append may have written its
+	// entry and then failed to save. Signing on would reuse that index, so the
+	// log itself must be exactly where the caller's copy says. Load repairs a
+	// lagging manifest; Append never does.
+	entries, err := s.readLog(m.ID, 0, 0)
+	if err != nil {
+		return err
+	}
+	head, err := joblog.Verify(s.key.Address(), m.ID, entries, 0, [32]byte{})
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrDamaged, err)
+	}
+	if uint64(len(entries)) != m.LogLen || "0x"+hex.EncodeToString(head[:]) != manifestPrev(*m) {
+		return fmt.Errorf("%w: job %s's log has %d entries, the caller's copy %d; Load it to repair", ErrStale, m.ID, len(entries), m.LogLen)
 	}
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -248,7 +291,7 @@ func (s *Store) saveLocked(m *Manifest) error {
 	if err != nil {
 		return err
 	}
-	return fsatomic.WriteFile(manifestPath(s.dir, m.ID), b)
+	return writeManifestFile(manifestPath(s.dir, m.ID), b)
 }
 
 // LoadManifest reads a manifest without checking its log: for step processes,

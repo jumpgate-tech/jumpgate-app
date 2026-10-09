@@ -25,6 +25,7 @@ func testStore(t *testing.T) (*Store, *signer.Key, *time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { s.Close() })
 	return s, k, &now
 }
 
@@ -420,9 +421,9 @@ func TestBadIDsAndStepsAreRefusedBeforeTheyReachAPath(t *testing.T) {
 	}
 }
 
-// Review I7: if a job's files cannot be removed its manifest stays, so the
-// job is still listed and the prune can be retried.
-func TestPruneKeepsTheManifestWhenTheLogCannotBeRemoved(t *testing.T) {
+// Review I7: a prune that cannot remove the manifest leaves the job listed,
+// so it can be retried.
+func TestPruneThatCannotRemoveTheManifestLeavesTheJobListed(t *testing.T) {
 	s, _, now := testStore(t)
 	m, mbody := newManifest(t)
 	m.State = intent.JobSucceeded
@@ -527,7 +528,50 @@ func TestPruneLeavesNoDamagedJobWhenItFailsHalfway(t *testing.T) {
 	mustOK(t, s.Prune(time.Hour, 100))
 	ents, err := os.ReadDir(s.Dir())
 	mustOK(t, err)
-	if len(ents) != 0 {
+	if len(ents) != 1 || ents[0].Name() != ".lock" { // only the directory lock remains
 		t.Fatalf("orphans left behind: %v", ents)
 	}
+}
+
+// Review I3: an Append whose manifest save failed leaves its entry in the log;
+// another copy must not sign onto the same index.
+func TestAppendRefusesWhenTheLogIsAheadOfTheCallersCopy(t *testing.T) {
+	s, k, _ := testStore(t)
+	m, mbody := newManifest(t)
+	ctx := context.Background()
+	mustOK(t, s.Create(ctx, &m, mbody))
+	a, err := s.Load(m.ID)
+	mustOK(t, err)
+	b, err := s.Load(m.ID)
+	mustOK(t, err)
+	orig := writeManifestFile
+	defer func() { writeManifestFile = orig }()
+	writeManifestFile = func(string, []byte) error { return errors.New("injected manifest save failure") }
+	if err := s.Append(ctx, &a, joblog.KindStepStarted, joblog.StepBody{Step: "one"}); err == nil {
+		t.Fatal("Append succeeded although the manifest save failed")
+	}
+	writeManifestFile = orig
+	if err := s.Append(ctx, &b, joblog.KindStepStarted, joblog.StepBody{Step: "two"}); !errors.Is(err, ErrStale) {
+		t.Fatalf("Append onto a log that is ahead = %v, want ErrStale", err)
+	}
+	es, _, err := s.ReadLog(m.ID, 0, 0)
+	mustOK(t, err)
+	if _, err := joblog.Verify(k.Address(), m.ID, es, 0, [32]byte{}); err != nil || len(es) != 2 {
+		t.Fatalf("log: %d entries, %v", len(es), err)
+	}
+	// Load repairs the lag, after which appending works.
+	c, err := s.Load(m.ID)
+	mustOK(t, err)
+	mustOK(t, s.Append(ctx, &c, joblog.KindStepStarted, joblog.StepBody{Step: "three"}))
+}
+
+func TestASecondStoreOnTheSameDirectoryFails(t *testing.T) {
+	s, k, _ := testStore(t)
+	if _, err := OpenStore(s.Dir(), k, nil); !errors.Is(err, ErrStoreInUse) {
+		t.Fatalf("second OpenStore = %v, want ErrStoreInUse", err)
+	}
+	mustOK(t, s.Close())
+	s2, err := OpenStore(s.Dir(), k, nil)
+	mustOK(t, err)
+	mustOK(t, s2.Close())
 }
