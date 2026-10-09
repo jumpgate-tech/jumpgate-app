@@ -23,7 +23,13 @@ type gateExec struct {
 	once    sync.Once
 	started chan struct{}
 	release chan struct{}
+	relOnce sync.Once
 }
+
+// open lets a held `systemctl stop` continue. It is safe to call twice, so a
+// test can also release the gate in a cleanup: a handler left holding it
+// would pin httptest.Server.Close, and the test would hang instead of fail.
+func (g *gateExec) open() { g.relOnce.Do(func() { close(g.release) }) }
 
 func newGateExec() *gateExec {
 	return &gateExec{started: make(chan struct{}), release: make(chan struct{})}
@@ -87,19 +93,30 @@ func TestClearFinishesAfterTheClientGoesAway(t *testing.T) {
 // Ctrl-C during a clear waits for it to finish rather than killing it half
 // done. A second Ctrl-C still forces the exit (signal handling in main).
 func TestShutdownWaitsForAnInFlightClear(t *testing.T) {
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	// The reservation stays open until the httptest server behind `a` has its
+	// own port. Closed earlier, the kernel could hand httptest that same port:
+	// ListenAndServe then failed to bind, the clear went to httptest instead,
+	// and nothing ever released it, so cleanup hung in httptest.Server.Close
+	// until the package timed out (CI job 11432).
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
 	addr := ln.Addr().String()
-	ln.Close()
 
 	g := newGateExec()
 	a := newAPITestServerCfg(t, func(config.Target) (executor.Executor, error) { return g, nil },
 		func(c *Config) { c.Bind = addr })
+	t.Cleanup(g.open) // runs before ts.Close, so a held clear can never pin it
+	ln.Close()
 	addAndWireLocalTarget(t, a)
 	g.armed.Store(true)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan struct{})
-	go func() { _ = a.srv.ListenAndServe(ctx); close(done) }()
+	var serveErr error
+	go func() { serveErr = a.srv.ListenAndServe(ctx); close(done) }()
 	for i := 0; i < 100; i++ {
 		if c, err := net.Dial("tcp", addr); err == nil {
 			c.Close()
@@ -115,19 +132,28 @@ func TestShutdownWaitsForAnInFlightClear(t *testing.T) {
 			res.Body.Close()
 		}
 	}()
-	<-g.started
+	select {
+	case <-g.started:
+	case <-done:
+		t.Fatalf("the server on %s stopped before the clear started: %v", addr, serveErr)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the clear never reached the executor")
+	}
 	cancel() // Ctrl-C
 
 	select {
 	case <-done:
-		t.Fatal("the server exited while a clear was half done")
+		t.Fatalf("the server exited while a clear was half done (ListenAndServe: %v)", serveErr)
 	case <-time.After(shutdownGrace + time.Second):
 	}
-	close(g.release)
+	g.open()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the server did not exit after the clear finished")
+	}
+	if serveErr != nil {
+		t.Fatalf("ListenAndServe: %v", serveErr)
 	}
 	if !g.ran("systemctl start") {
 		t.Fatal("the clear did not run to completion")
