@@ -8,14 +8,13 @@ list and the acceptance record. This note deliberately does not restate them —
 two places tracking the same status is how the two drift apart. What follows is
 only what that plan does not already say.
 
-## One conflict to resolve
+## Acceptance numbers: the plan's run is current
 
-This ledger arrived carrying acceptance numbers that disagree with the ones in
-the plan. They look like two different runs rather than a correction, so both
-are recorded here and neither has been overwritten. Somebody who knows which
-run is current should reconcile them.
+This ledger arrived carrying acceptance numbers from a different run than the
+plan's. On 2026-10-09 the plan's run was confirmed as the current one, so the
+plan's numbers stand and the ledger's are kept below only as history.
 
-| | plan doc | this ledger |
+| | current (plan doc) | superseded (this ledger) |
 |---|---|---|
 | credit test | 100 credits at 5/call → 20 calls, then 402 | 40 credits at 5/call → 8 calls, then 402 |
 | settle loop | 980 remaining, 0 reserved (1000 funded − 20 spent) | 0 remaining, 0 reserved |
