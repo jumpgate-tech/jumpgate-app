@@ -329,6 +329,14 @@ func classifyNodeError(err error) (int, api.Error) {
 	)
 	msg := err.Error()
 	switch {
+	case errors.Is(err, errJobLogInvalid):
+		return http.StatusBadGateway, api.Error{Message: msg, Code: api.CodeJobLogInvalid}
+	case errors.As(err, &rej) && jobRejectionCodes[rej.Code] != "":
+		status := http.StatusConflict
+		if rej.Code == intent.ReasonJobNotFound {
+			status = http.StatusNotFound
+		}
+		return status, api.Error{Message: rej.Message, Code: jobRejectionCodes[rej.Code], Reason: rej.Code}
 	case errors.As(err, &rej):
 		return http.StatusConflict, api.Error{Message: rej.Message, Code: api.CodeRejected, Reason: rej.Code, Hint: api.RejectionHint(rej.Code)}
 	case errors.As(err, &fail):
@@ -357,6 +365,14 @@ func classifyNodeError(err error) (int, api.Error) {
 		return http.StatusGatewayTimeout, api.Error{Message: msg, Code: api.CodeUnreachable}
 	}
 	return http.StatusBadGateway, api.Error{Message: msg}
+}
+
+// jobRejectionCodes gives job refusals their own codes, so a client can tell
+// "someone else drives this" from any other refusal without parsing text.
+var jobRejectionCodes = map[string]api.Code{
+	intent.ReasonLeaseHeld: api.CodeLeaseHeld, intent.ReasonJobNotFound: api.CodeJobNotFound,
+	intent.ReasonJobActive: api.CodeJobActive, intent.ReasonJobsUnsupported: api.CodeJobsUnsupported,
+	intent.ReasonJobState: api.CodeJobState, intent.ReasonUnknownPlan: api.CodeUnknownPlan,
 }
 
 func writeNodeError(w http.ResponseWriter, err error) {

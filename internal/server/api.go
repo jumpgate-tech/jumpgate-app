@@ -705,6 +705,18 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/fleet/{id}/disk/measure", s.handleFleetMeasure)
 	mux.HandleFunc("GET /api/fleet/{id}/status/stream", s.handleFleetStatusStream)
 
+	// Durable jobs (jobs.go). Never under /api/targets/{id} (ruling P7). The
+	// patterns do not overlap: /api/jobs/stream has two segments and every
+	// per-job route four or more, so a box named "stream" keeps its job
+	// routes (/api/jobs/stream/{job}) and never reaches the inbox stream.
+	// Should a GET /api/jobs/{target} ever be added, ServeMux gives the
+	// literal /api/jobs/stream precedence, as the more specific pattern;
+	// TestJobRoutesAndATargetNamedStream holds both.
+	mux.HandleFunc("GET /api/jobs", s.handleJobs)
+	mux.HandleFunc("GET /api/jobs/stream", s.handleJobsStream)
+	mux.HandleFunc("GET /api/jobs/{target}/{job}", s.handleJobDetail)
+	mux.HandleFunc("GET /api/jobs/{target}/{job}/output/stream", s.handleJobOutput)
+
 	mux.HandleFunc("GET /api/targets/{id}/logs", s.handleLogs)
 	mux.HandleFunc("GET /api/targets/{id}/logs/stream", s.handleLogsStream)
 

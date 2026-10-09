@@ -215,6 +215,8 @@ type Server struct {
 
 	// fleet polls every box for /api/fleet while anyone watches (fleet.go).
 	fleet *fleetPoller
+	// jobs lists, verifies and serves every paired box's durable jobs (jobs.go).
+	jobs *jobsHub
 
 	// codes are the outstanding one-time browser login codes (login.go).
 	codes loginCodes
@@ -262,6 +264,7 @@ func New(cfg Config) *Server {
 	if s.geteuid == nil {
 		s.geteuid = os.Geteuid
 	}
+	s.jobs = newJobsHub(s)
 	s.fleet = newFleetPoller(s)
 	s.reg.onRetire = s.fleet.retireStatus
 	return s
@@ -393,6 +396,7 @@ func tokensEqual(a, b string) bool {
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	err := serveUntil(ctx, newHTTPServer(s.cfg.Bind, s.Handler()), shutdownGrace)
 	s.fleet.stopWithin(fleetStopWait)
+	s.jobs.stopWithin(fleetStopWait)
 	s.waitCritical()
 	return err
 }
@@ -429,6 +433,7 @@ func (s *Server) ServeUnix(ctx context.Context, path string) error {
 	srv := newHTTPServer("", s.Handler())
 	err = serveWith(ctx, srv, shutdownGrace, func() error { return srv.Serve(ln) })
 	s.fleet.stopWithin(fleetStopWait)
+	s.jobs.stopWithin(fleetStopWait)
 	s.waitCritical()
 	return err
 }
