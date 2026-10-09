@@ -211,8 +211,8 @@ func TestPreflightFinishesAHalfMigratedBox(t *testing.T) {
 		ex *scriptExec
 		w  catalog.WireConfig
 	}{
-		"renamed, units not rewritten":       {migratedBox().on("getent group valve-node-app", stdout("valve-node-app:x:998:\n")).on("test -e '/var/lib/jumpgate-node'", fail1), legacyWire()},
-		"legacy group left":                  {migratedBox().on("getent group valve-node-app", stdout("valve-node-app:x:998:\n")), migratedWire()},
+		"renamed, units not rewritten":       {migratedBox().on("getent group valve-node-app", stdout("valve-node-app:x:998:\n")).on("getent group jumpgate-node", fail1).on("test -e '/var/lib/jumpgate-node'", fail1), legacyWire()},
+		"legacy group left":                  {migratedBox().on("getent group valve-node-app", stdout("valve-node-app:x:998:\n")).on("getent group jumpgate-node", fail1), migratedWire()},
 		"legacy unit left":                   {migratedBox().on("test -e '/etc/systemd/system/valve-node-app-exec.service'", ok0), migratedWire()},
 		"owner marker names the old account": {migratedBox().on("cat '"+catalog.OwnerMarkerPath(migratedWire())+"'", stdout("valve-node-app\n")), migratedWire()},
 		"snapshot marker names the old dir":  {migratedBox().on("cat '"+catalog.SnapshotMarkerPath(migratedWire())+"'", stdout("/var/lib/valve-node-app/369\n")), migratedWire()},
@@ -425,6 +425,7 @@ func TestRewriteUnitsSwitchesNodeJSONAndTheMarker(t *testing.T) {
 	ex := newScript().on("test -e '"+catalog.SnapshotMarkerPath(legacyWire())+"'", fail1)
 	env := mnEnv(t, ex, legacyWire())
 	env.Results["move-data"] = movedResult()
+	env.Results["preflight"] = preflightResult(true, true)
 	if _, err := step(t, "rewrite-units").Run(context.Background(), env); err != nil {
 		t.Fatal(err)
 	}
@@ -465,6 +466,7 @@ func TestRewriteUnitsMovesTheSnapshotMarkerWithTheData(t *testing.T) {
 	ex := newScript().on(marker, stdout("/var/lib/valve-node-app/369\n"))
 	env := mnEnv(t, ex, legacyWire())
 	env.Results["move-data"] = movedResult()
+	env.Results["preflight"] = preflightResult(true, true)
 	if _, err := step(t, "rewrite-units").Run(context.Background(), env); err != nil {
 		t.Fatal(err)
 	}
@@ -477,6 +479,7 @@ func TestRewriteUnitsMovesTheSnapshotMarkerWithTheData(t *testing.T) {
 		ex := newScript().on(marker, stdout(named))
 		env := mnEnv(t, ex, legacyWire())
 		env.Results["move-data"] = movedResult()
+		env.Results["preflight"] = preflightResult(true, true)
 		if _, err := step(t, "rewrite-units").Run(context.Background(), env); err != nil {
 			t.Fatal(err)
 		}
@@ -492,6 +495,7 @@ func TestRewriteUnitsKeepsTheSnapshotMarkerWhenTheDataStays(t *testing.T) {
 	ex := newScript().on("cat '"+catalog.SnapshotMarkerPath(legacyWire())+"'", stdout("/var/lib/valve-node-app/369\n"))
 	env := mnEnv(t, ex, legacyWire())
 	env.Results["move-data"] = json.RawMessage(`{"moved":false,"dataDir":"/var/lib/valve-node-app/369","jwtPath":"/var/lib/valve-node-app/369/jwt.hex"}`)
+	env.Results["preflight"] = preflightResult(true, true)
 	if _, err := step(t, "rewrite-units").Run(context.Background(), env); err != nil {
 		t.Fatal(err)
 	}
@@ -516,6 +520,7 @@ func TestRewriteUnitsRefusesAMoveThatDoesNotMatchNodeJSON(t *testing.T) {
 	ex := newScript()
 	env := mnEnv(t, ex, legacyWire())
 	env.Results["move-data"] = json.RawMessage(`{"moved":true,"dataDir":"/var/lib/jumpgate/369","jwtPath":"/var/lib/jumpgate/369/jwt.hex"}`)
+	env.Results["preflight"] = preflightResult(true, true)
 	if _, err := step(t, "rewrite-units").Run(context.Background(), env); err == nil || len(ex.files) != 0 {
 		t.Fatalf("rewrite-units = %v, files %v", err, ex.files)
 	}
@@ -589,6 +594,7 @@ func TestStartUnitsRestoresOnlyWhatRan(t *testing.T) {
 func TestVerifyReportsTheResult(t *testing.T) {
 	ex := migratedBox()
 	env := mnEnv(t, ex, migratedWire())
+	env.Results["preflight"] = preflightResult(true, true)
 	o, err := step(t, "verify").Run(context.Background(), env)
 	if err != nil {
 		t.Fatal(err)
@@ -603,7 +609,9 @@ func TestVerifyNamesWhatIsLeft(t *testing.T) {
 	ex := migratedBox().on("getent group valve-node-app", stdout("valve-node-app:x:998:\n")).
 		on("cat '"+catalog.SnapshotMarkerPath(migratedWire())+"'", stdout("/var/lib/valve-node-app/369\n")).
 		on("systemctl is-enabled jumpgate-node-beacon.service", fail1)
-	_, err := step(t, "verify").Run(context.Background(), mnEnv(t, ex, migratedWire()))
+	env := mnEnv(t, ex, migratedWire())
+	env.Results["preflight"] = preflightResult(true, true)
+	_, err := step(t, "verify").Run(context.Background(), env)
 	for _, want := range []string{"group valve-node-app", "snapshot marker", "jumpgate-node-beacon.service is not enabled"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("verify = %v, want %q", err, want)
@@ -654,5 +662,163 @@ func TestReadNamesMarkerRefusesWhatItCannotApply(t *testing.T) {
 		if _, ok, err := ReadNamesMarker(p); ok || err == nil {
 			t.Errorf("accepted %s", body)
 		}
+	}
+}
+
+func preflightResult(execEnabled, beaconEnabled bool) json.RawMessage {
+	b, _ := json.Marshal(migratePreflight{WasActive: map[string]bool{},
+		WasEnabled: map[string]bool{"exec": execEnabled, "beacon": beaconEnabled}})
+	return b
+}
+
+func rootMove() NamesMarker {
+	return NamesMarker{Names: catalog.NamesCurrent, DataRootFrom: catalog.LegacyNames.DataRoot, DataRootTo: catalog.CurrentNames.DataRoot}
+}
+
+// I1: names.json is what keeps a stale re-pair from pointing the node back at
+// the old root. A later job must carry the move it records, never drop it.
+func TestARecordedRootMoveSurvivesMoveDataAndRewriteUnits(t *testing.T) {
+	ex := newScript()
+	env := mnEnv(t, ex, legacyWire()) // a stale re-pair: node.json at the old root
+	if err := writeNamesMarker(env.NamesPath, rootMove()); err != nil {
+		t.Fatal(err)
+	}
+	o, err := step(t, "move-data").Run(context.Background(), env)
+	var mv migrateMove
+	_ = json.Unmarshal(o.Result, &mv)
+	if err != nil || !mv.Moved || mv.DataDir != "/var/lib/jumpgate-node/369" || ex.ran("mv ") {
+		t.Fatalf("move-data = %+v, %v, calls %v", mv, err, ex.calls)
+	}
+	env.Results["move-data"] = o.Result
+	env.Results["preflight"] = preflightResult(true, true)
+	if _, err := step(t, "rewrite-units").Run(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
+	if mk, ok, err := ReadNamesMarker(env.NamesPath); err != nil || !ok || mk != rootMove() {
+		t.Fatalf("names.json %+v %v %v", mk, ok, err)
+	}
+}
+
+// I1, end to end: job A moves the root and is aborted at ownership (its owner
+// marker still names the old account); job B finishes the migration and
+// names.json still records the move.
+func TestASecondJobAfterAnAbortKeepsTheRootMove(t *testing.T) {
+	env := mnEnv(t, nil, legacyWire())
+	runJob := func(steps []string, exFor func(id string) *scriptExec) {
+		t.Helper()
+		env.Results, env.Answer = map[string]json.RawMessage{}, nil
+		for _, id := range steps {
+			env.Exec = exFor(id)
+			o, err := step(t, id).Run(context.Background(), env)
+			if err != nil || o.Ask != nil {
+				t.Fatalf("%s: %+v, %v", id, o.Ask, err)
+			}
+			env.Results[id] = o.Result
+		}
+	}
+	runJob([]string{"preflight", "stop-units", "rename-account", "move-data", "rewrite-units"}, func(id string) *scriptExec {
+		switch id {
+		case "stop-units":
+			return legacyBox().on("pgrep -a -u", fail1)
+		case "rename-account":
+			return legacyBox().on("id -u jumpgate-node", fail1, idOK("998")).on("getent group jumpgate-node", fail1, stdout("jumpgate-node:x:998:\n"))
+		case "move-data":
+			return legacyBox().on("test -d '/var/lib/valve-node-app'", ok0).on("findmnt -rn -o TARGET", stdout("/\n"))
+		}
+		return legacyBox()
+	})
+	if mk, _, _ := ReadNamesMarker(env.NamesPath); mk != rootMove() {
+		t.Fatalf("job A names.json %+v", mk)
+	}
+	// Job B: the box is renamed and moved; only the owner marker is left.
+	ownerCat := "cat '" + catalog.OwnerMarkerPath(migratedWire()) + "'"
+	box := func() *scriptExec {
+		return migratedBox().on(ownerCat, stdout("valve-node-app\n")).on("pgrep -a -u", fail1).
+			on("stat -c %U", stdout("jumpgate-node\n")).on("test -d '/var/lib/valve-node-app'", fail1).on("test -e '/var/lib/jumpgate-node'", ok0)
+	}
+	var owner *scriptExec
+	runJob([]string{"preflight", "stop-units", "rename-account", "move-data", "rewrite-units", "ownership"}, func(id string) *scriptExec {
+		ex := box()
+		if id == "ownership" {
+			owner = ex
+		}
+		return ex
+	})
+	if !owner.ran(catalog.OwnerMarkerCommand(migratedWire())) {
+		t.Fatalf("job B did not finish the owner marker: %v", owner.calls)
+	}
+	if mk, ok, err := ReadNamesMarker(env.NamesPath); err != nil || !ok || mk != rootMove() {
+		t.Fatalf("job B names.json %+v %v %v", mk, ok, err)
+	}
+	if w := readWire(t, env); w.DataDir != "/var/lib/jumpgate-node/369" || w.Names != catalog.NamesCurrent {
+		t.Fatalf("node.json %+v", w)
+	}
+}
+
+// M1: with no group to rename and none to use, the account is left alone.
+func TestNoGroupMeansNothingIsRenamed(t *testing.T) {
+	ex := legacyBox().on("getent group valve-node-app", fail1)
+	if _, err := step(t, "preflight").Run(context.Background(), mnEnv(t, ex, legacyWire())); err == nil || !strings.Contains(err.Error(), "group") {
+		t.Fatalf("preflight = %v", err)
+	}
+	ex = legacyBox().on("getent group valve-node-app", fail1)
+	if _, err := step(t, "rename-account").Run(context.Background(), mnEnv(t, ex, legacyWire())); err == nil || !strings.Contains(err.Error(), "group") {
+		t.Fatalf("rename-account = %v", err)
+	}
+	noCommand(t, ex, "usermod", "groupmod")
+}
+
+// M2: a reboot between stop-units and rename-account starts the legacy units
+// again. That is a question, answered by stopping them again, not a failure.
+func TestRenameAccountAsksWhenTheNodeRunsAgain(t *testing.T) {
+	ex := legacyBox().on("id -u jumpgate-node", fail1, fail1, idOK("998")).on("getent group jumpgate-node", fail1, fail1, stdout("jumpgate-node:x:998:\n")).
+		on("systemctl is-active valve-node-app-exec.service", stdout("active\n"), stdout("inactive\n")).
+		on("pgrep -a -u valve-node-app", stdout("4242 reth node\n"), fail1)
+	env := mnEnv(t, ex, legacyWire())
+	o, err := step(t, "rename-account").Run(context.Background(), env)
+	if err != nil || o.Ask == nil || o.Ask.Key != "busy-user" || !strings.Contains(o.Ask.Prompt, "valve-node-app-exec.service") {
+		t.Fatalf("rename-account = %+v, %v", o.Ask, err)
+	}
+	if ex.ran("usermod") || ex.ran("systemctl stop") {
+		t.Fatalf("calls %v", ex.calls)
+	}
+	env.Answer = &Answer{Key: "busy-user", Option: intent.OptRetry}
+	if o, err := step(t, "rename-account").Run(context.Background(), env); err != nil || o.Ask != nil {
+		t.Fatalf("after retry: %+v, %v", o.Ask, err)
+	}
+	if s, u := ex.index("systemctl stop valve-node-app-exec.service"), ex.index("usermod"); s < 0 || u < s {
+		t.Fatalf("stop at %d, usermod at %d: %v", s, u, ex.calls)
+	}
+}
+
+// M3: an operator who disabled a unit keeps it disabled under its new name.
+func TestADisabledUnitStaysDisabled(t *testing.T) {
+	ex := legacyBox().on("systemctl is-enabled valve-node-app-beacon.service", fail1)
+	o, err := step(t, "preflight").Run(context.Background(), mnEnv(t, ex, legacyWire()))
+	var pre migratePreflight
+	_ = json.Unmarshal(o.Result, &pre)
+	if err != nil || !pre.WasEnabled["exec"] || pre.WasEnabled["beacon"] {
+		t.Fatalf("preflight %+v, %v", pre, err)
+	}
+	ex = newScript()
+	env := mnEnv(t, ex, legacyWire())
+	env.Results["move-data"] = movedResult()
+	env.Results["preflight"] = o.Result
+	if _, err := step(t, "rewrite-units").Run(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
+	if !ex.ran("systemctl enable jumpgate-node-exec.service") || ex.ran("enable jumpgate-node-beacon.service") || ex.ran("enable jumpgate-node-exec.service jumpgate-node-beacon") {
+		t.Fatalf("calls %v", ex.calls)
+	}
+	// verify holds the box to the same set: beacon enabled is a problem.
+	ex = migratedBox()
+	env = mnEnv(t, ex, migratedWire())
+	env.Results["preflight"] = o.Result
+	if _, err := step(t, "verify").Run(context.Background(), env); err == nil || !strings.Contains(err.Error(), "jumpgate-node-beacon.service is enabled") {
+		t.Fatalf("verify = %v", err)
+	}
+	ex.on("systemctl is-enabled jumpgate-node-beacon.service", fail1)
+	if _, err := step(t, "verify").Run(context.Background(), env); err != nil {
+		t.Fatalf("verify = %v", err)
 	}
 }

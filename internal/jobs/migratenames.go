@@ -62,7 +62,7 @@ func init() {
 			{ID: "stop-units", Title: "Stop the node services", Run: mnStopUnits,
 				AbortNote: "nothing was renamed, but the node services are stopped (and any other process of the account you chose to stop): start them with `jumpgate service HOST exec start`, then beacon"},
 			{ID: "rename-account", Title: "Rename the service account", Run: mnRenameAccount,
-				AbortNote: "the account may already be renamed while the units still name the old one, so the node cannot start; a new node.migrate-names job finishes the rename"},
+				AbortNote: "the account (and its group) may already be renamed while the units still name the old one, so the node cannot start; a new node.migrate-names job finishes the rename. If nothing was renamed yet, the node is as you find it: stopped, or running again under its old names after a reboot"},
 			{ID: "move-data", Title: "Move the data root", Run: mnMoveData,
 				AbortNote: "the account is renamed and the data root may already be at " + current.DataRoot + ", but the units still name the old account and path, so the node cannot start; a new node.migrate-names job finishes the move"},
 			{ID: "rewrite-units", Title: "Rewrite the node units", Run: mnRewriteUnits,
@@ -77,7 +77,8 @@ func init() {
 }
 
 type migratePreflight struct {
-	WasActive   map[string]bool `json:"wasActive"` // "exec", "beacon": running when the job began
+	WasActive   map[string]bool `json:"wasActive"`  // "exec", "beacon": running when the job began
+	WasEnabled  map[string]bool `json:"wasEnabled"` // "exec", "beacon": enabled when the job began
 	AlreadyDone bool            `json:"alreadyDone"`
 }
 
@@ -340,6 +341,17 @@ func mnPreflight(ctx context.Context, env Env) (Outcome, error) {
 			fmt.Fprintf(env.Out, "an earlier migration did not finish: %s\n", strings.Join(left, "; "))
 		}
 	}
+	hasLegacyG, err := groupExists(ctx, env, legacy.Group)
+	if err != nil {
+		return Outcome{}, err
+	}
+	hasCurrentG, err := groupExists(ctx, env, current.Group)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if err := checkGroups(hasLegacyG, hasCurrentG); err != nil {
+		return Outcome{}, err
+	}
 	// Any other unit running as the legacy account would break when it is
 	// renamed (the systemd eRPC backend, for one). Q3: those move in
 	// sub-project 6; until then, refuse before touching anything.
@@ -374,21 +386,51 @@ func mnPreflight(ctx context.Context, env Env) (Outcome, error) {
 			return Outcome{}, fmt.Errorf("both %s and %s exist; move %s aside, then retry", legacy.DataRoot, current.DataRoot, current.DataRoot)
 		}
 	}
-	pre := migratePreflight{WasActive: map[string]bool{}}
-	for svc, units := range map[string][]string{
-		"exec":   {legacy.ExecUnit(), current.ExecUnit()},
-		"beacon": {legacy.BeaconUnit(), current.BeaconUnit()},
-	} {
-		for _, u := range units {
+	pre := migratePreflight{WasActive: map[string]bool{}, WasEnabled: map[string]bool{}}
+	for _, s := range services {
+		for _, u := range []string{s.legacy, s.current} {
 			st, err := unitState(ctx, env, u)
 			if err != nil {
 				return Outcome{}, err
 			}
-			pre.WasActive[svc] = pre.WasActive[svc] || st == "active"
+			enabled, err := probe(ctx, env, "systemctl is-enabled "+u)
+			if err != nil {
+				return Outcome{}, err
+			}
+			pre.WasActive[s.svc] = pre.WasActive[s.svc] || st == "active"
+			pre.WasEnabled[s.svc] = pre.WasEnabled[s.svc] || enabled
 		}
 	}
 	b, _ := json.Marshal(pre)
 	return Outcome{Result: b}, nil
+}
+
+// services pairs each node service with its unit under both name sets.
+var services = []struct{ svc, legacy, current string }{
+	{"exec", legacy.ExecUnit(), current.ExecUnit()},
+	{"beacon", legacy.BeaconUnit(), current.BeaconUnit()},
+}
+
+// readPreflight is preflight's record; the steps that restore what it saw
+// cannot guess it.
+func readPreflight(env Env) (migratePreflight, error) {
+	var pre migratePreflight
+	if err := json.Unmarshal(env.Results["preflight"], &pre); err != nil {
+		return pre, fmt.Errorf("preflight left no result: %w", err)
+	}
+	return pre, nil
+}
+
+// toEnable is the new units whose legacy (or, after an earlier job, current)
+// unit was enabled when the job began: an operator's disabled unit stays so.
+func toEnable(pre migratePreflight) []string {
+	var units []string
+	for _, s := range services {
+		if pre.WasEnabled[s.svc] {
+			units = append(units, s.current)
+		}
+	}
+	return units
 }
 
 // procs is every process of user, one "pid command" line each.
@@ -399,7 +441,13 @@ func procs(ctx context.Context, env Env, user string) ([]string, error) {
 	}
 	switch res.ExitCode {
 	case 0:
-		return strings.Split(strings.TrimSpace(res.Stdout), "\n"), nil
+		var lines []string
+		for _, l := range strings.Split(strings.TrimSpace(res.Stdout), "\n") {
+			if l != "" {
+				lines = append(lines, l)
+			}
+		}
+		return lines, nil
 	case 1:
 		return nil, nil // pgrep matched nothing
 	}
@@ -437,27 +485,51 @@ func firstLines(left []string) string {
 	return strings.Join(left[:min(len(left), 10)], "\n")
 }
 
-func mnStopUnits(ctx context.Context, env Env) (Outcome, error) {
-	if alreadyDone(env) {
-		return Outcome{}, nil
-	}
-	// Either name set may be absent (or half there, after an earlier job), so
-	// a unit that does not exist is not an error: what matters is the check
-	// below that none of them still runs.
+// stopNodeUnits stops the node units of both name sets and checks that none
+// still runs. Either set may be absent (or half there, after an earlier
+// job), so a unit that does not exist is not an error.
+func stopNodeUnits(ctx context.Context, env Env) error {
 	units := append(legacy.Units(), current.Units()...)
 	for _, u := range units {
 		if _, err := run(ctx, env, "systemctl stop "+u); err != nil {
-			return Outcome{}, err
+			return err
 		}
 	}
 	for _, u := range units {
 		st, err := unitState(ctx, env, u)
 		if err != nil {
-			return Outcome{}, err
+			return err
 		}
 		if running(st) {
-			return Outcome{}, fmt.Errorf("%s is still %s after systemctl stop", u, st)
+			return fmt.Errorf("%s is still %s after systemctl stop", u, st)
 		}
+	}
+	return nil
+}
+
+// busyWith lists what still runs as user: node units that are up, and the
+// account's processes.
+func busyWith(ctx context.Context, env Env, user string) ([]string, error) {
+	var busy []string
+	for _, u := range append(legacy.Units(), current.Units()...) {
+		st, err := unitState(ctx, env, u)
+		if err != nil {
+			return nil, err
+		}
+		if running(st) {
+			busy = append(busy, u+" is "+st)
+		}
+	}
+	left, err := procs(ctx, env, user)
+	return append(busy, left...), err
+}
+
+func mnStopUnits(ctx context.Context, env Env) (Outcome, error) {
+	if alreadyDone(env) {
+		return Outcome{}, nil
+	}
+	if err := stopNodeUnits(ctx, env); err != nil {
+		return Outcome{}, err
 	}
 	user := legacy.User
 	if ok, err := userExists(ctx, env, user); err != nil {
@@ -537,8 +609,31 @@ func mnRenameAccount(ctx context.Context, env Env) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
-	if hasLegacyG && hasCurrentG {
-		return Outcome{}, fmt.Errorf("both groups exist (%s and %s); remove the one the node does not use, then retry", legacy.Group, current.Group)
+	if err := checkGroups(hasLegacyG, hasCurrentG); err != nil {
+		return Outcome{}, err
+	}
+	// A reboot since stop-units starts the (still enabled) legacy units
+	// again, and usermod refuses a busy account. That is a question, not a
+	// failure: the operator already chose to stop the node, so "retry" stops
+	// it again and checks once more.
+	if hasLegacy {
+		if a := env.Answer; a != nil && a.Key == qBusyUser && a.Option == intent.OptRetry {
+			if err := stopNodeUnits(ctx, env); err != nil {
+				return Outcome{}, err
+			}
+		}
+		busy, err := busyWith(ctx, env, legacy.User)
+		if err != nil {
+			return Outcome{}, err
+		}
+		if len(busy) > 0 {
+			return Outcome{Ask: &intent.JobQuestion{Key: qBusyUser, Tier: intent.TierRoutine,
+				Prompt: fmt.Sprintf("%s is busy again (did the box reboot?), so it cannot be renamed:\n%s", legacy.User, firstLines(busy)),
+				Options: []intent.JobOption{
+					{ID: intent.OptRetry, Label: "Stop the node again", Detail: "stops the node services and checks again; any other process you stop yourself first"},
+					{ID: intent.OptAbort, Label: "Stop the migration here", Detail: "nothing has been renamed; the node runs under its old names as you find it"},
+				}}}, nil
+		}
 	}
 	// The user first: it is the call that fails while a process still runs as
 	// the account, and then nothing at all has changed. usermod -l keeps the
@@ -558,14 +653,24 @@ func mnRenameAccount(ctx context.Context, env Env) (Outcome, error) {
 	} else if !ok {
 		return Outcome{}, fmt.Errorf("%s does not exist after the rename", current.User)
 	}
-	// The units name Group= as well as User=; a group named otherwise would
-	// stop them starting.
 	if ok, err := groupExists(ctx, env, current.Group); err != nil {
 		return Outcome{}, err
 	} else if !ok {
-		return Outcome{}, fmt.Errorf("group %s does not exist after the rename (the account's group was not %s); create it, then retry", current.Group, legacy.Group)
+		return Outcome{}, fmt.Errorf("group %s does not exist after the rename", current.Group)
 	}
 	return Outcome{}, nil
+}
+
+// checkGroups refuses, before anything is renamed, a box where the rename
+// cannot end with exactly one group named for the units' Group= line.
+func checkGroups(hasLegacy, hasCurrent bool) error {
+	switch {
+	case hasLegacy && hasCurrent:
+		return fmt.Errorf("both groups exist (%s and %s); remove the one the node does not use, then retry", legacy.Group, current.Group)
+	case !hasLegacy && !hasCurrent:
+		return fmt.Errorf("neither group %s nor %s exists, and the units run as group %s; create it (or rename the account's group to it), then retry", legacy.Group, current.Group, current.Group)
+	}
+	return nil
 }
 
 func mnMoveData(ctx context.Context, env Env) (Outcome, error) {
@@ -578,7 +683,21 @@ func mnMoveData(ctx context.Context, env Env) (Outcome, error) {
 		return Outcome{Result: b}, err
 	}
 	stay := migrateMove{DataDir: w.DataDir, JWTPath: jwtOf(w)}
-	if alreadyDone(env) || !catalog.UnderRoot(w.DataDir, legacy.DataRoot) {
+	if alreadyDone(env) {
+		return result(stay)
+	}
+	// An earlier job moved the root and recorded it in names.json; readNode
+	// already applied it, so the dir is under the new root. Report it as
+	// moved, so rewrite-units keeps the record (which is what stops a stale
+	// re-pair pointing the node at the old root) and the snapshot marker
+	// still follows the data.
+	if mk, ok, err := ReadNamesMarker(env.NamesPath); err != nil {
+		return Outcome{}, err
+	} else if ok && mk.DataRootFrom != "" && catalog.UnderRoot(w.DataDir, current.DataRoot) {
+		stay.Moved = true
+		return result(stay)
+	}
+	if !catalog.UnderRoot(w.DataDir, legacy.DataRoot) {
 		return result(stay) // a custom data dir stays where it is (Q2)
 	}
 	moved := migrateMove{Moved: true, JWTPath: jwtOf(w)}
@@ -657,6 +776,10 @@ func mnRewriteUnits(ctx context.Context, env Env) (Outcome, error) {
 	if err := checkWire(nw); err != nil {
 		return Outcome{}, err
 	}
+	pre, err := readPreflight(env)
+	if err != nil {
+		return Outcome{}, err
+	}
 	execUnit, beaconUnit, err := catalog.RenderUnits(nw)
 	if err != nil {
 		return Outcome{}, err
@@ -667,14 +790,21 @@ func mnRewriteUnits(ctx context.Context, env Env) (Outcome, error) {
 	if err := env.Exec.WriteFile(ctx, catalog.UnitPath(current.BeaconUnit()), []byte(beaconUnit), 0o644); err != nil {
 		return Outcome{}, err
 	}
+	// The new units are enabled before the legacy ones are disabled, so a
+	// crash between the two leaves the enablement on the new names for the
+	// next job's preflight to find.
+	enable := "systemctl daemon-reload"
+	if units := toEnable(pre); len(units) > 0 {
+		enable += " && systemctl enable " + strings.Join(units, " ")
+	}
+	if _, err := sh(ctx, env, enable); err != nil {
+		return Outcome{}, err
+	}
 	// Exit unchecked: the legacy units are gone after an earlier attempt.
 	if _, err := run(ctx, env, "systemctl disable "+strings.Join(legacy.Units(), " ")+" 2>/dev/null"); err != nil {
 		return Outcome{}, err
 	}
-	if _, err := sh(ctx, env, "rm -f "+shQuote(catalog.UnitPath(legacy.ExecUnit()))+" "+shQuote(catalog.UnitPath(legacy.BeaconUnit()))); err != nil {
-		return Outcome{}, err
-	}
-	if _, err := sh(ctx, env, "systemctl daemon-reload && systemctl enable "+strings.Join(current.Units(), " ")); err != nil {
+	if _, err := sh(ctx, env, "rm -f "+shQuote(catalog.UnitPath(legacy.ExecUnit()))+" "+shQuote(catalog.UnitPath(legacy.BeaconUnit()))+" && systemctl daemon-reload"); err != nil {
 		return Outcome{}, err
 	}
 	// The snapshot marker, node.json and names.json switch together, after
@@ -769,19 +899,21 @@ func mnStartUnits(ctx context.Context, env Env) (Outcome, error) {
 	if alreadyDone(env) {
 		return Outcome{}, nil
 	}
-	var pre migratePreflight
-	_ = json.Unmarshal(env.Results["preflight"], &pre)
-	for _, s := range []struct{ svc, unit string }{{"exec", current.ExecUnit()}, {"beacon", current.BeaconUnit()}} {
+	pre, err := readPreflight(env)
+	if err != nil {
+		return Outcome{}, err
+	}
+	for _, s := range services {
 		if !pre.WasActive[s.svc] {
 			continue // it was stopped before the job: leave it so
 		}
-		if _, err := sh(ctx, env, "systemctl start "+s.unit); err != nil {
+		if _, err := sh(ctx, env, "systemctl start "+s.current); err != nil {
 			return Outcome{}, err
 		}
-		if st, err := unitState(ctx, env, s.unit); err != nil {
+		if st, err := unitState(ctx, env, s.current); err != nil {
 			return Outcome{}, err
 		} else if st != "active" {
-			return Outcome{}, fmt.Errorf("%s is %s after it was started; read `journalctl -u %s`", s.unit, st, s.unit)
+			return Outcome{}, fmt.Errorf("%s is %s after it was started; read `journalctl -u %s`", s.current, st, s.current)
 		}
 	}
 	return Outcome{}, nil
@@ -801,9 +933,6 @@ func mnVerify(ctx context.Context, env Env) (Outcome, error) {
 		{"id -u " + current.User, true, current.User + " does not exist"},
 		{"id -u " + legacy.User, false, legacy.User + " still exists"},
 		{"getent group " + current.Group, true, "group " + current.Group + " does not exist"},
-		// One unit per call: is-enabled exits 0 when any one it names is.
-		{"systemctl is-enabled " + current.ExecUnit(), true, current.ExecUnit() + " is not enabled"},
-		{"systemctl is-enabled " + current.BeaconUnit(), true, current.BeaconUnit() + " is not enabled"},
 	} {
 		ok, err := probe(ctx, env, c.cmd)
 		if err != nil {
@@ -811,6 +940,23 @@ func mnVerify(ctx context.Context, env Env) (Outcome, error) {
 		}
 		if ok != c.want {
 			problems = append(problems, c.problem)
+		}
+	}
+	// One unit per call: is-enabled exits 0 when any one it names is.
+	pre, err := readPreflight(env)
+	if err != nil {
+		return Outcome{}, err
+	}
+	for _, s := range services {
+		enabled, err := probe(ctx, env, "systemctl is-enabled "+s.current)
+		if err != nil {
+			return Outcome{}, err
+		}
+		switch {
+		case pre.WasEnabled[s.svc] && !enabled:
+			problems = append(problems, s.current+" is not enabled")
+		case !pre.WasEnabled[s.svc] && enabled:
+			problems = append(problems, s.current+" is enabled, but its unit was not when the job began")
 		}
 	}
 	left, err := leftovers(ctx, env, w)

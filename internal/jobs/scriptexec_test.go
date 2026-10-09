@@ -92,14 +92,16 @@ func idOK(uid string) executor.Result { return executor.Result{Stdout: uid + "\n
 func stdout(s string) executor.Result { return executor.Result{Stdout: s} }
 
 // legacyBox scripts a box set up before sub-project 2: the legacy account
-// exists, the new one does not, and nothing sits at the new data root.
+// exists, the new one does not, and nothing sits at the new data root or
+// under the new unit names.
 func legacyBox() *scriptExec {
 	return newScript().
 		on("id -u valve-node-app", idOK("998")).
 		on("id -u jumpgate-node", fail1).
 		on("getent group valve-node-app", stdout("valve-node-app:x:998:\n")).
 		on("getent group jumpgate-node", fail1).
-		on("test -e '/var/lib/jumpgate-node'", fail1)
+		on("test -e '/var/lib/jumpgate-node'", fail1).
+		on("systemctl is-enabled jumpgate-node-", fail1)
 }
 
 // migratedBox scripts a box node.migrate-names finished on: only the new
