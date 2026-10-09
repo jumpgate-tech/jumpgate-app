@@ -311,12 +311,13 @@ func TestSnapshot_VerifyFailsUntilTheDataDirIsPopulated(t *testing.T) {
 }
 
 func TestSnapshot_VerifyPassesOnceTheCompletionMarkerExists(t *testing.T) {
-	e := newFakeExecutor().script("test -f", executor.Result{ExitCode: 0})
+	w := snapshotWire()
+	e := newFakeExecutor().script("cat", executor.Result{Stdout: w.DataDir + "\n"})
 
-	if err := snapshotStep().Verify(context.Background(), e, &State{Wire: snapshotWire()}); err != nil {
+	if err := snapshotStep().Verify(context.Background(), e, &State{Wire: w}); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if !ran(e, "test -f", catalog.SnapshotMarkerPath(snapshotWire())) {
+	if !ran(e, "cat", catalog.SnapshotMarkerPath(w)) {
 		t.Errorf("verify looked in the wrong place: %q", e.callLog())
 	}
 }
@@ -408,7 +409,7 @@ func TestStart_VerifyReportsWhatSystemdSaidOnNonZeroExit(t *testing.T) {
 func TestSnapshot_VerifyNeedsTheCompletionMarker(t *testing.T) {
 	w := snapshotWire() // ExecSnapshot set
 	f := newFakeExecutor().
-		script("test -f '"+catalog.SnapshotMarkerPath(w)+"'", executor.Result{ExitCode: 1}).
+		script("cat '"+catalog.SnapshotMarkerPath(w)+"'", executor.Result{ExitCode: 1}).
 		script("test -d '"+w.DataDir+"/db'", executor.Result{ExitCode: 0}).
 		script("test -f '"+catalog.UnitPath(w.NodeNames().ExecUnit())+"'", executor.Result{ExitCode: 1})
 	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err == nil {
@@ -421,7 +422,7 @@ func TestSnapshot_VerifyNeedsTheCompletionMarker(t *testing.T) {
 func TestSnapshot_VerifyAdoptsAFinishedPreMarkerInstall(t *testing.T) {
 	w := snapshotWire()
 	f := newFakeExecutor().
-		script("test -f '"+catalog.SnapshotMarkerPath(w)+"'", executor.Result{ExitCode: 1}).
+		script("cat '"+catalog.SnapshotMarkerPath(w)+"'", executor.Result{ExitCode: 1}).
 		script("test -d '"+w.DataDir+"/db'", executor.Result{ExitCode: 0}).
 		script("test -f '"+catalog.UnitPath(w.NodeNames().ExecUnit())+"'", executor.Result{ExitCode: 0})
 	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err != nil {
@@ -445,16 +446,33 @@ func TestSnapshot_RunWritesTheMarkerOnlyAfterTheDownload(t *testing.T) {
 }
 
 // A marker the service account can write is a marker it can forge: one left in
-// the data dir must not stand in for the root-only one.
+// the data dir must not stand in for the root-only one. Verify must not even
+// look there, so the test fails on any command naming the in-tree marker
+// rather than relying on a script that could shadow it.
 func TestSnapshot_AMarkerInTheDataDirIsNotTrusted(t *testing.T) {
 	w := snapshotWire()
-	forged := "test -f '" + w.DataDir + "/.jumpgate-snapshot-complete'"
 	f := newFakeExecutor().
+		script("cat", executor.Result{ExitCode: 1}).
 		script("test -f", executor.Result{ExitCode: 1}).
-		script("test -d", executor.Result{ExitCode: 1}).
-		script(forged, executor.Result{ExitCode: 0})
+		script("test -d", executor.Result{ExitCode: 1})
 	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err == nil {
-		t.Fatal("a marker file under the data dir satisfied Verify")
+		t.Fatal("Verify passed with no root-only marker")
+	}
+	if ran(f, w.DataDir+"/.jumpgate") {
+		t.Fatalf("Verify consulted a path under the data dir: %v", f.callLog())
+	}
+}
+
+// The marker names the data dir it vouches for. One that names another (a move
+// to a new disk, or a dir wiped by hand and re-pointed) must not skip the restore.
+func TestSnapshot_AMarkerForAnotherDataDirDoesNotSatisfyVerify(t *testing.T) {
+	w := snapshotWire()
+	f := newFakeExecutor().
+		script("cat", executor.Result{Stdout: "/mnt/old-disk/reth\n"}).
+		script("test -f", executor.Result{ExitCode: 1}).
+		script("test -d", executor.Result{ExitCode: 1})
+	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err == nil {
+		t.Fatal("a marker for a different data dir satisfied Verify")
 	}
 }
 

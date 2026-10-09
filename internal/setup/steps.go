@@ -459,12 +459,14 @@ func snapshotStep() Step {
 			if !w.ExecSnapshot {
 				return nil
 			}
-			marker := shQuote(catalog.SnapshotMarkerPath(w))
-			res, err := e.Run(ctx, "test -f "+marker, nil)
+			// The marker names the data dir it vouches for: a rerun against a
+			// different dir (a new disk) or one wiped by hand must not pass.
+			// A mismatch counts as no marker.
+			res, err := e.Run(ctx, "cat "+shQuote(catalog.SnapshotMarkerPath(w)), nil)
 			if err != nil {
 				return fmt.Errorf("snapshot: verify completion marker: %w", err)
 			}
-			if res.ExitCode == 0 {
+			if res.ExitCode == 0 && strings.TrimSpace(res.Stdout) == w.DataDir {
 				return nil
 			}
 
@@ -498,10 +500,9 @@ func snapshotStep() Step {
 	}
 }
 
-// snapshotMarkerCmd records the moment the restore finished. The timestamp is
-// for a human reading the file; only its existence is checked.
+// snapshotMarkerCmd records which data dir the finished restore populated.
 func snapshotMarkerCmd(w catalog.WireConfig) string {
-	return writeMarkerCmd(`"$(date -u +%FT%TZ)"`, catalog.SnapshotMarkerPath(w))
+	return writeMarkerCmd(shQuote(w.DataDir), catalog.SnapshotMarkerPath(w))
 }
 
 // ownerMarkerCmd records which account chown -R finished for.
@@ -517,8 +518,8 @@ func ownerMarkerCmd(w catalog.WireConfig) string {
 // it stays root's.
 func writeMarkerCmd(value, target string) string {
 	dir := shQuote(catalog.MarkersDir)
-	return fmt.Sprintf(`umask 077 && mkdir -p %s && chmod 0700 %s && t=$(mktemp %s) && printf '%%s\n' %s > "$t" && mv -f "$t" %s`,
-		dir, dir, shQuote(catalog.MarkersDir+"/.tmp.XXXXXX"), value, shQuote(target))
+	return fmt.Sprintf(`install -d -m 0755 %s && umask 077 && mkdir -p %s && chmod 0700 %s && t=$(mktemp %s) && printf '%%s\n' %s > "$t" && mv -f "$t" %s`,
+		shQuote(path.Dir(catalog.MarkersDir)), dir, dir, shQuote(catalog.MarkersDir+"/.tmp.XXXXXX"), value, shQuote(target))
 }
 
 // ---------------------------------------------------------------------
