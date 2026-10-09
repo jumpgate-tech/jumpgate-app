@@ -3,6 +3,7 @@ package jobs
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -362,11 +363,91 @@ func TestQuestionTierIsTheOpenQuestions(t *testing.T) {
 	g := newRig(t)
 	rec, _ := g.start(t, g.a, `{"FailAt":"one"}`)
 	rec = g.advance(t, g.a, rec.ID)
-	if got := g.m.QuestionTier(rec.ID, rec.Question.ID); got != intent.TierRoutine {
-		t.Fatalf("tier %q", got)
+	if got, err := g.m.QuestionTier(rec.ID, rec.Question.ID); err != nil || got != intent.TierRoutine {
+		t.Fatalf("tier %q %v", got, err)
 	}
-	if got := g.m.QuestionTier(rec.ID, "nope"); got != intent.TierRoutine {
-		t.Fatalf("an unknown question's tier %q; Decide refuses it later", got)
+	if got, err := g.m.QuestionTier(rec.ID, "nope"); err != nil || got != intent.TierRoutine {
+		t.Fatalf("an unknown question's tier %q %v; Decide refuses it later", got, err)
+	}
+	if got, err := g.m.QuestionTier("0123456789abcdef", "nope"); err != nil || got != intent.TierRoutine {
+		t.Fatalf("no such job: %q %v; Decide refuses it later", got, err)
+	}
+}
+
+// M2: a manifest the early lookup cannot read is an error, never routine.
+func TestQuestionTierFailsClosed(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{"AskAt":"one"}`)
+	rec = g.advance(t, g.a, rec.ID)
+	path := filepath.Join(g.m.store.Dir(), rec.ID+".json")
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := g.m.QuestionTier(rec.ID, rec.Question.ID); err == nil {
+		t.Fatalf("a damaged manifest read as tier %q", got)
+	}
+}
+
+// M1: the early lookup never writes, even where a Load would save a repair.
+func TestQuestionTierNeverWrites(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{"AskAt":"one"}`)
+	rec = g.advance(t, g.a, rec.ID)
+	path := filepath.Join(g.m.store.Dir(), rec.ID+".json")
+	b, _ := os.ReadFile(path)
+	var m map[string]any
+	_ = json.Unmarshal(b, &m)
+	// One entry behind, chained onto the last entry's prev: the crash Load
+	// repairs, and saves.
+	last, _, err := g.m.store.ReadLog(rec.ID, rec.LogLen-1, 1)
+	if err != nil || len(last) != 1 {
+		t.Fatal(err)
+	}
+	m["logLen"] = float64(rec.LogLen - 1)
+	m["logHead"] = "0x" + hex.EncodeToString(last[0].Prev[:])
+	stale, _ := json.Marshal(m)
+	if err := os.WriteFile(path, stale, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.m.QuestionTier(rec.ID, rec.Question.ID); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(stale) {
+		t.Fatal("QuestionTier rewrote the manifest")
+	}
+	if _, err := g.m.store.Load(rec.ID); err != nil {
+		t.Fatalf("the stale manifest was not the repairable kind: %v", err)
+	}
+	if after, _ := os.ReadFile(path); string(after) == string(stale) {
+		t.Fatal("Load did not repair it, so the test proves nothing")
+	}
+}
+
+// Q5, where it is answered: Decide checks the tier of the very question it
+// answers, so a question that opened after the agent admitted the decision
+// is still guarded, and stays open when refused.
+func TestDecideChecksTheTierOfTheQuestionItAnswers(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{"AskAt":"one","AskTier":"approval"}`)
+	rec = g.advance(t, g.a, rec.ID)
+	if rec.Question == nil || rec.Question.Tier != intent.TierApproval {
+		t.Fatalf("job %+v", rec)
+	}
+	before := rec.LogLen
+	for name, check := range map[string]TierCheck{"routine only": routineOnly, "no check": nil} {
+		_, err := g.decideAs(t, g.a, rec.ID, rec.Question.ID, "go", check)
+		var r *Refusal
+		if !errors.As(err, &r) || r.Code != intent.ReasonUnauthorizedKind {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	after, _ := g.read(t, rec.ID)
+	if after.State != intent.JobNeedsDecision || after.Question == nil || after.Question.ID != rec.Question.ID || after.LogLen != before {
+		t.Fatalf("a refused decision changed the job: %+v", after)
+	}
+	var asked string
+	if _, err := g.decideAs(t, g.a, rec.ID, rec.Question.ID, "go", func(tier string) error { asked = tier; return nil }); err != nil || asked != intent.TierApproval {
+		t.Fatalf("with the tier covered: %v (checked %q)", err, asked)
 	}
 }
 

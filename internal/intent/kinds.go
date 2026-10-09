@@ -74,6 +74,12 @@ type AgentInfo struct {
 	ChainID      int      `json:"chainId,omitempty"` // the box's node; 0 before setup
 	Names        string   `json:"names,omitempty"`   // catalog names id of the box's node; "" is legacy
 	DataDir      string   `json:"dataDir,omitempty"` // the node's data dir, after any names marker
+	JWTPath      string   `json:"jwtPath,omitempty"` // the node's JWT secret, after any names marker
+	// SetUpError is why the box's node config could not be read, when a
+	// node.json or names.json exists but is refused (SetUp is then false).
+	// It is never set for a box with no node.json: a caller must not take a
+	// box whose config is broken for a new one.
+	SetUpError *Rejection `json:"setUpError,omitempty"`
 }
 
 // Logs limits.

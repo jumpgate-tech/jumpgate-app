@@ -74,17 +74,21 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, env intent.Envelo
 			Version: buildinfo.Version(), Address: a.Address().Hex(), LastSeq: a.replay.LastSeq(i.Controller),
 			PlanVersions: jobs.Versions(), Signers: len(p.Signers), SetUp: notSetUp == nil,
 		}
-		if notSetUp == nil {
+		switch {
+		case notSetUp == nil:
 			// After the names marker: a migrated box reports its new names
-			// and data dir even when its node.json is stale.
-			info.ChainID, info.Names, info.DataDir = w.ChainID, w.Names, w.DataDir
+			// and paths even when its node.json is stale.
+			info.ChainID, info.Names, info.DataDir, info.JWTPath = w.ChainID, w.Names, w.DataDir, w.JWTPath
+		case notSetUp.Code != intent.ReasonNotSetUp:
+			// A config that exists but is refused is not a new box.
+			info.SetUpError = &intent.Rejection{Code: notSetUp.Code, Message: notSetUp.Message}
 		}
 		return mustJSON(info), intent.StatusOK, nil
 	}
 	// A job kind needs no node set up: node.migrate-names reports a missing
 	// node.json itself, in its preflight.
 	if isJobKind(i.Kind) {
-		return a.dispatchJob(ctx, i, env, signers)
+		return a.dispatchJob(ctx, i, env, signers, p)
 	}
 
 	w, rej := a.loadNode()

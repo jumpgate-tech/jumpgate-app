@@ -149,6 +149,29 @@ func TestAnApprovalQuestionNeedsAnApprovalSignature(t *testing.T) {
 	}
 }
 
+// C1: a decision sent after the asking step finished but before its fold.
+// The early lookup sees no question and lets a routine signature through;
+// dispatchJob's reconcile then opens the approval question, and Decide must
+// still refuse it, leaving the question open. Its id is predictable
+// (<step>-<attempt>-<key>), so this is a race a routine key could win.
+func TestARoutineKeyCannotAnswerAnApprovalQuestionThatOpensLate(t *testing.T) {
+	r, run := jobsRig(t)
+	rec := ok[intent.JobRecord](t)(r.send(t, jobstest.TestKind, map[string]string{"AskAt": "one", "AskTier": intent.TierApproval}, nil))
+	_ = ok[intent.JobRecord](t)(r.send(t, intent.KindJobAdvance, intent.JobAdvancePayload{ID: rec.ID}, nil))
+	run.Wait() // the step has finished; nothing has folded it
+	if man, _ := jobs.LoadManifest(filepath.Join(r.dir, "jobs"), rec.ID); man.Question != nil {
+		t.Fatalf("the question opened before the decision was sent: %+v", man.Question)
+	}
+	rc, res := r.send(t, intent.KindJobDecide, intent.JobDecidePayload{ID: rec.ID, Decision: "one-0-pick", Option: "go"}, nil)
+	if got := rejection(t, rc, res).Code; got != intent.ReasonUnauthorizedKind {
+		t.Fatalf("a routine decision on a late approval question: %s", got)
+	}
+	job := ok[intent.JobReadResult](t)(r.send(t, intent.KindJobRead, intent.JobReadPayload{ID: rec.ID}, nil)).Job
+	if job.State != intent.JobNeedsDecision || job.Question == nil || job.Question.ID != "one-0-pick" || job.Question.Tier != intent.TierApproval {
+		t.Fatalf("the question did not stay open: %+v", job)
+	}
+}
+
 // A question tier this agent has no signers for is never satisfied: an
 // unknown tier fails closed rather than falling back to routine.
 func TestAQuestionOfAnUnknownTierCannotBeDecided(t *testing.T) {
@@ -173,7 +196,7 @@ func TestTheNamesMarkerWinsOverAStaleNodeJSON(t *testing.T) {
 	b, _ := json.Marshal(jobs.NamesMarker{Names: catalog.NamesCurrent, DataRootFrom: "/var/lib/valve-node-app", DataRootTo: "/var/lib/jumpgate-node"})
 	_ = os.WriteFile(r.a.cfg.NamesPath, b, 0o600)
 	info := ok[intent.AgentInfo](t)(r.send(t, intent.KindAgentInfo, struct{}{}, nil))
-	if info.Names != catalog.NamesCurrent || info.DataDir != "/var/lib/jumpgate-node/369" {
+	if info.Names != catalog.NamesCurrent || info.DataDir != "/var/lib/jumpgate-node/369" || info.JWTPath != "/var/lib/jumpgate-node/369/jwt.hex" {
 		t.Fatalf("agent.info %+v", info)
 	}
 	_, _ = r.send(t, intent.KindServiceAction, intent.ServiceActionPayload{Service: "exec", Action: "restart"}, nil)
@@ -194,6 +217,29 @@ func TestTheNamesMarkerWinsOverAStaleNodeJSON(t *testing.T) {
 		if strings.Contains(c, "/var/lib/valve-node-app") {
 			t.Fatalf("a command still names the legacy data root: %q", c)
 		}
+	}
+}
+
+// I2: agent.info tells a broken node config from no node at all, so a
+// controller never takes a box it cannot read for a new one.
+func TestAgentInfoReportsAConfigItRefuses(t *testing.T) {
+	r := newRig(t, false)
+	if info := ok[intent.AgentInfo](t)(r.send(t, intent.KindAgentInfo, struct{}{}, nil)); info.SetUp || info.SetUpError != nil {
+		t.Fatalf("no node.json: %+v", info)
+	}
+	if err := os.WriteFile(filepath.Join(r.dir, "node.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info := ok[intent.AgentInfo](t)(r.send(t, intent.KindAgentInfo, struct{}{}, nil))
+	if info.SetUp || info.SetUpError == nil || info.SetUpError.Code != intent.ReasonValidation {
+		t.Fatalf("a broken node.json: %+v", info)
+	}
+	r = newRig(t, true)
+	r.a.cfg.NamesPath = filepath.Join(r.dir, "names.json")
+	_ = os.WriteFile(r.a.cfg.NamesPath, []byte(`{"names":"other"}`), 0o600)
+	info = ok[intent.AgentInfo](t)(r.send(t, intent.KindAgentInfo, struct{}{}, nil))
+	if info.SetUp || info.SetUpError == nil || !strings.Contains(info.SetUpError.Message, "names.json") {
+		t.Fatalf("a foreign names.json: %+v", info)
 	}
 }
 
@@ -302,6 +348,10 @@ func TestStartingAJobChecksTheEnvelopeItLogs(t *testing.T) {
 	body := []byte(`{}`)
 	ctl := []eip712.Address{r.controller.Address()}
 	stranger, _ := signer.GenerateKey()
+	pol, err := LoadPolicy(filepath.Join(r.dir, "policy.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, good := startEnvelope(t, r, jobstest.TestKind, body, nil)
 	_, elsewhere := startEnvelope(t, r, jobstest.TestKind, body, func(i *intent.Intent) { i.Agent = eip712.Address{1} })
 	if rej := r.a.checkStart(jobstest.TestKind, body, good, ctl); rej != nil {
@@ -328,14 +378,14 @@ func TestStartingAJobChecksTheEnvelopeItLogs(t *testing.T) {
 	// dispatchJob runs the checks, and also refuses an envelope that is not
 	// the intent Handle admitted.
 	i, env := startEnvelope(t, r, jobstest.TestKind, body, nil)
-	if _, _, rej := r.a.dispatchJob(context.Background(), i, good, ctl); rej == nil || rej.Code != intent.ReasonInvalidPayload {
+	if _, _, rej := r.a.dispatchJob(context.Background(), i, good, ctl, pol); rej == nil || rej.Code != intent.ReasonInvalidPayload {
 		t.Errorf("another intent's envelope: %+v", rej)
 	}
-	if _, _, rej := r.a.dispatchJob(context.Background(), i, env, []eip712.Address{stranger.Address()}); rej == nil || rej.Code != intent.ReasonUnauthorizedKind {
+	if _, _, rej := r.a.dispatchJob(context.Background(), i, env, []eip712.Address{stranger.Address()}, pol); rej == nil || rej.Code != intent.ReasonUnauthorizedKind {
 		t.Errorf("an unsigned controller: %+v", rej)
 	}
 	iElsewhere, envElsewhere := startEnvelope(t, r, jobstest.TestKind, body, func(i *intent.Intent) { i.Agent = eip712.Address{1} })
-	if _, _, rej := r.a.dispatchJob(context.Background(), iElsewhere, envElsewhere, ctl); rej == nil || rej.Code != intent.ReasonWrongAgent {
+	if _, _, rej := r.a.dispatchJob(context.Background(), iElsewhere, envElsewhere, ctl, pol); rej == nil || rej.Code != intent.ReasonWrongAgent {
 		t.Errorf("a start for another box: %+v", rej)
 	}
 	if list, err := r.a.cfg.Jobs.List(); err != nil || len(list.Jobs) != 0 {

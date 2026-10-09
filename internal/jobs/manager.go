@@ -360,19 +360,45 @@ func (m *Manager) Advance(ctx context.Context, id string, step, attempt int, who
 	return man.JobRecord, nil
 }
 
-// QuestionTier is the tier the job's open question needs; routine when there
-// is no such question (Decide then refuses it as job_state).
-func (m *Manager) QuestionTier(id, decision string) string {
+// QuestionTier is the tier the job's open question needs, for an early
+// refusal before the agent admits a decision: routine when there is no such
+// job or question (Decide then refuses it as job_not_found or job_state). It
+// reads the manifest without the store, so it never writes (a Load could
+// save a crash repair), and a manifest it cannot read is an error the caller
+// must treat as the strictest tier. Decide enforces the tier itself.
+func (m *Manager) QuestionTier(id, decision string) (string, error) {
 	m.lock()
 	defer m.unlock()
-	man, err := m.store.Load(id)
-	if err != nil || man.Question == nil || man.Question.ID != decision || man.Question.Tier == "" {
-		return intent.TierRoutine
+	man, err := LoadManifest(m.store.Dir(), id)
+	if errors.Is(err, ErrNotFound) {
+		return intent.TierRoutine, nil
 	}
-	return man.Question.Tier
+	if err != nil {
+		return "", err
+	}
+	if man.Question == nil || man.Question.ID != decision {
+		return intent.TierRoutine, nil
+	}
+	return questionTier(man.Question), nil
 }
 
-func (m *Manager) Decide(ctx context.Context, id, decision, option string, who eip712.Address, signers []eip712.Address, env intent.Envelope) (intent.JobRecord, error) {
+func questionTier(q *intent.JobQuestion) string {
+	if q.Tier == "" {
+		return intent.TierRoutine
+	}
+	return q.Tier
+}
+
+// TierCheck reports whether a decision's signatures cover tier: nil when
+// they do, else why not.
+type TierCheck func(tier string) error
+
+// Decide answers the job's open question. authorised is checked against the
+// very question answered, under the manager's lock: a question can open
+// between the agent's admission of the decision and this call (a fold by
+// this request's own reconcile, or by the loop), so a tier checked earlier
+// proves nothing about it (Q5). A nil authorised refuses every decision.
+func (m *Manager) Decide(ctx context.Context, id, decision, option string, who eip712.Address, signers []eip712.Address, authorised TierCheck, env intent.Envelope) (intent.JobRecord, error) {
 	m.lock()
 	defer m.unlock()
 	man, plan, err := m.load(id)
@@ -392,6 +418,13 @@ func (m *Manager) Decide(ctx context.Context, id, decision, option string, who e
 			open = q.ID
 		}
 		return intent.JobRecord{}, refuse(intent.ReasonJobState, fmt.Sprintf("job %s is not waiting on decision %q (open: %s)", id, decision, open))
+	}
+	tier := questionTier(q)
+	if authorised == nil {
+		return intent.JobRecord{}, refuse(intent.ReasonUnauthorizedKind, fmt.Sprintf("decision %s needs a %s signature, and none was checked", decision, tier))
+	}
+	if err := authorised(tier); err != nil {
+		return intent.JobRecord{}, refuse(intent.ReasonUnauthorizedKind, fmt.Sprintf("decision %s needs a %s signature: %v", decision, tier, err))
 	}
 	known := false
 	for _, o := range q.Options {

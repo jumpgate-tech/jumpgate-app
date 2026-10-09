@@ -72,14 +72,18 @@ func (r *stepRunner) lose(unit string) {
 // twoSteps is the engine's test plan. Inputs say which step fails or asks.
 func twoSteps(t *testing.T) Plan {
 	t.Helper()
-	type in struct{ FailAt, AskAt string }
+	type in struct{ FailAt, AskAt, AskTier string }
 	step := func(id string) StepDef {
 		return StepDef{ID: id, Title: "Step " + id, AbortNote: "nothing after " + id + " ran",
 			Run: func(ctx context.Context, env Env) (Outcome, error) {
 				var i in
 				_ = json.Unmarshal(env.Inputs, &i)
 				if i.AskAt == id && env.Answer == nil {
-					return Outcome{Ask: &intent.JobQuestion{Key: "pick", Prompt: "pick one", Tier: intent.TierRoutine,
+					tier := intent.TierRoutine
+					if i.AskTier != "" {
+						tier = i.AskTier
+					}
+					return Outcome{Ask: &intent.JobQuestion{Key: "pick", Prompt: "pick one", Tier: tier,
 						Options: []intent.JobOption{{ID: "go", Label: "Go on"}, {ID: intent.OptAbort, Label: "Stop"}}}}, nil
 				}
 				if i.FailAt == id && env.Answer == nil {
@@ -166,8 +170,22 @@ func (g *rig) lease(t *testing.T, k *signer.Key, id, op string) (intent.JobRecor
 
 func (g *rig) decide(t *testing.T, k *signer.Key, id, decision, option string) (intent.JobRecord, error) {
 	t.Helper()
-	return g.m.Decide(context.Background(), id, decision, option, k.Address(), []eip712.Address{k.Address()},
+	return g.decideAs(t, k, id, decision, option, routineOnly)
+}
+
+// decideAs is decide with the tier check the agent would pass.
+func (g *rig) decideAs(t *testing.T, k *signer.Key, id, decision, option string, check TierCheck) (intent.JobRecord, error) {
+	t.Helper()
+	return g.m.Decide(context.Background(), id, decision, option, k.Address(), []eip712.Address{k.Address()}, check,
 		g.sign(t, k, intent.KindJobDecide, intent.JobDecidePayload{ID: id, Decision: decision, Option: option}))
+}
+
+// routineOnly is the tier check of a decision signed by one routine key.
+func routineOnly(tier string) error {
+	if tier != intent.TierRoutine {
+		return fmt.Errorf("only a routine signature")
+	}
+	return nil
 }
 
 // advance moves the job one step as the lease holder would, then reconciles.

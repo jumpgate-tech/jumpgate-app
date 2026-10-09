@@ -90,7 +90,7 @@ func (a *Agent) checkStart(kind string, inputs []byte, env intent.Envelope, sign
 
 // dispatchJob answers the job kinds. Reconcile runs first, so every answer
 // reflects units that finished since the last pass.
-func (a *Agent) dispatchJob(ctx context.Context, i intent.Intent, env intent.Envelope, signers []eip712.Address) ([]byte, uint8, *Reject) {
+func (a *Agent) dispatchJob(ctx context.Context, i intent.Intent, env intent.Envelope, signers []eip712.Address, p Policy) ([]byte, uint8, *Reject) {
 	m := a.cfg.Jobs
 	if m == nil {
 		return nil, 0, reject(intent.ReasonJobsUnsupported, "this agent runs without durable jobs (no job store)")
@@ -151,7 +151,7 @@ func (a *Agent) dispatchJob(ctx context.Context, i intent.Intent, env intent.Env
 		if rej != nil {
 			return nil, 0, rej
 		}
-		rec, err := m.Decide(ctx, pl.ID, pl.Decision, pl.Option, i.Controller, signers, env)
+		rec, err := m.Decide(ctx, pl.ID, pl.Decision, pl.Option, i.Controller, signers, decisionCheck(p, i.Controller, signers), env)
 		if err != nil {
 			return jobFailure(err)
 		}

@@ -225,7 +225,12 @@ func agentRun(stateDir, configDir string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go a.RunJobs(ctx)
+	// The reconcile loop writes to the job store, so it must end before the
+	// deferred mgr.Close above releases it. Defers run last first: this one
+	// stops the loop and waits for it, then the store closes.
+	jobsDone := make(chan struct{})
+	go func() { defer close(jobsDone); a.RunJobs(ctx) }()
+	defer func() { stop(); <-jobsDone }()
 	fmt.Fprintf(os.Stderr, "jumpgate agent %s listening on %s\n", a.Address().Hex(), agentclient.DefaultSocket)
 	return agent.Serve(ctx, a, ln)
 }

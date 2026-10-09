@@ -76,10 +76,11 @@ func (r *Runner) Lose(unit string) {
 const TestKind = "test.steps"
 
 // RegisterPlan registers test.steps/1: steps one and two, failing or asking at
-// the step its inputs name, once per job (an answer or a retry passes).
+// the step its inputs name, once per job (an answer or a retry passes). A
+// question is of tier AskTier, routine when the inputs name none.
 func RegisterPlan(t testing.TB) {
 	t.Helper()
-	type in struct{ FailAt, AskAt string }
+	type in struct{ FailAt, AskAt, AskTier string }
 	step := func(id string) jobs.StepDef {
 		return jobs.StepDef{ID: id, Title: "Step " + id, AbortNote: "test",
 			Run: func(ctx context.Context, env jobs.Env) (jobs.Outcome, error) {
@@ -89,7 +90,11 @@ func RegisterPlan(t testing.TB) {
 					fmt.Fprintln(env.Out, "running", id)
 				}
 				if i.AskAt == id && env.Answer == nil {
-					return jobs.Outcome{Ask: &intent.JobQuestion{Key: "pick", Prompt: "pick one", Tier: intent.TierRoutine,
+					tier := intent.TierRoutine
+					if i.AskTier != "" {
+						tier = i.AskTier
+					}
+					return jobs.Outcome{Ask: &intent.JobQuestion{Key: "pick", Prompt: "pick one", Tier: tier,
 						Options: []intent.JobOption{{ID: "go", Label: "Go on"}, {ID: intent.OptAbort, Label: "Stop"}}}}, nil
 				}
 				if i.FailAt == id && env.Answer == nil {

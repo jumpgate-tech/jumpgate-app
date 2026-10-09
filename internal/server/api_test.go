@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -23,6 +24,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/logwatch"
 	"github.com/valve-tech/jumpgate/internal/monitor"
 	"github.com/valve-tech/jumpgate/internal/ops"
@@ -1838,8 +1840,8 @@ func TestSetupAsksAPairedBoxForItsNames(t *testing.T) {
 		wantNames string
 		wantDir   string
 	}{
-		{"legacy box", &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369"}, catalog.NamesLegacy, "/var/lib/valve-node-app/369"},
-		{"migrated box", &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", Names: catalog.NamesCurrent, DataDir: "/var/lib/jumpgate-node/369"}, catalog.NamesCurrent, "/var/lib/jumpgate-node/369"},
+		{"legacy box", &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369", JWTPath: "/var/lib/valve-node-app/369/secrets/jwt.hex"}, catalog.NamesLegacy, "/var/lib/valve-node-app/369"},
+		{"migrated box", &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", Names: catalog.NamesCurrent, DataDir: "/var/lib/jumpgate-node/369", JWTPath: "/var/lib/jumpgate-node/369/secrets/jwt.hex"}, catalog.NamesCurrent, "/var/lib/jumpgate-node/369"},
 		{"no node yet", nil, catalog.NamesCurrent, "/var/lib/jumpgate-node/369"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -1864,6 +1866,59 @@ func TestSetupAsksAPairedBoxForItsNames(t *testing.T) {
 			if got.Names != c.wantNames || got.DataDir != c.wantDir {
 				t.Fatalf("setup would use names %q dir %s", got.Names, got.DataDir)
 			}
+			// M4: the box's own JWT path is kept, not rebuilt from the default.
+			if c.node != nil && got.JWTPath != c.node.JWTPath {
+				t.Fatalf("setup would use jwt %s, the box has %s", got.JWTPath, c.node.JWTPath)
+			}
 		})
+	}
+}
+
+// I1 (J10): a paired box's agent is the authority on its names. A controller
+// whose copy predates a migration it missed must not render legacy units.
+func TestSetupTrustsThePairedBoxOverAStaleWire(t *testing.T) {
+	requireAgentPeer(t)
+	var srv *Server
+	stale := &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369", JWTPath: "/var/lib/valve-node-app/369/jwt.hex"}
+	pairedBoxWith(t, nopExec{}, pairedOpts{onServer: func(s *Server) { srv = s }, target: func(tg *config.Target) { tg.Wire = stale }})
+	b, _ := json.Marshal(catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", Names: catalog.NamesCurrent,
+		DataDir: "/var/lib/jumpgate-node/369", JWTPath: "/var/lib/jumpgate-node/369/jwt.hex"})
+	if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), "node.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil || cfg.Targets[0].Wire == nil || cfg.Targets[0].Wire.Names != catalog.NamesLegacy {
+		t.Fatalf("the controller must keep the stale legacy wire: %v", err)
+	}
+	existing, err := srv.setupExisting(context.Background(), cfg, cfg.Targets[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := setupWire(catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse"}, existing)
+	if got.Names != catalog.NamesCurrent || got.DataDir != "/var/lib/jumpgate-node/369" || got.JWTPath != "/var/lib/jumpgate-node/369/jwt.hex" {
+		t.Fatalf("setup would use names %q dir %s jwt %s", got.Names, got.DataDir, got.JWTPath)
+	}
+}
+
+// I2: a box whose node config exists but is refused is not a new box: setup
+// refuses, with the box's reason, rather than give it the new names.
+func TestSetupRefusesABoxWhoseNodeConfigIsBroken(t *testing.T) {
+	requireAgentPeer(t)
+	var srv *Server
+	pairedBoxWith(t, nopExec{}, pairedOpts{onServer: func(s *Server) { srv = s }})
+	if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), "node.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing, err := srv.setupExisting(context.Background(), cfg, cfg.Targets[0])
+	var rej *agentRejected
+	if !errors.As(err, &rej) || rej.Code != intent.ReasonValidation || existing != nil {
+		t.Fatalf("setup on a broken node config: %v %+v", err, existing)
+	}
+	if status, e := apiErrorFor(err); status != http.StatusConflict || e.Reason != intent.ReasonValidation {
+		t.Fatalf("answered %d %+v", status, e)
 	}
 }

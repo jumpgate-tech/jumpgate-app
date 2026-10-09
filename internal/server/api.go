@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -1069,27 +1070,42 @@ func setupWire(req catalog.WireConfig, existing *catalog.WireConfig) catalog.Wir
 	return w
 }
 
-// setupExisting is the wire setup keeps a box's names and data dir from: the
-// controller's own copy, or, when it keeps none, what a paired box's agent
-// reports in agent.info (a box paired from another controller, or a config
-// restored from before the box was set up). Review Focus 4: without this a
-// legacy box would be treated as new, given the jumpgate-node names, and set
-// up with units for an account that does not exist. A box that cannot answer
-// refuses the setup rather than guess.
+// setupExisting is the wire setup keeps a box's names and paths from. For a
+// paired box it is always what the box's agent reports in agent.info, after
+// the names marker (D-J10): the controller's copy may predate a migration it
+// missed, or be absent (a box paired from another controller, or a config
+// restored from before the box was set up), and setup renders units as root
+// from these names. Review Focus 4: without this a legacy box would be
+// treated as new, given the jumpgate-node names, and set up with units for an
+// account that does not exist. A box that cannot answer, or whose node config
+// it refuses, refuses the setup rather than guess. An unpaired target has
+// only the controller's copy.
 func (s *Server) setupExisting(ctx context.Context, cfg config.Config, t config.Target) (*catalog.WireConfig, error) {
-	if t.Wire != nil || t.Agent == nil {
+	if t.Agent == nil {
 		return t.Wire, nil
 	}
 	info, err := decodeResult[intent.AgentInfo](s.agentResult(ctx, cfg, t, intent.KindAgentInfo, struct{}{}))
 	if err != nil {
 		return nil, fmt.Errorf("ask the box which names its node uses: %w", err)
 	}
-	if !info.SetUp {
-		return nil, nil
+	if info.SetUpError != nil {
+		return nil, &agentRejected{*info.SetUpError}
 	}
-	// An agent from before sub-project 2 sends no names: every box it set up
-	// is legacy, which Names "" already says.
-	return &catalog.WireConfig{ChainID: info.ChainID, Names: info.Names, DataDir: info.DataDir}, nil
+	var box *catalog.WireConfig
+	if info.SetUp {
+		// An agent from before sub-project 2 sends no names: every box it
+		// set up is legacy, which Names "" already says.
+		box = &catalog.WireConfig{ChainID: info.ChainID, Names: info.Names, DataDir: info.DataDir, JWTPath: info.JWTPath}
+	}
+	if w := t.Wire; w != nil && (box == nil || w.ChainID != box.ChainID || w.Names != box.Names || w.DataDir != box.DataDir || w.JWTPath != box.JWTPath) {
+		got := "no node"
+		if box != nil {
+			got = fmt.Sprintf("chain %d, names %q, data dir %s, jwt %s", box.ChainID, box.Names, box.DataDir, box.JWTPath)
+		}
+		log.Printf("jumpgate: setup %s: the controller's copy of the node config (chain %d, names %q, data dir %s, jwt %s) is stale; the box reports %s, and setup uses the box's",
+			t.ID, w.ChainID, w.Names, w.DataDir, w.JWTPath, got)
+	}
+	return box, nil
 }
 
 func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
