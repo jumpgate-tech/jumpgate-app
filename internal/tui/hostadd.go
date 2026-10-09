@@ -66,9 +66,7 @@ var (
 // key is only ever confirmed by the probe ID and fingerprint the person was
 // shown.
 type addFlow struct {
-	gen    uint64
-	ctx    context.Context
-	cancel context.CancelFunc
+	visit // the hosts screen's visit for this flow, copied in by startFlow
 
 	step    addStep
 	fields  []textinput.Model
@@ -211,7 +209,7 @@ func (f *addFlow) whose(hostPort string) string {
 func (f *addFlow) update(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case probeMsg:
-		if msg.gen != f.gen || f.step != stepProbing {
+		if !f.current(msg.gen) || f.step != stepProbing {
 			return nil, false
 		}
 		if msg.err != nil {
@@ -237,7 +235,7 @@ func (f *addFlow) update(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		return nil, false
 	case hostKeyConfirmedMsg:
-		if msg.gen != f.gen || !f.asked {
+		if !f.current(msg.gen) || !f.asked {
 			return nil, false
 		}
 		f.asked = false
@@ -247,7 +245,7 @@ func (f *addFlow) update(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		return f.probe(a), false // the next hop, or the same host if it still is not recorded: ask again
 	case targetAddedMsg:
-		if msg.gen != f.gen || !f.adding {
+		if !f.current(msg.gen) || !f.adding {
 			return nil, false
 		}
 		f.adding = false
@@ -259,7 +257,7 @@ func (f *addFlow) update(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		return f.pair(a), false
 	case pairMsg:
-		if msg.gen != f.gen || f.step != stepPairing {
+		if !f.current(msg.gen) || f.step != stepPairing {
 			return nil, false
 		}
 		if msg.ch != nil {

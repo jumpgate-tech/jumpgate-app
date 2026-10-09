@@ -101,3 +101,29 @@ func TestOpenTrustedWritableResolvesALinkOnce(t *testing.T) {
 	}
 	f.Close()
 }
+
+// The returned file's Name is the resolved path that was checked, which a
+// caller passes on (to an ssh child) instead of looking the link up again.
+func TestOpenTrustedWritableNamesTheResolvedPath(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.WriteFile(real, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenTrustedWritable(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if f.Name() != want {
+		t.Fatalf("Name() = %q, want the resolved %q", f.Name(), want)
+	}
+}

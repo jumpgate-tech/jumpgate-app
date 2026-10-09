@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -66,10 +65,8 @@ type (
 // the person leaves the box.
 type hostScreen struct {
 	id     string
-	gen    uint64
+	visit  // gen is the open's number (App.hostGen); ctx holds the streams
 	tab    int
-	ctx    context.Context
-	cancel context.CancelFunc
 	loaded map[string]bool
 
 	status     api.NodeStatus
@@ -108,11 +105,11 @@ type hostScreen struct {
 // openHost shows a box's detail, closing any open one.
 func (a *App) openHost(id string) tea.Cmd {
 	a.closeDetail()
-	ctx, cancel := context.WithCancel(a.ctx)
 	a.hostGen++
-	h := &hostScreen{id: id, gen: a.hostGen, ctx: ctx, cancel: cancel, loaded: map[string]bool{}, follow: true, logFilter: newLogFilter()}
+	h := &hostScreen{id: id, loaded: map[string]bool{}, follow: true, logFilter: newLogFilter()}
+	h.open(a.hostGen, a.ctx)
 	a.detail, a.sel = h, id
-	return tea.Batch(h.watchStatus(a.be.WatchStatus(ctx, id)), h.load(a, h.tabName(a)))
+	return tea.Batch(h.watchStatus(a.be.WatchStatus(h.ctx, id)), h.load(a, h.tabName(a)))
 }
 
 // closeDetail leaves the open box and stops its streams.
@@ -194,7 +191,7 @@ func (h *hostScreen) keys() []key.Binding {
 func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case statusMsg:
-		if msg.id != h.id || msg.gen != h.gen {
+		if msg.id != h.id || !h.current(msg.gen) {
 			return nil
 		}
 		h.statusConn = msg.u.State
@@ -208,7 +205,7 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 		return h.watchStatus(msg.ch)
 	case diskMsg:
-		if msg.id != h.id || msg.gen != h.gen {
+		if msg.id != h.id || !h.current(msg.gen) {
 			return nil
 		}
 		h.measuring = false
@@ -219,7 +216,7 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case endpointsMsg:
-		if msg.id != h.id || msg.gen != h.gen {
+		if msg.id != h.id || !h.current(msg.gen) {
 			return nil
 		}
 		if msg.err != nil {
@@ -229,7 +226,7 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case firewallMsg:
-		if msg.id != h.id || msg.gen != h.gen {
+		if msg.id != h.id || !h.current(msg.gen) {
 			return nil
 		}
 		if msg.err != nil {
@@ -239,13 +236,13 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case logsMsg:
-		if msg.id != h.id || msg.gen != h.gen {
+		if msg.id != h.id || !h.current(msg.gen) {
 			return nil
 		}
 		h.applyLogs(msg.u)
 		return h.watchLogs(msg.ch)
 	case disclosureMsg:
-		if msg.id != h.id || msg.gen != h.gen {
+		if msg.id != h.id || !h.current(msg.gen) {
 			return nil
 		}
 		if m, ok := a.modal.(*explainModal); ok && m.h == h {
@@ -253,7 +250,7 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case explainMsg:
-		if msg.id != h.id || msg.gen != h.gen {
+		if msg.id != h.id || !h.current(msg.gen) {
 			return nil
 		}
 		if m, ok := a.modal.(*explainModal); ok && m.h == h {
@@ -266,7 +263,7 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case serviceMsg:
-		if msg.id != h.id || msg.gen != h.gen {
+		if msg.id != h.id || !h.current(msg.gen) {
 			return nil
 		}
 		svc, id := sanitizeLine(msg.svc), sanitizeLine(msg.id)
@@ -282,12 +279,12 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		a.flash = h.svcLast
 		return nil
 	case sshCmdMsg:
-		if msg.id != h.id || msg.gen != h.gen {
+		if msg.id != h.id || !h.current(msg.gen) {
 			return nil
 		}
 		return h.runShell(a, msg)
 	case shellDoneMsg:
-		if msg.id != h.id || msg.gen != h.gen {
+		if msg.id != h.id || !h.current(msg.gen) {
 			return nil
 		}
 		if msg.err != nil {

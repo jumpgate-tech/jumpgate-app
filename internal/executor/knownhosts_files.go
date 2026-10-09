@@ -66,14 +66,19 @@ func OpenSSHKnownHosts(home string) []string {
 // which cannot read the in-memory snapshot. The child re-opens the system
 // file by name, so unlike Strict it reads whatever is there then; the check
 // it passed means only a trusted account could have changed it since.
+//
+// The path given is the opened file's own name, which the trust check set to
+// the resolved path it judged, not a second lookup of systemKnownHosts: a
+// symlink retargeted after the check cannot send ssh to a file never checked.
 func OpenSSHKnownHostsPaths(home string) []string {
 	files := []string{filepath.Join(home, ".ssh", "known_hosts")}
 	f := openTrustedSystemKnownHosts()
 	if f == nil {
 		return files
 	}
+	checked := f.Name()
 	f.Close()
-	return append(files, systemKnownHosts)
+	return append(files, checked)
 }
 
 // openTrustedSystemKnownHosts opens the system-wide file when it exists and
@@ -120,4 +125,12 @@ func memKnownHostsBytes(entry string) ([]byte, bool) {
 	defer memMu.Unlock()
 	b, ok := memKnownHosts[entry]
 	return b, ok
+}
+
+// SetSystemKnownHostsForTest points the system-wide known_hosts at path, for
+// tests in other packages, and returns the function that restores it.
+func SetSystemKnownHostsForTest(path string) (restore func()) {
+	old := systemKnownHosts
+	systemKnownHosts = path
+	return func() { systemKnownHosts = old }
 }

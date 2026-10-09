@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -51,9 +50,7 @@ type signersScreen struct {
 
 	canRestart bool // Options.Restart is set; synced from the App on every update and view
 
-	gen    uint64 // counts loads; see controllerMsg
-	ctx    context.Context
-	cancel context.CancelFunc // ends commands still running for this visit
+	visit // gen counts loads (see controllerMsg); ctx ends commands still running for this visit
 }
 
 func (s *signersScreen) capturing() bool { return false }
@@ -69,18 +66,8 @@ func (s *signersScreen) keys() []key.Binding {
 // begin starts a visit or a reload: earlier commands are cancelled and their
 // replies, if any still arrive, are dropped.
 func (s *signersScreen) begin(a *App) {
-	s.end()
-	s.gen++
+	s.visit.begin(a.ctx)
 	s.checks = nil
-	s.ctx, s.cancel = context.WithCancel(a.ctx)
-}
-
-// end cancels the commands of this visit.
-func (s *signersScreen) end() {
-	if s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
-	}
 }
 
 func (s *signersScreen) load(a *App) tea.Cmd {
@@ -115,10 +102,9 @@ func (s *signersScreen) update(a *App, msg tea.Msg) tea.Cmd {
 	case enterMsg:
 		return s.load(a)
 	case leaveMsg:
-		s.end()
-		s.gen++ // replies still in flight are for a visit that is over
+		s.invalidate() // replies still in flight are for a visit that is over
 	case controllerMsg:
-		if msg.gen != s.gen {
+		if !s.current(msg.gen) {
 			return nil
 		}
 		s.ctl, s.ctlHas, s.ctlErr = msg.v, msg.err == nil, msg.err
@@ -128,7 +114,7 @@ func (s *signersScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			s.cursor = min(s.cursor, max(len(s.paired())-1, 0))
 		}
 	case checkMsg:
-		if msg.gen != s.gen {
+		if !s.current(msg.gen) {
 			return nil
 		}
 		if msg.err != nil {

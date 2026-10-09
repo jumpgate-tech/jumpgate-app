@@ -54,9 +54,7 @@ type settingsScreen struct {
 	keyInput       textinput.Model
 	editingKey     bool
 
-	gen    uint64
-	ctx    context.Context
-	cancel context.CancelFunc
+	visit
 }
 
 func (s *settingsScreen) capturing() bool { return s.editingKey }
@@ -69,16 +67,12 @@ func (s *settingsScreen) keys() []key.Binding {
 // begin starts a visit: earlier commands end and their replies are dropped.
 func (s *settingsScreen) begin(a *App) {
 	s.end()
-	s.gen++
-	s.ctx, s.cancel = context.WithCancel(a.ctx)
+	s.visit.begin(a.ctx)
 }
 
 // end cancels the visit's commands and forgets any key being typed.
 func (s *settingsScreen) end() {
-	if s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
-	}
+	s.visit.end()
 	s.stopEditing()
 }
 
@@ -387,7 +381,7 @@ func (s *settingsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		s.end()
 		s.gen++ // replies still in flight are for a visit that is over
 	case settingsMsg:
-		if msg.gen != s.gen {
+		if !s.current(msg.gen) {
 			return nil
 		}
 		if msg.err != nil {
@@ -396,7 +390,7 @@ func (s *settingsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 		s.settings, s.settingsHas = msg.s, true
 	case webOpenedMsg:
-		if msg.gen != s.gen {
+		if !s.current(msg.gen) {
 			return nil
 		}
 		if msg.err != nil {

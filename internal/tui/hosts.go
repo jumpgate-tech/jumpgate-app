@@ -45,7 +45,7 @@ type hostsScreen struct {
 	err    error
 	cursor int
 	flow   *addFlow
-	gen    uint64 // counts flows: a reply for an earlier flow is dropped
+	visit  // counts flows: a reply for an earlier flow is dropped
 }
 
 func (s *hostsScreen) capturing() bool { return s.flow != nil }
@@ -57,9 +57,8 @@ func (s *hostsScreen) keys() []key.Binding {
 // startFlow opens a new add or pair conversation, ending any earlier one.
 func (s *hostsScreen) startFlow(a *App, f *addFlow) {
 	s.endFlow()
-	s.gen++
-	f.gen = s.gen
-	f.ctx, f.cancel = context.WithCancel(a.ctx)
+	s.visit.begin(a.ctx)
+	f.visit = s.visit
 	s.flow = f
 }
 

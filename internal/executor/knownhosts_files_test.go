@@ -193,8 +193,12 @@ func TestOpenSSHKnownHostsPathsMatchTheStrictSet(t *testing.T) {
 	if err := os.WriteFile(sys, []byte("host ssh-ed25519 AAAA\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	openTrustedKnownHosts = func(p string) (*os.File, error) { return os.Open(p) }
-	if got := OpenSSHKnownHostsPaths(home); !slices.Equal(got, []string{user, sys}) {
+	openTrustedKnownHosts = fsperm.OpenTrustedWritable
+	resolved, err := filepath.EvalSymlinks(sys) // ssh gets the resolved path (a temp dir may itself sit behind a link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := OpenSSHKnownHostsPaths(home); !slices.Equal(got, []string{user, resolved}) {
 		t.Fatalf("with a trusted system file: %v", got)
 	}
 	if n := len(OpenSSHKnownHosts(home)); n != 2 {
@@ -206,5 +210,77 @@ func TestOpenSSHKnownHostsPathsMatchTheStrictSet(t *testing.T) {
 	}
 	if n := len(OpenSSHKnownHosts(home)); n != 1 {
 		t.Fatalf("strict set has %d entries", n)
+	}
+}
+
+// The path handed to an ssh child is the file the trust check judged: when the
+// system file is a symlink, ssh gets the resolved target, not the link.
+func TestOpenSSHKnownHostsPathsGivesSSHTheResolvedPath(t *testing.T) {
+	home := t.TempDir()
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real_known_hosts")
+	if err := os.WriteFile(real, []byte("h ssh-ed25519 AAAA\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "ssh_known_hosts")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("cannot symlink here: %v", err)
+	}
+	oldSys := systemKnownHosts
+	systemKnownHosts = link
+	t.Cleanup(func() { systemKnownHosts = oldSys })
+
+	want, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := OpenSSHKnownHostsPaths(home)
+	if len(got) != 2 || got[1] != want {
+		t.Fatalf("got %q, want the resolved %q", got, want)
+	}
+}
+
+// The path handed to ssh comes from the file the trust check opened, not from
+// a second lookup of the link: retargeting the link after the check passed
+// does not change it.
+func TestOpenSSHKnownHostsPathsIgnoresARetargetAfterTheCheck(t *testing.T) {
+	home := t.TempDir()
+	dir := t.TempDir()
+	checked := filepath.Join(dir, "checked_known_hosts")
+	other := filepath.Join(dir, "other_known_hosts")
+	for _, p := range []string{checked, other} {
+		if err := os.WriteFile(p, []byte("h ssh-ed25519 AAAA\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(dir, "ssh_known_hosts")
+	if err := os.Symlink(checked, link); err != nil {
+		t.Skipf("cannot symlink here: %v", err)
+	}
+	oldSys, oldOpen := systemKnownHosts, openTrustedKnownHosts
+	systemKnownHosts = link
+	t.Cleanup(func() { systemKnownHosts, openTrustedKnownHosts = oldSys, oldOpen })
+	openTrustedKnownHosts = func(p string) (*os.File, error) {
+		f, err := fsperm.OpenTrustedWritable(p)
+		if err != nil {
+			return nil, err
+		}
+		// The check has passed; now point the link somewhere else.
+		if err := os.Remove(link); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(other, link); err != nil {
+			t.Fatal(err)
+		}
+		return f, nil
+	}
+
+	want, err := filepath.EvalSymlinks(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := OpenSSHKnownHostsPaths(home)
+	if len(got) != 2 || got[1] != want {
+		t.Fatalf("got %q, want the checked %q", got, want)
 	}
 }

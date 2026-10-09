@@ -511,3 +511,59 @@ func TestExplainSaysWhereTheLinesWent(t *testing.T) {
 		})
 	}
 }
+
+// bottomLine is the newest line in the log window.
+func bottomLine(a *App, h *hostScreen) string {
+	parts := strings.Split(logWindow(a, h), "|")
+	last := parts[len(parts)-1]
+	return last[strings.Index(last, "line "):]
+}
+
+// With follow off, changing the filter keeps the line at the bottom of the
+// view where it was, or the nearest older line that still shows.
+func TestLogsFilterChangeKeepsTheFrozenLineAnchored(t *testing.T) {
+	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
+	h, _ := scrollHost(t, 30)
+	h.follow, h.logBack = false, 5 // bottom is "line 24"
+	if got := bottomLine(a, h); got != "line 24" {
+		t.Fatalf("setup: bottom %q", got)
+	}
+	h.logsKey(a, tea.KeyPressMsg{Code: '/', Text: "/"})
+	if !h.logEditing {
+		t.Fatal("not editing")
+	}
+	h.logsKey(a, tea.KeyPressMsg{Code: '1', Text: "1"}) // "line 24" no longer shows
+	if got := bottomLine(a, h); got != "line 21" {
+		t.Fatalf("filter 1: bottom %q, want the nearest older line, 21", got)
+	}
+	h.logsKey(a, tea.KeyPressMsg{Code: '5', Text: "5"}) // "15"
+	if got := bottomLine(a, h); got != "line 15" {
+		t.Fatalf("filter 15: bottom %q", got)
+	}
+	h.logsKey(a, tea.KeyPressMsg{Code: tea.KeyEscape}) // clears the filter
+	if got := bottomLine(a, h); got != "line 15" {
+		t.Fatalf("cleared: bottom %q, want 15 kept", got)
+	}
+}
+
+func TestLogsLevelChangeKeepsTheFrozenLineAnchored(t *testing.T) {
+	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
+	h := &hostScreen{follow: true, logFilter: newLogFilter()}
+	var hits []api.LogHit
+	for i := 0; i < 60; i++ {
+		sev := "info"
+		if i%2 == 0 {
+			sev = "warn"
+		}
+		hits = append(hits, hit(i, "x-exec.service", sev, fmt.Sprintf("line %d", i)))
+	}
+	h.applyLogs(liveLogs(hits...))
+	h.follow, h.logBack = false, 18 // bottom is "line 41"
+	if got := bottomLine(a, h); got != "line 41" {
+		t.Fatalf("setup: bottom %q", got)
+	}
+	h.logsKey(a, tea.KeyPressMsg{Code: '!', Text: "!"}) // warn and above
+	if got := bottomLine(a, h); got != "line 40" {
+		t.Fatalf("level warn: bottom %q, want 40", got)
+	}
+}
