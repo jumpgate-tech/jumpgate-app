@@ -101,13 +101,26 @@ func Verify(agent eip712.Address, job string, entries []Entry, start uint64, pre
 	return prev, nil
 }
 
+// JobIDFor is the id of the job a creating intent starts: the first 8 bytes of
+// the intent's EIP-712 digest, in hex (16 characters). The id commits to the
+// signed request that created the job, so a created entry can be checked
+// against the job it claims to start, and the intent's random nonce keeps ids
+// unique.
+func JobIDFor(in intent.Intent) (string, error) {
+	d, err := in.Digest()
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(d[:8]), nil
+}
+
 // VerifyIntents checks every entry that records a request: the intent was
 // addressed to this agent, the controller it names signed it over exactly the
 // payload recorded, and (for a later request) the payload names this job.
 // Without those bindings a genuine intent signed for another agent or job
 // would pass and wrongly credit its controller. A created entry's payload
-// (node.migrate-names) carries no job id, so for it the agent binding and the
-// log's own signature are what tie it to the job. The agent checked all this
+// (node.migrate-names) carries no job id; its intent must instead be the one
+// the job id is derived from (JobIDFor). The agent checked all this
 // when it admitted the intent; a controller checks it again because the log
 // is how it learns who asked for what.
 func VerifyIntents(agent eip712.Address, job string, entries []Entry) error {
@@ -125,6 +138,11 @@ func VerifyIntents(agent eip712.Address, job string, entries []Entry) error {
 		}
 		if in.Agent != agent {
 			return fmt.Errorf("%w: entry %d: the intent was addressed to agent %s", ErrBroken, e.Index, in.Agent.Hex())
+		}
+		if e.Kind == KindCreated {
+			if id, err := JobIDFor(in); err != nil || id != job {
+				return fmt.Errorf("%w: entry %d: the creating intent is not this job's", ErrBroken, e.Index)
+			}
 		}
 		if e.Kind == KindIntent {
 			var p struct {

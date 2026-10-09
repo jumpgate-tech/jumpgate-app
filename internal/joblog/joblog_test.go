@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -154,6 +155,51 @@ func TestVerifyIntentsNeedsTheNamedController(t *testing.T) {
 		if err := VerifyIntents(a, job, []Entry{e}); (err == nil) != c.ok {
 			t.Errorf("%s: VerifyIntents = %v", name, err)
 		}
+	}
+}
+
+// createdEntry signs a job.created entry whose intent was signed by ctl for agent.
+func createdEntry(t *testing.T, agentKey, ctl *signer.Key) (Entry, string) {
+	t.Helper()
+	n, err := intent.NewNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{}`)
+	in := intent.Intent{Agent: agentKey.Address(), Controller: ctl.Address(), Seq: 1, Nonce: n, IssuedAt: 1, Expiry: 2, Kind: intent.KindNodeMigrateNames, PayloadHash: intent.Hash(body)}
+	id, err := JobIDFor(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := ctl.SignTypedData(context.Background(), in.TypedData())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(IntentBody{Envelope: intent.Envelope{Intent: in.JSON(), Payload: body, Sigs: []string{sig.Hex()}}, Outcome: "created"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _, err := Sign(context.Background(), agentKey, id, 0, [32]byte{}, KindCreated, b, time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e, id
+}
+
+func TestVerifyIntentsBindsACreatedEntryToItsJobID(t *testing.T) {
+	agentKey, _ := signer.GenerateKey()
+	ctl, _ := signer.GenerateKey()
+	e, id := createdEntry(t, agentKey, ctl)
+	if !regexp.MustCompile(`^[0-9a-f]{16}$`).MatchString(id) {
+		t.Fatalf("JobIDFor = %q, want 16 lowercase hex characters", id)
+	}
+	if err := VerifyIntents(agentKey.Address(), id, []Entry{e}); err != nil {
+		t.Fatalf("a created entry for its own job: %v", err)
+	}
+	// A genuine intent from another job (another nonce, so another digest).
+	foreign, otherID := createdEntry(t, agentKey, ctl)
+	if err := VerifyIntents(agentKey.Address(), id, []Entry{foreign}); !errors.Is(err, ErrBroken) {
+		t.Fatalf("a created entry from job %s accepted for job %s: %v", otherID, id, err)
 	}
 }
 
