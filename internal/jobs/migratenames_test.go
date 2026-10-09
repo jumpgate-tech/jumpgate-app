@@ -196,12 +196,29 @@ func TestAMigratedBoxIsANoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.Results["preflight"] = o.Result
-	for _, id := range []string{"stop-units", "rename-account", "move-data", "rewrite-units", "ownership", "start-units"} {
-		if _, err := step(t, id).Run(context.Background(), env); err != nil {
+	for _, id := range []string{"stop-units", "rename-account", "move-data", "rewrite-units", "ownership", "start-units", "verify"} {
+		o, err := step(t, id).Run(context.Background(), env)
+		if err != nil {
 			t.Fatalf("%s: %v", id, err)
 		}
+		env.Results[id] = o.Result
 	}
 	noCommand(t, ex, "systemctl stop", "usermod", "groupmod", "mv ", "chown", "systemctl start", "mktemp")
+	// N1: a controller that lost the first job's result resubmits; the no-op
+	// job verifies whatever enablement the operator chose, and reports the
+	// box's names and paths.
+	var r MigrateNamesResult
+	if err := json.Unmarshal(env.Results["verify"], &r); err != nil || r.Names != catalog.NamesCurrent || r.DataDir != "/var/lib/jumpgate-node/369" {
+		t.Fatalf("verify result %+v, %v", r, err)
+	}
+	ex.on("systemctl is-enabled jumpgate-node-beacon.service", fail1)
+	if _, err := step(t, "verify").Run(context.Background(), env); err != nil {
+		t.Fatalf("verify with a disabled beacon: %v", err)
+	}
+	ex.on("test -e '/etc/systemd/system/jumpgate-node-exec.service'", fail1)
+	if _, err := step(t, "verify").Run(context.Background(), env); err == nil || !strings.Contains(err.Error(), "jumpgate-node-exec.service") {
+		t.Fatalf("verify without the exec unit: %v", err)
+	}
 }
 
 // A job stopped after the rename (aborted, or its controller gone) leaves the
@@ -678,7 +695,7 @@ func rootMove() NamesMarker {
 // I1: names.json is what keeps a stale re-pair from pointing the node back at
 // the old root. A later job must carry the move it records, never drop it.
 func TestARecordedRootMoveSurvivesMoveDataAndRewriteUnits(t *testing.T) {
-	ex := newScript()
+	ex := newScript().on("test -d '/var/lib/valve-node-app'", fail1).on("test -e '/var/lib/jumpgate-node'", ok0)
 	env := mnEnv(t, ex, legacyWire()) // a stale re-pair: node.json at the old root
 	if err := writeNamesMarker(env.NamesPath, rootMove()); err != nil {
 		t.Fatal(err)
@@ -820,5 +837,59 @@ func TestADisabledUnitStaysDisabled(t *testing.T) {
 	ex.on("systemctl is-enabled jumpgate-node-beacon.service", fail1)
 	if _, err := step(t, "verify").Run(context.Background(), env); err != nil {
 		t.Fatalf("verify = %v", err)
+	}
+}
+
+// N2: the record of the root move outlives a data dir that is not under
+// either root; the custom dir itself stays where it is.
+func TestARecordedRootMoveSurvivesACustomDataDir(t *testing.T) {
+	w := legacyWire()
+	w.DataDir, w.JWTPath = "/data/pulse", "/data/pulse/jwt.hex"
+	ex := newScript().on("test -d '/var/lib/valve-node-app'", fail1).on("test -e '/var/lib/jumpgate-node'", ok0)
+	env := mnEnv(t, ex, w)
+	if err := writeNamesMarker(env.NamesPath, rootMove()); err != nil {
+		t.Fatal(err)
+	}
+	o, err := step(t, "move-data").Run(context.Background(), env)
+	var mv migrateMove
+	_ = json.Unmarshal(o.Result, &mv)
+	if err != nil || !mv.Moved || mv.DataDir != "/data/pulse" || ex.ran("mv ") {
+		t.Fatalf("move-data = %+v, %v", mv, err)
+	}
+	env.Results["move-data"] = o.Result
+	env.Results["preflight"] = preflightResult(true, true)
+	if _, err := step(t, "rewrite-units").Run(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
+	if mk, ok, err := ReadNamesMarker(env.NamesPath); err != nil || !ok || mk != rootMove() {
+		t.Fatalf("names.json %+v %v %v", mk, ok, err)
+	}
+	if got := readWire(t, env); got.DataDir != "/data/pulse" {
+		t.Fatalf("node.json %+v", got)
+	}
+	if ex.ran("mktemp") {
+		t.Fatalf("a marker was rewritten for a dir that did not move: %v", ex.calls)
+	}
+}
+
+// N3: a names.json that records a move the box does not show is refused, not
+// rendered: the units would name a root that does not hold the data.
+func TestARecordedRootMoveTheBoxDoesNotShowIsRefused(t *testing.T) {
+	for name, ex := range map[string]*scriptExec{
+		"old root still there": newScript().on("test -d '/var/lib/valve-node-app'", ok0).on("test -e '/var/lib/jumpgate-node'", fail1),
+		"new root missing":     newScript().on("test -d '/var/lib/valve-node-app'", fail1).on("test -e '/var/lib/jumpgate-node'", fail1),
+		"both roots there":     newScript().on("test -d '/var/lib/valve-node-app'", ok0).on("test -e '/var/lib/jumpgate-node'", ok0),
+	} {
+		env := mnEnv(t, ex, legacyWire())
+		if err := writeNamesMarker(env.NamesPath, rootMove()); err != nil {
+			t.Fatal(err)
+		}
+		_, err := step(t, "move-data").Run(context.Background(), env)
+		if err == nil || !strings.Contains(err.Error(), "names.json records a move") {
+			t.Errorf("%s: move-data = %v", name, err)
+		}
+		if ex.ran("mv ") || len(ex.files) != 0 {
+			t.Errorf("%s: calls %v", name, ex.calls)
+		}
 	}
 }

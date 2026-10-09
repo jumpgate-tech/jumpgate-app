@@ -83,7 +83,7 @@ type migratePreflight struct {
 }
 
 type migrateMove struct {
-	Moved   bool   `json:"moved"`
+	Moved   bool   `json:"moved"` // the legacy data root is now the current one (by this job or one before)
 	DataDir string `json:"dataDir"`
 	JWTPath string `json:"jwtPath"`
 }
@@ -687,13 +687,24 @@ func mnMoveData(ctx context.Context, env Env) (Outcome, error) {
 		return result(stay)
 	}
 	// An earlier job moved the root and recorded it in names.json; readNode
-	// already applied it, so the dir is under the new root. Report it as
-	// moved, so rewrite-units keeps the record (which is what stops a stale
-	// re-pair pointing the node at the old root) and the snapshot marker
-	// still follows the data.
+	// already applied it to the paths. Report it as moved, wherever the data
+	// dir points, so rewrite-units keeps the record (which is what stops a
+	// stale re-pair pointing the node at the old root) and the snapshot
+	// marker still follows the data. The box must show the move: a record it
+	// contradicts would render units at a root that does not hold the data.
 	if mk, ok, err := ReadNamesMarker(env.NamesPath); err != nil {
 		return Outcome{}, err
-	} else if ok && mk.DataRootFrom != "" && catalog.UnderRoot(w.DataDir, current.DataRoot) {
+	} else if ok && mk.DataRootFrom != "" {
+		oldThere, newThere, err := roots(ctx, env)
+		if err != nil {
+			return Outcome{}, err
+		}
+		switch {
+		case oldThere:
+			return Outcome{}, fmt.Errorf("names.json records a move to %s, but %s still holds the data; remove the stale %s or the stray %s, then retry", current.DataRoot, legacy.DataRoot, env.NamesPath, legacy.DataRoot)
+		case !newThere:
+			return Outcome{}, fmt.Errorf("names.json records a move to %s, but %s does not exist", current.DataRoot, current.DataRoot)
+		}
 		stay.Moved = true
 		return result(stay)
 	}
@@ -834,8 +845,8 @@ func sameOrMoved(p, q string) bool {
 // vouches for moved with it. A marker naming any dir but the old one vouches
 // for something this job did not move, and is left alone; so is a missing one.
 func followSnapshotMarker(ctx context.Context, env Env, nw catalog.WireConfig, moved bool) error {
-	if !moved {
-		return nil // the data stayed: the marker already names its dir
+	if !moved || !catalog.UnderRoot(nw.DataDir, current.DataRoot) {
+		return nil // the data dir stayed: the marker already names it
 	}
 	old, _ := catalog.Rebase(nw.DataDir, current.DataRoot, legacy.DataRoot)
 	v, ok, err := readMarker(ctx, env, catalog.SnapshotMarkerPath(nw))
@@ -942,12 +953,23 @@ func mnVerify(ctx context.Context, env Env) (Outcome, error) {
 			problems = append(problems, c.problem)
 		}
 	}
-	// One unit per call: is-enabled exits 0 when any one it names is.
 	pre, err := readPreflight(env)
 	if err != nil {
 		return Outcome{}, err
 	}
 	for _, s := range services {
+		if ok, err := probe(ctx, env, "test -e "+shQuote(catalog.UnitPath(s.current))); err != nil {
+			return Outcome{}, err
+		} else if !ok {
+			problems = append(problems, catalog.UnitPath(s.current)+" does not exist")
+		}
+		// A job that found the box already migrated changed nothing, so
+		// whatever enablement is on disk is the operator's: there is no
+		// job-start state to hold it to.
+		if pre.AlreadyDone {
+			continue
+		}
+		// One unit per call: is-enabled exits 0 when any one it names is.
 		enabled, err := probe(ctx, env, "systemctl is-enabled "+s.current)
 		if err != nil {
 			return Outcome{}, err
