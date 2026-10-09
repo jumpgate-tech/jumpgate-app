@@ -83,3 +83,38 @@ func (m NamesMarker) Apply(w *catalog.WireConfig) {
 		w.JWTPath = j
 	}
 }
+
+// ReadNodeConfig is node.json at nodePath with the names marker at namesPath
+// applied over it: the one way the agent and every job step read the node
+// config (D-J10), so a re-pair that rewrote node.json with a controller's
+// stale wire cannot point either back at units, an account or a data root a
+// migration replaced. A missing node.json is an error that wraps
+// fs.ErrNotExist. The caller validates the result for its own use.
+func ReadNodeConfig(nodePath, namesPath string) (catalog.WireConfig, error) {
+	var w catalog.WireConfig
+	b, err := os.ReadFile(nodePath)
+	if err != nil {
+		return w, err
+	}
+	if err := json.Unmarshal(b, &w); err != nil {
+		return w, fmt.Errorf("node.json does not parse: %w", err)
+	}
+	if namesPath == "" {
+		return w, nil
+	}
+	mk, ok, err := ReadNamesMarker(namesPath)
+	if err != nil {
+		return w, &MarkerError{Err: err}
+	}
+	if ok {
+		mk.Apply(&w)
+	}
+	return w, nil
+}
+
+// MarkerError is a names marker ReadNodeConfig could not read or would not
+// apply.
+type MarkerError struct{ Err error }
+
+func (e *MarkerError) Error() string { return e.Err.Error() }
+func (e *MarkerError) Unwrap() error { return e.Err }

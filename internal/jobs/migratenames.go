@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -102,25 +101,19 @@ type MigrateNamesResult struct {
 // it reaches a root command line, so it is validated here, before any step
 // acts on it.
 func readNode(env Env) (catalog.WireConfig, error) {
-	var w catalog.WireConfig
-	b, err := os.ReadFile(env.NodePath)
-	if errors.Is(err, fs.ErrNotExist) {
+	w, err := ReadNodeConfig(env.NodePath, env.NamesPath)
+	if errors.Is(err, fs.ErrNotExist) && !isMarkerError(err) {
 		return w, errors.New("no node is set up on this box (no node.json); there is nothing to rename")
 	}
 	if err != nil {
 		return w, err
 	}
-	if err := json.Unmarshal(b, &w); err != nil {
-		return w, fmt.Errorf("node.json does not parse: %w", err)
-	}
-	mk, ok, err := ReadNamesMarker(env.NamesPath)
-	if err != nil {
-		return w, err
-	}
-	if ok {
-		mk.Apply(&w)
-	}
 	return w, checkWire(w)
+}
+
+func isMarkerError(err error) bool {
+	var me *MarkerError
+	return errors.As(err, &me)
 }
 
 func checkWire(w catalog.WireConfig) error {
