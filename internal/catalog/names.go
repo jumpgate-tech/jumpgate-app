@@ -86,10 +86,21 @@ func Rebase(dir, from, to string) (string, bool) {
 	return to + strings.TrimPrefix(path.Clean(dir), from), true
 }
 
-// Completion markers live directly in a node's data dir. Setup writes each one
-// only after the work it vouches for finished, so a rerun (and adopting a
-// durable job, which is a rerun) can trust it where a looser probe cannot.
-const (
-	SnapshotMarker = ".jumpgate-snapshot-complete" // the snapshot restore finished
-	OwnerMarker    = ".jumpgate-owner"             // chown -R finished; holds the owning account's name
-)
+// MarkersDir holds the completion markers. It is root-owned and 0700, outside
+// every tree the node's service account can write: root writes markers as it
+// works, and a marker in a service-writable directory could be forged to skip
+// work, or be a planted symlink that root would then overwrite.
+const MarkersDir = "/var/lib/jumpgate/markers"
+
+// SnapshotMarkerPath is the marker that the snapshot restore for w's chain
+// finished. The name comes from the chain id alone, never from a path segment
+// the service account controls.
+func SnapshotMarkerPath(w WireConfig) string {
+	return fmt.Sprintf("%s/%d.snapshot", MarkersDir, w.ChainID)
+}
+
+// OwnerMarkerPath is the marker that chown -R of w's data dir finished; it
+// holds the owning account's name.
+func OwnerMarkerPath(w WireConfig) string {
+	return fmt.Sprintf("%s/%d.owner", MarkersDir, w.ChainID)
+}

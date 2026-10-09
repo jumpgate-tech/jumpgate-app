@@ -26,7 +26,7 @@ func nodeReady() *fakeExecutor {
 		script("df -B1 --output=avail", executor.Result{Stdout: "Avail\n4000000000000\n"}).
 		script("id -u valve-node-app", executor.Result{Stdout: "997\n"}).
 		script("stat -c %U", executor.Result{Stdout: "valve-node-app\n"}).
-		script("cat '/mnt/reth/"+catalog.OwnerMarker+"'", executor.Result{Stdout: "valve-node-app\n"}).
+		script("cat '"+catalog.OwnerMarkerPath(testWire())+"'", executor.Result{Stdout: "valve-node-app\n"}).
 		script("systemctl is-active", executor.Result{Stdout: "active\nactive\n"}).
 		script("eth/v1/node/syncing", executor.Result{Stdout: "200"}).
 		script("eth_syncing", executor.Result{Stdout: `{"jsonrpc":"2.0","id":1,"result":false}`}).

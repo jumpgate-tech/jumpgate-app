@@ -316,7 +316,7 @@ func TestSnapshot_VerifyPassesOnceTheCompletionMarkerExists(t *testing.T) {
 	if err := snapshotStep().Verify(context.Background(), e, &State{Wire: snapshotWire()}); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if !ran(e, "test -f", "/mnt/reth/"+catalog.SnapshotMarker) {
+	if !ran(e, "test -f", catalog.SnapshotMarkerPath(snapshotWire())) {
 		t.Errorf("verify looked in the wrong place: %q", e.callLog())
 	}
 }
@@ -408,7 +408,7 @@ func TestStart_VerifyReportsWhatSystemdSaidOnNonZeroExit(t *testing.T) {
 func TestSnapshot_VerifyNeedsTheCompletionMarker(t *testing.T) {
 	w := snapshotWire() // ExecSnapshot set
 	f := newFakeExecutor().
-		script("test -f '"+w.DataDir+"/"+catalog.SnapshotMarker+"'", executor.Result{ExitCode: 1}).
+		script("test -f '"+catalog.SnapshotMarkerPath(w)+"'", executor.Result{ExitCode: 1}).
 		script("test -d '"+w.DataDir+"/db'", executor.Result{ExitCode: 0}).
 		script("test -f '"+catalog.UnitPath(w.NodeNames().ExecUnit())+"'", executor.Result{ExitCode: 1})
 	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err == nil {
@@ -421,13 +421,13 @@ func TestSnapshot_VerifyNeedsTheCompletionMarker(t *testing.T) {
 func TestSnapshot_VerifyAdoptsAFinishedPreMarkerInstall(t *testing.T) {
 	w := snapshotWire()
 	f := newFakeExecutor().
-		script("test -f '"+w.DataDir+"/"+catalog.SnapshotMarker+"'", executor.Result{ExitCode: 1}).
+		script("test -f '"+catalog.SnapshotMarkerPath(w)+"'", executor.Result{ExitCode: 1}).
 		script("test -d '"+w.DataDir+"/db'", executor.Result{ExitCode: 0}).
 		script("test -f '"+catalog.UnitPath(w.NodeNames().ExecUnit())+"'", executor.Result{ExitCode: 0})
 	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err != nil {
 		t.Fatalf("a finished pre-marker install failed Verify: %v", err)
 	}
-	if indexContaining(f, "> '"+w.DataDir+"/"+catalog.SnapshotMarker+"'") < 0 {
+	if indexContaining(f, `mv -f "$t" '`+catalog.SnapshotMarkerPath(w)+`'`) < 0 {
 		t.Fatalf("the marker was not written; calls %v", f.callLog())
 	}
 }
@@ -438,8 +438,46 @@ func TestSnapshot_RunWritesTheMarkerOnlyAfterTheDownload(t *testing.T) {
 	if err := snapshotStep().Run(context.Background(), f, &State{Wire: w}); err != nil {
 		t.Fatal(err)
 	}
-	dl, mk := indexContaining(f, "reth download"), indexContaining(f, catalog.SnapshotMarker)
+	dl, mk := indexContaining(f, "reth download"), indexContaining(f, catalog.SnapshotMarkerPath(w))
 	if dl < 0 || mk < 0 || mk < dl {
 		t.Fatalf("marker at %d, download at %d: %v", mk, dl, f.callLog())
+	}
+}
+
+// A marker the service account can write is a marker it can forge: one left in
+// the data dir must not stand in for the root-only one.
+func TestSnapshot_AMarkerInTheDataDirIsNotTrusted(t *testing.T) {
+	w := snapshotWire()
+	forged := "test -f '" + w.DataDir + "/.jumpgate-snapshot-complete'"
+	f := newFakeExecutor().
+		script("test -f", executor.Result{ExitCode: 1}).
+		script("test -d", executor.Result{ExitCode: 1}).
+		script(forged, executor.Result{ExitCode: 0})
+	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err == nil {
+		t.Fatal("a marker file under the data dir satisfied Verify")
+	}
+}
+
+func TestMarkers_LiveOutsideTheDataDirAndAreNeverChowned(t *testing.T) {
+	w := snapshotWire()
+	for _, m := range []string{catalog.SnapshotMarkerPath(w), catalog.OwnerMarkerPath(w)} {
+		if !strings.HasPrefix(m, catalog.MarkersDir+"/") || strings.HasPrefix(m, w.DataDir) {
+			t.Errorf("marker %q is not in the root-only markers dir", m)
+		}
+	}
+	f := resolvable(newFakeExecutor())
+	if err := snapshotStep().Run(context.Background(), f, &State{Wire: w}); err != nil {
+		t.Fatal(err)
+	}
+	if err := wireStep().Run(context.Background(), f, &State{Wire: w}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.callLog() {
+		if strings.Contains(c, catalog.MarkersDir) && strings.Contains(c, "chown") {
+			t.Errorf("a marker is chowned: %s", c)
+		}
+		if strings.Contains(c, "> '"+w.DataDir) {
+			t.Errorf("a command redirects into the data dir: %s", c)
+		}
 	}
 }

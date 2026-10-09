@@ -459,7 +459,7 @@ func snapshotStep() Step {
 			if !w.ExecSnapshot {
 				return nil
 			}
-			marker := shQuote(path.Join(w.DataDir, catalog.SnapshotMarker))
+			marker := shQuote(catalog.SnapshotMarkerPath(w))
 			res, err := e.Run(ctx, "test -f "+marker, nil)
 			if err != nil {
 				return fmt.Errorf("snapshot: verify completion marker: %w", err)
@@ -501,7 +501,24 @@ func snapshotStep() Step {
 // snapshotMarkerCmd records the moment the restore finished. The timestamp is
 // for a human reading the file; only its existence is checked.
 func snapshotMarkerCmd(w catalog.WireConfig) string {
-	return "date -u +%FT%TZ > " + shQuote(path.Join(w.DataDir, catalog.SnapshotMarker))
+	return writeMarkerCmd(`"$(date -u +%FT%TZ)"`, catalog.SnapshotMarkerPath(w))
+}
+
+// ownerMarkerCmd records which account chown -R finished for.
+func ownerMarkerCmd(w catalog.WireConfig) string {
+	return writeMarkerCmd(shQuote(w.NodeNames().User), catalog.OwnerMarkerPath(w))
+}
+
+// writeMarkerCmd writes value (an already shell-quoted word) to a marker in
+// catalog.MarkersDir. The directory is root-only, so nothing in it can be
+// planted by the service account; the value goes to a fresh temp file and
+// mv -f renames it into place, which replaces whatever is at the target (a
+// symlink included) rather than writing through it. A marker is never chowned:
+// it stays root's.
+func writeMarkerCmd(value, target string) string {
+	dir := shQuote(catalog.MarkersDir)
+	return fmt.Sprintf(`umask 077 && mkdir -p %s && chmod 0700 %s && t=$(mktemp %s) && printf '%%s\n' %s > "$t" && mv -f "$t" %s`,
+		dir, dir, shQuote(catalog.MarkersDir+"/.tmp.XXXXXX"), value, shQuote(target))
 }
 
 // ---------------------------------------------------------------------
@@ -570,10 +587,10 @@ func wireStep() Step {
 			}
 
 			// The marker follows the chown, so its presence proves the walk
-			// finished; the top directory's owner alone cannot.
-			ownerMarker := shQuote(path.Join(w.DataDir, catalog.OwnerMarker))
-			res, err = e.Run(ctx, fmt.Sprintf("printf '%%s\\n' %s > %s && chown %s:%s %s",
-				n.User, ownerMarker, n.User, n.Group, ownerMarker), opts)
+			// finished; the top directory's owner alone cannot. It lives in
+			// the root-only markers dir, not in the tree just handed to the
+			// service account.
+			res, err = e.Run(ctx, ownerMarkerCmd(w), opts)
 			if err != nil {
 				return fmt.Errorf("wire: write owner marker: %w", err)
 			}
@@ -662,8 +679,7 @@ func wireStep() Step {
 
 			// The top directory proves nothing about the files under it, so
 			// trust the marker Run writes after chown -R finishes.
-			ownerMarker := shQuote(path.Join(w.DataDir, catalog.OwnerMarker))
-			res, err = e.Run(ctx, "cat "+ownerMarker, nil)
+			res, err = e.Run(ctx, "cat "+shQuote(catalog.OwnerMarkerPath(w)), nil)
 			if err != nil {
 				return fmt.Errorf("wire: verify owner marker: %w", err)
 			}
@@ -680,8 +696,7 @@ func wireStep() Step {
 					}
 					return fmt.Errorf("wire: files under %s are not owned by %s yet (for example %s)", w.DataDir, n.User, first)
 				}
-				res, err = e.Run(ctx, fmt.Sprintf("printf '%%s\\n' %s > %s && chown %s:%s %s",
-					n.User, ownerMarker, n.User, n.Group, ownerMarker), nil)
+				res, err = e.Run(ctx, ownerMarkerCmd(w), nil)
 				if err != nil {
 					return fmt.Errorf("wire: adopt pre-marker ownership: %w", err)
 				}
