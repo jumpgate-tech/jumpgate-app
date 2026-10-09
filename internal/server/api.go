@@ -36,9 +36,15 @@ import (
 	"github.com/valve-tech/jumpgate/internal/setup"
 )
 
-// logUnits is the fixed set of journald units every target's logwatch
-// Watcher tails, matching internal/monitor's unit-name constants.
-var logUnits = []string{"valve-node-app-exec.service", "valve-node-app-beacon.service"}
+// logUnitsFor is the set of journald units a target's logwatch Watcher tails:
+// the node units under the names its wire records. A target with no wire yet
+// has no node to tail, so it reads as legacy, as WireConfig.NodeNames does.
+func logUnitsFor(t config.Target) []string {
+	if t.Wire == nil {
+		return catalog.LegacyNames.Units()
+	}
+	return t.Wire.NodeNames().Units()
+}
 
 // defaultRecentLogs is used when GET .../logs is called without ?n=.
 const defaultRecentLogs = 200
@@ -496,7 +502,7 @@ func (s *Server) getWatcher(t config.Target) (watch *logwatch.Watcher, retired <
 	if err := executor.RequireShell(ex); err != nil {
 		return nil, nil, fmt.Errorf("target %q: %w", t.ID, err)
 	}
-	watch = logwatch.New(ex, logUnits)
+	watch = logwatch.New(ex, logUnitsFor(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	watch.Start(ctx)
 	// Auto-diagnostics trigger: error/critical journal hits kick off a
@@ -1035,6 +1041,33 @@ const (
 var snapshotKeyPattern = regexp.MustCompile(
 	fmt.Sprintf(`^vk_[A-Za-z0-9_-]{%d,%d}$`, snapshotKeyMinLen, snapshotKeyMaxLen))
 
+// setupWire fills a setup request's defaults from the box's current wire.
+// Names never come from the request: a box keeps the names it has (legacy for
+// every box set up before sub-project 2) until node.migrate-names changes
+// them, and only a box with no wire yet starts with the new names. A data dir
+// the request leaves empty is the box's own when the chain is unchanged, so a
+// re-run from the web UI (which sends none) never points a node at an empty
+// directory.
+func setupWire(req catalog.WireConfig, existing *catalog.WireConfig) catalog.WireConfig {
+	w := req
+	switch {
+	case existing == nil:
+		w.Names = catalog.NamesCurrent
+	default:
+		w.Names = existing.Names
+		if w.DataDir == "" && existing.ChainID == w.ChainID && existing.DataDir != "" {
+			w.DataDir, w.JWTPath = existing.DataDir, existing.JWTPath
+		}
+	}
+	if w.DataDir == "" {
+		w.DataDir = catalog.DefaultDataDirFor(w.NodeNames(), w.ChainID)
+	}
+	if w.JWTPath == "" {
+		w.JWTPath = catalog.DefaultJWTPath(w.DataDir)
+	}
+	return w
+}
+
 func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -1047,23 +1080,6 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if wire.DataDir == "" {
-		wire.DataDir = catalog.DefaultDataDir(wire.ChainID)
-	}
-	if wire.JWTPath == "" {
-		wire.JWTPath = catalog.DefaultJWTPath(wire.DataDir)
-	}
-	if err := catalog.ValidateDataDir(wire.DataDir); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	steps, err := setup.Plan(wire)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
 	cfg, err := s.loadConfig()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -1072,6 +1088,17 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	target, ok := findTarget(cfg, id)
 	if !ok {
 		writeTargetNotFound(w)
+		return
+	}
+	wire = setupWire(wire, target.Wire)
+	if err := catalog.ValidateDataDir(wire.DataDir); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	steps, err := setup.Plan(wire)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 

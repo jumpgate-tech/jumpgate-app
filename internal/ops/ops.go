@@ -22,24 +22,19 @@ import (
 	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
-// Unit names, matching internal/setup/steps.go and internal/monitor/monitor.go.
-const (
-	execUnitName   = "valve-node-app-exec.service"
-	beaconUnitName = "valve-node-app-beacon.service"
-)
-
 // enginePort is the fixed, non-configurable engine-API port (JWT-authed,
 // execution<->beacon), matching internal/catalog/units.go's engineEndpoint.
 const enginePort = 8551
 
 // unitFor maps the API's svc identifier ("exec"|"beacon") to its systemd
-// unit name. The empty string / ok=false return signals an invalid svc.
-func unitFor(svc string) (string, bool) {
+// unit name under the box's names. The empty string / ok=false return signals
+// an invalid svc.
+func unitFor(n catalog.NodeNames, svc string) (string, bool) {
 	switch svc {
 	case "exec":
-		return execUnitName, true
+		return n.ExecUnit(), true
 	case "beacon":
-		return beaconUnitName, true
+		return n.BeaconUnit(), true
 	default:
 		return "", false
 	}
@@ -53,8 +48,8 @@ func unitFor(svc string) (string, bool) {
 // then reads back `systemctl is-active` for that unit as the returned
 // active bool. An unrecognized svc or action is rejected before anything
 // is run on the target.
-func ServiceAction(ctx context.Context, e executor.Executor, svc, action string) (bool, error) {
-	unit, ok := unitFor(svc)
+func ServiceAction(ctx context.Context, e executor.Executor, n catalog.NodeNames, svc, action string) (bool, error) {
+	unit, ok := unitFor(n, svc)
 	if !ok {
 		return false, fmt.Errorf("ops: invalid service %q (want \"exec\" or \"beacon\")", svc)
 	}
@@ -103,7 +98,7 @@ func isActive(ctx context.Context, e executor.Executor, unit string) (bool, erro
 // stopped and the error says so, rather than risk starting a service on
 // top of a half-deleted data directory.
 func ClearService(ctx context.Context, e executor.Executor, w catalog.WireConfig, svc string) error {
-	unit, ok := unitFor(svc)
+	unit, ok := unitFor(w.NodeNames(), svc)
 	if !ok {
 		return fmt.Errorf("ops: invalid service %q (want \"exec\" or \"beacon\")", svc)
 	}
@@ -757,5 +752,5 @@ func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// NodeUnits are the node's two systemd units, for callers that tail their logs.
-func NodeUnits() []string { return []string{execUnitName, beaconUnitName} }
+// NodeUnits are the node's two systemd units under the box's names, for callers that tail their logs.
+func NodeUnits(n catalog.NodeNames) []string { return n.Units() }

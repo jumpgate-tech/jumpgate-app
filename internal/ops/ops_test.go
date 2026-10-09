@@ -28,7 +28,7 @@ func TestServiceAction_StartRunsSystemctlAndReadsBack(t *testing.T) {
 		script("systemctl start valve-node-app-exec.service", executor.Result{ExitCode: 0}).
 		script("systemctl is-active valve-node-app-exec.service", executor.Result{Stdout: "active\n", ExitCode: 0})
 
-	active, err := ServiceAction(context.Background(), e, "exec", "start")
+	active, err := ServiceAction(context.Background(), e, catalog.LegacyNames, "exec", "start")
 	if err != nil {
 		t.Fatalf("ServiceAction: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestServiceAction_StopReadsBackInactive(t *testing.T) {
 		script("systemctl stop valve-node-app-beacon.service", executor.Result{ExitCode: 0}).
 		script("systemctl is-active valve-node-app-beacon.service", executor.Result{Stdout: "inactive\n", ExitCode: 3})
 
-	active, err := ServiceAction(context.Background(), e, "beacon", "stop")
+	active, err := ServiceAction(context.Background(), e, catalog.LegacyNames, "beacon", "stop")
 	if err != nil {
 		t.Fatalf("ServiceAction: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestServiceAction_RestartRunsCorrectUnit(t *testing.T) {
 		script("systemctl restart valve-node-app-exec.service", executor.Result{ExitCode: 0}).
 		script("systemctl is-active valve-node-app-exec.service", executor.Result{Stdout: "active\n"})
 
-	if _, err := ServiceAction(context.Background(), e, "exec", "restart"); err != nil {
+	if _, err := ServiceAction(context.Background(), e, catalog.LegacyNames, "exec", "restart"); err != nil {
 		t.Fatalf("ServiceAction: %v", err)
 	}
 	found := false
@@ -72,7 +72,7 @@ func TestServiceAction_RestartRunsCorrectUnit(t *testing.T) {
 
 func TestServiceAction_InvalidServiceErrors(t *testing.T) {
 	e := newFakeExecutor()
-	if _, err := ServiceAction(context.Background(), e, "bogus", "start"); err == nil {
+	if _, err := ServiceAction(context.Background(), e, catalog.LegacyNames, "bogus", "start"); err == nil {
 		t.Fatal("want error for invalid svc, got nil")
 	}
 	if len(e.callLog()) != 0 {
@@ -82,7 +82,7 @@ func TestServiceAction_InvalidServiceErrors(t *testing.T) {
 
 func TestServiceAction_InvalidActionErrors(t *testing.T) {
 	e := newFakeExecutor()
-	if _, err := ServiceAction(context.Background(), e, "exec", "bogus"); err == nil {
+	if _, err := ServiceAction(context.Background(), e, catalog.LegacyNames, "exec", "bogus"); err == nil {
 		t.Fatal("want error for invalid action, got nil")
 	}
 	if len(e.callLog()) != 0 {
@@ -93,7 +93,7 @@ func TestServiceAction_InvalidActionErrors(t *testing.T) {
 func TestServiceAction_NonZeroExitOnCommandIsError(t *testing.T) {
 	e := newFakeExecutor().
 		script("systemctl start valve-node-app-exec.service", executor.Result{ExitCode: 1, Stderr: "Unit not found."})
-	if _, err := ServiceAction(context.Background(), e, "exec", "start"); err == nil {
+	if _, err := ServiceAction(context.Background(), e, catalog.LegacyNames, "exec", "start"); err == nil {
 		t.Fatal("want error when systemctl start exits non-zero")
 	}
 }

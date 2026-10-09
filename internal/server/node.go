@@ -298,7 +298,7 @@ func (s *Server) nodeService(ctx context.Context, cfg config.Config, t config.Ta
 	if err != nil {
 		return false, viaSSH, err
 	}
-	active, err := ops.ServiceAction(ctx, ex, svc, action)
+	active, err := ops.ServiceAction(ctx, ex, t.Wire.NodeNames(), svc, action)
 	return active, viaSSH, err
 }
 

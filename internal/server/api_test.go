@@ -880,7 +880,7 @@ func addAndWireLocalTarget(t *testing.T, a *apiTestServer) {
 	res.Body.Close()
 
 	res = a.do(t, "POST", "/api/targets/local/setup", catalog.WireConfig{
-		ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369",
+		ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/jumpgate-node/369",
 	})
 	if res.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(res.Body)
@@ -906,7 +906,7 @@ func addAndWireLocalTarget(t *testing.T, a *apiTestServer) {
 func TestServiceActionHappyPath(t *testing.T) {
 	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) {
 		e := &scriptedExecutor{}
-		e.script("systemctl is-active valve-node-app-exec.service", executor.Result{Stdout: "active\n", ExitCode: 0})
+		e.script("systemctl is-active jumpgate-node-exec.service", executor.Result{Stdout: "active\n", ExitCode: 0})
 		return e, nil
 	})
 	addAndWireLocalTarget(t, a)
@@ -1793,5 +1793,34 @@ func TestStartSetupRejectsAnUnsafeDataDir(t *testing.T) {
 	body, _ := io.ReadAll(res.Body)
 	if res.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "data directory") {
 		t.Fatalf("status = %d body=%s, want 400 naming the data directory", res.StatusCode, body)
+	}
+}
+
+// Review Focus 4: the web UI sends no data dir. A legacy box keeps its names
+// and data dir, a migrated box keeps the new ones, and only a box set up for
+// the first time gets the new defaults.
+func TestSetupKeepsTheBoxNames(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		existing *catalog.WireConfig
+		wantIDs  string
+		wantDir  string
+	}{
+		{"first setup", nil, catalog.NamesCurrent, "/var/lib/jumpgate-node/369"},
+		{"legacy box", &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369"}, catalog.NamesLegacy, "/var/lib/valve-node-app/369"},
+		{"migrated box", &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", Names: catalog.NamesCurrent, DataDir: "/var/lib/jumpgate-node/369"}, catalog.NamesCurrent, "/var/lib/jumpgate-node/369"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := setupWire(catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse"}, c.existing)
+			if got.Names != c.wantIDs || got.DataDir != c.wantDir || got.JWTPath != c.wantDir+"/jwt.hex" {
+				t.Fatalf("setupWire = names %q dir %s jwt %s", got.Names, got.DataDir, got.JWTPath)
+			}
+		})
+	}
+	// A request may not switch a box's names: only node.migrate-names does.
+	got := setupWire(catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", Names: catalog.NamesCurrent},
+		&catalog.WireConfig{ChainID: 369, DataDir: "/var/lib/valve-node-app/369"})
+	if got.Names != catalog.NamesLegacy {
+		t.Fatalf("a request renamed a legacy box: %q", got.Names)
 	}
 }

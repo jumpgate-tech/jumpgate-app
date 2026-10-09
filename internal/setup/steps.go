@@ -23,17 +23,12 @@ import (
 // the right port.
 const enginePort = "8551"
 
-// Unit names/paths on the target, per task-4-brief.md.
-const (
-	execUnitName   = "valve-node-app-exec.service"
-	beaconUnitName = "valve-node-app-beacon.service"
-	execUnitPath   = "/etc/systemd/system/" + execUnitName
-	beaconUnitPath = "/etc/systemd/system/" + beaconUnitName
-)
-
 // Plan returns the ordered steps for the config: preflight, account,
 // toolchain, install-exec, install-beacon, snapshot, wire, start, handshake.
 func Plan(w catalog.WireConfig) ([]Step, error) {
+	if err := catalog.ValidateNames(w); err != nil {
+		return nil, fmt.Errorf("setup: %w", err)
+	}
 	if err := catalog.ValidateDataDir(w.DataDir); err != nil {
 		return nil, fmt.Errorf("setup: %w", err)
 	}
@@ -55,7 +50,7 @@ func Plan(w catalog.WireConfig) ([]Step, error) {
 
 	return []Step{
 		preflightStep(),
-		accountStep(),
+		accountStep(w.NodeNames()),
 		toolchainStep(neededToolchains(execClient, beaconClient)),
 		installStep("install-exec", "Install execution client ("+w.ExecID+")", execClient),
 		installStep("install-beacon", "Install beacon client ("+w.BeaconID+")", beaconClient),
@@ -166,7 +161,8 @@ func preflightCheck(ctx context.Context, e executor.Executor, w catalog.WireConf
 // per-line output is read.
 func ownActiveUnitPorts(ctx context.Context, e executor.Executor, w catalog.WireConfig) map[string]bool {
 	exempt := map[string]bool{}
-	res, err := e.Run(ctx, fmt.Sprintf("systemctl is-active %s %s", execUnitName, beaconUnitName), nil)
+	n := w.NodeNames()
+	res, err := e.Run(ctx, fmt.Sprintf("systemctl is-active %s %s", n.ExecUnit(), n.BeaconUnit()), nil)
 	if err != nil {
 		return exempt
 	}
@@ -186,19 +182,22 @@ func ownActiveUnitPorts(ctx context.Context, e executor.Executor, w catalog.Wire
 // ---------------------------------------------------------------------
 
 // accountStep creates the dedicated unprivileged system account the node
-// services run as (catalog.ServiceUser). The services drop to this user
+// services run as (the box's names' User). The services drop to this user
 // via the User=/Group= lines in the rendered units; setup itself still
-// runs as root (it is what performs the useradd). Home is the valve-node-app
+// runs as root (it is what performs the useradd). Home is the name set's
 // data root purely as a bookkeeping convention — nothing reads it, so it
-// is not created here (--no-create-home) and not chain-specific.
-func accountStep() Step {
+// is not created here (--no-create-home) and not chain-specific. n is only
+// for the title, which Plan builds before any State exists; the commands
+// read st.Wire.
+func accountStep(n catalog.NodeNames) Step {
 	return Step{
 		ID:    "account",
-		Title: "Create service account (" + catalog.ServiceUser + ")",
+		Title: "Create service account (" + n.User + ")",
 		Run: func(ctx context.Context, e executor.Executor, st *State) error {
+			n := st.Wire.NodeNames()
 			cmd := fmt.Sprintf(
-				"id -u %[1]s >/dev/null 2>&1 || useradd --system --user-group --home-dir /var/lib/valve-node-app --no-create-home --shell /usr/sbin/nologin %[1]s",
-				catalog.ServiceUser,
+				"id -u %[1]s >/dev/null 2>&1 || useradd --system --user-group --home-dir %[2]s --no-create-home --shell /usr/sbin/nologin %[1]s",
+				n.User, n.DataRoot,
 			)
 			res, err := e.Run(ctx, cmd, streamOpts(ctx, st, "account"))
 			if err != nil {
@@ -206,17 +205,18 @@ func accountStep() Step {
 			}
 			if res.ExitCode != 0 {
 				return fmt.Errorf("account: creating user %s failed (exit %d): %s",
-					catalog.ServiceUser, res.ExitCode, strings.TrimSpace(res.Stderr))
+					n.User, res.ExitCode, strings.TrimSpace(res.Stderr))
 			}
 			return nil
 		},
 		Verify: func(ctx context.Context, e executor.Executor, st *State) error {
-			res, err := e.Run(ctx, "id -u "+catalog.ServiceUser, nil)
+			user := st.Wire.NodeNames().User
+			res, err := e.Run(ctx, "id -u "+user, nil)
 			if err != nil {
-				return fmt.Errorf("account: id -u %s: %w", catalog.ServiceUser, err)
+				return fmt.Errorf("account: id -u %s: %w", user, err)
 			}
 			if res.ExitCode != 0 {
-				return fmt.Errorf("account: service user %s does not exist yet", catalog.ServiceUser)
+				return fmt.Errorf("account: service user %s does not exist yet", user)
 			}
 			return nil
 		},
@@ -473,6 +473,7 @@ func wireStep() Step {
 		Title: "Write JWT secret and systemd units",
 		Run: func(ctx context.Context, e executor.Executor, st *State) error {
 			w := st.Wire
+			n := w.NodeNames()
 			jwtPath := jwtPathFor(w)
 			opts := streamOpts(ctx, st, "wire")
 
@@ -504,7 +505,7 @@ func wireStep() Step {
 			// starts/restarts the units below anyway, so this stop adds no
 			// downtime that wasn't already coming. Exit code deliberately
 			// unchecked: on a fresh box the units don't exist yet.
-			stopCmd := fmt.Sprintf("systemctl stop %s %s 2>/dev/null || true", execUnitName, beaconUnitName)
+			stopCmd := fmt.Sprintf("systemctl stop %s %s 2>/dev/null || true", n.ExecUnit(), n.BeaconUnit())
 			if _, err := e.Run(ctx, stopCmd, opts); err != nil {
 				return fmt.Errorf("wire: stop services before chown: %w", err)
 			}
@@ -517,7 +518,7 @@ func wireStep() Step {
 			// (re)written and restarted, so the services never come up
 			// unable to write their own data.
 			chownCmd := fmt.Sprintf("mkdir -p %s && chown -R %s:%s %s %s",
-				shQuote(w.DataDir), catalog.ServiceUser, catalog.ServiceGroup,
+				shQuote(w.DataDir), n.User, n.Group,
 				shQuote(w.DataDir), shQuote(jwtPath))
 			res, err := e.Run(ctx, chownCmd, opts)
 			if err != nil {
@@ -539,23 +540,23 @@ func wireStep() Step {
 			// on its own. A missing file (ReadFile error) is a fresh
 			// install, not a change.
 			changed := false
-			if old, err := e.ReadFile(ctx, execUnitPath); err == nil && string(old) != execUnit {
+			if old, err := e.ReadFile(ctx, catalog.UnitPath(n.ExecUnit())); err == nil && string(old) != execUnit {
 				changed = true
 			}
-			if old, err := e.ReadFile(ctx, beaconUnitPath); err == nil && string(old) != beaconUnit {
+			if old, err := e.ReadFile(ctx, catalog.UnitPath(n.BeaconUnit())); err == nil && string(old) != beaconUnit {
 				changed = true
 			}
 
-			if err := e.WriteFile(ctx, execUnitPath, []byte(execUnit), 0644); err != nil {
-				return fmt.Errorf("wire: write %s: %w", execUnitPath, err)
+			if err := e.WriteFile(ctx, catalog.UnitPath(n.ExecUnit()), []byte(execUnit), 0644); err != nil {
+				return fmt.Errorf("wire: write %s: %w", catalog.UnitPath(n.ExecUnit()), err)
 			}
-			if err := e.WriteFile(ctx, beaconUnitPath, []byte(beaconUnit), 0644); err != nil {
-				return fmt.Errorf("wire: write %s: %w", beaconUnitPath, err)
+			if err := e.WriteFile(ctx, catalog.UnitPath(n.BeaconUnit()), []byte(beaconUnit), 0644); err != nil {
+				return fmt.Errorf("wire: write %s: %w", catalog.UnitPath(n.BeaconUnit()), err)
 			}
 
 			cmd := fmt.Sprintf(
 				"systemctl daemon-reload && systemctl enable --now %s && systemctl enable --now %s",
-				execUnitName, beaconUnitName,
+				n.ExecUnit(), n.BeaconUnit(),
 			)
 			res, err = e.Run(ctx, cmd, opts)
 			if err != nil {
@@ -570,7 +571,7 @@ func wireStep() Step {
 				// an explicit restart — `enable --now` on an already-
 				// running unit with a rewritten ExecStart does not by
 				// itself relaunch the process with the new config.
-				restartCmd := fmt.Sprintf("systemctl restart %s %s", execUnitName, beaconUnitName)
+				restartCmd := fmt.Sprintf("systemctl restart %s %s", n.ExecUnit(), n.BeaconUnit())
 				res, err := e.Run(ctx, restartCmd, opts)
 				if err != nil {
 					return fmt.Errorf("wire: systemctl restart: %w", err)
@@ -583,10 +584,11 @@ func wireStep() Step {
 		},
 		Verify: func(ctx context.Context, e executor.Executor, st *State) error {
 			w := st.Wire
+			n := w.NodeNames()
 			jwtPath := jwtPathFor(w)
 
 			cmd := fmt.Sprintf("test -f %s && test -f %s && test -f %s",
-				shQuote(jwtPath), shQuote(execUnitPath), shQuote(beaconUnitPath))
+				shQuote(jwtPath), shQuote(catalog.UnitPath(n.ExecUnit())), shQuote(catalog.UnitPath(n.BeaconUnit())))
 			res, err := e.Run(ctx, cmd, nil)
 			if err != nil {
 				return fmt.Errorf("wire: verify files: %w", err)
@@ -601,11 +603,11 @@ func wireStep() Step {
 			if err != nil {
 				return fmt.Errorf("wire: verify owner: %w", err)
 			}
-			if owner := strings.TrimSpace(res.Stdout); owner != catalog.ServiceUser {
-				return fmt.Errorf("wire: %s is owned by %q, not the service user %q yet", w.DataDir, owner, catalog.ServiceUser)
+			if owner := strings.TrimSpace(res.Stdout); owner != n.User {
+				return fmt.Errorf("wire: %s is owned by %q, not the service user %q yet", w.DataDir, owner, n.User)
 			}
 
-			res, err = e.Run(ctx, fmt.Sprintf("systemctl is-enabled %s %s", execUnitName, beaconUnitName), nil)
+			res, err = e.Run(ctx, fmt.Sprintf("systemctl is-enabled %s %s", n.ExecUnit(), n.BeaconUnit()), nil)
 			if err != nil {
 				return fmt.Errorf("wire: verify enabled: %w", err)
 			}
@@ -624,19 +626,19 @@ func wireStep() Step {
 			if err != nil {
 				return fmt.Errorf("wire: verify render: %w", err)
 			}
-			gotExec, err := e.ReadFile(ctx, execUnitPath)
+			gotExec, err := e.ReadFile(ctx, catalog.UnitPath(n.ExecUnit()))
 			if err != nil {
-				return fmt.Errorf("wire: verify read %s: %w", execUnitPath, err)
+				return fmt.Errorf("wire: verify read %s: %w", catalog.UnitPath(n.ExecUnit()), err)
 			}
 			if string(gotExec) != wantExec {
-				return fmt.Errorf("wire: %s content does not match the desired config (chain/client selection changed since it was written)", execUnitPath)
+				return fmt.Errorf("wire: %s content does not match the desired config (chain/client selection changed since it was written)", catalog.UnitPath(n.ExecUnit()))
 			}
-			gotBeacon, err := e.ReadFile(ctx, beaconUnitPath)
+			gotBeacon, err := e.ReadFile(ctx, catalog.UnitPath(n.BeaconUnit()))
 			if err != nil {
-				return fmt.Errorf("wire: verify read %s: %w", beaconUnitPath, err)
+				return fmt.Errorf("wire: verify read %s: %w", catalog.UnitPath(n.BeaconUnit()), err)
 			}
 			if string(gotBeacon) != wantBeacon {
-				return fmt.Errorf("wire: %s content does not match the desired config (chain/client selection changed since it was written)", beaconUnitPath)
+				return fmt.Errorf("wire: %s content does not match the desired config (chain/client selection changed since it was written)", catalog.UnitPath(n.BeaconUnit()))
 			}
 			return nil
 		},
@@ -663,7 +665,8 @@ func startStep() Step {
 		ID:    "start",
 		Title: "Start execution and beacon services",
 		Run: func(ctx context.Context, e executor.Executor, st *State) error {
-			cmd := fmt.Sprintf("systemctl start %s %s", execUnitName, beaconUnitName)
+			n := st.Wire.NodeNames()
+			cmd := fmt.Sprintf("systemctl start %s %s", n.ExecUnit(), n.BeaconUnit())
 			res, err := e.Run(ctx, cmd, streamOpts(ctx, st, "start"))
 			if err != nil {
 				return fmt.Errorf("start: %w", err)
@@ -674,7 +677,8 @@ func startStep() Step {
 			return nil
 		},
 		Verify: func(ctx context.Context, e executor.Executor, st *State) error {
-			res, err := e.Run(ctx, fmt.Sprintf("systemctl is-active %s %s", execUnitName, beaconUnitName), nil)
+			n := st.Wire.NodeNames()
+			res, err := e.Run(ctx, fmt.Sprintf("systemctl is-active %s %s", n.ExecUnit(), n.BeaconUnit()), nil)
 			if err != nil {
 				return fmt.Errorf("start: verify: %w", err)
 			}
@@ -761,7 +765,7 @@ func handshakeCheck(ctx context.Context, e executor.Executor, w catalog.WireConf
 		return fmt.Errorf("handshake: exec eth_syncing did not answer: %s", res.Stdout)
 	}
 
-	res, err = e.Run(ctx, "journalctl -u "+beaconUnitName+" --since -2m --no-pager", opts)
+	res, err = e.Run(ctx, "journalctl -u "+w.NodeNames().BeaconUnit()+" --since -2m --no-pager", opts)
 	if err != nil {
 		return fmt.Errorf("handshake: journalctl: %w", err)
 	}

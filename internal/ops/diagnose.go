@@ -58,8 +58,9 @@ func NetworkDiagnostics(ctx context.Context, e executor.Executor, w catalog.Wire
 		return item.Status != "fail"
 	}
 
-	execActive, beaconActive := unitActiveStates(ctx, e)
-	if !add(servicesItem(execActive, beaconActive)) {
+	n := w.NodeNames()
+	execActive, beaconActive := unitActiveStates(ctx, e, n)
+	if !add(servicesItem(n, execActive, beaconActive)) {
 		return items, nil
 	}
 	// Past this rung both services are active — later probes can treat an
@@ -106,7 +107,7 @@ func NetworkDiagnostics(ctx context.Context, e executor.Executor, w catalog.Wire
 	if !add(syncItem(ctx, e, w)) {
 		return items, nil
 	}
-	add(journalItem(ctx, e))
+	add(journalItem(ctx, e, n))
 	return items, nil
 }
 
@@ -114,8 +115,8 @@ func NetworkDiagnostics(ctx context.Context, e executor.Executor, w catalog.Wire
 // ownActiveUnitPorts in internal/setup, the exit code is ignored (is-active
 // exits non-zero whenever any listed unit isn't active) and only the
 // per-line output — one line per unit, in argument order — is read.
-func unitActiveStates(ctx context.Context, e executor.Executor) (execActive, beaconActive bool) {
-	res, err := e.Run(ctx, fmt.Sprintf("systemctl is-active %s %s", execUnitName, beaconUnitName), nil)
+func unitActiveStates(ctx context.Context, e executor.Executor, n catalog.NodeNames) (execActive, beaconActive bool) {
+	res, err := e.Run(ctx, fmt.Sprintf("systemctl is-active %s %s", n.ExecUnit(), n.BeaconUnit()), nil)
 	if err != nil {
 		return false, false
 	}
@@ -129,22 +130,22 @@ func unitActiveStates(ctx context.Context, e executor.Executor) (execActive, bea
 	return execActive, beaconActive
 }
 
-func servicesItem(execActive, beaconActive bool) CheckItem {
+func servicesItem(n catalog.NodeNames, execActive, beaconActive bool) CheckItem {
 	why := "Nothing else on this list can work until both the execution and beacon services are running — " +
 		"start here whenever anything below fails."
 	if execActive && beaconActive {
 		return CheckItem{ID: "diag-services", Title: "Node services running", Why: why,
-			Status: "pass", Detail: "both valve-node-app-exec and valve-node-app-beacon are active"}
+			Status: "pass", Detail: fmt.Sprintf("both %s-exec and %s-beacon are active", n.Prefix, n.Prefix)}
 	}
 
 	var down, fixes []string
 	if !execActive {
-		down = append(down, execUnitName)
-		fixes = append(fixes, "systemctl start "+execUnitName, fmt.Sprintf("journalctl -u %s -n 50 --no-pager", execUnitName))
+		down = append(down, n.ExecUnit())
+		fixes = append(fixes, "systemctl start "+n.ExecUnit(), fmt.Sprintf("journalctl -u %s -n 50 --no-pager", n.ExecUnit()))
 	}
 	if !beaconActive {
-		down = append(down, beaconUnitName)
-		fixes = append(fixes, "systemctl start "+beaconUnitName, fmt.Sprintf("journalctl -u %s -n 50 --no-pager", beaconUnitName))
+		down = append(down, n.BeaconUnit())
+		fixes = append(fixes, "systemctl start "+n.BeaconUnit(), fmt.Sprintf("journalctl -u %s -n 50 --no-pager", n.BeaconUnit()))
 	}
 	return CheckItem{ID: "diag-services", Title: "Node services running", Why: why,
 		Status: "fail",
@@ -179,7 +180,7 @@ func execRPCItem(ctx context.Context, e executor.Executor, w catalog.WireConfig)
 	return CheckItem{ID: "diag-exec-rpc", Title: "Execution RPC answering", Why: why,
 		Status: "fail",
 		Detail: fmt.Sprintf("the execution service is running but %s did not answer eth_chainId — likely still starting up (large chains can take minutes) or crashed mid-start", addr),
-		Fix:    fmt.Sprintf("journalctl -u %s -n 50 --no-pager", execUnitName),
+		Fix:    fmt.Sprintf("journalctl -u %s -n 50 --no-pager", w.NodeNames().ExecUnit()),
 	}
 }
 
@@ -196,7 +197,7 @@ func beaconAPIItem(ctx context.Context, e executor.Executor, w catalog.WireConfi
 	return CheckItem{ID: "diag-beacon-api", Title: "Beacon API answering", Why: why,
 		Status: "fail",
 		Detail: fmt.Sprintf("the beacon service is running but %s/eth/v1/node/version did not answer — likely still starting up or crashed mid-start", addr),
-		Fix:    fmt.Sprintf("journalctl -u %s -n 50 --no-pager", beaconUnitName),
+		Fix:    fmt.Sprintf("journalctl -u %s -n 50 --no-pager", w.NodeNames().BeaconUnit()),
 	}
 }
 
@@ -374,13 +375,13 @@ func syncItem(ctx context.Context, e executor.Executor, w catalog.WireConfig) Ch
 // history into a point-in-time diagnosis.
 const journalScanLines = 200
 
-func journalItem(ctx context.Context, e executor.Executor) CheckItem {
+func journalItem(ctx context.Context, e executor.Executor, n catalog.NodeNames) CheckItem {
 	why := "Known failure signatures in the recent journal (auth errors, port clashes, stalls, low peers) " +
 		"usually name the root cause directly when the probes above only show the symptom."
 
 	res, err := e.Run(ctx, fmt.Sprintf(
 		"journalctl -u %s -u %s -n %d --no-pager -o cat",
-		execUnitName, beaconUnitName, journalScanLines), nil)
+		n.ExecUnit(), n.BeaconUnit(), journalScanLines), nil)
 	if err != nil || res.ExitCode != 0 {
 		return CheckItem{ID: "diag-journal", Title: "Journal error signatures", Why: why,
 			Status: "unknown", Detail: "could not read the journal on the target"}

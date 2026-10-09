@@ -333,7 +333,7 @@ func TestStart_StartsBothUnits(t *testing.T) {
 	if err := startStep().Run(context.Background(), e, &State{Wire: testWire()}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !ran(e, "systemctl start", execUnitName, beaconUnitName) {
+	if !ran(e, "systemctl start", catalog.LegacyNames.ExecUnit(), catalog.LegacyNames.BeaconUnit()) {
 		t.Errorf("both units must be started in one call; ran: %q", e.callLog())
 	}
 }

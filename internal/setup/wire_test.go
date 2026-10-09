@@ -150,8 +150,8 @@ func TestWire_VerifyFailsOnEachConditionSeparately(t *testing.T) {
 			script("test -f", executor.Result{ExitCode: 0}).
 			script("stat -c", executor.Result{Stdout: catalog.ServiceUser + "\n"}).
 			script("systemctl is-enabled", executor.Result{ExitCode: 0, Stdout: "enabled\nenabled\n"})
-		e.files[execUnitPath] = []byte(renderedExec)
-		e.files[beaconUnitPath] = []byte(renderedBeacon)
+		e.files[catalog.UnitPath(catalog.LegacyNames.ExecUnit())] = []byte(renderedExec)
+		e.files[catalog.UnitPath(catalog.LegacyNames.BeaconUnit())] = []byte(renderedBeacon)
 		return e
 	}
 
@@ -176,7 +176,9 @@ func TestWire_VerifyFailsOnEachConditionSeparately(t *testing.T) {
 			"not enabled",
 		},
 		"a stale unit from an earlier config": {
-			func(e *fakeExecutor) { e.files[execUnitPath] = []byte("[Unit]\nDescription=stale\n") },
+			func(e *fakeExecutor) {
+				e.files[catalog.UnitPath(catalog.LegacyNames.ExecUnit())] = []byte("[Unit]\nDescription=stale\n")
+			},
 			"",
 		},
 	} {
@@ -212,8 +214,8 @@ func TestWire_VerifyComparesTheUnitsAgainstTheCurrentConfig(t *testing.T) {
 		script("stat -c", executor.Result{Stdout: catalog.ServiceUser + "\n"}).
 		script("systemctl is-enabled", executor.Result{ExitCode: 0, Stdout: "enabled\nenabled\n"})
 	// The target is wired — for the WRONG chain.
-	e.files[execUnitPath] = []byte(otherExec)
-	e.files[beaconUnitPath] = []byte(otherBeacon)
+	e.files[catalog.UnitPath(catalog.LegacyNames.ExecUnit())] = []byte(otherExec)
+	e.files[catalog.UnitPath(catalog.LegacyNames.BeaconUnit())] = []byte(otherBeacon)
 
 	if err := wireStep().Verify(context.Background(), e, &State{Wire: testWire()}); err == nil {
 		t.Fatal("a target wired for another chain verified as set up for this one")

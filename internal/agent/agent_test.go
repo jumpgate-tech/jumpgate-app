@@ -232,7 +232,7 @@ func TestLogsReadClampsN(t *testing.T) {
 	if rc.Status != intent.StatusOK {
 		t.Fatalf("status %d: %s", rc.Status, res)
 	}
-	units := ops.NodeUnits()
+	units := ops.NodeUnits(catalog.LegacyNames)
 	if len(r.exec.cmds) != len(units) {
 		t.Fatalf("ran %d commands, want one journalctl per unit (%d): %v", len(r.exec.cmds), len(units), r.exec.cmds)
 	}

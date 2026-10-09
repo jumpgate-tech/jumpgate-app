@@ -48,6 +48,9 @@ func (a *Agent) loadNode() (catalog.WireConfig, *Reject) {
 	if err := catalog.ValidateDataDir(w.DataDir); err != nil {
 		return w, reject(intent.ReasonValidation, err.Error())
 	}
+	if err := catalog.ValidateNames(w); err != nil {
+		return w, reject(intent.ReasonValidation, err.Error())
+	}
 	return w, nil
 }
 
@@ -131,7 +134,7 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, payload []byte, p
 			n = intent.LogsMaxN
 		}
 		var hits []logwatch.Hit
-		for _, unit := range ops.NodeUnits() {
+		for _, unit := range ops.NodeUnits(w.NodeNames()) {
 			res, err := ex.Run(ctx, "journalctl -u "+unit+" -n "+strconv.Itoa(n)+" --no-pager -o cat", nil)
 			if err != nil {
 				return failed(err)
@@ -155,7 +158,7 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, payload []byte, p
 		if rej != nil {
 			return nil, 0, rej
 		}
-		res, rej, err := logsSince(ctx, ex, pl, a.cfg.Now())
+		res, rej, err := logsSince(ctx, ex, w, pl, a.cfg.Now())
 		if rej != nil {
 			return nil, 0, rej
 		}
@@ -172,7 +175,7 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, payload []byte, p
 		if (pl.Service != "exec" && pl.Service != "beacon") || (pl.Action != "start" && pl.Action != "stop" && pl.Action != "restart") {
 			return nil, 0, reject(intent.ReasonInvalidPayload, fmt.Sprintf("service %q / action %q", pl.Service, pl.Action))
 		}
-		active, err := ops.ServiceAction(ctx, ex, pl.Service, pl.Action)
+		active, err := ops.ServiceAction(ctx, ex, w.NodeNames(), pl.Service, pl.Action)
 		if err != nil {
 			return failed(err)
 		}

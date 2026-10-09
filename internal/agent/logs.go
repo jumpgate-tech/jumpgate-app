@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/logwatch"
@@ -39,11 +40,11 @@ var cursorRE = regexp.MustCompile(`^[A-Za-z0-9=;_-]{1,512}$`)
 
 // logsSinceCommand is one journalctl call over both node units, interleaved
 // by time, as JSON so each line keeps its timestamp and the cursor. The units
-// are the node's own (ops.NodeUnits), as for logs.read: nothing in the
+// are the node's own (ops.NodeUnits, under the box's names), as for logs.read: nothing in the
 // payload reaches the command line except a validated cursor and a number.
 // After a cursor, journalctl reads forward, so -n bounds the lines read and
 // a caller that falls behind catches up over several calls.
-func logsSinceCommand(cursor string, n int) (string, error) {
+func logsSinceCommand(units []string, cursor string, n int) (string, error) {
 	if n <= 0 {
 		n = intent.LogsDefaultN
 	}
@@ -52,7 +53,7 @@ func logsSinceCommand(cursor string, n int) (string, error) {
 	}
 	var b strings.Builder
 	b.WriteString("journalctl")
-	for _, u := range ops.NodeUnits() {
+	for _, u := range units {
 		b.WriteString(" -u " + u)
 	}
 	if cursor != "" {
@@ -143,8 +144,8 @@ func classifyLine(unit, line string, at time.Time) logwatch.Hit {
 // sent so the next call resumes there; and after a cursor, lines older than
 // logsSinceMaxAge are passed over, so a cursor cannot page back through the
 // box's history (without one the answer is the last n lines, as logs.read).
-func logsSince(ctx context.Context, ex executor.Executor, pl intent.LogsSincePayload, now time.Time) (LogsSinceResult, *Reject, error) {
-	cmd, err := logsSinceCommand(pl.Cursor, pl.N)
+func logsSince(ctx context.Context, ex executor.Executor, w catalog.WireConfig, pl intent.LogsSincePayload, now time.Time) (LogsSinceResult, *Reject, error) {
+	cmd, err := logsSinceCommand(ops.NodeUnits(w.NodeNames()), pl.Cursor, pl.N)
 	if err != nil {
 		return LogsSinceResult{}, reject(intent.ReasonInvalidPayload, err.Error()), nil
 	}
