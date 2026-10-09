@@ -697,3 +697,58 @@ func TestAnUnsavedLeaseTakeIsNotRestored(t *testing.T) {
 		t.Fatalf("lease %+v, log %v", got.Lease, ks)
 	}
 }
+
+// unsavedFold leaves the job as an interrupted fold does: step one's
+// step.finished is in the log, and the manifest still says running.
+func (g *rig) unsavedFold(t *testing.T) intent.JobRecord {
+	t.Helper()
+	rec, _ := g.start(t, g.a, `{}`)
+	if _, err := g.advanceAt(t, g.a, rec.ID, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	failManifestSave(t, 1)
+	if err := g.m.Reconcile(context.Background()); err == nil {
+		t.Fatal("the injected failure did not reach Reconcile")
+	}
+	if ks := g.kinds(t, rec.ID); ks[len(ks)-1] != joblog.KindStepFinished {
+		t.Fatalf("log %v", ks)
+	}
+	if rec, _ = g.read(t, rec.ID); rec.State != intent.JobRunning {
+		t.Fatalf("the fold was saved after all: %+v", rec)
+	}
+	return rec
+}
+
+// A lease change on a job with an unsaved fold settles the fold first; its
+// own entries cannot bury the outcome for a second fold.
+func TestALeaseCannotBuryAnUnsavedFold(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		op   func(t *testing.T, g *rig, id string) (intent.JobRecord, error)
+	}{
+		{"adoption", func(t *testing.T, g *rig, id string) (intent.JobRecord, error) {
+			g.now = g.now.Add(LeaseTTL + time.Second)
+			return g.lease(t, g.b, id, intent.LeaseTake)
+		}},
+		{"release", func(t *testing.T, g *rig, id string) (intent.JobRecord, error) {
+			return g.lease(t, g.a, id, intent.LeaseRelease)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newRig(t)
+			rec := g.unsavedFold(t)
+			got, err := tc.op(t, g, rec.ID)
+			if err != nil || got.State != intent.JobWaiting || got.Step != 1 {
+				t.Fatalf("lease op: %+v, %v", got, err)
+			}
+			if err := g.m.Reconcile(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			rec, _ = g.read(t, rec.ID)
+			ks := g.kinds(t, rec.ID)
+			if count(ks, joblog.KindStepFinished) != 1 || rec.State != intent.JobWaiting || rec.Step != 1 || rec.Unit != "" {
+				t.Fatalf("log %v, job %+v", ks, rec)
+			}
+		})
+	}
+}

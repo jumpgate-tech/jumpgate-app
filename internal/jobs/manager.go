@@ -48,10 +48,22 @@ type ManagerConfig struct {
 // entries therefore records the request first (its intent entry), then puts
 // the job's whole new state in the manifest with the first entry that
 // describes the change. A crash or a failed write can still stop a change
-// between an entry and its manifest save, or between its two entries;
-// restoreTrailing repairs both from the log's last entry, and Reconcile and
-// every operation run it before they write, so a step folds once and no
-// trailing entry stays lost.
+// between an entry and its manifest save, or between its two entries.
+// restoreTrailing repairs that from the log's last entry, and Reconcile,
+// Lease, Advance and Decide run it before they write anything, so no new
+// entry can bury a gap. It repairs:
+//
+//   - a fold outcome (step.finished or step.lost) logged but not saved: the
+//     job leaves running as the entry says, so the step folds once;
+//   - a decision.answered logged but not saved: the logged answer applies;
+//   - a missing decision.asked after a step's outcome;
+//   - a missing job.finished after the last step or an abort;
+//   - a missing lease.taken or lease.released after its lease intent.
+//
+// It deliberately leaves an unsaved step.started or intent entry: the
+// request it records changed nothing that was saved, its unit was never
+// started, and a retried request logs its own; the extra entry is cosmetic
+// and runs nothing twice.
 type Manager struct {
 	cfg   ManagerConfig
 	store *Store
@@ -412,10 +424,12 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 }
 
 func (m *Manager) reconcileJob(ctx context.Context, man *Manifest, plan Plan) error {
-	if man.State != intent.JobRunning {
-		return m.restoreTrailing(ctx, man, plan)
+	// First any repair, which may move a running job on (an unsaved fold);
+	// then a fold, only for a job still running.
+	if err := m.restoreTrailing(ctx, man, plan); err != nil {
+		return err
 	}
-	if man.Step >= len(plan.Steps) {
+	if man.State != intent.JobRunning || man.Step >= len(plan.Steps) {
 		return nil
 	}
 	active, err := m.cfg.Runner.Active(ctx, man.Unit)
@@ -425,42 +439,42 @@ func (m *Manager) reconcileJob(ctx context.Context, man *Manifest, plan Plan) er
 	return m.fold(ctx, man, plan)
 }
 
-// fold records how the job's ended unit went and moves the job on, once. If
-// the log already ends with this attempt's step.finished or step.lost, an
-// earlier fold appended it and then failed to save the manifest (Load
-// repairs only the log's length and head, so the manifest still says
-// running): fold rebuilds the state that entry recorded and saves it, rather
-// than appending the entry twice.
+// fold records how the job's ended unit went and moves the job on. Its
+// caller has run restoreTrailing on man, so the log does not already hold
+// this attempt's outcome: an unsaved one is rebuilt there, never appended
+// twice.
 func (m *Manager) fold(ctx context.Context, man *Manifest, plan Plan) error {
 	s, attempt, unit := plan.Steps[man.Step], man.Attempt, man.Unit
 	path, err := ResultPath(m.store.Dir(), man.ID, s.ID, attempt)
 	if err != nil {
 		return err
 	}
-	kind, body, written, err := m.foldedEntry(man, s.ID, attempt, unit)
+	kind, body, res := readOutcome(path, s.ID, attempt, unit)
+	m.settle(man, plan, kind, body, res)
+	if err := m.store.Append(ctx, man, kind, body); err != nil {
+		return err
+	}
+	return m.restoreTrailing(ctx, man, plan)
+}
+
+// refold is fold for an outcome already in the log whose manifest save
+// failed (Load repairs only the log's length and head, so the manifest still
+// says running): it rebuilds the state the entry records and saves it.
+func (m *Manager) refold(man *Manifest, plan Plan, kind string, body joblog.StepBody) error {
+	path, err := ResultPath(m.store.Dir(), man.ID, body.Step, body.Attempt)
 	if err != nil {
 		return err
 	}
 	var res StepResult
-	switch {
-	case !written:
-		kind, body, res = readOutcome(path, s.ID, attempt, unit)
-	case kind == joblog.KindStepFinished && body.OK:
+	if kind == joblog.KindStepFinished && body.OK {
 		// The entry says the step succeeded; what it produced is in its
 		// result file, which nothing rewrites.
 		if res, err = readResult(path); err != nil {
-			return fmt.Errorf("step %s attempt %d is logged as finished but its result cannot be read again: %w", s.ID, attempt, err)
+			return fmt.Errorf("step %s attempt %d is logged as finished but its result cannot be read again: %w", body.Step, body.Attempt, err)
 		}
 	}
 	m.settle(man, plan, kind, body, res)
-	if written {
-		if err := m.store.Save(man); err != nil {
-			return err
-		}
-	} else if err := m.store.Append(ctx, man, kind, body); err != nil {
-		return err
-	}
-	return m.restoreTrailing(ctx, man, plan)
+	return m.store.Save(man)
 }
 
 // foldedEntry is the step.finished or step.lost the log ends with, if it is
@@ -596,8 +610,8 @@ func (m *Manager) lastEntry(man *Manifest) (joblog.Entry, bool, error) {
 //
 //   - The entry is written but the manifest save after it failed. Load then
 //     repairs only the log's length and head, so the manifest still predates
-//     the entry. For a fold this is fold's own check; for decision.answered
-//     the answer is applied here.
+//     the entry. A fold outcome (step.finished or step.lost) is settled
+//     with refold; a decision.answered is applied with decideState.
 //   - A change's first entry and its manifest are saved, and its second
 //     entry (decision.asked, job.finished, lease.taken, lease.released) is
 //     missing. It is appended here.
@@ -605,6 +619,21 @@ func (m *Manager) lastEntry(man *Manifest) (joblog.Entry, bool, error) {
 // Every operation runs this before it writes, so a gap is closed before a
 // new entry could hide it.
 func (m *Manager) restoreTrailing(ctx context.Context, man *Manifest, plan Plan) error {
+	// A running job whose log ends with this attempt's outcome was folded
+	// but not saved. It leaves running here, before anything can append past
+	// that outcome and hide it from the check. (A job whose plan this agent
+	// does not know cannot be settled; nothing here advances it.)
+	if man.State == intent.JobRunning && man.Step < len(plan.Steps) {
+		kind, body, written, err := m.foldedEntry(man, plan.Steps[man.Step].ID, man.Attempt, man.Unit)
+		if err != nil {
+			return err
+		}
+		if written {
+			if err := m.refold(man, plan, kind, body); err != nil {
+				return err
+			}
+		}
+	}
 	e, ok, err := m.lastEntry(man)
 	if err != nil || !ok {
 		return err
