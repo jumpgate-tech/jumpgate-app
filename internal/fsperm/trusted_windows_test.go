@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -48,5 +49,32 @@ func TestOpenNoReparseRefusesAReparsePoint(t *testing.T) {
 	if h, err := openNoReparse(link, 0x80000000, 7, 0); err == nil {
 		_ = h
 		t.Fatal("a symlink was opened as a file")
+	}
+}
+
+// The returned file's Name is the final path of the open handle with no \\?\
+// prefix for a drive path: the resolved file that was checked, in a form ssh's
+// argv split accepts.
+func TestOpenTrustedWritableNamesTheResolvedPath(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.WriteFile(real, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenTrustedWritable(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	got := f.Name()
+	if strings.HasPrefix(got, `\\`) || len(got) < 3 || got[1] != ':' || got[2] != '\\' {
+		t.Fatalf("Name() = %q, want a plain drive path", got)
+	}
+	want, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.EqualFold(got, want) {
+		t.Fatalf("Name() = %q, want %q", got, want)
 	}
 }

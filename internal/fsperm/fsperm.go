@@ -166,7 +166,9 @@ func Rename(oldpath, newpath string) error { return rename(oldpath, newpath) }
 // between, so the check and the open are one operation: a symlink is resolved
 // once, the real file is opened without following a link or reparse point, and
 // the permissions are read from that open file. Read from the returned file,
-// never from path again.
+// never from path again. Its Name is the resolved path that was checked (on
+// Windows, where the open handle really is, without the \\?\ prefix for a
+// drive path), so a caller that must pass a path on can pass that one.
 func OpenTrustedWritable(path string) (*os.File, error) { return openTrustedWritable(path) }
 
 // CheckTrustedWritable is OpenTrustedWritable for a caller that needs only the

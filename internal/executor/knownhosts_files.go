@@ -66,21 +66,19 @@ func OpenSSHKnownHosts(home string) []string {
 // which cannot read the in-memory snapshot. The child re-opens the system
 // file by name, so unlike Strict it reads whatever is there then; the check
 // it passed means only a trusted account could have changed it since.
+//
+// The path given is the opened file's own name, which the trust check set to
+// the resolved path it judged, not a second lookup of systemKnownHosts: a
+// symlink retargeted after the check cannot send ssh to a file never checked.
 func OpenSSHKnownHostsPaths(home string) []string {
 	files := []string{filepath.Join(home, ".ssh", "known_hosts")}
 	f := openTrustedSystemKnownHosts()
 	if f == nil {
 		return files
 	}
+	checked := f.Name()
 	f.Close()
-	// The check followed any symlink, so hand ssh the file it judged, not the
-	// link, which could be retargeted before ssh reads it.
-	resolved, err := filepath.EvalSymlinks(systemKnownHosts)
-	if err != nil {
-		log.Printf("jumpgate: ignoring %s: %v", systemKnownHosts, err)
-		return files
-	}
-	return append(files, resolved)
+	return append(files, checked)
 }
 
 // openTrustedSystemKnownHosts opens the system-wide file when it exists and
