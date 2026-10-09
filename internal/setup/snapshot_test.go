@@ -312,7 +312,9 @@ func TestSnapshot_VerifyFailsUntilTheDataDirIsPopulated(t *testing.T) {
 
 func TestSnapshot_VerifyPassesOnceTheCompletionMarkerExists(t *testing.T) {
 	w := snapshotWire()
-	e := newFakeExecutor().script("cat", executor.Result{Stdout: w.DataDir + "\n"})
+	e := newFakeExecutor().
+		script("cat", executor.Result{Stdout: w.DataDir + "\n"}).
+		script("test -d", executor.Result{ExitCode: 0})
 
 	if err := snapshotStep().Verify(context.Background(), e, &State{Wire: w}); err != nil {
 		t.Fatalf("verify: %v", err)
@@ -497,5 +499,38 @@ func TestMarkers_LiveOutsideTheDataDirAndAreNeverChowned(t *testing.T) {
 		if strings.Contains(c, "> '"+w.DataDir) {
 			t.Errorf("a command redirects into the data dir: %s", c)
 		}
+	}
+}
+
+// A marker for another dir is never adopted over, even when the new dir has a
+// db/ and the exec unit survives from the old one: that db/ may be the
+// half-unpacked remains of an interrupted restore.
+func TestSnapshot_AMarkerForAnotherDataDirIsNeverAdopted(t *testing.T) {
+	w := snapshotWire()
+	f := newFakeExecutor().
+		script("cat", executor.Result{Stdout: "/mnt/old-disk/reth\n"}).
+		script("test -d", executor.Result{ExitCode: 0}).
+		script("test -f", executor.Result{ExitCode: 0})
+	err := snapshotStep().Verify(context.Background(), f, &State{Wire: w})
+	if err == nil {
+		t.Fatal("a marker naming another data dir was adopted")
+	}
+	if !strings.Contains(err.Error(), "/mnt/old-disk/reth") || !strings.Contains(err.Error(), w.DataDir) {
+		t.Errorf("error %q should name both dirs", err)
+	}
+	if indexContaining(f, "mv -f") >= 0 {
+		t.Fatalf("the marker was rewritten: %v", f.callLog())
+	}
+}
+
+// A data dir emptied in place keeps its marker; the db/ it vouched for is gone.
+func TestSnapshot_AMatchingMarkerNeedsTheDatabaseStillThere(t *testing.T) {
+	w := snapshotWire()
+	f := newFakeExecutor().
+		script("cat", executor.Result{Stdout: w.DataDir + "\n"}).
+		script("test -d", executor.Result{ExitCode: 1})
+	err := snapshotStep().Verify(context.Background(), f, &State{Wire: w})
+	if err == nil || !strings.Contains(err.Error(), "is gone") {
+		t.Fatalf("want a db-is-gone error, got %v", err)
 	}
 }

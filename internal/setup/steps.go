@@ -459,22 +459,36 @@ func snapshotStep() Step {
 			if !w.ExecSnapshot {
 				return nil
 			}
-			// The marker names the data dir it vouches for: a rerun against a
-			// different dir (a new disk) or one wiped by hand must not pass.
-			// A mismatch counts as no marker.
+			// The marker names the data dir it vouches for, so a rerun against
+			// a different dir (a new disk) cannot pass on the old one's say-so.
+			// And because a dir can be emptied in place at the same path, a
+			// matching marker also needs the db/ it vouched for.
+			dbDir := shQuote(path.Join(w.DataDir, "db"))
 			res, err := e.Run(ctx, "cat "+shQuote(catalog.SnapshotMarkerPath(w)), nil)
 			if err != nil {
 				return fmt.Errorf("snapshot: verify completion marker: %w", err)
 			}
-			if res.ExitCode == 0 && strings.TrimSpace(res.Stdout) == w.DataDir {
+			if res.ExitCode == 0 {
+				if named := strings.TrimSpace(res.Stdout); named != w.DataDir {
+					// Never adopt here: the exec unit survives from the old
+					// dir, so a half-unpacked db/ in the new one would pass.
+					return fmt.Errorf("snapshot: the snapshot marker names %s, not %s; the restore has not run here", named, w.DataDir)
+				}
+				res, err = e.Run(ctx, "test -d "+dbDir, nil)
+				if err != nil {
+					return fmt.Errorf("snapshot: verify data dir: %w", err)
+				}
+				if res.ExitCode != 0 {
+					return fmt.Errorf("snapshot: the snapshot marker is present but %s/db is gone", w.DataDir)
+				}
 				return nil
 			}
 
-			// No marker. A box set up before markers existed has a db/
+			// No marker file at all. A box set up before markers existed has a db/
 			// directory and its exec unit (wire ran after the restore), so
 			// adopt it rather than download over live data. A db/ without the
 			// unit may be half-unpacked and must not be trusted.
-			res, err = e.Run(ctx, fmt.Sprintf("test -d %s", shQuote(path.Join(w.DataDir, "db"))), nil)
+			res, err = e.Run(ctx, "test -d "+dbDir, nil)
 			if err != nil {
 				return fmt.Errorf("snapshot: verify data dir: %w", err)
 			}
