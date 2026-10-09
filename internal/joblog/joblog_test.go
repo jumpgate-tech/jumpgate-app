@@ -25,6 +25,21 @@ func TestSchemaIsFrozen(t *testing.T) {
 	}
 }
 
+func mustKey(t *testing.T) *signer.Key {
+	t.Helper()
+	k, err := signer.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+func TestVerifyIntentsRefusesAnEmptyJobID(t *testing.T) {
+	if err := VerifyIntents(eip712.Address{}, "", nil); !errors.Is(err, ErrBroken) {
+		t.Fatalf("VerifyIntents with no job id = %v, want ErrBroken", err)
+	}
+}
+
 // chain signs n entries the way the agent appends them.
 func chain(t *testing.T, k *signer.Key, n int) []Entry {
 	t.Helper()
@@ -42,14 +57,17 @@ func chain(t *testing.T, k *signer.Key, n int) []Entry {
 }
 
 func TestVerifyAcceptsAnUnbrokenChainAndResumes(t *testing.T) {
-	k, _ := signer.GenerateKey()
+	k := mustKey(t)
 	es := chain(t, k, 4)
 	head, err := Verify(k.Address(), job, es, 0, [32]byte{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A controller that already verified the first two verifies only the rest.
-	mid, _ := Verify(k.Address(), job, es[:2], 0, [32]byte{})
+	mid, err := Verify(k.Address(), job, es[:2], 0, [32]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	again, err := Verify(k.Address(), job, es[2:], 2, mid)
 	if err != nil || again != head {
 		t.Fatalf("resumed verify: %v, head %x vs %x", err, again, head)
@@ -58,8 +76,8 @@ func TestVerifyAcceptsAnUnbrokenChainAndResumes(t *testing.T) {
 
 // Review Focus 5.
 func TestVerifyRejectsEditsReordersAndForeignSigners(t *testing.T) {
-	k, _ := signer.GenerateKey()
-	other, _ := signer.GenerateKey()
+	k := mustKey(t)
+	other := mustKey(t)
 	for name, mutate := range map[string]func([]Entry) []Entry{
 		"edited body":    func(es []Entry) []Entry { es[1].Body = []byte(`{"ok":false}`); return es },
 		"edited kind":    func(es []Entry) []Entry { es[2].Kind = KindStepLost; return es },
@@ -90,9 +108,12 @@ func TestVerifyRejectsEditsReordersAndForeignSigners(t *testing.T) {
 }
 
 func TestJSONRoundTripKeepsTheSignature(t *testing.T) {
-	k, _ := signer.GenerateKey()
+	k := mustKey(t)
 	es := chain(t, k, 2)
-	b, _ := json.Marshal(ToJSON(es[1]))
+	b, err := json.Marshal(ToJSON(es[1]))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var j intent.JobLogEntryJSON
 	if err := json.Unmarshal(b, &j); err != nil {
 		t.Fatal(err)
@@ -126,10 +147,10 @@ func signedEnvelope(t *testing.T, agent eip712.Address, id string, controller, s
 // Review Focus 5: an intent entry proves who asked only if the controller it
 // names signed it, over exactly the payload it carries, for this agent and job.
 func TestVerifyIntentsNeedsTheNamedController(t *testing.T) {
-	agentKey, _ := signer.GenerateKey()
-	otherAgent, _ := signer.GenerateKey()
-	ctl, _ := signer.GenerateKey()
-	mallory, _ := signer.GenerateKey()
+	agentKey := mustKey(t)
+	otherAgent := mustKey(t)
+	ctl := mustKey(t)
+	mallory := mustKey(t)
 	a := agentKey.Address()
 	good := signedEnvelope(t, a, job, ctl, ctl)
 	swapped := good
@@ -187,8 +208,8 @@ func createdEntry(t *testing.T, agentKey, ctl *signer.Key) (Entry, string) {
 }
 
 func TestVerifyIntentsBindsACreatedEntryToItsJobID(t *testing.T) {
-	agentKey, _ := signer.GenerateKey()
-	ctl, _ := signer.GenerateKey()
+	agentKey := mustKey(t)
+	ctl := mustKey(t)
 	e, id := createdEntry(t, agentKey, ctl)
 	if !regexp.MustCompile(`^[0-9a-f]{16}$`).MatchString(id) {
 		t.Fatalf("JobIDFor = %q, want 16 lowercase hex characters", id)
@@ -205,7 +226,7 @@ func TestVerifyIntentsBindsACreatedEntryToItsJobID(t *testing.T) {
 
 // A log cut short still verifies; only its head gives the cut away.
 func TestVerifyOfATruncatedLogReturnsADifferentHead(t *testing.T) {
-	k, _ := signer.GenerateKey()
+	k := mustKey(t)
 	es := chain(t, k, 4)
 	full, err := Verify(k.Address(), job, es, 0, [32]byte{})
 	if err != nil {
@@ -233,7 +254,10 @@ func TestDescribeStripsControlCharacters(t *testing.T) {
 }
 
 func TestDescribeIsOneReadableLine(t *testing.T) {
-	q, _ := json.Marshal(intent.JobQuestion{ID: "stop-units-0-busy-user", Prompt: "2 processes still run"})
+	q, err := json.Marshal(intent.JobQuestion{ID: "stop-units-0-busy-user", Prompt: "2 processes still run"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for kind, body := range map[string][]byte{
 		KindStepStarted:   []byte(`{"step":"stop-units","attempt":0,"unit":"jumpgate-job-x-stop-units-0"}`),
 		KindDecisionAsked: q,

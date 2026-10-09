@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -101,6 +102,8 @@ func Verify(agent eip712.Address, job string, entries []Entry, start uint64, pre
 	return prev, nil
 }
 
+var jobIDRE = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
 // JobIDFor is the id of the job a creating intent starts: the first 8 bytes of
 // the intent's EIP-712 digest, in hex (16 characters). The id commits to the
 // signed request that created the job, so a created entry can be checked
@@ -123,7 +126,14 @@ func JobIDFor(in intent.Intent) (string, error) {
 // the job id is derived from (JobIDFor). The agent checked all this
 // when it admitted the intent; a controller checks it again because the log
 // is how it learns who asked for what.
+//
+// It checks controller authority only. It does not check the agent's entry
+// signatures, so the caller must also run Verify on the same entries.
 func VerifyIntents(agent eip712.Address, job string, entries []Entry) error {
+	// An empty or malformed id would let an id-less payload match it.
+	if !jobIDRE.MatchString(job) {
+		return fmt.Errorf("%w: %q is not a job id", ErrBroken, job)
+	}
 	for _, e := range entries {
 		if e.Kind != KindCreated && e.Kind != KindIntent {
 			continue
