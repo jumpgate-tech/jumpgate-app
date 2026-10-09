@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -750,5 +751,70 @@ func TestALeaseCannotBuryAnUnsavedFold(t *testing.T) {
 				t.Fatalf("log %v, job %+v", ks, rec)
 			}
 		})
+	}
+}
+
+// An agent that does not know the job's plan cannot settle an unsaved
+// outcome, so it refuses an adoption rather than bury the outcome; an agent
+// that knows the plan settles it once.
+func TestALeaseOnAnUnknownPlanCannotBuryAnUnsavedFold(t *testing.T) {
+	g := newRig(t)
+	rec := g.unsavedFold(t)
+	p, _ := PlanFor("test.two/1")
+	Unregister(p.Version) // a downgraded agent
+	g.now = g.now.Add(LeaseTTL + time.Second)
+	if _, err := g.lease(t, g.b, rec.ID, intent.LeaseTake); refusalCode(err) != intent.ReasonUnknownPlan ||
+		!strings.Contains(err.Error(), "run an agent that knows plan test.two/1") {
+		t.Fatalf("adoption over an unsaved outcome = %v", err)
+	}
+	if after, _ := g.read(t, rec.ID); after.LogLen != rec.LogLen || after.Lease.Owner != g.a.Address().Hex() {
+		t.Fatalf("the refused lease wrote: %+v", after)
+	}
+	Register(p) // the plan is back: an agent that knows it
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = g.read(t, rec.ID)
+	if ks := g.kinds(t, rec.ID); count(ks, joblog.KindStepFinished) != 1 || rec.State != intent.JobWaiting || rec.Step != 1 {
+		t.Fatalf("log %v, job %+v", ks, rec)
+	}
+}
+
+// With no unsaved outcome, a lease on an unknown-plan job still works.
+func TestALeaseOnAnUnknownPlanStillWorks(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{}`)
+	Unregister("test.two/1")
+	g.now = g.now.Add(LeaseTTL + time.Second)
+	got, err := g.lease(t, g.b, rec.ID, intent.LeaseTake)
+	if err != nil || got.Lease.Owner != g.b.Address().Hex() {
+		t.Fatalf("adoption of an unknown-plan job: %+v, %v", got.Lease, err)
+	}
+}
+
+// An unsaved successful outcome whose result file is gone cannot be rebuilt:
+// every writer fails on the job and writes nothing past it.
+func TestAnUnsavedOutcomeWithoutItsResultFailsClosed(t *testing.T) {
+	g := newRig(t)
+	rec := g.unsavedFold(t)
+	p, err := ResultPath(g.dir, rec.ID, "one", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.lease(t, g.a, rec.ID, intent.LeaseRelease); err == nil {
+		t.Fatal("a release appended past an outcome it could not settle")
+	}
+	g.now = g.now.Add(LeaseTTL + time.Second)
+	if _, err := g.lease(t, g.b, rec.ID, intent.LeaseTake); err == nil {
+		t.Fatal("an adoption appended past an outcome it could not settle")
+	}
+	if err := g.m.Reconcile(context.Background()); err == nil {
+		t.Fatal("reconcile passed over an outcome it could not settle")
+	}
+	if after, _ := g.read(t, rec.ID); after.LogLen != rec.LogLen || after.State != intent.JobRunning {
+		t.Fatalf("the job moved: %+v", after)
 	}
 }

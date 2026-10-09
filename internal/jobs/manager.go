@@ -64,6 +64,19 @@ type ManagerConfig struct {
 // request it records changed nothing that was saved, its unit was never
 // started, and a retried request logs its own; the extra entry is cosmetic
 // and runs nothing twice.
+//
+// Two cases cannot be repaired, and both fail closed, writing nothing:
+//
+//   - A job whose format, driver or plan version this agent does not know is
+//     never settled or repaired from its plan. Lease is the only operation
+//     that writes on such a job, and it refuses (unknown_plan) while the
+//     log ends with an outcome of the job's running unit that was never
+//     saved, rather than append past it: the job waits for an agent that
+//     knows its plan.
+//   - An unsaved successful outcome whose result file is gone cannot be
+//     rebuilt (the result is only in that file). restoreTrailing returns an
+//     error, so Lease, Advance, Decide and Reconcile all fail on the job
+//     rather than append past the outcome.
 type Manager struct {
 	cfg   ManagerConfig
 	store *Store
@@ -232,7 +245,22 @@ func (m *Manager) Lease(ctx context.Context, id, op string, who eip712.Address, 
 	man, plan, err := m.load(id)
 	var r *Refusal
 	if errors.As(err, &r) && r.Code == intent.ReasonUnknownPlan {
-		err = nil // a lease on a job this agent cannot advance is still a lease; it lets a controller watch and decide nothing
+		// A lease on a job this agent cannot advance is still a lease: it
+		// lets a controller watch, and decide nothing. But an outcome the
+		// last agent logged and never saved can only be settled from the
+		// plan; appending past it would hide it, and an agent that knows the
+		// plan would then fold the step a second time.
+		unsettled, uerr := m.unsettledOutcome(&man)
+		if uerr != nil {
+			return intent.JobRecord{}, uerr
+		}
+		if unsettled {
+			return intent.JobRecord{}, refuse(intent.ReasonUnknownPlan, fmt.Sprintf(
+				"job %s has a step outcome this agent cannot settle (format %d, driver %q, plan %s); run an agent that knows plan %s, then take its lease",
+				id, man.Format, man.Driver, man.PlanVersion, man.PlanVersion))
+		}
+		// Nothing below may read a plan this agent does not trust.
+		err, plan = nil, Plan{}
 	}
 	if err != nil {
 		return intent.JobRecord{}, err
@@ -587,6 +615,24 @@ func decideState(man *Manifest, plan Plan, option, by string) {
 	man.Answer = &Answer{Key: q.Key, Option: option, Step: man.Step, Attempt: man.Attempt}
 	man.Attempt++
 	man.State = intent.JobWaiting
+}
+
+// unsettledOutcome reports, without the plan, whether the log ends with the
+// step.finished or step.lost of the job's running unit: a fold whose
+// manifest save failed.
+func (m *Manager) unsettledOutcome(man *Manifest) (bool, error) {
+	if man.State != intent.JobRunning || man.Unit == "" {
+		return false, nil
+	}
+	e, ok, err := m.lastEntry(man)
+	if err != nil || !ok || (e.Kind != joblog.KindStepFinished && e.Kind != joblog.KindStepLost) {
+		return false, err
+	}
+	var b joblog.StepBody
+	if err := json.Unmarshal(e.Body, &b); err != nil {
+		return false, fmt.Errorf("%w: job %s entry %d: %v", ErrDamaged, man.ID, e.Index, err)
+	}
+	return b.Unit == man.Unit, nil
 }
 
 // lastEntry is the log's last entry; ok is false for an empty log.
