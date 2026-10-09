@@ -140,7 +140,7 @@ func New(o Options) *App {
 		a.screens[i] = comingScreen{name: screenNames[i]}
 	}
 	a.screens[scrFleet] = newFleetScreen()
-	a.screens[scrJobs] = jobsScreen{}
+	a.screens[scrJobs] = &jobsScreen{}
 	a.screens[scrGateways] = &gatewaysScreen{}
 	a.screens[scrHosts] = &hostsScreen{}
 	a.screens[scrSigners] = &signersScreen{}

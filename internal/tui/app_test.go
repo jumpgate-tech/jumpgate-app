@@ -78,7 +78,7 @@ func TestTooSmallTerminalKeepsState(t *testing.T) {
 		t.Fatalf("frame:\n%s", f)
 	}
 	m, _ = tuitest.Send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
-	if m.(*App).active != scrJobs || !strings.Contains(tuitest.Frame(m), "Durable jobs") {
+	if m.(*App).active != scrJobs || !strings.Contains(tuitest.Frame(m), "Jobs inbox") {
 		t.Fatalf("state lost:\n%s", tuitest.Frame(m))
 	}
 }
@@ -140,8 +140,8 @@ func TestStatusBarShowsTheDataAge(t *testing.T) {
 
 func TestHelpListsGlobalKeys(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
-	// From the jobs screen, which has no keys of its own, so this frame does
-	// not change as later tasks give screens their keys.
+	// From the jobs screen: the frame lists its own keys (d, a, r) under
+	// "keys here" after the global ones.
 	m, _ := tuitest.Send(a, tuitest.Key("5"), tuitest.Key("?"))
 	fr := tuitest.Frame(m)
 	for _, want := range []string{"help", "quit", "screens", "command"} {

@@ -15,10 +15,10 @@ keys everywhere
   enter        open
   /            filter
 
-
-
-
-
-
-
+keys here
+  ↑/k          up
+  ↓/j          down
+  enter        open
+  d            answer the selected job's question
+  a            adopt a job whose controller went silent
  no box selected · server connecting · jobs ⚑ –
