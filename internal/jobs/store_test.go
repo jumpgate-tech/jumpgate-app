@@ -31,6 +31,15 @@ func testStore(t *testing.T) (*Store, *signer.Key, *time.Time) {
 // newManifest builds a job the way the agent does: a signed creating intent
 // whose digest names the job (ruling R-J5). The intent's random nonce keeps
 // every fixture's id distinct.
+// writeManifest puts m on disk as it is, bypassing Save's staleness check, to
+// stand in for a crash that left the manifest behind or wrong.
+func writeManifest(t *testing.T, s *Store, m *Manifest) {
+	t.Helper()
+	b, err := json.Marshal(m)
+	mustOK(t, err)
+	mustOK(t, os.WriteFile(filepath.Join(s.Dir(), m.ID+".json"), b, 0o600))
+}
+
 func mustOK(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
@@ -126,7 +135,7 @@ func TestLoadCompletesAnAppendTheManifestMissed(t *testing.T) {
 	mustOK(t, s.Create(ctx, &m, mbody))
 	stale := m // the manifest as saved
 	mustOK(t, s.Append(ctx, &m, joblog.KindStepStarted, joblog.StepBody{Step: "one"}))
-	mustOK(t, s.Save(&stale)) // a crash between the append and the save
+	writeManifest(t, s, &stale) // a crash between the append and the save
 	got, err := s.Load(m.ID)
 	if err != nil || got.LogLen != 2 || got.LogHead != m.LogHead {
 		t.Fatalf("Load = len %d head %s, %v; want len 2 head %s", got.LogLen, got.LogHead, err, m.LogHead)
@@ -206,7 +215,7 @@ func TestLoadDetectsAHeadThatDisagreesWithTheManifest(t *testing.T) {
 	mustOK(t, s.Create(ctx, &m, mbody))
 	mustOK(t, s.Append(ctx, &m, joblog.KindStepStarted, joblog.StepBody{Step: "one"}))
 	m.LogHead = "0x" + strings.Repeat("11", 32) // same count, a different head
-	mustOK(t, s.Save(&m))
+	writeManifest(t, s, &m)
 	if _, err := s.Load(m.ID); !errors.Is(err, ErrDamaged) {
 		t.Fatalf("Load with a wrong head = %v, want ErrDamaged", err)
 	}
@@ -443,5 +452,82 @@ func TestLoadRefusesAManifestForAnotherJob(t *testing.T) {
 	mustOK(t, os.WriteFile(filepath.Join(s.Dir(), other.ID+".json"), b, 0o600))
 	if _, err := s.Load(other.ID); !errors.Is(err, ErrDamaged) {
 		t.Fatalf("Load = %v, want ErrDamaged", err)
+	}
+}
+
+// Review I3: two copies of one job must not both write it.
+func TestAStaleCopyCannotAppendOrSave(t *testing.T) {
+	s, k, _ := testStore(t)
+	m, mbody := newManifest(t)
+	ctx := context.Background()
+	mustOK(t, s.Create(ctx, &m, mbody))
+	a, err := s.Load(m.ID)
+	mustOK(t, err)
+	b, err := s.Load(m.ID)
+	mustOK(t, err)
+	mustOK(t, s.Append(ctx, &a, joblog.KindStepStarted, joblog.StepBody{Step: "one"}))
+	if err := s.Append(ctx, &b, joblog.KindStepStarted, joblog.StepBody{Step: "two"}); !errors.Is(err, ErrStale) {
+		t.Fatalf("Append through a stale copy = %v, want ErrStale", err)
+	}
+	if err := s.Save(&b); !errors.Is(err, ErrStale) {
+		t.Fatalf("Save of a stale copy = %v, want ErrStale", err)
+	}
+	es, _, err := s.ReadLog(m.ID, 0, 0)
+	mustOK(t, err)
+	if _, err := joblog.Verify(k.Address(), m.ID, es, 0, [32]byte{}); err != nil || len(es) != 2 {
+		t.Fatalf("log: %d entries, %v", len(es), err)
+	}
+	if got, err := s.Load(m.ID); err != nil || got.LogLen != 2 {
+		t.Fatalf("Load = %d, %v", got.LogLen, err)
+	}
+}
+
+// Review I1: once the fsync succeeded the entry is durable, so a failing close
+// must not stop the manifest from moving on to it.
+func TestAppendSucceedsWhenOnlyTheCloseFails(t *testing.T) {
+	s, _, _ := testStore(t)
+	m, mbody := newManifest(t)
+	ctx := context.Background()
+	mustOK(t, s.Create(ctx, &m, mbody))
+	orig := closeFile
+	defer func() { closeFile = orig }()
+	closeFile = func(f *os.File) error { _ = f.Close(); return errors.New("injected close failure") }
+	mustOK(t, s.Append(ctx, &m, joblog.KindStepStarted, joblog.StepBody{Step: "one"}))
+	closeFile = orig
+	mustOK(t, s.Append(ctx, &m, joblog.KindStepStarted, joblog.StepBody{Step: "two"}))
+	if got, err := s.Load(m.ID); err != nil || got.LogLen != 3 {
+		t.Fatalf("Load = %d, %v", got.LogLen, err)
+	}
+}
+
+// A prune that fails after the manifest is gone leaves orphans, not a damaged
+// job, and the next prune sweeps them.
+func TestPruneLeavesNoDamagedJobWhenItFailsHalfway(t *testing.T) {
+	s, _, now := testStore(t)
+	m, mbody := newManifest(t)
+	m.State = intent.JobSucceeded
+	mustOK(t, s.Create(context.Background(), &m, mbody))
+	*now = now.Add(60 * 24 * time.Hour)
+	orig := removeFile
+	defer func() { removeFile = orig }()
+	removeFile = func(p string) error {
+		if strings.HasSuffix(p, ".log") {
+			return errors.New("injected removal failure")
+		}
+		return os.Remove(p)
+	}
+	if err := s.Prune(time.Hour, 100); err == nil {
+		t.Fatal("Prune succeeded although the log could not be removed")
+	}
+	ms, err := s.List()
+	if err != nil || len(ms) != 0 {
+		t.Fatalf("List after a failed prune = %+v, %v", ms, err)
+	}
+	removeFile = orig
+	mustOK(t, s.Prune(time.Hour, 100))
+	ents, err := os.ReadDir(s.Dir())
+	mustOK(t, err)
+	if len(ents) != 0 {
+		t.Fatalf("orphans left behind: %v", ents)
 	}
 }

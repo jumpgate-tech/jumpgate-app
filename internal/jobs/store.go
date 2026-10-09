@@ -70,6 +70,34 @@ func badID(id string) error {
 	return refuse(intent.ReasonValidation, fmt.Sprintf("%q is not a job id", id))
 }
 
+// ErrStale means the caller's manifest no longer matches the one on disk:
+// another copy appended or saved since it was loaded. Writing it would sign
+// an index twice or roll the other copy back, so the caller must reload.
+var ErrStale = errors.New("jobs: stale manifest, reload the job and try again")
+
+// closeFile and removeFile are variables so tests can make a close or a
+// removal fail.
+var (
+	closeFile  = func(f *os.File) error { return f.Close() }
+	removeFile = os.Remove
+)
+
+// checkFresh refuses m when its log length or head differ from the manifest
+// on disk. A missing manifest passes only if allowMissing (a first Save).
+func (s *Store) checkFresh(m *Manifest, allowMissing bool) error {
+	disk, err := LoadManifest(s.dir, m.ID)
+	if errors.Is(err, ErrNotFound) && allowMissing {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if disk.LogLen != m.LogLen || manifestPrev(disk) != manifestPrev(*m) {
+		return fmt.Errorf("%w: job %s is at entry %d on disk, the caller's copy at %d", ErrStale, m.ID, disk.LogLen, m.LogLen)
+	}
+	return nil
+}
+
 // syncFile fsyncs a log file. It is a variable so a test can make the fsync
 // of an append fail.
 var syncFile = func(f *os.File) error { return f.Sync() }
@@ -120,7 +148,9 @@ func (s *Store) Create(ctx context.Context, m *Manifest, created joblog.IntentBo
 // store lock. If the write or fsync fails the log is cut back to its old
 // length, so the next Append signs the same index onto a log that still
 // verifies. If only the manifest save fails the entry stays in the log, one
-// ahead of the manifest, which Load completes.
+// ahead of the manifest, which Load completes. A copy of m that is not the
+// manifest on disk (another copy appended since it was loaded) is refused with
+// ErrStale, never merged.
 func (s *Store) Append(ctx context.Context, m *Manifest, kind string, body any) error {
 	if !ValidID(m.ID) {
 		return badID(m.ID)
@@ -131,6 +161,9 @@ func (s *Store) Append(ctx context.Context, m *Manifest, kind string, body any) 
 }
 
 func (s *Store) appendLocked(ctx context.Context, m *Manifest, kind string, body any) error {
+	if err := s.checkFresh(m, false); err != nil {
+		return err
+	}
 	b, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -189,16 +222,24 @@ func (s *Store) writeLine(path string, line []byte) error {
 		f.Close()
 		return werr
 	}
-	return f.Close()
+	// The line is synced, so it is durable and the manifest must move on to
+	// it; a failing close of a file opened only for append loses nothing.
+	_ = closeFile(f)
+	return nil
 }
 
-// Save replaces m's manifest atomically, 0600.
+// Save replaces m's manifest atomically, 0600. It refuses a copy whose log
+// length or head differ from the manifest on disk (ErrStale), so a stale copy
+// cannot roll back another copy's Append.
 func (s *Store) Save(m *Manifest) error {
 	if !ValidID(m.ID) {
 		return badID(m.ID)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkFresh(m, true); err != nil {
+		return err
+	}
 	return s.saveLocked(m)
 }
 
@@ -383,12 +424,17 @@ func (s *Store) listLocked() ([]listed, error) {
 
 // Prune removes finished jobs last changed more than maxAge ago, and all but
 // the newest keep finished jobs (D-J6). Unfinished jobs are never pruned, and
-// neither is a job that failed its check: its log is evidence. A job's files
-// go before its manifest, so a failed removal leaves a job that is still
-// listed and can be retried.
+// neither is a job that failed its check: its log is evidence. A job's
+// manifest goes first: from then on List cannot see the job, so a crash or a
+// failed removal leaves only orphan files, never a manifest that loads as
+// damaged. Every Prune sweeps such orphans (a log or .d with a valid id and no
+// manifest) before it starts.
 func (s *Store) Prune(maxAge time.Duration, keep int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.sweepOrphans(); err != nil {
+		return err
+	}
 	js, err := s.listLocked()
 	if err != nil {
 		return err
@@ -403,15 +449,47 @@ func (s *Store) Prune(maxAge time.Duration, keep int) error {
 		if m.UpdatedAt >= cutoff && kept <= keep {
 			continue
 		}
-		if err := os.RemoveAll(resultDir(s.dir, m.ID)); err != nil {
+		if err := removeFile(manifestPath(s.dir, m.ID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
-		if err := os.Remove(logPath(s.dir, m.ID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		if err := os.Remove(manifestPath(s.dir, m.ID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := s.removeJobFiles(m.ID); err != nil {
 			return err
 		}
 	}
 	return fsatomic.SyncDir(s.dir)
+}
+
+func (s *Store) removeJobFiles(id string) error {
+	if err := removeFile(logPath(s.dir, id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return os.RemoveAll(resultDir(s.dir, id))
+}
+
+// sweepOrphans removes the log and result directory of every job that has no
+// manifest.
+func (s *Store) sweepOrphans() error {
+	ents, err := os.ReadDir(s.dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		id, ok := strings.CutSuffix(e.Name(), ".log")
+		if !ok {
+			id, ok = strings.CutSuffix(e.Name(), ".d")
+		}
+		if !ok || !ValidID(id) {
+			continue
+		}
+		if _, err := os.Lstat(manifestPath(s.dir, id)); err == nil || !errors.Is(err, fs.ErrNotExist) {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if err := s.removeJobFiles(id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
