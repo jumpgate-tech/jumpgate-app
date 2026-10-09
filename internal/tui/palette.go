@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/valve-tech/jumpgate/internal/catalog"
 )
 
 // paletteModal is `:`: a typed command. It only ever reaches what the keys
@@ -32,7 +35,7 @@ var paletteScreens = map[string]screenID{
 	"fleet": scrFleet, "hosts": scrHosts, "signers": scrSigners, "gateways": scrGateways, "jobs": scrJobs, "settings": scrSettings,
 }
 
-const paletteHelp = "fleet hosts signers gateways jobs settings | host NAME | logs NAME | measure NAME | ssh NAME | start|stop|restart exec|beacon NAME | remove NAME | add | help | quit"
+const paletteHelp = "fleet hosts signers gateways jobs settings | host NAME | logs NAME | measure NAME | ssh NAME | start|stop|restart exec|beacon NAME | remove NAME | migrate-names NAME | add | help | quit"
 
 func (m *paletteModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch k.String() {
@@ -107,7 +110,7 @@ func (m *paletteModal) run(a *App) (stay bool, cmd tea.Cmd) {
 		return false, a.openScreen(id)
 	}
 	boxCmd := func(name string) bool { return len(f) == 2 && f[0] == name }
-	if len(f) == 2 && (f[0] == "host" || f[0] == "logs" || f[0] == "measure" || f[0] == "ssh" || f[0] == "remove") && !known(a, f[1]) {
+	if len(f) == 2 && (f[0] == "host" || f[0] == "logs" || f[0] == "measure" || f[0] == "ssh" || f[0] == "remove" || f[0] == "migrate-names") && !known(a, f[1]) {
 		return bad("no box named %q", truncate(sanitizeLine(f[1]), 32, a.gl.Ellipsis))
 	}
 	switch {
@@ -138,6 +141,21 @@ func (m *paletteModal) run(a *App) (stay bool, cmd tea.Cmd) {
 		return false, tea.Batch(cmd, a.detail.(*hostScreen).shell(a))
 	case boxCmd("remove"):
 		confirmRemove(a, f[1])
+		return false, nil
+	case boxCmd("migrate-names"):
+		id := f[1]
+		a.modal = newConfirm("Rename the node on "+id,
+			"Starts the node.migrate-names job: it stops the node services, renames the "+catalog.LegacyNames.Prefix+
+				" account, units and data root to "+catalog.CurrentNames.Prefix+", and starts the services again. It asks you before anything it cannot undo.",
+			id, func() tea.Cmd {
+				return a.do("migrate-names", func(ctx context.Context, be Backend) tea.Msg {
+					v, err := be.MigrateNames(ctx, id)
+					if err != nil {
+						return errMsg{what: "migrate-names " + id, err: err}
+					}
+					return openJobsMsg{flash: "job " + v.ID + " started on " + id}
+				})
+			})
 		return false, nil
 	case len(f) == 3 && (f[0] == "start" || f[0] == "stop" || f[0] == "restart") && (f[1] == "exec" || f[1] == "beacon"):
 		if !known(a, f[2]) {

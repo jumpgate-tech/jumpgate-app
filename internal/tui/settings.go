@@ -255,7 +255,7 @@ func (s *settingsScreen) items(a *App) []settingItem {
 		cycle("Glyphs", func(p api.UIPrefs) string { return p.Glyphs }, func(p *api.UIPrefs, v string) { p.Glyphs = v }, []string{"auto", "unicode", "ascii"}),
 		flag("Compact rows", func(p api.UIPrefs) bool { return p.Compact }, func(p *api.UIPrefs, v bool) { p.Compact = v }),
 		flag("Show estimates", func(p api.UIPrefs) bool { return p.ShowEstimates }, func(p *api.UIPrefs, v bool) { p.ShowEstimates = v }),
-		flag("Bell on jobs that need you (from sub-project 2)", func(p api.UIPrefs) bool { return p.Bell }, func(p *api.UIPrefs, v bool) { p.Bell = v }),
+		flag("Bell on jobs that need you", func(p api.UIPrefs) bool { return p.Bell }, func(p *api.UIPrefs, v bool) { p.Bell = v }),
 		flag("Mouse (off keeps text selectable)", func(p api.UIPrefs) bool { return p.Mouse }, func(p *api.UIPrefs, v bool) { p.Mouse = v }),
 	)
 	items = append(items,

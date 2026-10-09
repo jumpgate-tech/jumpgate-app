@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,8 +100,12 @@ type App struct {
 
 	fleet    api.Fleet
 	fleetHas bool
-	conn     apiclient.ConnState
-	connErr  error
+	// needs is the fleet-wide count of jobs that need a decision at the last
+	// reading, and needsKnown says there was one: the bell compares against it.
+	needs      int
+	needsKnown bool
+	conn       apiclient.ConnState
+	connErr    error
 
 	active  screenID
 	screens [6]screen
@@ -244,10 +249,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tick()
 	case fleetMsg:
 		a.conn, a.connErr = msg.u.State, msg.u.Err
+		var ring tea.Cmd
 		if msg.u.Has {
 			a.fleet, a.fleetHas = msg.u.Value, true
+			n := a.needCount()
+			// Ring when more jobs need a person than before; never for the
+			// first reading, which would ring at every start-up.
+			if a.needsKnown && n > a.needs && a.prefs.Bell && a.o.Bell != nil {
+				bell := a.o.Bell
+				ring = func() tea.Msg { bell(); return nil }
+			}
+			a.needs, a.needsKnown = n, true
 		}
-		return a, tea.Batch(a.watchFleet(msg.ch), a.broadcast(msg))
+		return a, tea.Batch(a.watchFleet(msg.ch), a.broadcast(msg), ring)
+	case openJobsMsg:
+		a.flash = sanitizeLine(msg.flash)
+		return a, a.openScreen(scrJobs)
 	case prefsMsg:
 		if msg.checked && msg.seq != a.prefsSeq {
 			return a, nil // a newer save was sent since: this reply is about an older state
@@ -439,8 +456,30 @@ func (a *App) topBar() string {
 	return truncate(left+strings.Repeat(" ", max(gap, 1))+right, a.w, a.gl.Ellipsis)
 }
 
-// statusBar: the selected box and its link, the server connection, the jobs
-// flag (always – until sub-project 2), and the age of the fleet data.
+// needCount is the fleet-wide number of jobs that need a decision.
+func (a *App) needCount() int {
+	n := 0
+	for _, r := range a.fleet.Rows {
+		if r.Jobs != nil {
+			n += r.Jobs.NeedsDecision
+		}
+	}
+	return n
+}
+
+// jobsFlag is the fleet-wide count of jobs that need a decision, or the dash
+// until some box has reported its jobs (honest data: unknown is not 0).
+func (a *App) jobsFlag() string {
+	for _, r := range a.fleet.Rows {
+		if r.Jobs != nil {
+			return strconv.Itoa(a.needCount())
+		}
+	}
+	return a.gl.Dash
+}
+
+// statusBar: the selected box and its link, the server connection, the
+// fleet-wide ⚑ count, and the age of the fleet data.
 func (a *App) statusBar() string {
 	if a.flash != "" {
 		return truncate(" "+a.flash, a.w, a.gl.Ellipsis)
@@ -456,7 +495,7 @@ func (a *App) statusBar() string {
 	if a.conn == apiclient.Retrying && a.connErr != nil {
 		server += " (" + a.errText(a.connErr) + ")"
 	}
-	left := fmt.Sprintf(" %s %s %s %s jobs %s %s", box, a.gl.Sep, server, a.gl.Sep, a.gl.Flag, a.gl.Dash)
+	left := fmt.Sprintf(" %s %s %s %s jobs %s %s", box, a.gl.Sep, server, a.gl.Sep, a.gl.Flag, a.jobsFlag())
 	right := ""
 	if a.fleetHas {
 		right = formatAge(a.now().Sub(a.fleet.At)) + " ago "

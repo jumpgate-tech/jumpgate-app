@@ -18,6 +18,9 @@ var jobKeys = struct{ Decide, Adopt, Reload key.Binding }{
 	Reload: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 }
 
+// openJobsMsg opens the inbox with a notice, once a job has been started.
+type openJobsMsg struct{ flash string }
+
 type (
 	jobsMsg struct {
 		gen uint64

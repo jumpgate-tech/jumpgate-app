@@ -54,6 +54,10 @@ var _ Backend = (*apiclient.Client)(nil)
 // Options are what cmd/jumpgate hands the TUI.
 type Options struct {
 	Backend Backend
+	// Bell rings the terminal bell (the Settings "bell on jobs that need you"
+	// choice); nil is silent. cmd/jumpgate writes BEL to stderr: stdout is
+	// Bubble Tea's.
+	Bell func()
 	// Self is this jumpgate executable. Pairing this machine as a non-root
 	// user and `keys init` run as foreground children of the TUI (spec D17).
 	Self    string
