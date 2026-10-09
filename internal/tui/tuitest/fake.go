@@ -43,6 +43,12 @@ type Fake struct {
 	CheckV      api.AgentCheck
 	SSHV        map[string]api.SSHCommand
 	GatewaysV   []api.GatewaySummary
+
+	JobsV        api.JobsInbox
+	JobsCh       chan apiclient.Update[api.JobsInbox]
+	JobV         map[string]api.JobDetail // key "target/id"
+	JobViewV     api.JobView              // the answer of MigrateNames, Decide and Adopt
+	LastDecision api.JobDecision          // what Decide last received
 }
 
 // NewFake is a Fake with empty data and open stream channels.
@@ -51,6 +57,7 @@ func NewFake() *Fake {
 		Err: map[string]error{}, FleetCh: make(chan apiclient.Update[api.Fleet], 16),
 		LogsCh:     map[string]chan apiclient.Update[[]api.LogHit]{},
 		EndpointsV: map[string]api.Endpoints{}, FirewallV: map[string][]api.CheckItem{},
+		JobsCh: make(chan apiclient.Update[api.JobsInbox], 16), JobV: map[string]api.JobDetail{},
 		PrefsV: api.DefaultPrefs(), SSHV: map[string]api.SSHCommand{},
 		DiskV: map[string]api.DiskView{}, StatusCh: map[string]chan apiclient.Update[api.NodeStatus]{},
 	}
@@ -293,4 +300,33 @@ func (f *Fake) Gateways(context.Context) ([]api.GatewaySummary, error) {
 	v := f.GatewaysV
 	f.mu.Unlock()
 	return v, f.call("Gateways")
+}
+
+func (f *Fake) Jobs(context.Context) (api.JobsInbox, error) { return f.JobsV, f.call("Jobs") }
+
+func (f *Fake) WatchJobs(ctx context.Context) <-chan apiclient.Update[api.JobsInbox] {
+	_ = f.call("WatchJobs")
+	return relay(ctx, f.JobsCh)
+}
+
+func (f *Fake) Job(_ context.Context, target, id string) (api.JobDetail, error) {
+	f.mu.Lock()
+	d := f.JobV[target+"/"+id]
+	f.mu.Unlock()
+	return d, f.call("Job", target, id)
+}
+
+func (f *Fake) MigrateNames(_ context.Context, target string) (api.JobView, error) {
+	return f.JobViewV, f.call("MigrateNames", target)
+}
+
+func (f *Fake) Decide(_ context.Context, target, id string, d api.JobDecision) (api.JobView, error) {
+	f.mu.Lock()
+	f.LastDecision = d
+	f.mu.Unlock()
+	return f.JobViewV, f.call("Decide", target, id, d.Decision, d.Option)
+}
+
+func (f *Fake) Adopt(_ context.Context, target, id string) (api.JobView, error) {
+	return f.JobViewV, f.call("Adopt", target, id)
 }

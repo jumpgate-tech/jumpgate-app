@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/valve-tech/jumpgate/internal/api"
+	"github.com/valve-tech/jumpgate/internal/intent"
 )
 
 func targetPath(id, rest string) string { return "/api/targets/" + url.PathEscape(id) + rest }
@@ -225,4 +226,60 @@ func (c *Client) Gateways(ctx context.Context) ([]api.GatewaySummary, error) {
 	}
 	err := c.Do(ctx, http.MethodGet, "/api/gateways", nil, &out)
 	return out.Gateways, err
+}
+
+// jobPath is a job route. Jobs live under /api/jobs/{target}, never under
+// /api/targets, whose routes are frozen.
+func jobPath(target, id, rest string) string {
+	return "/api/jobs/" + url.PathEscape(target) + "/" + url.PathEscape(id) + rest
+}
+
+// Jobs is every job on every paired box.
+func (c *Client) Jobs(ctx context.Context) (api.JobsInbox, error) {
+	var in api.JobsInbox
+	err := c.Do(ctx, http.MethodGet, "/api/jobs", nil, &in)
+	return in, err
+}
+
+// WatchJobs streams the inbox whenever it changes.
+func (c *Client) WatchJobs(ctx context.Context) <-chan Update[api.JobsInbox] {
+	return watch(ctx, c, "/api/jobs/stream", decodeJSON[api.JobsInbox])
+}
+
+// Job is one job with its verified log.
+func (c *Client) Job(ctx context.Context, target, id string) (api.JobDetail, error) {
+	var d api.JobDetail
+	err := c.Do(ctx, http.MethodGet, jobPath(target, id, ""), nil, &d)
+	return d, err
+}
+
+// WatchJobOutput follows a job's journal, a batch of lines per value.
+func (c *Client) WatchJobOutput(ctx context.Context, target, id string) <-chan Update[[]api.JobOutputLine] {
+	return watch(ctx, c, jobPath(target, id, "/output/stream"), decodeJSON[[]api.JobOutputLine])
+}
+
+// StartJob starts a job of the kind s names on target.
+func (c *Client) StartJob(ctx context.Context, target string, s api.JobStart) (api.JobView, error) {
+	var v api.JobView
+	err := c.Do(ctx, http.MethodPost, "/api/jobs/"+url.PathEscape(target), s, &v)
+	return v, err
+}
+
+// MigrateNames starts node.migrate-names on target.
+func (c *Client) MigrateNames(ctx context.Context, target string) (api.JobView, error) {
+	return c.StartJob(ctx, target, api.JobStart{Kind: intent.KindNodeMigrateNames})
+}
+
+// Decide answers a question a job is waiting on.
+func (c *Client) Decide(ctx context.Context, target, id string, d api.JobDecision) (api.JobView, error) {
+	var v api.JobView
+	err := c.Do(ctx, http.MethodPost, jobPath(target, id, "/decide"), d, &v)
+	return v, err
+}
+
+// Adopt takes over a job whose controller went away.
+func (c *Client) Adopt(ctx context.Context, target, id string) (api.JobView, error) {
+	var v api.JobView
+	err := c.Do(ctx, http.MethodPost, jobPath(target, id, "/adopt"), nil, &v)
+	return v, err
 }
