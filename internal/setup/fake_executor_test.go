@@ -128,3 +128,13 @@ func (f *fakeExecutor) callLog() []string {
 	copy(out, f.calls)
 	return out
 }
+
+// indexContaining is the position of the first command containing s, or -1.
+func indexContaining(f *fakeExecutor, s string) int {
+	for i, c := range f.callLog() {
+		if strings.Contains(c, s) {
+			return i
+		}
+	}
+	return -1
+}

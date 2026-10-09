@@ -551,6 +551,7 @@ func TestWire_VerifyFailsOnContentMismatchAndRunRewritesAndRestarts(t *testing.T
 	e := newFakeExecutor().
 		script("test -f", executor.Result{ExitCode: 0}). // jwt + both unit files present
 		script("stat -c %U", executor.Result{Stdout: catalog.ServiceUser + "\n", ExitCode: 0}).
+		script("cat '/mnt/reth/"+catalog.OwnerMarker+"'", executor.Result{Stdout: catalog.ServiceUser + "\n"}).
 		script("systemctl is-enabled", executor.Result{Stdout: "enabled\nenabled\n", ExitCode: 0}).
 		script("systemctl daemon-reload", executor.Result{ExitCode: 0}).
 		script("systemctl restart", executor.Result{ExitCode: 0})
@@ -606,6 +607,7 @@ func TestWire_VerifyPassesWhenContentMatchesDesiredRender(t *testing.T) {
 	e := newFakeExecutor().
 		script("test -f", executor.Result{ExitCode: 0}).
 		script("stat -c %U", executor.Result{Stdout: catalog.ServiceUser + "\n", ExitCode: 0}).
+		script("cat '/mnt/reth/"+catalog.OwnerMarker+"'", executor.Result{Stdout: catalog.ServiceUser + "\n"}).
 		script("systemctl is-enabled", executor.Result{Stdout: "enabled\nenabled\n", ExitCode: 0})
 	e.files[catalog.UnitPath(catalog.LegacyNames.ExecUnit())] = []byte(wantExec)
 	e.files[catalog.UnitPath(catalog.LegacyNames.BeaconUnit())] = []byte(wantBeacon)
@@ -944,6 +946,7 @@ func TestWire_VerifyFailsWhenDataDirNotOwnedByServiceUser(t *testing.T) {
 	}
 
 	e.scripts["stat -c %U"] = executor.Result{Stdout: catalog.ServiceUser + "\n", ExitCode: 0}
+	e.scripts["cat '/mnt/reth/"+catalog.OwnerMarker+"'"] = executor.Result{Stdout: catalog.ServiceUser + "\n"}
 	if err := step.Verify(context.Background(), e, &State{Wire: w}); err != nil {
 		t.Fatalf("want Verify to pass once the data dir is owned by %s, got %v", catalog.ServiceUser, err)
 	}

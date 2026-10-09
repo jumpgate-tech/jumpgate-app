@@ -442,6 +442,16 @@ func snapshotStep() Step {
 			if res.ExitCode != 0 {
 				return fmt.Errorf("snapshot: reth download failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
 			}
+
+			// Written only now: a db/ directory appears as soon as the unpack
+			// starts, so only this file proves the download ran to the end.
+			res, err = e.Run(ctx, snapshotMarkerCmd(w), opts)
+			if err != nil {
+				return fmt.Errorf("snapshot: write completion marker: %w", err)
+			}
+			if res.ExitCode != 0 {
+				return fmt.Errorf("snapshot: write completion marker failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+			}
 			return nil
 		},
 		Verify: func(ctx context.Context, e executor.Executor, st *State) error {
@@ -449,18 +459,49 @@ func snapshotStep() Step {
 			if !w.ExecSnapshot {
 				return nil
 			}
-			// Lenient marker: reth's datadir grows a db/ subdir once the
-			// snapshot has been unpacked into it.
-			res, err := e.Run(ctx, fmt.Sprintf("test -d %s", shQuote(path.Join(w.DataDir, "db"))), nil)
+			marker := shQuote(path.Join(w.DataDir, catalog.SnapshotMarker))
+			res, err := e.Run(ctx, "test -f "+marker, nil)
+			if err != nil {
+				return fmt.Errorf("snapshot: verify completion marker: %w", err)
+			}
+			if res.ExitCode == 0 {
+				return nil
+			}
+
+			// No marker. A box set up before markers existed has a db/
+			// directory and its exec unit (wire ran after the restore), so
+			// adopt it rather than download over live data. A db/ without the
+			// unit may be half-unpacked and must not be trusted.
+			res, err = e.Run(ctx, fmt.Sprintf("test -d %s", shQuote(path.Join(w.DataDir, "db"))), nil)
 			if err != nil {
 				return fmt.Errorf("snapshot: verify data dir: %w", err)
 			}
-			if res.ExitCode != 0 {
-				return fmt.Errorf("snapshot: restore hasn't populated %s yet (no db/ subdir)", w.DataDir)
+			if res.ExitCode == 0 {
+				unit := catalog.UnitPath(w.NodeNames().ExecUnit())
+				res, err = e.Run(ctx, "test -f "+shQuote(unit), nil)
+				if err != nil {
+					return fmt.Errorf("snapshot: verify exec unit: %w", err)
+				}
+				if res.ExitCode == 0 {
+					res, err = e.Run(ctx, snapshotMarkerCmd(w), nil)
+					if err != nil {
+						return fmt.Errorf("snapshot: adopt pre-marker install: %w", err)
+					}
+					if res.ExitCode != 0 {
+						return fmt.Errorf("snapshot: adopt pre-marker install failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+					}
+					return nil
+				}
 			}
-			return nil
+			return fmt.Errorf("snapshot: the snapshot restore has not finished (no completion marker)")
 		},
 	}
+}
+
+// snapshotMarkerCmd records the moment the restore finished. The timestamp is
+// for a human reading the file; only its existence is checked.
+func snapshotMarkerCmd(w catalog.WireConfig) string {
+	return "date -u +%FT%TZ > " + shQuote(path.Join(w.DataDir, catalog.SnapshotMarker))
 }
 
 // ---------------------------------------------------------------------
@@ -526,6 +567,18 @@ func wireStep() Step {
 			}
 			if res.ExitCode != 0 {
 				return fmt.Errorf("wire: chown data dir failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+			}
+
+			// The marker follows the chown, so its presence proves the walk
+			// finished; the top directory's owner alone cannot.
+			ownerMarker := shQuote(path.Join(w.DataDir, catalog.OwnerMarker))
+			res, err = e.Run(ctx, fmt.Sprintf("printf '%%s\\n' %s > %s && chown %s:%s %s",
+				n.User, ownerMarker, n.User, n.Group, ownerMarker), opts)
+			if err != nil {
+				return fmt.Errorf("wire: write owner marker: %w", err)
+			}
+			if res.ExitCode != 0 {
+				return fmt.Errorf("wire: write owner marker failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
 			}
 
 			execUnit, beaconUnit, err := catalog.RenderUnits(w)
@@ -605,6 +658,36 @@ func wireStep() Step {
 			}
 			if owner := strings.TrimSpace(res.Stdout); owner != n.User {
 				return fmt.Errorf("wire: %s is owned by %q, not the service user %q yet", w.DataDir, owner, n.User)
+			}
+
+			// The top directory proves nothing about the files under it, so
+			// trust the marker Run writes after chown -R finishes.
+			ownerMarker := shQuote(path.Join(w.DataDir, catalog.OwnerMarker))
+			res, err = e.Run(ctx, "cat "+ownerMarker, nil)
+			if err != nil {
+				return fmt.Errorf("wire: verify owner marker: %w", err)
+			}
+			if res.ExitCode != 0 || strings.TrimSpace(res.Stdout) != n.User {
+				// A full walk, read-only and with no downtime, run once per
+				// pre-marker box; the marker makes every later Verify one `cat`.
+				res, err = e.Run(ctx, fmt.Sprintf("find %s ! -user %s -print -quit", shQuote(w.DataDir), n.User), nil)
+				if err != nil {
+					return fmt.Errorf("wire: verify ownership walk: %w", err)
+				}
+				if first := strings.TrimSpace(res.Stdout); res.ExitCode != 0 || first != "" {
+					if res.ExitCode != 0 {
+						return fmt.Errorf("wire: ownership walk of %s failed (exit %d): %s", w.DataDir, res.ExitCode, strings.TrimSpace(res.Stderr))
+					}
+					return fmt.Errorf("wire: files under %s are not owned by %s yet (for example %s)", w.DataDir, n.User, first)
+				}
+				res, err = e.Run(ctx, fmt.Sprintf("printf '%%s\\n' %s > %s && chown %s:%s %s",
+					n.User, ownerMarker, n.User, n.Group, ownerMarker), nil)
+				if err != nil {
+					return fmt.Errorf("wire: adopt pre-marker ownership: %w", err)
+				}
+				if res.ExitCode != 0 {
+					return fmt.Errorf("wire: adopt pre-marker ownership failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+				}
 			}
 
 			res, err = e.Run(ctx, fmt.Sprintf("systemctl is-enabled %s %s", n.ExecUnit(), n.BeaconUnit()), nil)

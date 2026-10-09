@@ -297,24 +297,26 @@ func TestSnapshot_FailsWhenNoSnapshotMatchesTheRethVersion(t *testing.T) {
 // node would then start and sync from genesis, which is exactly what the
 // operator paid a download to avoid, while every step reported success.
 func TestSnapshot_VerifyFailsUntilTheDataDirIsPopulated(t *testing.T) {
-	e := newFakeExecutor().script("test -d", executor.Result{ExitCode: 1})
+	e := newFakeExecutor().
+		script("test -f", executor.Result{ExitCode: 1}).
+		script("test -d", executor.Result{ExitCode: 1})
 
 	err := snapshotStep().Verify(context.Background(), e, &State{Wire: snapshotWire()})
 	if err == nil {
 		t.Fatal("verify passed on a datadir with no db/ in it")
 	}
-	if !strings.Contains(err.Error(), "db/") {
+	if !strings.Contains(err.Error(), "marker") {
 		t.Errorf("error %q does not name the marker it looked for", err)
 	}
 }
 
-func TestSnapshot_VerifyPassesOnceTheDataDirHasADatabase(t *testing.T) {
-	e := newFakeExecutor().script("test -d", executor.Result{ExitCode: 0})
+func TestSnapshot_VerifyPassesOnceTheCompletionMarkerExists(t *testing.T) {
+	e := newFakeExecutor().script("test -f", executor.Result{ExitCode: 0})
 
 	if err := snapshotStep().Verify(context.Background(), e, &State{Wire: snapshotWire()}); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if !ran(e, "test -d", "/mnt/reth/db") {
+	if !ran(e, "test -f", "/mnt/reth/"+catalog.SnapshotMarker) {
 		t.Errorf("verify looked in the wrong place: %q", e.callLog())
 	}
 }
@@ -398,5 +400,46 @@ func TestStart_VerifyReportsWhatSystemdSaidOnNonZeroExit(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "inactive") {
 		t.Errorf("error %q does not carry systemd's own words", err)
+	}
+}
+
+// A half-unpacked snapshot has a db/ directory too: only the marker written
+// after a successful download proves the restore finished.
+func TestSnapshot_VerifyNeedsTheCompletionMarker(t *testing.T) {
+	w := snapshotWire() // ExecSnapshot set
+	f := newFakeExecutor().
+		script("test -f '"+w.DataDir+"/"+catalog.SnapshotMarker+"'", executor.Result{ExitCode: 1}).
+		script("test -d '"+w.DataDir+"/db'", executor.Result{ExitCode: 0}).
+		script("test -f '"+catalog.UnitPath(w.NodeNames().ExecUnit())+"'", executor.Result{ExitCode: 1})
+	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err == nil {
+		t.Fatal("a db/ directory without the marker or a finished setup passed as restored")
+	}
+}
+
+// A box set up before markers existed has db/ and its units: Verify adopts it
+// (writes the marker) instead of downloading the snapshot again over live data.
+func TestSnapshot_VerifyAdoptsAFinishedPreMarkerInstall(t *testing.T) {
+	w := snapshotWire()
+	f := newFakeExecutor().
+		script("test -f '"+w.DataDir+"/"+catalog.SnapshotMarker+"'", executor.Result{ExitCode: 1}).
+		script("test -d '"+w.DataDir+"/db'", executor.Result{ExitCode: 0}).
+		script("test -f '"+catalog.UnitPath(w.NodeNames().ExecUnit())+"'", executor.Result{ExitCode: 0})
+	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err != nil {
+		t.Fatalf("a finished pre-marker install failed Verify: %v", err)
+	}
+	if indexContaining(f, "> '"+w.DataDir+"/"+catalog.SnapshotMarker+"'") < 0 {
+		t.Fatalf("the marker was not written; calls %v", f.callLog())
+	}
+}
+
+func TestSnapshot_RunWritesTheMarkerOnlyAfterTheDownload(t *testing.T) {
+	w := snapshotWire()
+	f := resolvable(newFakeExecutor()) // the network calls succeed, as in TestSnapshot_CreatesTheDataDirThenDownloadsIntoIt
+	if err := snapshotStep().Run(context.Background(), f, &State{Wire: w}); err != nil {
+		t.Fatal(err)
+	}
+	dl, mk := indexContaining(f, "reth download"), indexContaining(f, catalog.SnapshotMarker)
+	if dl < 0 || mk < 0 || mk < dl {
+		t.Fatalf("marker at %d, download at %d: %v", mk, dl, f.callLog())
 	}
 }

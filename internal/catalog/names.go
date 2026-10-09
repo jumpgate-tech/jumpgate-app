@@ -85,3 +85,11 @@ func Rebase(dir, from, to string) (string, bool) {
 	}
 	return to + strings.TrimPrefix(path.Clean(dir), from), true
 }
+
+// Completion markers live directly in a node's data dir. Setup writes each one
+// only after the work it vouches for finished, so a rerun (and adopting a
+// durable job, which is a rerun) can trust it where a looser probe cannot.
+const (
+	SnapshotMarker = ".jumpgate-snapshot-complete" // the snapshot restore finished
+	OwnerMarker    = ".jumpgate-owner"             // chown -R finished; holds the owning account's name
+)
