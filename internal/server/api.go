@@ -30,6 +30,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/logwatch"
 	"github.com/valve-tech/jumpgate/internal/monitor"
 	"github.com/valve-tech/jumpgate/internal/ops"
@@ -1068,6 +1069,29 @@ func setupWire(req catalog.WireConfig, existing *catalog.WireConfig) catalog.Wir
 	return w
 }
 
+// setupExisting is the wire setup keeps a box's names and data dir from: the
+// controller's own copy, or, when it keeps none, what a paired box's agent
+// reports in agent.info (a box paired from another controller, or a config
+// restored from before the box was set up). Review Focus 4: without this a
+// legacy box would be treated as new, given the jumpgate-node names, and set
+// up with units for an account that does not exist. A box that cannot answer
+// refuses the setup rather than guess.
+func (s *Server) setupExisting(ctx context.Context, cfg config.Config, t config.Target) (*catalog.WireConfig, error) {
+	if t.Wire != nil || t.Agent == nil {
+		return t.Wire, nil
+	}
+	info, err := decodeResult[intent.AgentInfo](s.agentResult(ctx, cfg, t, intent.KindAgentInfo, struct{}{}))
+	if err != nil {
+		return nil, fmt.Errorf("ask the box which names its node uses: %w", err)
+	}
+	if !info.SetUp {
+		return nil, nil
+	}
+	// An agent from before sub-project 2 sends no names: every box it set up
+	// is legacy, which Names "" already says.
+	return &catalog.WireConfig{ChainID: info.ChainID, Names: info.Names, DataDir: info.DataDir}, nil
+}
+
 func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -1090,7 +1114,12 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		writeTargetNotFound(w)
 		return
 	}
-	wire = setupWire(wire, target.Wire)
+	existing, err := s.setupExisting(r.Context(), cfg, target)
+	if err != nil {
+		writeNodeError(w, err)
+		return
+	}
+	wire = setupWire(wire, existing)
 	if err := catalog.ValidateDataDir(wire.DataDir); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

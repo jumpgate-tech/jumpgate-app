@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1822,5 +1823,47 @@ func TestSetupKeepsTheBoxNames(t *testing.T) {
 		&catalog.WireConfig{ChainID: 369, DataDir: "/var/lib/valve-node-app/369"})
 	if got.Names != catalog.NamesLegacy {
 		t.Fatalf("a request renamed a legacy box: %q", got.Names)
+	}
+}
+
+// Review Focus 4, ruling P11: a paired box the controller keeps no wire for
+// says in agent.info which names its node uses. A legacy box keeps them, so
+// setup never renders units for a jumpgate-node account that does not exist;
+// a box with no node yet starts with the new names.
+func TestSetupAsksAPairedBoxForItsNames(t *testing.T) {
+	requireAgentPeer(t)
+	for _, c := range []struct {
+		name      string
+		node      *catalog.WireConfig // the box's node.json; nil: not set up
+		wantNames string
+		wantDir   string
+	}{
+		{"legacy box", &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/var/lib/valve-node-app/369"}, catalog.NamesLegacy, "/var/lib/valve-node-app/369"},
+		{"migrated box", &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", Names: catalog.NamesCurrent, DataDir: "/var/lib/jumpgate-node/369"}, catalog.NamesCurrent, "/var/lib/jumpgate-node/369"},
+		{"no node yet", nil, catalog.NamesCurrent, "/var/lib/jumpgate-node/369"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var srv *Server
+			pairedBoxWith(t, nopExec{}, pairedOpts{onServer: func(s *Server) { srv = s }})
+			if c.node != nil {
+				b, _ := json.Marshal(*c.node)
+				if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), "node.json"), b, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg, err := config.Load()
+			if err != nil || cfg.Targets[0].Wire != nil {
+				t.Fatalf("the controller must keep no wire for this box: %v", err)
+			}
+			existing, err := srv.setupExisting(context.Background(), cfg, cfg.Targets[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The request asks for the new names; only the box decides.
+			got := setupWire(catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", Names: catalog.NamesCurrent}, existing)
+			if got.Names != c.wantNames || got.DataDir != c.wantDir {
+				t.Fatalf("setup would use names %q dir %s", got.Names, got.DataDir)
+			}
+		})
 	}
 }
