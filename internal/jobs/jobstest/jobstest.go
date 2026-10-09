@@ -4,7 +4,14 @@ package jobstest
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"sync"
+	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/jobs"
 )
 
 // Runner runs each step's argv through Run in a goroutine. A unit is active
@@ -62,4 +69,47 @@ func (r *Runner) Lose(unit string) {
 	r.mu.Lock()
 	delete(r.active, unit)
 	r.mu.Unlock()
+}
+
+// TestKind is the plan RegisterPlan adds. A policy must list it under kinds
+// (it has no default requirement), so tests also prove the policy is read.
+const TestKind = "test.steps"
+
+// RegisterPlan registers test.steps/1: steps one and two, failing or asking at
+// the step its inputs name, once per job (an answer or a retry passes).
+func RegisterPlan(t testing.TB) {
+	t.Helper()
+	type in struct{ FailAt, AskAt string }
+	step := func(id string) jobs.StepDef {
+		return jobs.StepDef{ID: id, Title: "Step " + id, AbortNote: "test",
+			Run: func(ctx context.Context, env jobs.Env) (jobs.Outcome, error) {
+				var i in
+				_ = json.Unmarshal(env.Inputs, &i)
+				if env.Out != nil {
+					fmt.Fprintln(env.Out, "running", id)
+				}
+				if i.AskAt == id && env.Answer == nil {
+					return jobs.Outcome{Ask: &intent.JobQuestion{Key: "pick", Prompt: "pick one", Tier: intent.TierRoutine,
+						Options: []intent.JobOption{{ID: "go", Label: "Go on"}, {ID: intent.OptAbort, Label: "Stop"}}}}, nil
+				}
+				if i.FailAt == id && env.Answer == nil {
+					return jobs.Outcome{}, errors.New(id + " broke")
+				}
+				return jobs.Outcome{Result: json.RawMessage(`{"did":"` + id + `"}`)}, nil
+			}}
+	}
+	jobs.Register(jobs.Plan{Kind: TestKind, Version: TestKind + "/1", Title: "Test steps", Steps: []jobs.StepDef{step("one"), step("two")}})
+	t.Cleanup(func() { jobs.Unregister(TestKind + "/1") })
+}
+
+// InProcess is a Runner.Run that runs the step the argv names, as the unit
+// would, against the jobs directory dir.
+func InProcess(dir string, base jobs.Env) func(ctx context.Context, unit string, argv []string) error {
+	return func(ctx context.Context, _ string, argv []string) error {
+		a, err := jobs.ParseStepArgs(argv)
+		if err != nil {
+			return err
+		}
+		return jobs.RunStep(ctx, dir, a, base)
+	}
 }
