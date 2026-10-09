@@ -31,7 +31,6 @@ type (
 		err error
 	}
 	jobActionMsg struct {
-		gen  uint64
 		what string
 		v    api.JobView
 		err  error
@@ -90,11 +89,14 @@ func (s *jobsScreen) loadDetail(a *App, j api.JobView) tea.Cmd {
 	}
 }
 
+// act runs a mutation on the app's context, not the screen's: a decision is
+// signed and sent once, and leaving the inbox must not cancel it half way and
+// lose the answer. The result is flashed wherever the person has gone.
 func (s *jobsScreen) act(a *App, what string, f func(ctx context.Context, be Backend) (api.JobView, error)) tea.Cmd {
-	gen, ctx, be := s.gen, s.ctx, a.be
+	ctx, be := a.ctx, a.be
 	return func() tea.Msg {
 		v, err := f(ctx, be)
-		return jobActionMsg{gen: gen, what: what, v: v, err: err}
+		return jobActionMsg{what: what, v: v, err: err}
 	}
 }
 
@@ -121,9 +123,6 @@ func (s *jobsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case jobActionMsg:
-		if !s.current(msg.gen) {
-			return nil
-		}
 		if msg.err != nil {
 			a.flash = sanitizeLine(msg.what) + ": " + a.errText(msg.err)
 			return nil
@@ -250,6 +249,12 @@ func (s *jobsScreen) view(a *App, w, h int) string {
 		head += fmt.Sprintf(" %s %d needs you", a.gl.Sep, need)
 	}
 	b.WriteString(a.th.Title.Render(head) + "\n")
+	switch {
+	case s.err != nil:
+		b.WriteString(a.th.Bad.Render(truncate(" jobs stream: "+a.errText(s.err), w, a.gl.Ellipsis)) + "\n")
+	case s.conn != apiclient.Live:
+		b.WriteString(a.th.Dim.Render(" server "+s.conn.String()+"; what follows may be out of date") + "\n")
+	}
 	if !s.has {
 		b.WriteString(a.th.Dim.Render(" loading"+a.gl.Ellipsis) + "\n")
 		return b.String()

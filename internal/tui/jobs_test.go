@@ -1,9 +1,14 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/apiclient"
@@ -126,5 +131,113 @@ func TestInboxStripsControlSequencesFromJobText(t *testing.T) {
 	fr := tuitest.Frame(press(t, newTestApp(t, f, 80, 24, "unicode"), "5"))
 	if strings.Contains(fr, "\x1b") {
 		t.Fatalf("an escape reached the frame:\n%q", fr)
+	}
+}
+
+// reopen presses r, which restarts the stream, then delivers u on the new one.
+// Pushing after the restart matters: the old reader would otherwise take it.
+func reopen(t *testing.T, f *tuitest.Fake, m *App, u apiclient.Update[api.JobsInbox]) *App {
+	t.Helper()
+	next, cmds := tuitest.Send(m, tuitest.Key("r"))
+	f.JobsCh <- u
+	return tuitest.Settle(next, cmds...).(*App)
+}
+
+func TestInboxSaysWhenTheStreamDropped(t *testing.T) {
+	f := tuitest.NewFake()
+	m := jobsApp(t, f, "unicode")
+	if strings.Contains(tuitest.Frame(m), "out of date") {
+		t.Fatal("a live stream was called stale")
+	}
+	m = reopen(t, f, m, apiclient.Update[api.JobsInbox]{State: apiclient.Retrying, Err: errors.New("connection refused")})
+	fr := tuitest.Frame(m)
+	for _, want := range []string{"jobs stream: connection refused", "box-a"} {
+		if !strings.Contains(fr, want) {
+			t.Errorf("frame lacks %q:\n%s", want, fr)
+		}
+	}
+	m = reopen(t, f, m, apiclient.Update[api.JobsInbox]{State: apiclient.Connecting})
+	if fr = tuitest.Frame(m); !strings.Contains(fr, "out of date") || strings.Contains(fr, "connection refused") {
+		t.Errorf("a stream that is not live shows its rows as live:\n%s", fr)
+	}
+}
+
+// slowBackend holds Decide until released and records whether its context
+// was cancelled by then.
+type slowBackend struct {
+	*tuitest.Fake
+	started, release chan struct{}
+	ctxErr           chan error
+}
+
+func (b slowBackend) Decide(ctx context.Context, target, id string, d api.JobDecision) (api.JobView, error) {
+	close(b.started)
+	<-b.release
+	b.ctxErr <- ctx.Err()
+	return b.Fake.Decide(ctx, target, id, d)
+}
+
+func TestADecisionOutlivesTheScreen(t *testing.T) {
+	f := tuitest.NewFake()
+	b := slowBackend{Fake: f, started: make(chan struct{}), release: make(chan struct{}), ctxErr: make(chan error, 1)}
+	f.JobViewV = api.JobView{State: "running"}
+	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: sampleInbox(), Has: true, State: apiclient.Live}
+	a := New(Options{Backend: b, GOOS: "linux", Getenv: func(string) string { return "" }, Now: func() time.Time { return testNow }, Location: time.UTC})
+	t.Cleanup(func() { a.cancel() })
+	var m tea.Model = a
+	m, _ = tuitest.Send(m, tea.WindowSizeMsg{Width: 80, Height: 24}, prefsMsg{p: api.UIPrefs{Glyphs: "unicode"}})
+	m = press(t, m, "5")
+	m = press(t, m, "d", "1")
+	m = typed(t, m, "retry")
+	m, cmds := tuitest.Send(m, tuitest.Key("enter"))
+	done := make(chan tea.Msg, 1)
+	go func() { done <- tuitest.Run(tea.Batch(cmds...))[0] }()
+	<-b.started
+	m = press(t, m, "1") // leave the inbox while the decision is in flight
+	close(b.release)
+	if err := <-b.ctxErr; err != nil {
+		t.Fatalf("leaving the screen cancelled the decision: %v", err)
+	}
+	msg := <-done
+	m, _ = tuitest.Send(m, msg)
+	if fl := m.(*App).flash; !strings.Contains(fl, "decision sent") {
+		t.Fatalf("flash %q", fl)
+	}
+}
+
+// watchRecorder remembers each channel WatchJobs handed out.
+type watchRecorder struct {
+	*tuitest.Fake
+	mu  sync.Mutex
+	chs []<-chan apiclient.Update[api.JobsInbox]
+}
+
+func (w *watchRecorder) WatchJobs(ctx context.Context) <-chan apiclient.Update[api.JobsInbox] {
+	ch := w.Fake.WatchJobs(ctx)
+	w.mu.Lock()
+	w.chs = append(w.chs, ch)
+	w.mu.Unlock()
+	return ch
+}
+
+func TestReloadRestartsTheStreamAndStopsTheOldReader(t *testing.T) {
+	w := &watchRecorder{Fake: tuitest.NewFake()}
+	a := New(Options{Backend: w, GOOS: "linux", Getenv: func(string) string { return "" }, Now: func() time.Time { return testNow }, Location: time.UTC})
+	t.Cleanup(func() { a.cancel() })
+	var m tea.Model = a
+	m, _ = tuitest.Send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = press(t, m, "5", "r")
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.chs) != 2 {
+		t.Fatalf("WatchJobs ran %d times, want 2", len(w.chs))
+	}
+	select {
+	case _, ok := <-w.chs[0]:
+		if ok {
+			t.Fatal("the old stream delivered after reload")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the old stream was not stopped by reload")
 	}
 }
