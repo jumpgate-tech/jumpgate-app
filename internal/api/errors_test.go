@@ -77,7 +77,8 @@ func TestEveryRejectionReasonHasAHint(t *testing.T) {
 		intent.ReasonWrongAgent, intent.ReasonExpired, intent.ReasonClockSkew, intent.ReasonBadSignature,
 		intent.ReasonUnauthorizedKind, intent.ReasonUnknownKind, intent.ReasonStaleSeq, intent.ReasonReplayedNonce,
 		intent.ReasonBusy, intent.ReasonInvalidPayload, intent.ReasonValidation, intent.ReasonNotSetUp,
-		intent.ReasonReplayState,
+		intent.ReasonReplayState, intent.ReasonJobsUnsupported, intent.ReasonJobNotFound, intent.ReasonJobActive,
+		intent.ReasonLeaseHeld, intent.ReasonUnknownPlan, intent.ReasonJobState,
 	} {
 		if RejectionHint(r) == "" {
 			t.Errorf("no hint for rejection %q", r)

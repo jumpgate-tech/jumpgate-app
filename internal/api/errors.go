@@ -233,6 +233,12 @@ var rejectionHints = map[string]string{
 	intent.ReasonValidation:       "the box's node configuration is invalid; check /etc/jumpgate/node.json",
 	intent.ReasonNotSetUp:         "no node is set up on this box yet; run setup first",
 	intent.ReasonReplayState:      "the box's replay record is damaged; on the box, inspect /var/lib/jumpgate/replay.json then run `sudo jumpgate agent reset-replay --yes`",
+	intent.ReasonJobsUnsupported:  "durable jobs run only on Linux boxes with systemd as init; the reason above says which is missing",
+	intent.ReasonJobNotFound:      "no such job on this box; `jumpgate jobs HOST` lists them",
+	intent.ReasonJobActive:        "one job runs at a time on a box; wait for it, or decide it in the jobs inbox",
+	intent.ReasonLeaseHeld:        "another controller drives this job; watch it, or adopt it once its lease is stale (90 s without a heartbeat)",
+	intent.ReasonUnknownPlan:      "this box's agent does not know that job's plan (it was downgraded?); re-pair the box to upgrade its agent",
+	intent.ReasonJobState:         "the job moved on since this request was made; reload it",
 }
 
 // RejectionHint is the remedy for a signed rejection reason, or "".

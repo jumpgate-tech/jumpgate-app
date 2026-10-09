@@ -36,7 +36,7 @@ type Policy struct {
 	Kinds map[string][]Tier `json:"kinds,omitempty"`
 }
 
-// DefaultRequirements are sub-project 1's kinds, all routine. A kind absent
+// DefaultRequirements are sub-project 1's kinds and sub-project 2's job kinds, all routine. A kind absent
 // from both this table and Policy.Kinds is unknown and refused.
 var DefaultRequirements = map[string][]Tier{
 	intent.KindAgentInfo:     {TierRoutine},
@@ -47,6 +47,14 @@ var DefaultRequirements = map[string][]Tier{
 	intent.KindLogsRead:      {TierRoutine},
 	intent.KindLogsSince:     {TierRoutine},
 	intent.KindServiceAction: {TierRoutine},
+
+	intent.KindJobList:          {TierRoutine},
+	intent.KindJobRead:          {TierRoutine},
+	intent.KindJobOutput:        {TierRoutine},
+	intent.KindJobLease:         {TierRoutine},
+	intent.KindJobAdvance:       {TierRoutine},
+	intent.KindJobDecide:        {TierRoutine},
+	intent.KindNodeMigrateNames: {TierRoutine},
 }
 
 // LoadPolicy reads the policy file, refusing one other users can write or read.

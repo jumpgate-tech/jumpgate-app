@@ -71,3 +71,13 @@ func TestPolicyAddSignerIsIdempotentAndSaveRoundTrips(t *testing.T) {
 		t.Fatalf("LoadPolicy = %+v, %v", back, err)
 	}
 }
+
+// Q1: every job kind is routine by default; a policy may raise any of them.
+func TestJobKindsAreRoutineByDefault(t *testing.T) {
+	for _, k := range []string{intent.KindJobList, intent.KindJobRead, intent.KindJobOutput, intent.KindJobLease,
+		intent.KindJobAdvance, intent.KindJobDecide, intent.KindNodeMigrateNames} {
+		if got := DefaultRequirements[k]; len(got) != 1 || got[0] != TierRoutine {
+			t.Errorf("%s requires %v", k, got)
+		}
+	}
+}

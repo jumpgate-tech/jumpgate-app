@@ -72,6 +72,8 @@ type AgentInfo struct {
 	Signers      int      `json:"signers"`
 	SetUp        bool     `json:"setUp"`
 	ChainID      int      `json:"chainId,omitempty"` // the box's node; 0 before setup
+	Names        string   `json:"names,omitempty"`   // catalog names id of the box's node; "" is legacy
+	DataDir      string   `json:"dataDir,omitempty"` // the node's data dir, after any names marker
 }
 
 // Logs limits.
