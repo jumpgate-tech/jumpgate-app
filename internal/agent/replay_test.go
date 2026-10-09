@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/testutil"
 )
@@ -106,9 +107,9 @@ func TestOpenReplayFailsClosed(t *testing.T) {
 func TestAdmitFailsWhenTheDirectorySyncFails(t *testing.T) {
 	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r, _ := newReplay(t)
-	orig := syncDir
-	syncDir = func(string) error { return errors.New("injected dir sync failure") }
-	defer func() { syncDir = orig }()
+	orig := fsatomic.SyncDir
+	fsatomic.SyncDir = func(string) error { return errors.New("injected dir sync failure") }
+	defer func() { fsatomic.SyncDir = orig }()
 
 	exp := uint64(t0.Unix() + 120)
 	if err := r.Admit(addr(1), 5, nonce(1), exp, t0); err == nil {

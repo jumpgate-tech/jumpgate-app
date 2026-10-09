@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
+	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/intent"
 )
 
@@ -40,7 +41,7 @@ func InitReplay(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	}
-	return writeAtomic(path, b)
+	return fsatomic.WriteFile(path, b)
 }
 
 // OpenReplay loads the record, failing closed.
@@ -97,7 +98,7 @@ func (r *Replay) Admit(controller eip712.Address, seq uint64, nonce [32]byte, ex
 	if err != nil {
 		return err
 	}
-	if err := writeAtomic(r.path, b); err != nil {
+	if err := fsatomic.WriteFile(r.path, b); err != nil {
 		return fmt.Errorf("agent: persist replay state: %w", err)
 	}
 	r.st = next

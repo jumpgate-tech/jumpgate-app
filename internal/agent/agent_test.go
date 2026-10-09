@@ -14,6 +14,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/ops"
 	"github.com/valve-tech/jumpgate/internal/signer"
@@ -271,10 +272,10 @@ func TestCorruptReplayStateRefusesEverything(t *testing.T) {
 func TestAdmissionPersistFailureRefusesAndRunsNothing(t *testing.T) {
 	testutil.RequireUnix(t) // the agent is Linux-only: its replay and policy persistence fsyncs directories
 	r := newRig(t, true)
-	orig := syncDir
-	syncDir = func(string) error { return errors.New("injected dir sync failure") }
+	orig := fsatomic.SyncDir
+	fsatomic.SyncDir = func(string) error { return errors.New("injected dir sync failure") }
 	rc, res := r.send(t, intent.KindServiceAction, intent.ServiceActionPayload{Service: "beacon", Action: "restart"}, nil)
-	syncDir = orig
+	fsatomic.SyncDir = orig
 	if got := rejection(t, rc, res).Code; got != intent.ReasonValidation {
 		t.Fatalf("code %s, want validation", got)
 	}

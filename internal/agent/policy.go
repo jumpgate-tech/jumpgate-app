@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
+	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/intent"
 )
 
@@ -83,7 +83,7 @@ func (p Policy) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(path, b)
+	return fsatomic.WriteFile(path, b)
 }
 
 // AddSigner enrolls e unless its address is already enrolled. It never
@@ -158,55 +158,6 @@ func (p Policy) Authorise(kind string, controller eip712.Address, signers []eip7
 		if !found {
 			return reject(intent.ReasonUnauthorizedKind, fmt.Sprintf("%s needs a %s signature", kind, need))
 		}
-	}
-	return nil
-}
-
-// writeAtomic writes b to path through a fsynced temp file and rename.
-func writeAtomic(path string, b []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp)
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
-		return err
-	}
-	if _, err := f.Write(b); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	return syncDir(dir)
-}
-
-// syncDir is a variable so a test can make the directory fsync fail.
-var syncDir = func(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("agent: open %s to sync it: %w", dir, err)
-	}
-	if err := d.Sync(); err != nil {
-		d.Close()
-		return fmt.Errorf("agent: sync directory %s: %w", dir, err)
-	}
-	if err := d.Close(); err != nil {
-		return fmt.Errorf("agent: close directory %s: %w", dir, err)
 	}
 	return nil
 }
