@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/valve-tech/jumpgate/internal/catalog"
 )
 
 // commandHelp is one line per command, in the order a new user needs them.
@@ -19,6 +21,8 @@ var commandHelp = []struct{ name, text string }{
 	{"firewall HOST", "firewall checklist of a paired box"},
 	{"logs HOST [-n N]", "recent node logs"},
 	{"service HOST exec|beacon start|stop|restart", "control a node service"},
+	{"jobs [HOST]", "durable jobs; also jobs show|decide|adopt|output"},
+	{"migrate-names HOST --yes", "rename " + catalog.LegacyNames.Prefix + " to " + catalog.CurrentNames.Prefix + " on HOST (stops its node)"},
 	{"ssh HOST", "open a shell on a box, under the host keys you confirmed"},
 	{"hosts forget-key NAME [--jump]", "forget the host key recorded for a box"},
 	{"open", "open the web app in your browser"},

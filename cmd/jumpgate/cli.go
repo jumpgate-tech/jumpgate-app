@@ -25,6 +25,7 @@ var subcommands = map[string]func(args []string) int{
 	"status": cmdIntent("status", intent.KindStatusRead), "disk": cmdIntent("disk", intent.KindDiskRead),
 	"endpoints": cmdIntent("endpoints", intent.KindEndpointsRead), "firewall": cmdIntent("firewall", intent.KindFirewallRead),
 	"logs": cmdLogs, "service": cmdService, "ssh": cmdSSH, "help": cmdHelp, "open": cmdOpen, "home": cmdHome, "tui": cmdTUI,
+	"jobs": cmdJobs, "migrate-names": cmdMigrateNames,
 }
 
 func main() {
