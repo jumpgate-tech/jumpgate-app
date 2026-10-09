@@ -10,7 +10,9 @@ type Stale struct {
 	Firewall bool `json:"firewall"`
 }
 
-// JobsSummary counts a box's durable jobs. Always null until sub-project 2.
+// JobsSummary counts a box's durable jobs. Null when the box is SSH-only, its
+// agent cannot run jobs, or it has not been asked yet; Running counts waiting
+// and running jobs.
 type JobsSummary struct {
 	Running       int `json:"running"`
 	NeedsDecision int `json:"needsDecision"`
