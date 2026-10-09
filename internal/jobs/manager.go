@@ -22,6 +22,13 @@ const (
 	pruneKeep   = 100
 )
 
+// The outcomes of the lease requests' intent entries, which restoreTrailing
+// reads back to find a lease entry that never followed.
+const (
+	outcomeLeaseTake    = "lease take"
+	outcomeLeaseRelease = "lease release"
+)
+
 type ManagerConfig struct {
 	Dir      string
 	Key      signer.Signer
@@ -40,9 +47,11 @@ type ManagerConfig struct {
 // Append saves the manifest with each entry. A change that appends several
 // entries therefore records the request first (its intent entry), then puts
 // the job's whole new state in the manifest with the first entry that
-// describes the change. A crash between that entry and the next can cost a
-// trailing entry (decision.asked, job.finished), never leave a job running
-// for a second fold.
+// describes the change. A crash or a failed write can still stop a change
+// between an entry and its manifest save, or between its two entries;
+// restoreTrailing repairs both from the log's last entry, and Reconcile and
+// every operation run it before they write, so a step folds once and no
+// trailing entry stays lost.
 type Manager struct {
 	cfg   ManagerConfig
 	store *Store
@@ -208,12 +217,15 @@ func (m *Manager) Read(id string, from uint64) (intent.JobReadResult, error) {
 func (m *Manager) Lease(ctx context.Context, id, op string, who eip712.Address, env intent.Envelope) (intent.JobRecord, error) {
 	m.lock()
 	defer m.unlock()
-	man, _, err := m.load(id)
+	man, plan, err := m.load(id)
 	var r *Refusal
 	if errors.As(err, &r) && r.Code == intent.ReasonUnknownPlan {
 		err = nil // a lease on a job this agent cannot advance is still a lease; it lets a controller watch and decide nothing
 	}
 	if err != nil {
+		return intent.JobRecord{}, err
+	}
+	if err := m.restoreTrailing(ctx, &man, plan); err != nil {
 		return intent.JobRecord{}, err
 	}
 	now := m.cfg.Now()
@@ -227,7 +239,7 @@ func (m *Manager) Lease(ctx context.Context, id, op string, who eip712.Address, 
 			// The owner taking its own lease again is a renewal (Q7).
 			return man.JobRecord, m.store.Save(&man)
 		}
-		if err := m.store.Append(ctx, &man, joblog.KindIntent, joblog.IntentBody{Envelope: env, Outcome: "lease take"}); err != nil {
+		if err := m.store.Append(ctx, &man, joblog.KindIntent, joblog.IntentBody{Envelope: env, Outcome: outcomeLeaseTake}); err != nil {
 			return intent.JobRecord{}, err
 		}
 		if err := m.store.Append(ctx, &man, joblog.KindLeaseTaken, joblog.LeaseBody{Owner: who.Hex(), Previous: prev}); err != nil {
@@ -245,7 +257,7 @@ func (m *Manager) Lease(ctx context.Context, id, op string, who eip712.Address, 
 		if err := man.ReleaseLease(who); err != nil {
 			return intent.JobRecord{}, err
 		}
-		if err := m.store.Append(ctx, &man, joblog.KindIntent, joblog.IntentBody{Envelope: env, Outcome: "lease release"}); err != nil {
+		if err := m.store.Append(ctx, &man, joblog.KindIntent, joblog.IntentBody{Envelope: env, Outcome: outcomeLeaseRelease}); err != nil {
 			return intent.JobRecord{}, err
 		}
 		if err := m.store.Append(ctx, &man, joblog.KindLeaseReleased, joblog.LeaseBody{Owner: who.Hex()}); err != nil {
@@ -267,6 +279,9 @@ func (m *Manager) Advance(ctx context.Context, id string, step, attempt int, who
 	defer m.unlock()
 	man, plan, err := m.load(id)
 	if err != nil {
+		return intent.JobRecord{}, err
+	}
+	if err := m.restoreTrailing(ctx, &man, plan); err != nil {
 		return intent.JobRecord{}, err
 	}
 	if err := man.Holds(who); err != nil {
@@ -324,6 +339,9 @@ func (m *Manager) Decide(ctx context.Context, id, decision, option string, who e
 	if err != nil {
 		return intent.JobRecord{}, err
 	}
+	if err := m.restoreTrailing(ctx, &man, plan); err != nil {
+		return intent.JobRecord{}, err
+	}
 	if err := man.Holds(who); err != nil {
 		return intent.JobRecord{}, err
 	}
@@ -350,36 +368,26 @@ func (m *Manager) Decide(ctx context.Context, id, decision, option string, who e
 	if err := m.store.Append(ctx, &man, joblog.KindIntent, joblog.IntentBody{Envelope: env, Outcome: "decide " + option}); err != nil {
 		return intent.JobRecord{}, err
 	}
-	if man.Decisions == nil {
-		man.Decisions = map[string]string{}
-	}
-	man.Decisions[decision] = option
-	man.Question = nil
+	decideState(&man, plan, option, who.Hex())
 	answered := joblog.AnswerBody{Question: decision, Option: option, Controller: who.Hex(), Signers: hexes}
-	if option == intent.OptAbort {
-		man.State = intent.JobAborted
-		man.Error = fmt.Sprintf("aborted at step %s by %s", plan.Steps[man.Step].ID, who.Hex())
-		if err := m.store.Append(ctx, &man, joblog.KindDecisionAnswered, answered); err != nil {
-			return intent.JobRecord{}, err
-		}
+	if err := m.store.Append(ctx, &man, joblog.KindDecisionAnswered, answered); err != nil {
+		return intent.JobRecord{}, err
+	}
+	if man.State == intent.JobAborted {
 		if err := m.store.Append(ctx, &man, joblog.KindFinished, joblog.FinishedBody{State: man.State, Error: man.Error}); err != nil {
 			return intent.JobRecord{}, err
 		}
-		return man.JobRecord, nil
-	}
-	man.Answer = &Answer{Key: q.Key, Option: option, Step: man.Step, Attempt: man.Attempt}
-	man.Attempt++
-	man.State = intent.JobWaiting
-	if err := m.store.Append(ctx, &man, joblog.KindDecisionAnswered, answered); err != nil {
-		return intent.JobRecord{}, err
 	}
 	return man.JobRecord, nil
 }
 
-// Reconcile folds every finished step into the log: run on agent start,
-// every 5 s, and before each job intent. A unit whose state cannot be read
-// is left for the next pass, never guessed at; a damaged job, or one whose
-// plan this agent does not know, is left alone.
+// Reconcile brings every job's manifest and log back in line: run on agent
+// start, every 5 s, and before each job intent. It folds each running job
+// whose unit has ended, and restores the trailing entry of any change that
+// stopped between its two entries. A unit whose state cannot be read is left
+// for the next pass, never guessed at; a damaged job, or one whose plan this
+// agent does not know, is left alone. One job's error does not hold up the
+// others.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	m.lock()
 	defer m.unlock()
@@ -387,89 +395,298 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, j := range ms {
-		if j.State != intent.JobRunning {
-			continue // List labels a damaged job damaged, so it never gets here
+		if j.State == intent.JobDamaged {
+			continue // evidence: never written to
 		}
 		man, plan, err := m.load(j.ID)
 		if err != nil {
 			continue // unknown plan or damage: shown by List, never advanced
 		}
-		if man.State != intent.JobRunning || man.Step >= len(plan.Steps) {
-			continue
-		}
-		active, err := m.cfg.Runner.Active(ctx, man.Unit)
-		if err != nil || active {
-			continue
-		}
-		if err := m.fold(ctx, &man, plan); err != nil {
-			return err
+		if err := m.reconcileJob(ctx, &man, plan); err != nil {
+			errs = append(errs, fmt.Errorf("job %s: %w", j.ID, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
-// fold records how the job's ended unit went, from its result file. Each case
-// moves the manifest out of running with its first entry, so the fold
-// happens once.
+func (m *Manager) reconcileJob(ctx context.Context, man *Manifest, plan Plan) error {
+	if man.State != intent.JobRunning {
+		return m.restoreTrailing(ctx, man, plan)
+	}
+	if man.Step >= len(plan.Steps) {
+		return nil
+	}
+	active, err := m.cfg.Runner.Active(ctx, man.Unit)
+	if err != nil || active {
+		return nil
+	}
+	return m.fold(ctx, man, plan)
+}
+
+// fold records how the job's ended unit went and moves the job on, once. If
+// the log already ends with this attempt's step.finished or step.lost, an
+// earlier fold appended it and then failed to save the manifest (Load
+// repairs only the log's length and head, so the manifest still says
+// running): fold rebuilds the state that entry recorded and saves it, rather
+// than appending the entry twice.
 func (m *Manager) fold(ctx context.Context, man *Manifest, plan Plan) error {
 	s, attempt, unit := plan.Steps[man.Step], man.Attempt, man.Unit
-	path, err := ResultPath(m.store.Dir(), man.ID, s.ID, man.Attempt)
+	path, err := ResultPath(m.store.Dir(), man.ID, s.ID, attempt)
 	if err != nil {
 		return err
 	}
-	b, err := os.ReadFile(path)
+	kind, body, written, err := m.foldedEntry(man, s.ID, attempt, unit)
+	if err != nil {
+		return err
+	}
 	var res StepResult
+	switch {
+	case !written:
+		kind, body, res = readOutcome(path, s.ID, attempt, unit)
+	case kind == joblog.KindStepFinished && body.OK:
+		// The entry says the step succeeded; what it produced is in its
+		// result file, which nothing rewrites.
+		if res, err = readResult(path); err != nil {
+			return fmt.Errorf("step %s attempt %d is logged as finished but its result cannot be read again: %w", s.ID, attempt, err)
+		}
+	}
+	m.settle(man, plan, kind, body, res)
+	if written {
+		if err := m.store.Save(man); err != nil {
+			return err
+		}
+	} else if err := m.store.Append(ctx, man, kind, body); err != nil {
+		return err
+	}
+	return m.restoreTrailing(ctx, man, plan)
+}
+
+// foldedEntry is the step.finished or step.lost the log ends with, if it is
+// this attempt's: the sign of a fold whose manifest save failed.
+func (m *Manager) foldedEntry(man *Manifest, step string, attempt int, unit string) (string, joblog.StepBody, bool, error) {
+	var b joblog.StepBody
+	e, ok, err := m.lastEntry(man)
+	if err != nil || !ok || (e.Kind != joblog.KindStepFinished && e.Kind != joblog.KindStepLost) {
+		return "", b, false, err
+	}
+	if err := json.Unmarshal(e.Body, &b); err != nil {
+		return "", b, false, fmt.Errorf("%w: job %s entry %d: %v", ErrDamaged, man.ID, e.Index, err)
+	}
+	if b.Step != step || b.Attempt != attempt || b.Unit != unit {
+		return "", b, false, nil
+	}
+	return e.Kind, b, true, nil
+}
+
+func readResult(path string) (StepResult, error) {
+	var res StepResult
+	b, err := os.ReadFile(path)
 	if err == nil {
 		err = json.Unmarshal(b, &res)
 	}
+	return res, err
+}
+
+// readOutcome is the entry a step's result file calls for: step.lost when
+// there is no readable result, else step.finished.
+func readOutcome(path, step string, attempt int, unit string) (string, joblog.StepBody, StepResult) {
+	body := joblog.StepBody{Step: step, Attempt: attempt, Unit: unit}
+	res, err := readResult(path)
 	switch {
 	case err != nil:
-		why := "it stopped without reporting a result (the box may have rebooted, or the step was killed)"
+		body.Error = "it stopped without reporting a result (the box may have rebooted, or the step was killed)"
 		if !errors.Is(err, fs.ErrNotExist) {
-			why = "its result file does not parse: " + err.Error()
+			body.Error = "its result file does not parse: " + err.Error()
 		}
-		q := failureQuestion(s, man.Attempt, why)
-		q.ID = fmt.Sprintf("%s-%d-lost", s.ID, man.Attempt)
-		return m.askAfter(ctx, man, joblog.KindStepLost, joblog.StepBody{Step: s.ID, Attempt: man.Attempt, Unit: unit, Error: why}, q)
+		return joblog.KindStepLost, body, res
 	case !res.OK:
-		return m.askAfter(ctx, man, joblog.KindStepFinished, joblog.StepBody{Step: s.ID, Attempt: man.Attempt, Unit: unit, Error: res.Error},
-			failureQuestion(s, man.Attempt, res.Error))
+		body.Error = res.Error
+	default:
+		body.OK = true
+	}
+	return joblog.KindStepFinished, body, res
+}
+
+// settle moves man out of running as the step's entry (kind, body) and, for
+// a step that succeeded, its result res say.
+func (m *Manager) settle(man *Manifest, plan Plan, kind string, body joblog.StepBody, res StepResult) {
+	s := plan.Steps[man.Step]
+	switch {
+	case kind == joblog.KindStepLost:
+		q := failureQuestion(s, man.Attempt, body.Error)
+		q.ID = fmt.Sprintf("%s-%d-lost", s.ID, man.Attempt)
+		m.setQuestion(man, q)
+	case !body.OK:
+		m.setQuestion(man, failureQuestion(s, man.Attempt, body.Error))
 	case res.Ask != nil:
 		q := *res.Ask
 		q.ID, q.Step = fmt.Sprintf("%s-%d-%s", s.ID, man.Attempt, q.Key), s.ID
-		return m.askAfter(ctx, man, joblog.KindStepFinished, joblog.StepBody{Step: s.ID, Attempt: man.Attempt, Unit: unit, OK: true}, q)
+		m.setQuestion(man, q)
+	default:
+		if man.Results == nil {
+			man.Results = map[string]json.RawMessage{}
+		}
+		man.Results[s.ID] = res.Result
+		man.Step, man.Attempt, man.Answer, man.Unit = man.Step+1, 0, nil, ""
+		man.State = intent.JobWaiting
+		if man.Step == len(plan.Steps) {
+			man.State, man.Result = intent.JobSucceeded, res.Result
+		}
 	}
-	if man.Results == nil {
-		man.Results = map[string]json.RawMessage{}
-	}
-	man.Results[s.ID] = res.Result
-	man.Step, man.Attempt, man.Answer, man.Unit = man.Step+1, 0, nil, ""
-	man.State = intent.JobWaiting
-	if man.Step == len(plan.Steps) {
-		man.State, man.Result = intent.JobSucceeded, res.Result
-	}
-	if err := m.store.Append(ctx, man, joblog.KindStepFinished, joblog.StepBody{Step: s.ID, Attempt: attempt, Unit: unit, OK: true}); err != nil {
-		return err
-	}
-	if man.State == intent.JobSucceeded {
-		return m.store.Append(ctx, man, joblog.KindFinished, joblog.FinishedBody{State: man.State})
-	}
-	return nil
 }
 
-// askAfter stops the job at q: it appends the entry that explains why (kind,
-// body), with the question already in the manifest, then decision.asked.
-func (m *Manager) askAfter(ctx context.Context, man *Manifest, kind string, body any, q intent.JobQuestion) error {
+// setQuestion stops the job at q.
+func (m *Manager) setQuestion(man *Manifest, q intent.JobQuestion) {
 	if q.Tier == "" {
 		q.Tier = intent.TierRoutine
 	}
 	q.AskedAt = m.cfg.Now().Unix()
 	man.Question, man.State, man.Unit = &q, intent.JobNeedsDecision, ""
+}
+
+// askAfter stops the job at q: it appends the entry that explains why (kind,
+// body), with the question already in the manifest, then decision.asked.
+func (m *Manager) askAfter(ctx context.Context, man *Manifest, kind string, body any, q intent.JobQuestion) error {
+	m.setQuestion(man, q)
 	if err := m.store.Append(ctx, man, kind, body); err != nil {
 		return err
 	}
-	return m.store.Append(ctx, man, joblog.KindDecisionAsked, q)
+	return m.store.Append(ctx, man, joblog.KindDecisionAsked, *man.Question)
+}
+
+// decideState applies option, chosen by controller by, to the job's open
+// question.
+func decideState(man *Manifest, plan Plan, option, by string) {
+	q := man.Question
+	if man.Decisions == nil {
+		man.Decisions = map[string]string{}
+	}
+	man.Decisions[q.ID] = option
+	man.Question = nil
+	if option == intent.OptAbort {
+		man.State = intent.JobAborted
+		man.Error = fmt.Sprintf("aborted at step %s by %s", plan.Steps[man.Step].ID, by)
+		return
+	}
+	man.Answer = &Answer{Key: q.Key, Option: option, Step: man.Step, Attempt: man.Attempt}
+	man.Attempt++
+	man.State = intent.JobWaiting
+}
+
+// lastEntry is the log's last entry; ok is false for an empty log.
+func (m *Manager) lastEntry(man *Manifest) (joblog.Entry, bool, error) {
+	if man.LogLen == 0 {
+		return joblog.Entry{}, false, nil
+	}
+	es, _, err := m.store.ReadLog(man.ID, man.LogLen-1, 1)
+	if err != nil {
+		return joblog.Entry{}, false, err
+	}
+	if len(es) != 1 {
+		return joblog.Entry{}, false, fmt.Errorf("%w: job %s's log has no entry %d", ErrDamaged, man.ID, man.LogLen-1)
+	}
+	return es[0], true, nil
+}
+
+// restoreTrailing finishes a change that stopped partway. Append saves the
+// manifest with each entry, so a crash or a failed write can leave either of
+// two gaps, and both show as the log's last entry:
+//
+//   - The entry is written but the manifest save after it failed. Load then
+//     repairs only the log's length and head, so the manifest still predates
+//     the entry. For a fold this is fold's own check; for decision.answered
+//     the answer is applied here.
+//   - A change's first entry and its manifest are saved, and its second
+//     entry (decision.asked, job.finished, lease.taken, lease.released) is
+//     missing. It is appended here.
+//
+// Every operation runs this before it writes, so a gap is closed before a
+// new entry could hide it.
+func (m *Manager) restoreTrailing(ctx context.Context, man *Manifest, plan Plan) error {
+	e, ok, err := m.lastEntry(man)
+	if err != nil || !ok {
+		return err
+	}
+	bad := func(err error) error {
+		return fmt.Errorf("%w: job %s entry %d: %v", ErrDamaged, man.ID, e.Index, err)
+	}
+	finished := func() error {
+		return m.store.Append(ctx, man, joblog.KindFinished, joblog.FinishedBody{State: man.State, Error: man.Error})
+	}
+	switch e.Kind {
+	case joblog.KindStepFinished, joblog.KindStepLost:
+		var b joblog.StepBody
+		if err := json.Unmarshal(e.Body, &b); err != nil {
+			return bad(err)
+		}
+		switch {
+		case man.State == intent.JobNeedsDecision && man.Question != nil && man.Question.Step == b.Step:
+			return m.store.Append(ctx, man, joblog.KindDecisionAsked, *man.Question)
+		case man.State == intent.JobSucceeded:
+			return finished()
+		}
+	case joblog.KindDecisionAnswered:
+		var b joblog.AnswerBody
+		if err := json.Unmarshal(e.Body, &b); err != nil {
+			return bad(err)
+		}
+		if man.State == intent.JobNeedsDecision && man.Question != nil && man.Question.ID == b.Question && man.Step < len(plan.Steps) {
+			decideState(man, plan, b.Option, b.Controller)
+			if err := m.store.Save(man); err != nil {
+				return err
+			}
+		}
+		if man.State == intent.JobAborted {
+			return finished()
+		}
+	case joblog.KindIntent:
+		var b joblog.IntentBody
+		if err := json.Unmarshal(e.Body, &b); err != nil {
+			return bad(err)
+		}
+		if b.Outcome != outcomeLeaseTake && b.Outcome != outcomeLeaseRelease {
+			return nil
+		}
+		// The holder before this request is the one the log records:
+		// renewals and retakes by the holder change no owner and log nothing.
+		prev, err := m.loggedOwner(man)
+		if err != nil {
+			return err
+		}
+		switch {
+		case b.Outcome == outcomeLeaseTake && man.Lease.Owner != "" && man.Lease.Owner != prev:
+			return m.store.Append(ctx, man, joblog.KindLeaseTaken, joblog.LeaseBody{Owner: man.Lease.Owner, Previous: prev})
+		case b.Outcome == outcomeLeaseRelease && man.Lease.Owner == "" && prev != "":
+			return m.store.Append(ctx, man, joblog.KindLeaseReleased, joblog.LeaseBody{Owner: prev})
+		}
+	}
+	return nil
+}
+
+// loggedOwner is the lease holder the log records: the creator, then each
+// lease.taken and lease.released in turn.
+func (m *Manager) loggedOwner(man *Manifest) (string, error) {
+	es, _, err := m.store.ReadLog(man.ID, 0, 0)
+	if err != nil {
+		return "", err
+	}
+	owner := man.CreatedBy
+	for _, e := range es {
+		if e.Kind != joblog.KindLeaseTaken && e.Kind != joblog.KindLeaseReleased {
+			continue
+		}
+		var b joblog.LeaseBody
+		if err := json.Unmarshal(e.Body, &b); err != nil {
+			return "", fmt.Errorf("%w: job %s entry %d: %v", ErrDamaged, man.ID, e.Index, err)
+		}
+		owner = b.Owner
+		if e.Kind == joblog.KindLeaseReleased {
+			owner = ""
+		}
+	}
+	return owner, nil
 }
 
 // failureQuestion is the decision every failed or lost step stops at: nothing

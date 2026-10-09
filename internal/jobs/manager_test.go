@@ -368,3 +368,332 @@ func TestQuestionTierIsTheOpenQuestions(t *testing.T) {
 		t.Fatalf("an unknown question's tier %q; Decide refuses it later", got)
 	}
 }
+
+// failManifestSave makes the n-th manifest save from now fail, once: a crash
+// or a full disk between an entry and the manifest that records it.
+func failManifestSave(t *testing.T, n int) {
+	t.Helper()
+	orig, calls := writeManifestFile, 0
+	writeManifestFile = func(p string, b []byte) error {
+		if calls++; calls == n {
+			return errors.New("injected manifest save failure")
+		}
+		return orig(p, b)
+	}
+	t.Cleanup(func() { writeManifestFile = orig })
+}
+
+// failLogSync makes the n-th log fsync from now fail, once, so that append
+// is cut back: a change stopped between its entries.
+func failLogSync(t *testing.T, n int) {
+	t.Helper()
+	orig, calls := syncFile, 0
+	syncFile = func(f *os.File) error {
+		if calls++; calls == n {
+			return errors.New("injected fsync failure")
+		}
+		return orig(f)
+	}
+	t.Cleanup(func() { syncFile = orig })
+}
+
+func (g *rig) kinds(t *testing.T, id string) []string {
+	t.Helper()
+	_, res := g.read(t, id)
+	var out []string
+	for _, e := range res.Entries {
+		out = append(out, e.Kind)
+	}
+	return out
+}
+
+func count(kinds []string, kind string) int {
+	n := 0
+	for _, k := range kinds {
+		if k == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// mustFailThenReconcile runs the reconcile the injected failure breaks, then
+// two clean ones: the first repairs, the second must change nothing.
+func (g *rig) mustFailThenReconcile(t *testing.T, id string) intent.JobRecord {
+	t.Helper()
+	if err := g.m.Reconcile(context.Background()); err == nil {
+		t.Fatal("the injected failure did not reach Reconcile")
+	}
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := g.read(t, id)
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := g.read(t, id); again.LogLen != rec.LogLen || again.State != rec.State {
+		t.Fatalf("a clean reconcile moved a repaired job: %+v", again)
+	}
+	return rec
+}
+
+// Review Focus 2: fold's step.finished reached the log but its manifest save
+// failed; the next reconcile must not fold the same result again.
+func TestAFoldWhoseManifestSaveFailedIsNotFoldedAgain(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{}`)
+	if _, err := g.advanceAt(t, g.a, rec.ID, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	failManifestSave(t, 1)
+	rec = g.mustFailThenReconcile(t, rec.ID)
+	ks := g.kinds(t, rec.ID)
+	if count(ks, joblog.KindStepFinished) != 1 || rec.State != intent.JobWaiting || rec.Step != 1 || rec.Unit != "" {
+		t.Fatalf("log %v, job %+v", ks, rec)
+	}
+	if rec = g.advance(t, g.a, rec.ID); rec.State != intent.JobSucceeded || compact(t, rec.Result) != `{"did":"two"}` {
+		t.Fatalf("the repaired job could not go on: %+v", rec)
+	}
+}
+
+func TestALostStepWhoseManifestSaveFailedIsAskedOnce(t *testing.T) {
+	g := newRig(t)
+	g.r.hold = true
+	rec, _ := g.start(t, g.a, `{}`)
+	if _, err := g.advanceAt(t, g.a, rec.ID, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	g.r.lose(UnitName(rec.ID, "one", 0))
+	failManifestSave(t, 1)
+	rec = g.mustFailThenReconcile(t, rec.ID)
+	ks := g.kinds(t, rec.ID)
+	if count(ks, joblog.KindStepLost) != 1 || count(ks, joblog.KindDecisionAsked) != 1 || ks[len(ks)-1] != joblog.KindDecisionAsked {
+		t.Fatalf("log %v", ks)
+	}
+	if rec.State != intent.JobNeedsDecision || rec.Question == nil || rec.Question.ID != "one-0-lost" {
+		t.Fatalf("job %+v", rec)
+	}
+}
+
+func TestAStepQuestionWhoseManifestSaveFailedIsAskedOnce(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{"AskAt":"one"}`)
+	if _, err := g.advanceAt(t, g.a, rec.ID, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	failManifestSave(t, 1)
+	rec = g.mustFailThenReconcile(t, rec.ID)
+	ks := g.kinds(t, rec.ID)
+	if count(ks, joblog.KindStepFinished) != 1 || count(ks, joblog.KindDecisionAsked) != 1 || ks[len(ks)-1] != joblog.KindDecisionAsked {
+		t.Fatalf("log %v", ks)
+	}
+	if rec.State != intent.JobNeedsDecision || rec.Question == nil || rec.Question.Key != "pick" {
+		t.Fatalf("job %+v", rec)
+	}
+}
+
+// A failed start whose step.finished was logged but not saved folds as the
+// failure it logged, not as a lost step.
+func TestAFailedStartWhoseManifestSaveFailedAsksOnce(t *testing.T) {
+	g := newRig(t)
+	g.r.fail = errors.New("Unit already exists")
+	rec, _ := g.start(t, g.a, `{}`)
+	failManifestSave(t, 3) // intent, step.started, then step.finished's save
+	if _, err := g.advanceAt(t, g.a, rec.ID, 0, 0); err == nil {
+		t.Fatal("the injected failure did not reach Advance")
+	}
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = g.read(t, rec.ID)
+	ks := g.kinds(t, rec.ID)
+	if count(ks, joblog.KindStepFinished) != 1 || count(ks, joblog.KindStepLost) != 0 || ks[len(ks)-1] != joblog.KindDecisionAsked {
+		t.Fatalf("log %v", ks)
+	}
+	if rec.Question == nil || rec.Question.ID != "one-0-failed" {
+		t.Fatalf("job %+v", rec)
+	}
+}
+
+// The trailing decision.asked of a failed step never reached the log.
+func TestReconcileRestoresADroppedQuestion(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{"FailAt":"one"}`)
+	if _, err := g.advanceAt(t, g.a, rec.ID, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	failLogSync(t, 2) // step.finished, then decision.asked
+	if err := g.m.Reconcile(context.Background()); err == nil {
+		t.Fatal("the injected failure did not reach Reconcile")
+	}
+	if ks := g.kinds(t, rec.ID); ks[len(ks)-1] != joblog.KindStepFinished {
+		t.Fatalf("the failure did not land between the entries: %v", ks)
+	}
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = g.read(t, rec.ID)
+	ks := g.kinds(t, rec.ID)
+	if count(ks, joblog.KindStepFinished) != 1 || count(ks, joblog.KindDecisionAsked) != 1 || ks[len(ks)-1] != joblog.KindDecisionAsked || rec.State != intent.JobNeedsDecision {
+		t.Fatalf("log %v, job %+v", ks, rec)
+	}
+}
+
+// An operation closes the gap before it writes, so its own entries cannot
+// hide it: the decision lands after the restored question.
+func TestADecisionRestoresADroppedQuestionFirst(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{"FailAt":"one"}`)
+	if _, err := g.advanceAt(t, g.a, rec.ID, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	failLogSync(t, 2)
+	_ = g.m.Reconcile(context.Background())
+	rec, _ = g.read(t, rec.ID)
+	if _, err := g.decide(t, g.a, rec.ID, rec.Question.ID, intent.OptRetry); err != nil {
+		t.Fatal(err)
+	}
+	ks := g.kinds(t, rec.ID)
+	want := []string{joblog.KindStepFinished, joblog.KindDecisionAsked, joblog.KindIntent, joblog.KindDecisionAnswered}
+	if got := ks[len(ks)-4:]; !equal(got, want) {
+		t.Fatalf("log ends %v, want %v", got, want)
+	}
+}
+
+func equal(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// The job.finished after a job's last step never reached the log.
+func TestReconcileRestoresADroppedFinish(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{}`)
+	g.advance(t, g.a, rec.ID)
+	if _, err := g.advanceAt(t, g.a, rec.ID, 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	failLogSync(t, 2) // step.finished, then job.finished
+	rec = g.mustFailThenReconcile(t, rec.ID)
+	ks := g.kinds(t, rec.ID)
+	if count(ks, joblog.KindFinished) != 1 || ks[len(ks)-1] != joblog.KindFinished || rec.State != intent.JobSucceeded {
+		t.Fatalf("log %v, job %+v", ks, rec)
+	}
+}
+
+// The job.finished after an abort never reached the log.
+func TestReconcileRestoresADroppedAbortFinish(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{"FailAt":"one"}`)
+	rec = g.advance(t, g.a, rec.ID)
+	failLogSync(t, 3) // intent, decision.answered, then job.finished
+	if _, err := g.decide(t, g.a, rec.ID, rec.Question.ID, intent.OptAbort); err == nil {
+		t.Fatal("the injected failure did not reach Decide")
+	}
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = g.read(t, rec.ID)
+	ks := g.kinds(t, rec.ID)
+	if count(ks, joblog.KindFinished) != 1 || ks[len(ks)-1] != joblog.KindFinished || rec.State != intent.JobAborted {
+		t.Fatalf("log %v, job %+v", ks, rec)
+	}
+}
+
+// decision.answered reached the log but its manifest save failed: the answer
+// the log records is the one that takes effect, once.
+func TestAnAnswerWhoseManifestSaveFailedTakesEffectOnce(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{"FailAt":"one"}`)
+	rec = g.advance(t, g.a, rec.ID)
+	q := rec.Question.ID
+	failManifestSave(t, 2) // intent, then decision.answered's save
+	if _, err := g.decide(t, g.a, rec.ID, q, intent.OptRetry); err == nil {
+		t.Fatal("the injected failure did not reach Decide")
+	}
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = g.read(t, rec.ID)
+	if rec.State != intent.JobWaiting || rec.Attempt != 1 || rec.Question != nil {
+		t.Fatalf("job %+v", rec)
+	}
+	if _, err := g.decide(t, g.a, rec.ID, q, intent.OptRetry); refusalCode(err) != intent.ReasonJobState {
+		t.Fatalf("answering again = %v", err)
+	}
+	if ks := g.kinds(t, rec.ID); count(ks, joblog.KindDecisionAnswered) != 1 {
+		t.Fatalf("log %v", ks)
+	}
+}
+
+// The lease.taken after an adoption never reached the log.
+func TestReconcileRestoresADroppedLeaseTake(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{}`)
+	g.now = g.now.Add(LeaseTTL + time.Second)
+	failLogSync(t, 2) // intent, then lease.taken
+	if _, err := g.lease(t, g.b, rec.ID, intent.LeaseTake); err == nil {
+		t.Fatal("the injected failure did not reach Lease")
+	}
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, res := g.read(t, rec.ID)
+	last := res.Entries[len(res.Entries)-1]
+	var b joblog.LeaseBody
+	if last.Kind != joblog.KindLeaseTaken || json.Unmarshal(last.Body, &b) != nil ||
+		b.Owner != g.b.Address().Hex() || b.Previous != g.a.Address().Hex() {
+		t.Fatalf("last entry %s %s", last.Kind, last.Body)
+	}
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if ks := g.kinds(t, rec.ID); count(ks, joblog.KindLeaseTaken) != 1 {
+		t.Fatalf("log %v", ks)
+	}
+}
+
+// The lease.released after a release never reached the log.
+func TestReconcileRestoresADroppedLeaseRelease(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{}`)
+	failLogSync(t, 2) // intent, then lease.released
+	if _, err := g.lease(t, g.a, rec.ID, intent.LeaseRelease); err == nil {
+		t.Fatal("the injected failure did not reach Lease")
+	}
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, res := g.read(t, rec.ID)
+	last := res.Entries[len(res.Entries)-1]
+	var b joblog.LeaseBody
+	if last.Kind != joblog.KindLeaseReleased || json.Unmarshal(last.Body, &b) != nil || b.Owner != g.a.Address().Hex() {
+		t.Fatalf("last entry %s %s", last.Kind, last.Body)
+	}
+}
+
+// A lease take whose own intent entry was never saved changed no holder:
+// nothing is restored.
+func TestAnUnsavedLeaseTakeIsNotRestored(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{}`)
+	g.now = g.now.Add(LeaseTTL + time.Second)
+	failManifestSave(t, 1) // the intent entry's save
+	if _, err := g.lease(t, g.b, rec.ID, intent.LeaseTake); err == nil {
+		t.Fatal("the injected failure did not reach Lease")
+	}
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := g.read(t, rec.ID)
+	if ks := g.kinds(t, rec.ID); got.Lease.Owner != g.a.Address().Hex() || count(ks, joblog.KindLeaseTaken) != 0 {
+		t.Fatalf("lease %+v, log %v", got.Lease, ks)
+	}
+}
