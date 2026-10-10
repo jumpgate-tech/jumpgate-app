@@ -43,21 +43,34 @@ type boxRig struct {
 func (b *boxRig) clock() time.Time        { b.mu.Lock(); defer b.mu.Unlock(); return b.now }
 func (b *boxRig) advance(d time.Duration) { b.mu.Lock(); b.now = b.now.Add(d); b.mu.Unlock() }
 
-func newBoxRig(t *testing.T) *boxRig { return newBoxRigNamed(t, "box") }
+// newBoxRig is a paired box whose agent runs jobs in-process. server adjusts
+// the server's Config (withoutDriver, for one). The test kind may be started
+// through POST /api/jobs/{target} for as long as the test runs.
+func newBoxRig(t *testing.T, server ...func(*Config)) *boxRig {
+	return newBoxRigNamed(t, "box", server...)
+}
+
+// withoutDriver keeps the hub listing and verifying but never driving, so a
+// test can look at a job that stays where it was put.
+func withoutDriver(c *Config) { c.noJobsDriver = true }
 
 // newBoxRigNamed is newBoxRig with the paired target saved as name.
-func newBoxRigNamed(t *testing.T, name string) *boxRig {
+func newBoxRigNamed(t *testing.T, name string, server ...func(*Config)) *boxRig {
 	t.Helper()
 	jobstest.RegisterPlan(t)
 	b := &boxRig{now: time.Now(), target: name}
-	prevDrive, prevList := jobsDriveEvery, jobsListEvery
+	prevDrive, prevList, prevKinds := jobsDriveEvery, jobsListEvery, jobStartKinds
 	jobsDriveEvery, jobsListEvery = 20*time.Millisecond, 0
-	t.Cleanup(func() { jobsDriveEvery, jobsListEvery = prevDrive, prevList })
+	jobStartKinds = map[string]bool{intent.KindNodeMigrateNames: true, jobstest.TestKind: true}
+	t.Cleanup(func() { jobsDriveEvery, jobsListEvery, jobStartKinds = prevDrive, prevList, prevKinds })
 	ts, token := pairedBoxWith(t, nopExec{}, pairedOpts{
 		setUp:  true,
 		target: func(tg *config.Target) { tg.ID = name },
 		agent: func(home string, c *agent.Config) {
 			b.home, b.key = home, c.Key
+			// The names marker node.migrate-names writes, which agent.info
+			// applies (absent until a test writes one).
+			c.NamesPath = filepath.Join(home, "names.json")
 			dir := filepath.Join(home, "jobs")
 			run := &jobstest.Runner{}
 			run.Run = jobstest.InProcess(dir, jobs.Env{Exec: c.Exec, NodePath: c.NodePath, Out: io.Discard})
@@ -71,6 +84,11 @@ func newBoxRigNamed(t *testing.T, name string) *boxRig {
 			p.Kinds = map[string][]agent.Tier{jobstest.TestKind: {agent.TierRoutine}}
 			_ = p.Save(c.PolicyPath)
 		},
+		server: func(c *Config) {
+			for _, f := range server {
+				f(c)
+			}
+		},
 		onServer: func(s *Server) { b.srv = s },
 	})
 	b.ts, b.token = ts, token
@@ -81,7 +99,22 @@ func newBoxRigNamed(t *testing.T, name string) *boxRig {
 
 func (b *boxRig) get(t *testing.T, path string) (int, []byte) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, b.ts.URL+path, nil)
+	return b.req(t, http.MethodGet, path, nil)
+}
+
+// req sends one request with the session token; body, when not nil, is
+// sent as JSON.
+func (b *boxRig) req(t *testing.T, method, path string, body any) (int, []byte) {
+	t.Helper()
+	var rd io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rd = strings.NewReader(string(raw))
+	}
+	req, _ := http.NewRequest(method, b.ts.URL+path, rd)
 	req.Header.Set("Authorization", "Bearer "+b.token)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -92,17 +125,16 @@ func (b *boxRig) get(t *testing.T, path string) (int, []byte) {
 	return res.StatusCode, raw
 }
 
-func (b *boxRig) do(t *testing.T, path string, out any) int {
+func (b *boxRig) do(t *testing.T, method, path string, body, out any) int {
 	t.Helper()
-	code, raw := b.get(t, path)
+	code, raw := b.req(t, method, path, body)
 	if out != nil {
 		_ = json.Unmarshal(raw, out)
 	}
 	return code
 }
 
-// send sends one intent straight through the agent (Task 12 adds the routes
-// that start and change jobs).
+// send sends one intent straight through the agent (past the job routes).
 func (b *boxRig) send(t *testing.T, kind string, payload any) json.RawMessage {
 	t.Helper()
 	cfg, _ := b.srv.loadConfig()
@@ -130,10 +162,10 @@ func (b *boxRig) startJob(t *testing.T, inputs string) intent.JobRecord {
 
 func TestInboxListsEveryPairedBoxsJobs(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	rec := b.startJob(t, `{}`)
 	var in api.JobsInbox
-	if code := b.do(t, "/api/jobs", &in); code != 200 {
+	if code := b.do(t, "GET", "/api/jobs", nil, &in); code != 200 {
 		t.Fatalf("GET /api/jobs = %d", code)
 	}
 	if len(in.Jobs) != 1 || in.Jobs[0].ID != rec.ID || in.Jobs[0].Target != "box" || !in.Jobs[0].Lease.Mine || !in.Jobs[0].Lease.Fresh {
@@ -171,31 +203,31 @@ func TestInboxPutsDecisionsFirst(t *testing.T) {
 
 func TestJobDetailVerifiesTheLog(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	rec := b.startJob(t, `{}`)
 	var d api.JobDetail
-	if code := b.do(t, "/api/jobs/box/"+rec.ID, &d); code != 200 || len(d.Log) != 1 || d.Log[0].Kind != joblog.KindCreated {
+	if code := b.do(t, "GET", "/api/jobs/box/"+rec.ID, nil, &d); code != 200 || len(d.Log) != 1 || d.Log[0].Kind != joblog.KindCreated {
 		t.Fatalf("detail %d %+v", code, d)
 	}
 	// A second read verifies only what is new: the cache holds the prefix.
 	b.send(t, intent.KindJobLease, intent.JobLeasePayload{ID: rec.ID, Op: intent.LeaseRelease})
 	var after api.JobDetail
-	if code := b.do(t, "/api/jobs/box/"+rec.ID, &after); code != 200 || len(after.Log) != 3 || after.Job.Lease.Owner != "" {
+	if code := b.do(t, "GET", "/api/jobs/box/"+rec.ID, nil, &after); code != 200 || len(after.Log) != 3 || after.Job.Lease.Owner != "" {
 		t.Fatalf("after release %d %+v", code, after)
 	}
 }
 
 func TestJobDetailOfAJobThatIsNotThere(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	for _, id := range []string{"0123456789abcdef", "not-an-id"} {
 		var e api.Error
-		if code := b.do(t, "/api/jobs/box/"+id, &e); code != http.StatusNotFound || e.Code != api.CodeJobNotFound || e.Hint == "" {
+		if code := b.do(t, "GET", "/api/jobs/box/"+id, nil, &e); code != http.StatusNotFound || e.Code != api.CodeJobNotFound || e.Hint == "" {
 			t.Fatalf("%s: %d %+v", id, code, e)
 		}
 	}
 	var e api.Error
-	if code := b.do(t, "/api/jobs/nobox/0123456789abcdef", &e); code != http.StatusNotFound || e.Code != api.CodeTargetNotFound {
+	if code := b.do(t, "GET", "/api/jobs/nobox/0123456789abcdef", nil, &e); code != http.StatusNotFound || e.Code != api.CodeTargetNotFound {
 		t.Fatalf("unknown box: %d %+v", code, e)
 	}
 }
@@ -203,7 +235,7 @@ func TestJobDetailOfAJobThatIsNotThere(t *testing.T) {
 // Review Focus 5: an edited entry on the box is refused, not shown.
 func TestJobDetailRefusesABrokenLog(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	rec := b.startJob(t, `{}`)
 	logPath := filepath.Join(b.home, "jobs", rec.ID+".log")
 	raw, _ := os.ReadFile(logPath)
@@ -335,7 +367,7 @@ func (b *boxRig) serve(res intent.JobReadResult) {
 // agent, is job_log_invalid, and the detail shows none of it.
 func TestJobDetailRefusesALogTheRecordDoesNotDescribe(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	rec := b.startJob(t, `{}`)
 	// A three-entry log: created, the release intent, lease.released.
 	b.send(t, intent.KindJobLease, intent.JobLeasePayload{ID: rec.ID, Op: intent.LeaseRelease})
@@ -389,14 +421,14 @@ func TestJobDetailRefusesALogTheRecordDoesNotDescribe(t *testing.T) {
 		return res, err
 	}
 	var d api.JobDetail
-	if code := b.do(t, "/api/jobs/box/"+rec.ID, &d); code != 200 || len(d.Log) != 3 {
+	if code := b.do(t, "GET", "/api/jobs/box/"+rec.ID, nil, &d); code != 200 || len(d.Log) != 3 {
 		t.Fatalf("paged honest read %d %+v", code, d)
 	}
 }
 
 func TestFleetRowsCarryJobCounts(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	b.startJob(t, `{}`)
 	b.srv.jobs.refresh(context.Background(), true)
 	s := b.srv.jobs.summary("box")
@@ -404,7 +436,7 @@ func TestFleetRowsCarryJobCounts(t *testing.T) {
 		t.Fatalf("summary %+v", s)
 	}
 	var f api.Fleet
-	b.do(t, "/api/fleet", &f)
+	b.do(t, "GET", "/api/fleet", nil, &f)
 	if row, ok := f.Row("box"); !ok || row.Jobs == nil || row.Jobs.Running != 1 {
 		t.Fatalf("fleet row jobs %+v", row.Jobs)
 	}
@@ -428,7 +460,7 @@ func TestFleetRowOfABoxWithoutJobsHasNoCount(t *testing.T) {
 
 func TestJobsStreamSendsTheInbox(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	b.startJob(t, `{}`)
 	b.srv.jobs.refresh(context.Background(), true)
 	frames, _ := readFrames(t, b.ts, b.token, "/api/jobs/stream", 1)
@@ -442,10 +474,10 @@ func TestJobsStreamSendsTheInbox(t *testing.T) {
 // stream is never read as a box.
 func TestJobRoutesAndATargetNamedStream(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRigNamed(t, "stream")
+	b := newBoxRigNamed(t, "stream", withoutDriver)
 	rec := b.startJob(t, `{}`)
 	var d api.JobDetail
-	if code := b.do(t, "/api/jobs/stream/"+rec.ID, &d); code != 200 || d.Job.Target != "stream" || len(d.Log) != 1 {
+	if code := b.do(t, "GET", "/api/jobs/stream/"+rec.ID, nil, &d); code != 200 || d.Job.Target != "stream" || len(d.Log) != 1 {
 		t.Fatalf("the box named stream: %d %+v", code, d)
 	}
 	b.srv.jobs.refresh(context.Background(), true)
@@ -459,7 +491,7 @@ func TestJobRoutesAndATargetNamedStream(t *testing.T) {
 
 func TestJobOutputStreamOpens(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	rec := b.startJob(t, `{}`)
 	if code, _ := b.get(t, "/api/jobs/box/not-an-id/output/stream"); code != http.StatusNotFound {
 		t.Fatalf("a bad id = %d", code)
@@ -483,7 +515,7 @@ func TestJobOutputStreamOpens(t *testing.T) {
 // ceiling, quickly, and caches nothing.
 func TestJobDetailRefusesAnEndlessLog(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	rec := b.startJob(t, `{}`)
 	honest := b.fullRead(t, rec.ID)
 
@@ -534,11 +566,11 @@ func TestJobDetailRefusesAnEndlessLog(t *testing.T) {
 // and the old entries fail against the new key.
 func TestJobLogCacheIsBoundToTheAgentKey(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	rec := b.startJob(t, `{}`)
 	honest := b.fullRead(t, rec.ID)
 	var d api.JobDetail
-	if code := b.do(t, "/api/jobs/box/"+rec.ID, &d); code != 200 || b.cached(rec.ID) == nil {
+	if code := b.do(t, "GET", "/api/jobs/box/"+rec.ID, nil, &d); code != 200 || b.cached(rec.ID) == nil {
 		t.Fatalf("first read %d, cached %v", code, b.cached(rec.ID) != nil)
 	}
 	stranger, _ := signer.GenerateKey()
@@ -555,7 +587,7 @@ func TestJobLogCacheIsBoundToTheAgentKey(t *testing.T) {
 // M1: a log starts with its one created entry.
 func TestJobDetailRefusesAMisshapenLog(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	rec := b.startJob(t, `{}`)
 	honest := b.fullRead(t, rec.ID)
 
@@ -584,7 +616,7 @@ func TestJobDetailRefusesAMisshapenLog(t *testing.T) {
 // same job is refused: each page must chain onto the last.
 func TestJobDetailRefusesASplicedLog(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	rec := b.startJob(t, `{}`)
 	b.send(t, intent.KindJobLease, intent.JobLeasePayload{ID: rec.ID, Op: intent.LeaseRelease})
 	honest := b.fullRead(t, rec.ID)
@@ -615,10 +647,10 @@ func TestJobDetailRefusesASplicedLog(t *testing.T) {
 // M2: the cache holds only what the boxes still list.
 func TestJobLogCacheFollowsTheListing(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	rec := b.startJob(t, `{}`)
 	var d api.JobDetail
-	if code := b.do(t, "/api/jobs/box/"+rec.ID, &d); code != 200 || b.cached(rec.ID) == nil {
+	if code := b.do(t, "GET", "/api/jobs/box/"+rec.ID, nil, &d); code != 200 || b.cached(rec.ID) == nil {
 		t.Fatalf("first read %d", code)
 	}
 	// The box prunes the job (J6): the next listing drops its log.
@@ -634,7 +666,7 @@ func TestJobLogCacheFollowsTheListing(t *testing.T) {
 
 	// A removed box takes its logs with it.
 	rec2 := b.startJob(t, `{}`)
-	if code := b.do(t, "/api/jobs/box/"+rec2.ID, &d); code != 200 || b.cached(rec2.ID) == nil {
+	if code := b.do(t, "GET", "/api/jobs/box/"+rec2.ID, nil, &d); code != 200 || b.cached(rec2.ID) == nil {
 		t.Fatalf("second job read %d", code)
 	}
 	if _, err := config.Update(func(c *config.Config) error { c.Targets = nil; return nil }); err != nil {
@@ -651,7 +683,7 @@ func TestJobLogCacheFollowsTheListing(t *testing.T) {
 // once the log as a whole passes it, and nothing past it is cached.
 func TestJobLogByteCapCoversTheWholeLog(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	rec := b.startJob(t, `{}`)
 	res := b.fullRead(t, rec.ID)
 	prev := jobLogMaxBytes
@@ -801,7 +833,7 @@ func TestJobLogIsCachedOnlyWhileListed(t *testing.T) {
 // does not cache.
 func TestRemovedBoxBumpsItsGeneration(t *testing.T) {
 	requireAgentPeer(t)
-	b := newBoxRig(t)
+	b := newBoxRig(t, withoutDriver)
 	rec := b.startJob(t, `{}`)
 	_, gen := b.srv.jobs.cachedLog(jobKey{"box", rec.ID}, b.key.Address())
 	if _, err := config.Update(func(c *config.Config) error { c.Targets = nil; return nil }); err != nil {

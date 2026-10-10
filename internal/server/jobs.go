@@ -24,8 +24,8 @@ import (
 // Cadences (variables so tests shorten them). D-J2.
 var (
 	jobsListEvery   = 10 * time.Second // a refresh within this is reused
-	jobsDriveEvery  = 5 * time.Second  // Task 12's step driver
-	jobsRenewEvery  = 20 * time.Second // Task 12's lease renewals
+	jobsDriveEvery  = 5 * time.Second  // the step driver reads its job (jobsdrive.go)
+	jobsRenewEvery  = 20 * time.Second // and renews its lease; three missed renewals is jobs.LeaseTTL
 	jobsOutputEvery = 2 * time.Second
 )
 
@@ -81,15 +81,15 @@ var (
 
 // jobsHub is this server's view of every paired box's durable jobs: it lists
 // them (lazily, at most every jobsListEvery), verifies their logs, serves the
-// inbox, and (Task 12) drives the jobs whose lease this controller holds.
+// inbox, and drives the jobs whose lease this controller holds (jobsdrive.go).
 type jobsHub struct {
 	s      *Server
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	// afterList runs after each box is listed, outside mu (Task 12 resumes
-	// this controller's own jobs there).
+	// afterList runs after each box is listed, outside mu (wireDriver
+	// resumes this controller's own jobs there).
 	afterList func(t config.Target, jobs []intent.JobRecord)
 	// readJob asks a box for one page of a job (job.read). It is a field so
 	// a test can stand in for an agent that lies about its log.
@@ -105,13 +105,18 @@ type jobsHub struct {
 	logUses  uint64            // ticks on every cache read and store, for LRU
 	logGen   map[string]uint64 // per target, bumped whenever its logs are dropped
 	driving  map[jobKey]context.CancelFunc
+	// settled are the finished jobs whose result this controller has copied
+	// into its record of the box (jobsdrive.go: finished), or is copying.
+	settled  map[jobKey]bool
+	noDriver bool // Config.noJobsDriver: list and verify, never drive
 	stopped  bool
 }
 
 func newJobsHub(s *Server) *jobsHub {
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &jobsHub{s: s, ctx: ctx, cancel: cancel, boxes: map[string]*boxJobs{}, subs: map[chan api.JobsInbox]struct{}{},
-		logs: map[jobKey]*verifiedLog{}, logGen: map[string]uint64{}, driving: map[jobKey]context.CancelFunc{}}
+		logs: map[jobKey]*verifiedLog{}, logGen: map[string]uint64{}, driving: map[jobKey]context.CancelFunc{},
+		settled: map[jobKey]bool{}}
 	h.readJob = func(ctx context.Context, cfg config.Config, t config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
 		return decodeResult[intent.JobReadResult](s.agentResult(ctx, cfg, t, intent.KindJobRead, p))
 	}

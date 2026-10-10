@@ -716,6 +716,9 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/jobs/stream", s.handleJobsStream)
 	mux.HandleFunc("GET /api/jobs/{target}/{job}", s.handleJobDetail)
 	mux.HandleFunc("GET /api/jobs/{target}/{job}/output/stream", s.handleJobOutput)
+	mux.HandleFunc("POST /api/jobs/{target}", s.handleJobStart)
+	mux.HandleFunc("POST /api/jobs/{target}/{job}/decide", s.handleJobDecide)
+	mux.HandleFunc("POST /api/jobs/{target}/{job}/adopt", s.handleJobAdopt)
 
 	mux.HandleFunc("GET /api/targets/{id}/logs", s.handleLogs)
 	mux.HandleFunc("GET /api/targets/{id}/logs/stream", s.handleLogsStream)
