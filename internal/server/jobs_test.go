@@ -20,6 +20,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/eip712"
+	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/joblog"
 	"github.com/valve-tech/jumpgate/internal/jobs"
@@ -57,13 +58,19 @@ func withoutDriver(c *Config) { c.noJobsDriver = true }
 // newBoxRigNamed is newBoxRig with the paired target saved as name.
 func newBoxRigNamed(t *testing.T, name string, server ...func(*Config)) *boxRig {
 	t.Helper()
+	return newBoxRigExec(t, name, nopExec{}, server...)
+}
+
+// newBoxRigExec is newBoxRigNamed with the box's commands answered by ex.
+func newBoxRigExec(t *testing.T, name string, ex executor.Executor, server ...func(*Config)) *boxRig {
+	t.Helper()
 	jobstest.RegisterPlan(t)
 	b := &boxRig{now: time.Now(), target: name}
 	prevDrive, prevList, prevKinds := jobsDriveEvery, jobsListEvery, jobStartKinds
 	jobsDriveEvery, jobsListEvery = 20*time.Millisecond, 0
 	jobStartKinds = map[string]bool{intent.KindNodeMigrateNames: true, jobstest.TestKind: true}
 	t.Cleanup(func() { jobsDriveEvery, jobsListEvery, jobStartKinds = prevDrive, prevList, prevKinds })
-	ts, token := pairedBoxWith(t, nopExec{}, pairedOpts{
+	ts, token := pairedBoxWith(t, ex, pairedOpts{
 		setUp:  true,
 		target: func(tg *config.Target) { tg.ID = name },
 		agent: func(home string, c *agent.Config) {
