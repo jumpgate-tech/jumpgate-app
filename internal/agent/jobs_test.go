@@ -470,3 +470,30 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// I4: once a local operator abandons the box's job, service.action runs
+// again.
+func TestAnAbandonedJobFreesTheNodeServices(t *testing.T) {
+	r, run := jobsRig(t)
+	rec := ok[intent.JobRecord](t)(r.send(t, jobstest.TestKind, map[string]string{}, nil))
+	rc, res := r.send(t, intent.KindServiceAction, intent.ServiceActionPayload{Service: "exec", Action: "restart"}, nil)
+	if got := rejection(t, rc, res).Code; got != intent.ReasonJobActive {
+		t.Fatalf("service.action during a job: %s", got)
+	}
+	dir := filepath.Join(r.dir, "jobs")
+	cfg := jobs.ManagerConfig{Dir: dir, Key: r.agentKey, Runner: run, Now: func() time.Time { return r.now }}
+	_ = r.a.cfg.Jobs.Close() // the agent stops
+	if _, err := jobs.Abandon(context.Background(), cfg, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	m, err := jobs.NewManager(cfg) // and starts again
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	r.a.cfg.Jobs = m
+	rc, res = r.send(t, intent.KindServiceAction, intent.ServiceActionPayload{Service: "exec", Action: "restart"}, nil)
+	if rc.Status != intent.StatusOK {
+		t.Fatalf("service.action after the abandon: %d %s", rc.Status, res)
+	}
+}

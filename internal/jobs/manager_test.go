@@ -987,3 +987,97 @@ func TestReconcileDoesNotVerifyFinishedJobs(t *testing.T) {
 		t.Fatalf("reconcile verified %d logs; want 1, the unfinished job %s's", calls, waiting.ID)
 	}
 }
+
+// I4: a job whose result file cannot be read again blocks every write on it,
+// and so the box, for good. A local operator abandons it: the job ends
+// failed with an entry the agent's key signs, its log still verifies, and a
+// new job can start.
+func TestAbandonEndsAStuckJob(t *testing.T) {
+	g := newRig(t)
+	rec := g.unsavedFold(t)
+	p, err := ResultPath(g.dir, rec.ID, "one", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.m.Reconcile(context.Background()); err == nil {
+		t.Fatal("the job is not stuck")
+	}
+	cfg := g.m.cfg
+	// The running agent holds the store: abandon must not write beside it.
+	if _, err := Abandon(context.Background(), cfg, rec.ID); !errors.Is(err, ErrStoreInUse) {
+		t.Fatalf("abandon beside a running agent = %v", err)
+	}
+	g.m.Close()
+	got, err := Abandon(context.Background(), cfg, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != intent.JobFailed || got.Unit != "" || got.Question != nil || got.Lease.Owner != "" ||
+		!strings.Contains(got.Error, "abandoned by a local operator") {
+		t.Fatalf("abandoned job %+v", got)
+	}
+	if g.m, err = NewManager(cfg); err != nil {
+		t.Fatal(err)
+	}
+	es, _, err := g.m.store.ReadLog(rec.ID, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := joblog.Verify(g.box.Address(), rec.ID, es, 0, [32]byte{}); err != nil {
+		t.Fatalf("the abandoned job's log does not verify: %v", err)
+	}
+	last := es[len(es)-1]
+	var fin joblog.FinishedBody
+	if err := json.Unmarshal(last.Body, &fin); err != nil || last.Kind != joblog.KindFinished || fin.State != intent.JobFailed ||
+		!strings.Contains(fin.Error, "abandoned by a local operator") {
+		t.Fatalf("last entry %s %s", last.Kind, last.Body)
+	}
+	if after, _ := g.read(t, rec.ID); after.State != intent.JobFailed {
+		t.Fatalf("on disk: %+v", after)
+	}
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile after the abandon: %v", err)
+	}
+	if _, ok := g.m.Active(); ok {
+		t.Fatal("the abandoned job still blocks the box")
+	}
+	if _, err := g.start(t, g.a, `{}`); err != nil {
+		t.Fatalf("a new job after the abandon: %v", err)
+	}
+}
+
+// Abandon refuses a finished job, an unknown one, and one whose unit still
+// runs: the operator stops the unit first, or the job would end while its
+// step still acts on the box.
+func TestAbandonRefusesWhatItMustNotEnd(t *testing.T) {
+	g := newRig(t)
+	g.r.hold = true
+	done, _ := g.start(t, g.a, `{"FailAt":"one"}`)
+	g.r.hold = false
+	done = g.advance(t, g.a, done.ID)
+	if _, err := g.decide(t, g.a, done.ID, done.Question.ID, intent.OptAbort); err != nil {
+		t.Fatal(err)
+	}
+	g.r.hold = true
+	running, _ := g.start(t, g.a, `{}`)
+	if _, err := g.advanceAt(t, g.a, running.ID, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	cfg := g.m.cfg
+	g.m.Close()
+	for id, want := range map[string]string{done.ID: intent.ReasonJobState, "00000000000000ff": intent.ReasonJobNotFound, running.ID: intent.ReasonJobState} {
+		if _, err := Abandon(context.Background(), cfg, id); refusalCode(err) != want {
+			t.Errorf("abandon %s = %v, want %s", id, err, want)
+		}
+	}
+	var err error
+	if g.m, err = NewManager(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := g.read(t, running.ID); rec.State != intent.JobRunning {
+		t.Fatalf("a refused abandon moved the job: %+v", rec)
+	}
+}

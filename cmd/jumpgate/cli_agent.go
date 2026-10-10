@@ -33,7 +33,7 @@ func cmdAgent(args []string) int {
 		return failed("`jumpgate agent` runs on the Linux boxes jumpgate manages, not on Windows")
 	}
 	if len(args) == 0 {
-		return usage("usage: jumpgate agent init|enroll|run|reset-replay|job-step")
+		return usage("usage: jumpgate agent init|enroll|run|reset-replay|job-step|job-abandon")
 	}
 	fset := flag.NewFlagSet("agent "+args[0], flag.ContinueOnError)
 	state := fset.String("state-dir", defaultStateDir, "agent state directory")
@@ -42,7 +42,7 @@ func cmdAgent(args []string) int {
 	tier := fset.String("tier", "routine", "signer tier")
 	label := fset.String("label", "", "signer label")
 	localUID := fset.Int("local-uid", -1, "also allow this local uid on the socket")
-	yes := fset.Bool("yes", false, "confirm reset-replay")
+	yes := fset.Bool("yes", false, "confirm reset-replay or job-abandon")
 	resetReplay := fset.Bool("reset-replay", false, "init: start an empty replay record when the key exists but the record is gone")
 	// job-step's own arguments are read by jobs.ParseStepArgs, which checks
 	// every one; they are declared here only so the flag set accepts them.
@@ -51,6 +51,14 @@ func cmdAgent(args []string) int {
 	fset.String("attempt", "", "attempt (job-step)")
 	if err := fset.Parse(args[1:]); err != nil {
 		return exitCode("usage")
+	}
+	// job-abandon takes its job id first; flags after it still count.
+	var jobID string
+	if args[0] == "job-abandon" && fset.NArg() > 0 {
+		jobID = fset.Arg(0)
+		if err := fset.Parse(fset.Args()[1:]); err != nil || fset.NArg() > 0 {
+			return usage("usage: jumpgate agent job-abandon ID --yes")
+		}
 	}
 	var err error
 	switch args[0] {
@@ -70,6 +78,14 @@ func cmdAgent(args []string) int {
 			return usage("reset-replay reopens a replay window for intents captured before now; re-run with --yes once you know why the record broke")
 		}
 		err = agentResetReplay(*state)
+	case "job-abandon":
+		if !jobs.ValidID(jobID) {
+			return usage("usage: jumpgate agent job-abandon ID --yes (ID is the job's 16 hex digits)")
+		}
+		if !*yes {
+			return usage("job-abandon ends job %s as failed, whatever its steps left undone; re-run with --yes once you know why no controller can move it", jobID)
+		}
+		err = agentJobAbandon(os.Stdout, *state, jobID)
 	default:
 		return usage("unknown agent subcommand %q", args[0])
 	}
@@ -169,6 +185,53 @@ func agentJobStep(stateDir, configDir string, a jobs.StepArgs) error {
 	})
 }
 
+// agentKeyPath is where the agent's key is read from: systemd hands it in
+// through LoadCredential; outside systemd it is in the state directory.
+func agentKeyPath(stateDir string) string {
+	if d := os.Getenv("CREDENTIALS_DIRECTORY"); d != "" {
+		return filepath.Join(d, "agent.key")
+	}
+	return filepath.Join(stateDir, "agent.key")
+}
+
+// agentJobAbandon ends a job no signed request can move, as failed, with an
+// entry the agent's own key signs (jobs.Abandon). It opens the job store, so
+// the agent must be stopped first.
+func agentJobAbandon(out io.Writer, stateDir, id string) error {
+	k, err := signer.LoadKeyFile(agentKeyPath(stateDir))
+	if err != nil {
+		return err
+	}
+	rec, err := jobs.Abandon(context.Background(), jobs.ManagerConfig{
+		Dir: filepath.Join(stateDir, "jobs"), Key: k, Runner: jobs.DefaultRunner(executor.NewLocal()), Version: buildinfo.Version(),
+	}, id)
+	if errors.Is(err, jobs.ErrStoreInUse) {
+		return fmt.Errorf("the running agent holds the job store; stop the agent (systemctl stop jumpgate-agent), run job-abandon again, then start it: %w", err)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "job %s (%s) is now %s: %s\n", rec.ID, rec.Kind, rec.State, rec.Error)
+	return nil
+}
+
+// agentJobManager is the job store agentRun serves with. Only another agent
+// holding the store stops the agent. Any other failure to open it (a broken
+// directory, a full disk) is logged, and the agent runs without durable
+// jobs: every job kind is refused (jobs_unsupported), and status, logs and
+// service actions keep working, so the box can still be looked at and fixed.
+func agentJobManager(log io.Writer, stateDir, configDir string, k signer.Signer, ex executor.Executor) (*jobs.Manager, error) {
+	mgr, err := openJobManager(stateDir, configDir, k, ex)
+	if errors.Is(err, jobs.ErrStoreInUse) {
+		return nil, err
+	}
+	if err != nil {
+		fmt.Fprintf(log, "jumpgate agent: running without durable jobs, the job store did not open: %v\n", err)
+		return nil, nil
+	}
+	return mgr, nil
+}
+
 // openJobManager opens the job store, which it locks until Close. A second
 // agent on the box fails here, saying so, before it could touch the running
 // agent's socket.
@@ -190,22 +253,20 @@ func openJobManager(stateDir, configDir string, k signer.Signer, ex executor.Exe
 // agentRun serves until SIGTERM. systemd hands the key in through
 // LoadCredential; outside systemd it is read from the state directory.
 func agentRun(stateDir, configDir string) error {
-	keyPath := filepath.Join(stateDir, "agent.key")
-	if d := os.Getenv("CREDENTIALS_DIRECTORY"); d != "" {
-		keyPath = filepath.Join(d, "agent.key")
-	}
-	k, err := signer.LoadKeyFile(keyPath)
+	k, err := signer.LoadKeyFile(agentKeyPath(stateDir))
 	if err != nil {
 		return err
 	}
 	ex := executor.NewLocal()
 	// The job store first: its lock is what tells a second agent to stop,
 	// and Listen below replaces whatever socket is at the path.
-	mgr, err := openJobManager(stateDir, configDir, k, ex)
+	mgr, err := agentJobManager(os.Stderr, stateDir, configDir, k, ex)
 	if err != nil {
 		return err
 	}
-	defer mgr.Close()
+	if mgr != nil {
+		defer mgr.Close()
+	}
 	a := agent.New(agent.Config{
 		Key: k, Exec: ex, Jobs: mgr, Log: os.Stderr,
 		PolicyPath: filepath.Join(configDir, "policy.json"),
