@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -890,6 +891,110 @@ func TestARecordedRootMoveTheBoxDoesNotShowIsRefused(t *testing.T) {
 		}
 		if ex.ran("mv ") || len(ex.files) != 0 {
 			t.Errorf("%s: calls %v", name, ex.calls)
+		}
+	}
+}
+
+// With no node.json there is nothing to rename: preflight says so in words a
+// person can act on, and runs no command as root.
+func TestPreflightWithoutANodeSaysSoAndRunsNothing(t *testing.T) {
+	ex := legacyBox()
+	env := mnEnv(t, ex, legacyWire())
+	if err := os.Remove(env.NodePath); err != nil {
+		t.Fatal(err)
+	}
+	_, err := step(t, "preflight").Run(context.Background(), env)
+	if err == nil || !strings.Contains(err.Error(), "no node is set up on this box") {
+		t.Fatalf("preflight = %v", err)
+	}
+	if len(ex.calls) != 0 {
+		t.Fatalf("ran %v", ex.calls)
+	}
+}
+
+// A names marker that cannot be applied stops every step that reads the
+// node: falling back to node.json alone would point root commands at an
+// account and data root a migration replaced. It is reported as the marker's
+// error, never as "no node is set up".
+func TestADamagedNamesMarkerStopsTheStepAsAMarkerError(t *testing.T) {
+	env := mnEnv(t, legacyBox(), legacyWire())
+	if err := os.WriteFile(env.NamesPath, []byte(`{"names":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readNode(env)
+	var me *MarkerError
+	if !errors.As(err, &me) || strings.Contains(err.Error(), "no node is set up") {
+		t.Fatalf("readNode = %v", err)
+	}
+	var syn *json.SyntaxError
+	if !errors.As(err, &syn) || err.Error() != me.Err.Error() || !strings.Contains(err.Error(), env.NamesPath) {
+		t.Fatalf("the marker error does not carry its cause: %v", err)
+	}
+	if _, err := step(t, "preflight").Run(context.Background(), env); !errors.As(err, &me) {
+		t.Fatalf("preflight ran past a damaged marker: %v", err)
+	}
+}
+
+// node.json's paths reach root command lines, so a jwt path outside the data
+// dir's rules is refused before any step acts; an unset one defaults inside
+// the data dir.
+func TestReadNodeChecksTheJWTPath(t *testing.T) {
+	for _, jwt := range []string{"relative/jwt.hex", "/etc", "/var/lib/x/../../etc/shadow"} {
+		w := legacyWire()
+		w.JWTPath = jwt
+		if _, err := readNode(mnEnv(t, newScript(), w)); err == nil || !strings.Contains(err.Error(), "jwt path") {
+			t.Errorf("jwt path %q: readNode = %v", jwt, err)
+		}
+	}
+	w := legacyWire()
+	w.JWTPath = ""
+	if _, err := readNode(mnEnv(t, newScript(), w)); err != nil {
+		t.Fatalf("an unset jwt path: %v", err)
+	}
+	if got := jwtOf(w); got != w.DataDir+"/jwt.hex" {
+		t.Fatalf("jwtOf = %q", got)
+	}
+}
+
+// node.json that does not parse is an error, not an empty config whose zero
+// values a step would act on.
+func TestReadNodeConfigRefusesAnUnparsableNodeJSON(t *testing.T) {
+	env := mnEnv(t, newScript(), legacyWire())
+	if err := os.WriteFile(env.NodePath, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadNodeConfig(env.NodePath, env.NamesPath); err == nil || !strings.Contains(err.Error(), "does not parse") {
+		t.Fatalf("ReadNodeConfig = %v", err)
+	}
+}
+
+// Without a names path (setup's own read before any migration) node.json is
+// returned as written, even when a marker file sits beside it.
+func TestReadNodeConfigWithoutANamesPathReadsNodeJSONAlone(t *testing.T) {
+	env := mnEnv(t, newScript(), legacyWire())
+	if err := writeNamesMarker(env.NamesPath, rootMove()); err != nil {
+		t.Fatal(err)
+	}
+	w, err := ReadNodeConfig(env.NodePath, "")
+	if want := legacyWire(); err != nil || w.Names != want.Names || w.DataDir != want.DataDir || w.JWTPath != want.JWTPath {
+		t.Fatalf("ReadNodeConfig = %+v, %v", w, err)
+	}
+}
+
+// The marker writer holds itself to the reader's rules: a marker the agent
+// would refuse to apply is never written.
+func TestWriteNamesMarkerRefusesWhatReadWouldRefuse(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "names.json")
+	for _, m := range []NamesMarker{
+		{Names: catalog.NamesLegacy},
+		{Names: catalog.NamesCurrent, DataRootFrom: "/", DataRootTo: catalog.CurrentNames.DataRoot},
+		{Names: catalog.NamesCurrent, DataRootTo: catalog.CurrentNames.DataRoot},
+	} {
+		if err := writeNamesMarker(p, m); err == nil {
+			t.Errorf("wrote %+v", m)
+		}
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a refused marker left a file: %v", err)
 		}
 	}
 }

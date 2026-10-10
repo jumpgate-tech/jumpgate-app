@@ -1081,3 +1081,124 @@ func TestAbandonRefusesWhatItMustNotEnd(t *testing.T) {
 		t.Fatalf("a refused abandon moved the job: %+v", rec)
 	}
 }
+
+// The previous holder a restored lease.taken names is the one the log
+// records last, not the job's creator: a later adopter's history must read
+// who it really took the job from.
+func TestARestoredLeaseTakeNamesTheLastLoggedHolder(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{}`)
+	g.now = g.now.Add(LeaseTTL + time.Second)
+	if _, err := g.lease(t, g.b, rec.ID, intent.LeaseTake); err != nil {
+		t.Fatal(err)
+	}
+	g.now = g.now.Add(LeaseTTL + time.Second)
+	failLogSync(t, 2) // a's intent, then its lease.taken
+	if _, err := g.lease(t, g.a, rec.ID, intent.LeaseTake); err == nil {
+		t.Fatal("the injected failure did not reach Lease")
+	}
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, res := g.read(t, rec.ID)
+	last := res.Entries[len(res.Entries)-1]
+	var b joblog.LeaseBody
+	if last.Kind != joblog.KindLeaseTaken || json.Unmarshal(last.Body, &b) != nil ||
+		b.Owner != g.a.Address().Hex() || b.Previous != g.b.Address().Hex() {
+		t.Fatalf("last entry %s %s, want a taking from b", last.Kind, last.Body)
+	}
+}
+
+// After a logged release nobody holds the job, so a take whose lease.taken
+// was dropped is restored with no previous holder.
+func TestARestoredLeaseTakeAfterAReleaseHasNoPreviousHolder(t *testing.T) {
+	g := newRig(t)
+	rec, _ := g.start(t, g.a, `{}`)
+	if _, err := g.lease(t, g.a, rec.ID, intent.LeaseRelease); err != nil {
+		t.Fatal(err)
+	}
+	failLogSync(t, 2)
+	if _, err := g.lease(t, g.b, rec.ID, intent.LeaseTake); err == nil {
+		t.Fatal("the injected failure did not reach Lease")
+	}
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, res := g.read(t, rec.ID)
+	last := res.Entries[len(res.Entries)-1]
+	var b joblog.LeaseBody
+	if last.Kind != joblog.KindLeaseTaken || json.Unmarshal(last.Body, &b) != nil ||
+		b.Owner != g.b.Address().Hex() || b.Previous != "" {
+		t.Fatalf("last entry %s %s", last.Kind, last.Body)
+	}
+}
+
+// List is every job on the box, finished ones too, stamped with the agent's
+// clock so a controller can judge lease ages against it.
+func TestListHasEveryJobAndTheAgentsTime(t *testing.T) {
+	g := newRig(t)
+	empty, err := g.m.List()
+	if err != nil || empty.Jobs == nil || len(empty.Jobs) != 0 {
+		t.Fatalf("an empty box lists %+v, %v (want an empty, non-nil list)", empty, err)
+	}
+	first, _ := g.start(t, g.a, `{}`)
+	g.advance(t, g.a, first.ID)
+	g.advance(t, g.a, first.ID)
+	second, err := g.start(t, g.b, `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := g.m.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]string{}
+	for _, j := range got.Jobs {
+		states[j.ID] = j.State
+	}
+	if len(got.Jobs) != 2 || states[first.ID] != intent.JobSucceeded || states[second.ID] != intent.JobWaiting {
+		t.Fatalf("List = %+v", got.Jobs)
+	}
+	if got.AgentTime != g.now.Unix() {
+		t.Fatalf("AgentTime %d, want %d", got.AgentTime, g.now.Unix())
+	}
+}
+
+// Prune drops a finished job once it is older than the retention age, with
+// its log, and never touches a job that is still open.
+func TestPruneDropsOldFinishedJobsAndKeepsOpenOnes(t *testing.T) {
+	g := newRig(t)
+	old, _ := g.start(t, g.a, `{}`)
+	g.advance(t, g.a, old.ID)
+	g.advance(t, g.a, old.ID)
+	g.now = g.now.Add(pruneAge + time.Hour)
+	open, err := g.start(t, g.a, `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.now = g.now.Add(pruneAge + time.Hour) // the open job is old too
+	if err := g.m.Prune(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := g.m.List()
+	if len(got.Jobs) != 1 || got.Jobs[0].ID != open.ID {
+		t.Fatalf("after Prune: %+v", got.Jobs)
+	}
+	if _, err := os.Stat(filepath.Join(g.dir, old.ID+".log")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the pruned job's log is still there: %v", err)
+	}
+	if _, err := g.m.Read(old.ID, 0); refusalCode(err) != intent.ReasonJobNotFound {
+		t.Fatalf("Read of a pruned job = %v", err)
+	}
+}
+
+// An open question with no tier is routine, the least privileged answer;
+// any tier it names is kept as named.
+func TestQuestionTierDefaultsToRoutine(t *testing.T) {
+	if got := questionTier(&intent.JobQuestion{}); got != intent.TierRoutine {
+		t.Fatalf("no tier = %q", got)
+	}
+	if got := questionTier(&intent.JobQuestion{Tier: intent.TierApproval}); got != intent.TierApproval {
+		t.Fatalf("approval tier = %q", got)
+	}
+}

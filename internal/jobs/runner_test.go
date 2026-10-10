@@ -130,3 +130,82 @@ func TestSystemdRunnerAnyActive(t *testing.T) {
 		t.Fatal("a failed listing read as no unit")
 	}
 }
+
+// errExec fails every command, as a lost SSH session or a dead executor does.
+type errExec struct{ recExec }
+
+func (e *errExec) Run(_ context.Context, cmd string, _ *executor.RunOpts) (executor.Result, error) {
+	e.cmds = append(e.cmds, cmd)
+	return executor.Result{}, errors.New("executor gone")
+}
+
+// Each reason a box cannot run jobs is named, so the refusal tells the
+// operator what to fix; a box with both pieces is supported. A command that
+// could not run at all is that error, not an ErrUnsupported verdict about the
+// box.
+func TestSystemdRunnerSupportedChecksEachPiece(t *testing.T) {
+	ex := &recExec{}
+	if err := (SystemdRunner{Exec: ex}).Supported(context.Background()); err != nil {
+		t.Fatalf("a box with systemd and systemd-run: %v", err)
+	}
+	if strings.Join(ex.cmds, ";") != "test -d /run/systemd/system;command -v systemd-run" {
+		t.Fatalf("commands %v", ex.cmds)
+	}
+	ex = &recExec{answers: map[string]executor.Result{"command -v systemd-run": {ExitCode: 1}}}
+	err := SystemdRunner{Exec: ex}.Supported(context.Background())
+	if !errors.Is(err, ErrUnsupported) || !strings.Contains(err.Error(), "systemd-run is not installed") {
+		t.Fatalf("no systemd-run: %v", err)
+	}
+	ex = &recExec{answers: map[string]executor.Result{"test -d /run/systemd/system": {ExitCode: 1}}}
+	err = SystemdRunner{Exec: ex}.Supported(context.Background())
+	if !strings.Contains(err.Error(), "/run/systemd/system is absent") || len(ex.cmds) != 1 {
+		t.Fatalf("no systemd: %v after %v", err, ex.cmds)
+	}
+	for _, failAt := range []string{"test -d", "command -v"} {
+		ex := &failingAt{prefix: failAt}
+		err := SystemdRunner{Exec: ex}.Supported(context.Background())
+		if err == nil || errors.Is(err, ErrUnsupported) {
+			t.Errorf("%s could not run: Supported = %v", failAt, err)
+		}
+	}
+}
+
+// failingAt runs every command but the one with prefix, which errors.
+type failingAt struct {
+	recExec
+	prefix string
+}
+
+func (f *failingAt) Run(ctx context.Context, cmd string, o *executor.RunOpts) (executor.Result, error) {
+	if strings.HasPrefix(cmd, f.prefix) {
+		return executor.Result{}, errors.New("executor gone")
+	}
+	return f.recExec.Run(ctx, cmd, o)
+}
+
+// A step whose systemd-run could not even be sent is an error naming the
+// unit, never a started step.
+func TestSystemdRunnerStartReportsAnExecutorError(t *testing.T) {
+	err := SystemdRunner{Exec: &errExec{}}.Start(context.Background(), "jumpgate-job-0123456789abcdef-one-0", []string{"/bin/true"})
+	if err == nil || !strings.Contains(err.Error(), "jumpgate-job-0123456789abcdef-one-0") {
+		t.Fatalf("Start = %v", err)
+	}
+	if err := (SystemdRunner{Exec: &recExec{}}).Start(context.Background(), "jumpgate-job-0123456789abcdef-one-0", nil); err == nil {
+		t.Fatal("a unit with no command was started")
+	}
+}
+
+// Active refuses a name that is not a job unit before it reaches a command
+// line, and an executor error stays an error ("cannot tell").
+func TestSystemdRunnerActiveRefusesForeignUnitsAndReportsErrors(t *testing.T) {
+	ex := &recExec{}
+	if _, err := (SystemdRunner{Exec: ex}).Active(context.Background(), "sshd; reboot"); err == nil || len(ex.cmds) != 0 {
+		t.Fatalf("Active on a foreign unit = %v, ran %v", err, ex.cmds)
+	}
+	if _, err := (SystemdRunner{Exec: &errExec{}}).Active(context.Background(), "jumpgate-job-0123456789abcdef-one-0"); err == nil {
+		t.Fatal("an executor error read as a verdict")
+	}
+	if _, err := (SystemdRunner{Exec: &errExec{}}).AnyActive(context.Background(), "0123456789abcdef"); err == nil {
+		t.Fatal("an executor error read as no unit running")
+	}
+}
