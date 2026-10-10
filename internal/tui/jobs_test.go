@@ -241,3 +241,110 @@ func TestReloadRestartsTheStreamAndStopsTheOldReader(t *testing.T) {
 		t.Fatal("the old stream was not stopped by reload")
 	}
 }
+
+// The option list shows the box's question and each option by number, all
+// cleaned of escapes; esc closes it and sends nothing.
+func TestTheChoiceListShowsTheQuestionAndEscSendsNothing(t *testing.T) {
+	f := tuitest.NewFake()
+	in := sampleInbox()
+	in.Jobs[0].Question.Prompt = "1 process\x1b[2J still runs\nas valve-node-app"
+	in.Jobs[0].Question.Options[1].Detail = "SIGTERM\x1b]52;c;AAAA\x07 first"
+	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: in, Has: true, State: apiclient.Live}
+	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "5", "d").(*App)
+	fr := tuitest.Frame(m)
+	for _, want := range []string{"box-a asks", "1 process still runs", "as valve-node-app", "1 Check again", "2 Stop them", "SIGTERM first", "3 Stop the migration here", "press a number, or esc"} {
+		if !strings.Contains(fr, want) {
+			t.Errorf("the choice list lacks %q:\n%s", want, fr)
+		}
+	}
+	if strings.Contains(fr, "\x1b]") || strings.Contains(fr, "\x1b[2J") {
+		t.Fatalf("an escape from the box reached the frame:\n%q", fr)
+	}
+	m = press(t, m, "9").(*App) // no such option: the list stays
+	if m.modal == nil {
+		t.Fatal("a number with no option closed the list")
+	}
+	m = press(t, m, "esc").(*App)
+	if m.modal != nil || f.Called("Decide") {
+		t.Fatalf("esc left modal %T, calls %v", m.modal, f.Calls)
+	}
+}
+
+// d explains why it cannot ask instead of sending a request the box would
+// refuse: no open question, or nobody holds the lease.
+func TestDecideSaysWhyItCannotAsk(t *testing.T) {
+	f := tuitest.NewFake()
+	m := press(t, jobsApp(t, f, "unicode"), "down", "d").(*App) // box-b has no question
+	if !strings.Contains(m.flash, "not waiting on a decision") || m.modal != nil {
+		t.Fatalf("flash %q modal %T", m.flash, m.modal)
+	}
+	f = tuitest.NewFake()
+	in := sampleInbox()
+	in.Jobs[0].Lease = api.JobLease{} // released: nobody drives it
+	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: in, Has: true, State: apiclient.Live}
+	m = press(t, newTestApp(t, f, 80, 24, "unicode"), "5").(*App)
+	if fr := tuitest.Frame(m); !strings.Contains(fr, "nobody drives it") {
+		t.Fatalf("frame:\n%s", fr)
+	}
+	m = press(t, m, "d").(*App)
+	if !strings.Contains(m.flash, "adopt it first") || m.modal != nil || f.Called("Decide") {
+		t.Fatalf("flash %q modal %T calls %v", m.flash, m.modal, f.Calls)
+	}
+}
+
+// A job whose controller is alive cannot be adopted from here; the inbox
+// says it is watched and a says why not.
+func TestAdoptRefusesALiveController(t *testing.T) {
+	f := tuitest.NewFake()
+	in := sampleInbox()
+	in.Jobs[0].Lease = api.JobLease{Owner: "0xbbbb000000000000000000000000000000000bbb", Fresh: true}
+	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: in, Has: true, State: apiclient.Live}
+	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "5").(*App)
+	if fr := tuitest.Frame(m); !strings.Contains(fr, "watching 0xbbbb") {
+		t.Fatalf("frame:\n%s", fr)
+	}
+	m = press(t, m, "a").(*App)
+	if !strings.Contains(m.flash, "still alive") || m.modal != nil || f.Called("Adopt") {
+		t.Fatalf("flash %q modal %T calls %v", m.flash, m.modal, f.Calls)
+	}
+}
+
+// A refused decision is flashed with the server's reason, cleaned; the
+// person sees it was not taken.
+func TestARefusedDecisionIsFlashed(t *testing.T) {
+	f := tuitest.NewFake()
+	f.Err = map[string]error{"Decide": &api.Error{Message: "the job moved on\x1b[2J", Code: api.CodeJobState}}
+	m := jobsApp(t, f, "unicode")
+	m = press(t, m, "d", "1").(*App)
+	m = typed(t, m, "retry").(*App)
+	m = press(t, m, "enter").(*App)
+	if !f.Called("Decide") || !strings.HasPrefix(m.flash, "decision: ") || !strings.Contains(m.flash, "the job moved on") || strings.Contains(m.flash, "\x1b") {
+		t.Fatalf("flash %q calls %v", m.flash, f.Calls)
+	}
+}
+
+// A log that could not be read says why under the job, rather than showing
+// an empty history as if it were verified.
+func TestALogThatCannotBeReadSaysWhy(t *testing.T) {
+	f := tuitest.NewFake()
+	f.Err = map[string]error{"Job": &api.Error{Message: "the log does not verify", Code: api.CodeJobLogInvalid}}
+	fr := tuitest.Frame(press(t, jobsApp(t, f, "unicode"), "enter"))
+	if !strings.Contains(fr, "the log does not verify") {
+		t.Fatalf("frame:\n%s", fr)
+	}
+}
+
+// An empty inbox says how to start a job, and a box that did not answer is
+// named with its error.
+func TestAnEmptyInboxSaysHowToStartAndNamesSilentBoxes(t *testing.T) {
+	f := tuitest.NewFake()
+	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: api.JobsInbox{Errors: []api.JobsError{{Target: "box-c", Error: api.Error{Message: "could not reach the agent"}}}}, Has: true, State: apiclient.Live}
+	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "5", "d", "a").(*App)
+	fr := tuitest.Frame(m)
+	if !strings.Contains(fr, "No durable jobs on any paired box") || !strings.Contains(fr, "box-c: could not reach the agent") {
+		t.Fatalf("frame:\n%s", fr)
+	}
+	if f.Called("Decide") || f.Called("Adopt") {
+		t.Fatalf("an empty inbox sent %v", f.Calls)
+	}
+}
