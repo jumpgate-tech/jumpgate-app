@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
+	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/intent"
 )
 
@@ -36,7 +36,7 @@ type Policy struct {
 	Kinds map[string][]Tier `json:"kinds,omitempty"`
 }
 
-// DefaultRequirements are sub-project 1's kinds, all routine. A kind absent
+// DefaultRequirements are sub-project 1's kinds and sub-project 2's job kinds, all routine. A kind absent
 // from both this table and Policy.Kinds is unknown and refused.
 var DefaultRequirements = map[string][]Tier{
 	intent.KindAgentInfo:     {TierRoutine},
@@ -47,6 +47,14 @@ var DefaultRequirements = map[string][]Tier{
 	intent.KindLogsRead:      {TierRoutine},
 	intent.KindLogsSince:     {TierRoutine},
 	intent.KindServiceAction: {TierRoutine},
+
+	intent.KindJobList:          {TierRoutine},
+	intent.KindJobRead:          {TierRoutine},
+	intent.KindJobOutput:        {TierRoutine},
+	intent.KindJobLease:         {TierRoutine},
+	intent.KindJobAdvance:       {TierRoutine},
+	intent.KindJobDecide:        {TierRoutine},
+	intent.KindNodeMigrateNames: {TierRoutine},
 }
 
 // LoadPolicy reads the policy file, refusing one other users can write or read.
@@ -75,7 +83,7 @@ func (p Policy) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(path, b)
+	return fsatomic.WriteFile(path, b)
 }
 
 // AddSigner enrolls e unless its address is already enrolled. It never
@@ -112,8 +120,13 @@ func (p Policy) tierOf(a eip712.Address) (Tier, bool) {
 }
 
 // Authorise checks that controller is an enrolled routine signer that signed,
-// and that every tier the kind requires is covered by a distinct signer.
-func (p Policy) Authorise(kind string, controller eip712.Address, signers []eip712.Address) error {
+// and that every tier the kind requires, plus each of extra, is covered by a
+// distinct signer. extra is what this one request needs beyond its kind: a
+// decision on a question of the approval tier needs an approval signature
+// whatever the policy asks of job.decide (Q5). A job kind with neither a
+// default requirement nor a policy entry stays unknown: registering a plan
+// does not authorise anyone to start it.
+func (p Policy) Authorise(kind string, controller eip712.Address, signers []eip712.Address, extra ...Tier) error {
 	req, ok := p.Kinds[kind]
 	if !ok {
 		req, ok = DefaultRequirements[kind]
@@ -121,6 +134,7 @@ func (p Policy) Authorise(kind string, controller eip712.Address, signers []eip7
 	if !ok {
 		return reject(intent.ReasonUnknownKind, fmt.Sprintf("this agent does not know %q", kind))
 	}
+	req = append(append([]Tier{}, req...), extra...)
 	if tier, enrolled := p.tierOf(controller); !enrolled || tier != TierRoutine {
 		return reject(intent.ReasonUnauthorizedKind, fmt.Sprintf("controller %s is not enrolled on this box", controller.Hex()))
 	}
@@ -150,55 +164,6 @@ func (p Policy) Authorise(kind string, controller eip712.Address, signers []eip7
 		if !found {
 			return reject(intent.ReasonUnauthorizedKind, fmt.Sprintf("%s needs a %s signature", kind, need))
 		}
-	}
-	return nil
-}
-
-// writeAtomic writes b to path through a fsynced temp file and rename.
-func writeAtomic(path string, b []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp)
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
-		return err
-	}
-	if _, err := f.Write(b); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	return syncDir(dir)
-}
-
-// syncDir is a variable so a test can make the directory fsync fail.
-var syncDir = func(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("agent: open %s to sync it: %w", dir, err)
-	}
-	if err := d.Sync(); err != nil {
-		d.Close()
-		return fmt.Errorf("agent: sync directory %s: %w", dir, err)
-	}
-	if err := d.Close(); err != nil {
-		return fmt.Errorf("agent: close directory %s: %w", dir, err)
 	}
 	return nil
 }

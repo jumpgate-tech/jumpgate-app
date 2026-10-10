@@ -24,9 +24,9 @@ func TestDefaultTargetPathsArePOSIX(t *testing.T) {
 		wantDataDir string
 		wantJWTPath string
 	}{
-		{name: "pulsechain mainnet", chainID: 369, wantDataDir: "/var/lib/valve-node-app/369", wantJWTPath: "/var/lib/valve-node-app/369/jwt.hex"},
-		{name: "ethereum mainnet", chainID: 1, wantDataDir: "/var/lib/valve-node-app/1", wantJWTPath: "/var/lib/valve-node-app/1/jwt.hex"},
-		{name: "pulsechain testnet v4", chainID: 943, wantDataDir: "/var/lib/valve-node-app/943", wantJWTPath: "/var/lib/valve-node-app/943/jwt.hex"},
+		{name: "pulsechain mainnet", chainID: 369, wantDataDir: "/var/lib/jumpgate-node/369", wantJWTPath: "/var/lib/jumpgate-node/369/jwt.hex"},
+		{name: "ethereum mainnet", chainID: 1, wantDataDir: "/var/lib/jumpgate-node/1", wantJWTPath: "/var/lib/jumpgate-node/1/jwt.hex"},
+		{name: "pulsechain testnet v4", chainID: 943, wantDataDir: "/var/lib/jumpgate-node/943", wantJWTPath: "/var/lib/jumpgate-node/943/jwt.hex"},
 	}
 
 	for _, tt := range tests {

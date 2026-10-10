@@ -124,7 +124,9 @@ const gatewayChainIDCall = `{"jsonrpc":"2.0","id":1,"method":"eth_chainId","para
 // bad chain id, an endpoint with no scheme) fails immediately instead of
 // partway through RunAll with a container already removed.
 //
-// Note for the systemd backend: the unit runs as catalog.ServiceUser, and
+// Note for the systemd backend: the unit runs as catalog.ServiceUser (the
+// legacy account; node.migrate-names refuses a box where this unit exists,
+// and sub-project 6 renames it), and
 // this plan does not create that account or install the erpc binary. Both
 // are the node plan's job. A systemd gateway is therefore an addition to a
 // box jumpgate already provisioned; a gateway on a bare machine is

@@ -192,9 +192,10 @@ const FitMargin = 1.10
 
 // DefaultDataDir is where a chain's data lives on a box by default. Target
 // paths are POSIX on every control-plane OS, so this uses package path, never
-// filepath. Sub-project 2's node.migrate-names changes the prefix here, once.
+// filepath. This is the default for a new setup; an existing box keeps the
+// data dir its wire records.
 func DefaultDataDir(chainID int) string {
-	return fmt.Sprintf("/var/lib/valve-node-app/%d", chainID)
+	return DefaultDataDirFor(CurrentNames, chainID)
 }
 
 // DefaultJWTPath is the engine-API secret beside the data.

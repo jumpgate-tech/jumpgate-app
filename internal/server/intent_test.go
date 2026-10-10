@@ -324,3 +324,31 @@ func TestIntentRejectionCarriesAHint(t *testing.T) {
 		t.Fatalf("reply %v", out)
 	}
 }
+
+// The generic intent route is not a back door around the jobs routes: a job
+// start there would skip the P7 allowlist and the per-target claim that keeps
+// a job from starting during setup or a clear, and a job.* kind would drive a
+// job without its lease. Such kinds are refused before anything is signed,
+// and an ordinary kind still goes through.
+func TestIntentEndpointRefusesJobKinds(t *testing.T) {
+	ts, token := pairedLocal(t)
+	before := nextSeq(t, "box")
+	for _, kind := range []string{intent.KindNodeMigrateNames, intent.KindJobDecide, intent.KindJobAdvance, intent.KindJobLease, intent.KindJobRead} {
+		res, out := postIntent(t, ts, token, "/api/targets/box/intent/"+kind, `{}`)
+		if res.StatusCode != http.StatusBadRequest || out["code"] != string(api.CodeJobKindNotAllowed) {
+			t.Fatalf("%s: %d %v", kind, res.StatusCode, out)
+		}
+		if hint, _ := out["hint"].(string); !strings.Contains(hint, "/api/jobs") || !strings.Contains(hint, "jumpgate jobs") {
+			t.Fatalf("%s: hint %q does not point to the jobs routes", kind, hint)
+		}
+	}
+	if after := nextSeq(t, "box"); after != before {
+		t.Fatalf("an intent was signed (next seq %d -> %d)", before, after)
+	}
+	if res, out := postIntent(t, ts, token, "/api/targets/box/intent/agent.info", `{}`); res.StatusCode != http.StatusOK {
+		t.Fatalf("an ordinary kind was refused: %d %v", res.StatusCode, out)
+	}
+	if after := nextSeq(t, "box"); after <= before {
+		t.Fatalf("the ordinary kind was not sent (next seq %d -> %d)", before, after)
+	}
+}

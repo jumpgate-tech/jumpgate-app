@@ -1083,8 +1083,8 @@ func TestDefaultUpstreams(t *testing.T) {
 }
 
 func TestDefaultPathsArePOSIX(t *testing.T) {
-	if got := DefaultDataDir(369); got != "/var/lib/valve-node-app/369" {
-		t.Fatalf("DefaultDataDir = %q (the rename is sub-project 2's node.migrate-names, not this)", got)
+	if got := DefaultDataDir(369); got != "/var/lib/jumpgate-node/369" {
+		t.Fatalf("DefaultDataDir = %q", got)
 	}
 	if got := DefaultJWTPath("/var/lib/x/1"); got != "/var/lib/x/1/jwt.hex" {
 		t.Fatalf("DefaultJWTPath = %q", got)

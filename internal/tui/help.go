@@ -10,7 +10,10 @@ import (
 
 // helpModal lists the global keys and the current screen's, generated from
 // the same bindings the screens match on.
-type helpModal struct{ lines []string }
+type helpModal struct {
+	lines  []string
+	offset int
+}
 
 func newHelp(a *App) *helpModal {
 	row := func(b key.Binding) string {
@@ -42,9 +45,40 @@ func (a *App) offers(b key.Binding) bool {
 }
 
 func (h *helpModal) key(_ *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
-	return k.String() == "esc" || k.String() == "?" || k.String() == "q", nil
+	switch k.String() {
+	case "esc", "?", "q":
+		return true, nil
+	case "up", "k":
+		h.offset = max(h.offset-1, 0)
+	case "down", "j":
+		h.offset++ // clamped against the height when drawn
+	}
+	return false, nil
 }
 
-func (h *helpModal) view(a *App, w, _ int) string {
-	return a.th.Title.Render(" Help") + a.th.Dim.Render("  (esc to close)") + "\n\n" + strings.Join(h.lines, "\n")
+// view drops its blank lines before it scrolls: at 80x24 the jobs screen's
+// keys only just fit once the spacing goes, and a help that hides a key is
+// worse than a cramped one. When even that is too tall the keys scroll, and
+// a last line says there is more.
+func (h *helpModal) view(a *App, w, height int) string {
+	head := a.th.Title.Render(" Help") + a.th.Dim.Render("  (esc to close)")
+	lines := h.lines
+	if len(lines)+2 > height {
+		lines = lines[:0:0]
+		for _, l := range h.lines {
+			if l != "" {
+				lines = append(lines, l)
+			}
+		}
+	} else {
+		head += "\n"
+	}
+	room := height - 1 - strings.Count(head, "\n")
+	if len(lines) <= room || room < 2 {
+		return head + "\n" + strings.Join(lines, "\n")
+	}
+	room-- // the "more" line
+	h.offset = min(h.offset, len(lines)-room)
+	more := a.th.Dim.Render(fmt.Sprintf("  %s more (%s)", a.gl.Ellipsis, a.gl.UpDown))
+	return head + "\n" + strings.Join(lines[h.offset:h.offset+room], "\n") + "\n" + more
 }

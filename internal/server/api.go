@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -30,15 +31,22 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/logwatch"
 	"github.com/valve-tech/jumpgate/internal/monitor"
 	"github.com/valve-tech/jumpgate/internal/ops"
 	"github.com/valve-tech/jumpgate/internal/setup"
 )
 
-// logUnits is the fixed set of journald units every target's logwatch
-// Watcher tails, matching internal/monitor's unit-name constants.
-var logUnits = []string{"valve-node-app-exec.service", "valve-node-app-beacon.service"}
+// logUnitsFor is the set of journald units a target's logwatch Watcher tails:
+// the node units under the names its wire records. A target with no wire yet
+// has no node to tail, so it reads as legacy, as WireConfig.NodeNames does.
+func logUnitsFor(t config.Target) []string {
+	if t.Wire == nil {
+		return catalog.LegacyNames.Units()
+	}
+	return t.Wire.NodeNames().Units()
+}
 
 // defaultRecentLogs is used when GET .../logs is called without ?n=.
 const defaultRecentLogs = 200
@@ -181,6 +189,10 @@ type targetEntry struct {
 	// opBusy is set while a destructive operation (wipe, reset, clear) is
 	// running against this target. See claimTargetOp.
 	opBusy bool
+
+	// jobStarting is set while a job's start is in flight to this target's
+	// agent. See claimJobStart.
+	jobStarting bool
 
 	// intentMu serialises intents to this target's agent; see handleIntent.
 	intentMu sync.Mutex
@@ -496,7 +508,7 @@ func (s *Server) getWatcher(t config.Target) (watch *logwatch.Watcher, retired <
 	if err := executor.RequireShell(ex); err != nil {
 		return nil, nil, fmt.Errorf("target %q: %w", t.ID, err)
 	}
-	watch = logwatch.New(ex, logUnits)
+	watch = logwatch.New(ex, logUnitsFor(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	watch.Start(ctx)
 	// Auto-diagnostics trigger: error/critical journal hits kick off a
@@ -696,6 +708,21 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/fleet/{id}/disk", s.handleFleetDisk)
 	mux.HandleFunc("POST /api/fleet/{id}/disk/measure", s.handleFleetMeasure)
 	mux.HandleFunc("GET /api/fleet/{id}/status/stream", s.handleFleetStatusStream)
+
+	// Durable jobs (jobs.go). Never under /api/targets/{id} (ruling P7). The
+	// patterns do not overlap: /api/jobs/stream has two segments and every
+	// per-job route four or more, so a box named "stream" keeps its job
+	// routes (/api/jobs/stream/{job}) and never reaches the inbox stream.
+	// Should a GET /api/jobs/{target} ever be added, ServeMux gives the
+	// literal /api/jobs/stream precedence, as the more specific pattern;
+	// TestJobRoutesAndATargetNamedStream holds both.
+	mux.HandleFunc("GET /api/jobs", s.handleJobs)
+	mux.HandleFunc("GET /api/jobs/stream", s.handleJobsStream)
+	mux.HandleFunc("GET /api/jobs/{target}/{job}", s.handleJobDetail)
+	mux.HandleFunc("GET /api/jobs/{target}/{job}/output/stream", s.handleJobOutput)
+	mux.HandleFunc("POST /api/jobs/{target}", s.handleJobStart)
+	mux.HandleFunc("POST /api/jobs/{target}/{job}/decide", s.handleJobDecide)
+	mux.HandleFunc("POST /api/jobs/{target}/{job}/adopt", s.handleJobAdopt)
 
 	mux.HandleFunc("GET /api/targets/{id}/logs", s.handleLogs)
 	mux.HandleFunc("GET /api/targets/{id}/logs/stream", s.handleLogsStream)
@@ -1035,6 +1062,146 @@ const (
 var snapshotKeyPattern = regexp.MustCompile(
 	fmt.Sprintf(`^vk_[A-Za-z0-9_-]{%d,%d}$`, snapshotKeyMinLen, snapshotKeyMaxLen))
 
+// setupWire fills a setup request's defaults from the box's current wire.
+// Names never come from the request: a box keeps the names it has (legacy for
+// every box set up before sub-project 2) until node.migrate-names changes
+// them, and only a box with no wire yet starts with the new names. A data dir
+// the request leaves empty is the box's own when the chain is unchanged, so a
+// re-run from the web UI (which sends none) never points a node at an empty
+// directory.
+func setupWire(req catalog.WireConfig, existing *catalog.WireConfig) catalog.WireConfig {
+	w := req
+	switch {
+	case existing == nil:
+		w.Names = catalog.NamesCurrent
+	default:
+		w.Names = existing.Names
+		if w.DataDir == "" && existing.ChainID == w.ChainID && existing.DataDir != "" {
+			w.DataDir, w.JWTPath = existing.DataDir, existing.JWTPath
+		}
+	}
+	if w.DataDir == "" {
+		w.DataDir = catalog.DefaultDataDirFor(w.NodeNames(), w.ChainID)
+	}
+	if w.JWTPath == "" {
+		w.JWTPath = catalog.DefaultJWTPath(w.DataDir)
+	}
+	return w
+}
+
+// setupExisting is the wire setup keeps a box's names and paths from. For a
+// paired box it is what the box's agent reports in agent.info, after the
+// names marker (D-J10): the controller's copy may predate a migration it
+// missed, or be absent (a box paired from another controller, or a config
+// restored from before the box was set up), and setup renders units as root
+// from these names. Review Focus 4: without this a legacy box would be
+// treated as new, given the jumpgate-node names, and set up with units for an
+// account that does not exist. A box that cannot answer, or whose node config
+// it refuses, refuses the setup rather than guess. An unpaired target has
+// only the controller's copy.
+//
+// A released agent (before sub-project 2) reports only setUp and chainId.
+// For such a box the controller's copy fills in what the agent does not say,
+// and a box it reports as not set up while the controller holds a config
+// for it is refused (setupConflict): an older agent says the same of a node
+// config it cannot read, and taking that box for a new one would give it
+// units for an account that does not exist. A current agent (one that
+// reports plan versions) says why it refuses a config, so the same report
+// from it means the box has none, and the refusal names that remedy.
+func (s *Server) setupExisting(ctx context.Context, cfg config.Config, t config.Target) (*catalog.WireConfig, error) {
+	if t.Agent == nil {
+		return t.Wire, nil
+	}
+	info, err := decodeResult[intent.AgentInfo](s.agentResult(ctx, cfg, t, intent.KindAgentInfo, struct{}{}))
+	if err != nil {
+		return nil, fmt.Errorf("ask the box which names its node uses: %w", err)
+	}
+	return setupExistingFrom(info, t)
+}
+
+// setupExistingFrom is setupExisting's decision for a paired box, from the
+// box's agent.info and the controller's target.
+func setupExistingFrom(info intent.AgentInfo, t config.Target) (*catalog.WireConfig, error) {
+	if info.SetUpError != nil {
+		return nil, &agentRejected{*info.SetUpError}
+	}
+	w := t.Wire
+	if !info.SetUp {
+		if w != nil && len(info.PlanVersions) > 0 {
+			// A current agent reports its plan versions, and SetUpError
+			// for a node config it refuses, so no error here means the
+			// box has no node.json: it was removed. Re-pairing would write
+			// it back from this controller's stale copy, so the remedy is
+			// to forget that copy.
+			return nil, &setupConflict{fmt.Sprintf("box %s has no node config (no /etc/jumpgate/node.json), but this controller still holds one for it (chain %d, data dir %s). "+
+				"If the node was removed on purpose, remove the host from this controller and add it again, which forgets the stored config, then pair it and run setup; "+
+				"otherwise restore the box's node.json",
+				t.ID, w.ChainID, w.DataDir)}
+		}
+		if w != nil {
+			return nil, &setupConflict{fmt.Sprintf("box %s reports no node set up, but this controller holds a node config for it (chain %d, data dir %s). "+
+				"Its agent may be older than this controller and not say why, or unable to read its config: upgrade the agent (re-pair the box) or fix its node config, then run setup again",
+				t.ID, w.ChainID, w.DataDir)}
+		}
+		return nil, nil
+	}
+	box := &catalog.WireConfig{ChainID: info.ChainID, Names: info.Names, DataDir: info.DataDir, JWTPath: info.JWTPath}
+	if w != nil {
+		// A current agent always reports the data dir of a node it has set
+		// up, and its names with it ("" being legacy). Without a data dir the
+		// agent is older and said neither, so both come from the controller's
+		// copy (a data dir only for the same chain); names it did send win.
+		if info.DataDir == "" {
+			box.Names = w.Names
+			if w.ChainID == box.ChainID {
+				box.DataDir = w.DataDir
+			}
+		}
+		if box.JWTPath == "" && box.DataDir != "" && box.DataDir == w.DataDir {
+			box.JWTPath = w.JWTPath
+		}
+		if w.ChainID != box.ChainID || w.Names != box.Names || w.DataDir != box.DataDir || w.JWTPath != box.JWTPath {
+			log.Printf("jumpgate: setup %s: the controller's copy of the node config (chain %d, names %q, data dir %s, jwt %s) is stale; the box reports chain %d, names %q, data dir %s, jwt %s, and setup uses the box's",
+				t.ID, w.ChainID, w.Names, w.DataDir, w.JWTPath, box.ChainID, box.Names, box.DataDir, box.JWTPath)
+		}
+	}
+	return box, nil
+}
+
+// namesMarkerPath is the names marker node.migrate-names leaves on a box it
+// migrated (D-J10).
+const namesMarkerPath = "/etc/jumpgate/names.json"
+
+// refuseLegacyOnMigratedBox refuses a setup that would render the legacy
+// names on a box that has a names marker: the box was migrated, and this
+// controller's view of it predates that (an SSH-only target's stored wire,
+// or a paired box whose agent is too old to apply the marker). Setting it up
+// as legacy would recreate the old account and units and undo the
+// migration. It is one probe, and any failure to run it refuses too.
+func refuseLegacyOnMigratedBox(ctx context.Context, ex executor.Executor, id string, wire catalog.WireConfig) error {
+	if wire.Names != catalog.NamesLegacy {
+		return nil
+	}
+	res, err := ex.Run(ctx, "test -e '"+namesMarkerPath+"'", nil)
+	if err != nil {
+		return fmt.Errorf("check whether box %s was migrated to the jumpgate names: %w", id, err)
+	}
+	switch res.ExitCode {
+	case 0:
+		return &setupConflict{fmt.Sprintf("box %s has %s: it was migrated to the jumpgate names, and setup from this controller would render the legacy ones and undo that. "+
+			"This controller's view of the box predates the migration: remove the host and add it again (and pair it, if it was paired, which also brings its agent up to date), then run setup", id, namesMarkerPath)}
+	case 1:
+		return nil
+	}
+	return fmt.Errorf("check whether box %s was migrated to the jumpgate names: test -e exited %d: %s", id, res.ExitCode, strings.TrimSpace(res.Stderr))
+}
+
+// setupConflict is a setup refused because the box and the controller
+// disagree in a way setup must not guess past.
+type setupConflict struct{ msg string }
+
+func (e *setupConflict) Error() string { return e.msg }
+
 func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -1047,12 +1214,27 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if wire.DataDir == "" {
-		wire.DataDir = catalog.DefaultDataDir(wire.ChainID)
+	cfg, err := s.loadConfig()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	if wire.JWTPath == "" {
-		wire.JWTPath = catalog.DefaultJWTPath(wire.DataDir)
+	target, ok := findTarget(cfg, id)
+	if !ok {
+		writeTargetNotFound(w)
+		return
 	}
+	existing, err := s.setupExisting(r.Context(), cfg, target)
+	var conflict *setupConflict
+	if errors.As(err, &conflict) {
+		writeErrorDetail(w, http.StatusConflict, err.Error(), "", api.CodeConflict)
+		return
+	}
+	if err != nil {
+		writeNodeError(w, err)
+		return
+	}
+	wire = setupWire(wire, existing)
 	if err := catalog.ValidateDataDir(wire.DataDir); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1064,25 +1246,34 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	target, ok := findTarget(cfg, id)
-	if !ok {
-		writeTargetNotFound(w)
-		return
-	}
-
 	ex, err := s.getShellExecutor(target)
 	if err != nil {
 		writeDialError(w, err)
 		return
 	}
-
 	claimed, ok := s.claimSetupRun(w, id)
 	if !ok {
+		return
+	}
+	// J1: a job owns the node services until it ends. Setup recreates the
+	// service account and rewrites and starts the units, so during
+	// node.migrate-names it would undo the rename halfway. Checked after the
+	// claim, which keeps a job from starting until setup ends.
+	if s.refuseDuringJob(w, r.Context(), cfg, target) {
+		s.releaseSetupRun(id, claimed)
+		return
+	}
+	// Probed only now that setup holds the target and no job runs on it: a
+	// migrate job that ended between an earlier probe and the claim would
+	// have left a marker this setup never saw.
+	if err := refuseLegacyOnMigratedBox(r.Context(), ex, target.ID, wire); err != nil {
+		s.releaseSetupRun(id, claimed)
+		var conflict *setupConflict
+		if errors.As(err, &conflict) {
+			writeErrorDetail(w, http.StatusConflict, err.Error(), "", api.CodeConflict)
+		} else {
+			writeDialError(w, err)
+		}
 		return
 	}
 
@@ -1167,6 +1358,10 @@ func (s *Server) claimSetupRun(w http.ResponseWriter, id string) (claimedRun, bo
 		writeError(w, http.StatusConflict, "a wipe, reset or clear is running on this target; start setup once it has finished")
 		return claimedRun{}, false
 	}
+	if entry.jobStarting {
+		writeError(w, http.StatusConflict, "a job is starting on this target; it owns the node services until it ends")
+		return claimedRun{}, false
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	run := newSetupRun(cancel)
 	entry.setup = run
@@ -1194,6 +1389,10 @@ func (s *Server) claimTargetOp(w http.ResponseWriter, id string) (release func()
 	}
 	if entry.opBusy {
 		writeError(w, http.StatusConflict, "another wipe, reset or clear is already running on this target")
+		return nil, false
+	}
+	if entry.jobStarting {
+		writeError(w, http.StatusConflict, "a job is starting on this target; it owns the node services until it ends")
 		return nil, false
 	}
 	entry.opBusy = true
@@ -1669,6 +1868,14 @@ func (s *Server) handleServiceClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	// J1, as for setup: clearing a service's data under a running job
+	// pulls it out from under the job's steps.
+	if cfg, err := s.loadConfig(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if s.refuseDuringJob(w, r.Context(), cfg, target) {
+		return
+	}
 
 	opCtx, opDone := s.criticalOp(r)
 	defer opDone()

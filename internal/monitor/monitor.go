@@ -31,13 +31,6 @@ import (
 // defaultInterval is used when Config.Interval is zero.
 const defaultInterval = 5 * time.Second
 
-// Target unit names, matching internal/catalog/units.go and
-// internal/setup/steps.go's naming contract.
-const (
-	execUnitName   = "valve-node-app-exec.service"
-	beaconUnitName = "valve-node-app-beacon.service"
-)
-
 // execRPCAddr and beaconAPIAddr resolve a poll's exec/beacon HTTP base
 // URLs from the WireConfig's port resolvers (zero value = default 8545 /
 // 5052), rather than hardcoding the defaults — a target configured with
@@ -225,7 +218,7 @@ func (m *Monitor) poll(ctx context.Context) Snapshot {
 	// systemctl is-active exits non-zero when a unit isn't active — that's
 	// a valid (inactive) reading, not a probe failure, so only the
 	// transport error is checked here.
-	if res, err := m.cfg.Exec.Run(ctx, activeCmd(), nil); err == nil {
+	if res, err := m.cfg.Exec.Run(ctx, activeCmd(m.cfg.Wire.NodeNames()), nil); err == nil {
 		snap.ExecActive, snap.BeaconActive = parseActive(res.Stdout)
 	}
 
@@ -310,8 +303,8 @@ func diskCmd(dir string) string {
 	)
 }
 
-func activeCmd() string {
-	return fmt.Sprintf("systemctl is-active %s %s", execUnitName, beaconUnitName)
+func activeCmd(n catalog.NodeNames) string {
+	return fmt.Sprintf("systemctl is-active %s %s", n.ExecUnit(), n.BeaconUnit())
 }
 
 // shQuote single-quotes s for safe interpolation into a `sh -c` command

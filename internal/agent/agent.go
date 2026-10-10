@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/jobs"
 	"github.com/valve-tech/jumpgate/internal/signer"
 )
 
@@ -23,14 +25,28 @@ const (
 )
 
 // Config wires an Agent. Paths are /etc/jumpgate/policy.json,
-// /var/lib/jumpgate/replay.json and /etc/jumpgate/node.json in production.
+// /var/lib/jumpgate/replay.json, /etc/jumpgate/node.json and
+// /etc/jumpgate/names.json in production.
 type Config struct {
 	Key        *signer.Key
 	PolicyPath string
 	ReplayPath string
 	NodePath   string
-	Exec       executor.Executor
-	Now        func() time.Time
+	// NamesPath is the names marker node.migrate-names writes. It is
+	// applied over node.json on every read (D-J10); empty reads none.
+	NamesPath string
+	Exec      executor.Executor
+	Now       func() time.Time
+	// Jobs runs durable jobs; nil refuses every job kind (jobs_unsupported).
+	Jobs *jobs.Manager
+	// JobsUnavailable is why the job store at JobsDir did not open, when it
+	// did not (Jobs is then nil). It is not "no jobs": a job already on disk
+	// may own the node services, so service.action fails closed on it.
+	JobsUnavailable error
+	JobsDir         string
+	// Log takes what the agent reports outside any answer, such as a failed
+	// reconcile pass; nil discards it.
+	Log io.Writer
 }
 
 // Agent handles intents. It is safe for concurrent use.
@@ -115,6 +131,12 @@ func (a *Agent) Handle(ctx context.Context, env intent.Envelope) intent.ReceiptE
 	if err := policy.Authorise(i.Kind, i.Controller, signers); err != nil {
 		return a.answerReject(i, reqHash, asReject(err))
 	}
+	// Only an enrolled controller's decision gets as far as reading a job.
+	if extra := a.decisionTiers(i, env); len(extra) > 0 {
+		if err := policy.Authorise(i.Kind, i.Controller, signers, extra...); err != nil {
+			return a.answerReject(i, reqHash, asReject(err))
+		}
+	}
 
 	if !a.claim(i.Controller) {
 		return a.answerReject(i, reqHash, reject(intent.ReasonBusy, "another intent from this controller is running"))
@@ -129,11 +151,58 @@ func (a *Agent) Handle(ctx context.Context, env intent.Envelope) intent.ReceiptE
 		return a.answerReject(i, reqHash, asReject(err))
 	}
 
-	result, status, rej := a.dispatch(ctx, i, env.Payload, policy)
+	result, status, rej := a.dispatch(ctx, i, env, signers, policy)
 	if rej != nil {
 		return a.answerReject(i, reqHash, rej)
 	}
 	return a.answer(i, reqHash, status, result)
+}
+
+// decisionTiers is what a job.decide needs beyond the policy's requirement
+// for its kind, as an early refusal: the tier of the question it answers
+// (spec: "a signed decision of the tier the policy requires", Q5), read
+// before admission so a refused decision does not consume the controller's
+// sequence. It is not the enforcement: a question can open after this
+// (dispatchJob reconciles first, and so does the loop), so Manager.Decide
+// checks the tier of the question it answers (decisionCheck). Any tier but
+// routine is required as named, so a tier no signer holds is never
+// satisfied; a job the lookup cannot read requires approval, the strictest.
+func (a *Agent) decisionTiers(i intent.Intent, env intent.Envelope) []Tier {
+	if i.Kind != intent.KindJobDecide || a.cfg.Jobs == nil {
+		return nil
+	}
+	pl, rej := decode[intent.JobDecidePayload](env.Payload)
+	if rej != nil || !jobs.ValidID(pl.ID) {
+		return nil // dispatch refuses the payload itself
+	}
+	t, err := a.cfg.Jobs.QuestionTier(pl.ID, pl.Decision)
+	if err != nil {
+		return []Tier{TierApproval}
+	}
+	return tiersBeyondRoutine(t)
+}
+
+func tiersBeyondRoutine(tier string) []Tier {
+	if tier == intent.TierRoutine {
+		return nil
+	}
+	return []Tier{Tier(tier)}
+}
+
+// decisionCheck is the tier check Manager.Decide runs, under its lock, on the
+// question it is about to answer: the policy's requirement for job.decide
+// plus the question's own tier, against this envelope's signers.
+func decisionCheck(p Policy, controller eip712.Address, signers []eip712.Address) jobs.TierCheck {
+	return func(tier string) error {
+		return p.Authorise(intent.KindJobDecide, controller, signers, tiersBeyondRoutine(tier)...)
+	}
+}
+
+// logf writes one line to the agent's log.
+func (a *Agent) logf(format string, args ...any) {
+	if a.cfg.Log != nil {
+		fmt.Fprintf(a.cfg.Log, "jumpgate agent: "+format+"\n", args...)
+	}
 }
 
 // currentReplay returns the replay record. While the record is failed it is

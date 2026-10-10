@@ -149,9 +149,10 @@ func TestWire_VerifyFailsOnEachConditionSeparately(t *testing.T) {
 		e := newFakeExecutor().
 			script("test -f", executor.Result{ExitCode: 0}).
 			script("stat -c", executor.Result{Stdout: catalog.ServiceUser + "\n"}).
+			script("cat '"+catalog.OwnerMarkerPath(testWire())+"'", executor.Result{Stdout: catalog.ServiceUser + "\n"}).
 			script("systemctl is-enabled", executor.Result{ExitCode: 0, Stdout: "enabled\nenabled\n"})
-		e.files[execUnitPath] = []byte(renderedExec)
-		e.files[beaconUnitPath] = []byte(renderedBeacon)
+		e.files[catalog.UnitPath(catalog.LegacyNames.ExecUnit())] = []byte(renderedExec)
+		e.files[catalog.UnitPath(catalog.LegacyNames.BeaconUnit())] = []byte(renderedBeacon)
 		return e
 	}
 
@@ -176,7 +177,9 @@ func TestWire_VerifyFailsOnEachConditionSeparately(t *testing.T) {
 			"not enabled",
 		},
 		"a stale unit from an earlier config": {
-			func(e *fakeExecutor) { e.files[execUnitPath] = []byte("[Unit]\nDescription=stale\n") },
+			func(e *fakeExecutor) {
+				e.files[catalog.UnitPath(catalog.LegacyNames.ExecUnit())] = []byte("[Unit]\nDescription=stale\n")
+			},
 			"",
 		},
 	} {
@@ -210,12 +213,62 @@ func TestWire_VerifyComparesTheUnitsAgainstTheCurrentConfig(t *testing.T) {
 	e := newFakeExecutor().
 		script("test -f", executor.Result{ExitCode: 0}).
 		script("stat -c", executor.Result{Stdout: catalog.ServiceUser + "\n"}).
+		script("cat '"+catalog.OwnerMarkerPath(testWire())+"'", executor.Result{Stdout: catalog.ServiceUser + "\n"}).
 		script("systemctl is-enabled", executor.Result{ExitCode: 0, Stdout: "enabled\nenabled\n"})
 	// The target is wired — for the WRONG chain.
-	e.files[execUnitPath] = []byte(otherExec)
-	e.files[beaconUnitPath] = []byte(otherBeacon)
+	e.files[catalog.UnitPath(catalog.LegacyNames.ExecUnit())] = []byte(otherExec)
+	e.files[catalog.UnitPath(catalog.LegacyNames.BeaconUnit())] = []byte(otherBeacon)
 
 	if err := wireStep().Verify(context.Background(), e, &State{Wire: testWire()}); err == nil {
 		t.Fatal("a target wired for another chain verified as set up for this one")
+	}
+}
+
+// The top directory's owner says nothing about the files under it: an
+// interrupted chown -R leaves it right and the rest root-owned.
+func TestWire_VerifyNeedsTheOwnerMarkerOrAFullWalk(t *testing.T) {
+	w := testWire()
+	n := w.NodeNames()
+	f := wiredExecutor(). // the JWT and unit files are present
+				script("stat -c %U '"+w.DataDir+"'", executor.Result{Stdout: n.User + "\n"}).
+				script("cat '"+catalog.OwnerMarkerPath(w)+"'", executor.Result{ExitCode: 1}).
+				script("find '"+w.DataDir+"' ! -user "+n.User, executor.Result{Stdout: w.DataDir + "/db/mdbx.dat\n"})
+	if err := wireStep().Verify(context.Background(), f, &State{Wire: w}); err == nil {
+		t.Fatal("a tree with root-owned files passed as wired")
+	}
+}
+
+func TestWire_RunWritesTheOwnerMarkerAfterTheChown(t *testing.T) {
+	w := testWire()
+	f := newFakeExecutor()
+	if err := wireStep().Run(context.Background(), f, &State{Wire: w}); err != nil {
+		t.Fatal(err)
+	}
+	ch, mk := indexContaining(f, "chown -R"), indexContaining(f, catalog.OwnerMarkerPath(w))
+	if ch < 0 || mk < ch {
+		t.Fatalf("marker at %d, chown at %d: %v", mk, ch, f.callLog())
+	}
+}
+
+// A box wired before markers existed is fully owned already: Verify adopts it
+// by writing the marker, so it is walked once and never again.
+func TestWire_VerifyAdoptsAFullyOwnedPreMarkerTree(t *testing.T) {
+	w := testWire()
+	n := w.NodeNames()
+	execUnit, beaconUnit, err := catalog.RenderUnits(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := wiredExecutor().
+		script("stat -c %U '"+w.DataDir+"'", executor.Result{Stdout: n.User + "\n"}).
+		script("cat '"+catalog.OwnerMarkerPath(w)+"'", executor.Result{ExitCode: 1}).
+		script("systemctl is-enabled", executor.Result{Stdout: "enabled\nenabled\n"})
+	f.files[catalog.UnitPath(n.ExecUnit())] = []byte(execUnit)
+	f.files[catalog.UnitPath(n.BeaconUnit())] = []byte(beaconUnit)
+	if err := wireStep().Verify(context.Background(), f, &State{Wire: w}); err != nil {
+		t.Fatalf("a fully owned pre-marker tree failed Verify: %v", err)
+	}
+	if indexContaining(f, `mv -f "$t" '`+catalog.OwnerMarkerPath(w)+`'`) < 0 {
+		t.Fatalf("the marker was not written; calls %v", f.callLog())
 	}
 }

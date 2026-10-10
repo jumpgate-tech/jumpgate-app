@@ -166,3 +166,23 @@ func fleetMsgFor(t *testing.T) tea.Msg {
 	t.Helper()
 	return fleetMsg{u: apiclient.Update[api.Fleet]{Value: sampleFleet(), Has: true, State: apiclient.Live}}
 }
+
+func TestPaletteMigrateNamesNeedsTheHostName(t *testing.T) {
+	f := tuitest.NewFake()
+	f.JobViewV = api.JobView{Target: "box-a", ID: "0123456789abcdef", State: "waiting"}
+	m := fleetApp(t, f, "unicode", apiclient.Live)
+	m2 := press(t, m, ":")
+	m2 = typed(t, m2, "migrate-names box-a")
+	m2 = press(t, m2, "enter")
+	if f.Called("MigrateNames") {
+		t.Fatal("ran before the typed confirmation")
+	}
+	m2 = typed(t, m2, "box-a")
+	m2 = press(t, m2, "enter")
+	if !f.Called("MigrateNames box-a") {
+		t.Fatalf("calls %v", f.Calls)
+	}
+	if a := m2.(*App); a.active != scrJobs {
+		t.Fatalf("the inbox did not open; active %v", a.active)
+	}
+}

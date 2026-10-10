@@ -30,7 +30,9 @@ import (
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/jobs"
 	"github.com/valve-tech/jumpgate/internal/server"
+	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
@@ -159,6 +161,52 @@ func TestAgentInitKeepsItsIdentity(t *testing.T) {
 	testutil.RequireUnix(t) // directory mode bits mean nothing on Windows
 	if fi, _ := os.Stat(conf); fi.Mode().Perm() != 0o700 {
 		t.Errorf("config dir mode %o, want 700", fi.Mode().Perm())
+	}
+}
+
+// D-J4: job-step is a transient unit's entry point. Its argv is checked by
+// jobs.ParseStepArgs before anything else, and it neither loads the agent key
+// nor opens the job store (whose lock the running agent holds).
+func TestAgentJobStepChecksItsArgumentsAndHoldsNoKey(t *testing.T) {
+	if hostGOOS == "windows" {
+		t.Skip("`jumpgate agent` is refused on Windows")
+	}
+	stderr := captureStderr(t)
+	if code := cmdAgent([]string{"job-step", "--job", "nothex", "--step", "one", "--attempt", "0"}); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if !strings.Contains(stderr(), "bad step arguments") {
+		t.Fatalf("stderr %q", stderr())
+	}
+	state, conf := t.TempDir(), t.TempDir()
+	if code := cmdAgent([]string{"job-step", "--state-dir", state, "--config-dir", conf, "--job", "0123456789abcdef", "--step", "one", "--attempt", "0"}); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if out := stderr(); !strings.Contains(out, "no such job") || strings.Contains(out, "agent.key") {
+		t.Fatalf("stderr %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(state, "jobs", ".lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("job-step opened the job store: %v", err)
+	}
+}
+
+// A second agent on the same box fails fast, before it could take the
+// running agent's socket, and says why.
+func TestASecondAgentCannotOpenTheJobStore(t *testing.T) {
+	testutil.RequireUnix(t) // agent-side code, Linux-only
+	state, conf := t.TempDir(), t.TempDir()
+	k, err := signer.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := openJobManager(state, conf, k, executor.NewLocal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	_, err = openJobManager(state, conf, k, executor.NewLocal())
+	if !errors.Is(err, jobs.ErrStoreInUse) || !strings.Contains(err.Error(), "another jumpgate agent") {
+		t.Fatalf("a second manager: %v", err)
 	}
 }
 

@@ -39,6 +39,9 @@ type pairedOpts struct {
 	// ai, when set, is the provider the server's NewAIProvider seam hands
 	// out, so no test dials a real one (Ruling T11).
 	ai *fakeAIProvider
+	// agent adjusts the box's agent.Config before the agent is built (a job
+	// manager, a clock); home is the box's directory.
+	agent func(home string, c *agent.Config)
 }
 
 // requireAgentPeer skips a test that needs the agent to answer: it runs on
@@ -84,8 +87,12 @@ func pairedBoxWith(t *testing.T, ex executor.Executor, o pairedOpts) (*httptest.
 	if err := agent.InitReplay(filepath.Join(home, "replay.json")); err != nil {
 		t.Fatal(err)
 	}
-	a := agent.New(agent.Config{Key: agentKey, Exec: ex, PolicyPath: filepath.Join(home, "policy.json"),
-		ReplayPath: filepath.Join(home, "replay.json"), NodePath: filepath.Join(home, "node.json")})
+	ac := agent.Config{Key: agentKey, Exec: ex, PolicyPath: filepath.Join(home, "policy.json"),
+		ReplayPath: filepath.Join(home, "replay.json"), NodePath: filepath.Join(home, "node.json")}
+	if o.agent != nil {
+		o.agent(home, &ac)
+	}
+	a := agent.New(ac)
 	sock := filepath.Join(home, "a.sock")
 	ln, err := agent.Listen(sock, -1, 0o660)
 	if err != nil {

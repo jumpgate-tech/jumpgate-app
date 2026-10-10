@@ -127,14 +127,14 @@ func (j *journalExecutor) emit(t *testing.T, line string) {
 	deadline := time.Now().Add(streamWait)
 	for {
 		j.mu.Lock()
-		fn := j.streams[logUnits[0]]
+		fn := j.streams[catalog.LegacyNames.ExecUnit()]
 		j.mu.Unlock()
 		if fn != nil {
 			fn(line)
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the tail for %s never started", logUnits[0])
+			t.Fatalf("the tail for %s never started", catalog.LegacyNames.ExecUnit())
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -277,8 +277,8 @@ func TestLogs_RecentCarriesTheClassificationNotJustTheLine(t *testing.T) {
 	if got.Severity != "error" && got.Severity != "critical" {
 		t.Errorf("severity: got %q, want the line classified as a problem", got.Severity)
 	}
-	if got.Unit != logUnits[0] {
-		t.Errorf("unit: got %q, want %q", got.Unit, logUnits[0])
+	if got.Unit != catalog.LegacyNames.ExecUnit() {
+		t.Errorf("unit: got %q, want %q", got.Unit, catalog.LegacyNames.ExecUnit())
 	}
 }
 

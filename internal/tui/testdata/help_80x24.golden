@@ -1,6 +1,5 @@
  jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  [5 Jobs]  6 Settings  ? help
  Help  (esc to close)
-
 keys everywhere
   1-6          screens
   ?            help
@@ -14,11 +13,12 @@ keys everywhere
   →/l          next tab
   enter        open
   /            filter
-
-
-
-
-
-
+keys here
+  ↑/k          up
+  ↓/j          down
+  enter        open
+  d            answer the selected job's question
+  a            adopt a job whose controller went silent
+  r            reload
 
  no box selected · server connecting · jobs ⚑ –

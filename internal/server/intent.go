@@ -2,8 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/api"
@@ -22,6 +24,17 @@ var refHeadClient = &http.Client{Timeout: 5 * time.Second}
 // the reason the recorded key did not open (noControllerKeyError).
 func (s *Server) writeNoControllerKey(w http.ResponseWriter) {
 	writeAPIError(w, http.StatusServiceUnavailable, noControllerKeyError(s.cfg.SignerErr))
+}
+
+// jobKindHint names the routes and commands that run jobs, for a job kind
+// sent to the generic intent route.
+const jobKindHint = "jobs run through the /api/jobs/... routes: use `jumpgate jobs` to watch or decide one and `jumpgate migrate-names HOST` to start a migration"
+
+// isJobKind reports whether kind starts or acts on a durable job. Every
+// job.* kind counts, including ones added later, so a new job kind never
+// becomes reachable through the generic intent route by accident.
+func isJobKind(kind string) bool {
+	return jobStartKinds[kind] || strings.HasPrefix(kind, "job.")
 }
 
 // handleIntent signs one intent with the controller key, sends it to the
@@ -52,6 +65,15 @@ func (s *Server) handleIntent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := r.PathValue("kind")
+	if isJobKind(kind) {
+		// Refused before anything is read or signed: a job start here would
+		// skip the P7 allowlist and the claim that keeps a job from starting
+		// while setup, a clear or another op runs on this box, and a job.*
+		// kind would act on a job outside the lease its driver holds.
+		writeErrorDetail(w, http.StatusBadRequest, fmt.Sprintf("%q is a job intent and is not sent through the generic intent route", kind),
+			jobKindHint, api.CodeJobKindNotAllowed)
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxIntentBody+1))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "could not read the body")

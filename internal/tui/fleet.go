@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -244,7 +245,13 @@ func (s *fleetScreen) cell(a *App, r api.FleetRow, col string) string {
 		}
 		return "?"
 	case "jobs":
-		return a.gl.Dash // sub-project 2 (spec D27)
+		if r.Jobs == nil {
+			return a.th.Dim.Render(na) // not reported: never 0
+		}
+		if r.Jobs.NeedsDecision > 0 {
+			return a.th.Warn.Render(a.gl.Flag + strconv.Itoa(r.Jobs.NeedsDecision))
+		}
+		return strconv.Itoa(r.Jobs.Running)
 	case "age":
 		if r.LastSeen == nil {
 			return a.th.Dim.Render(na)

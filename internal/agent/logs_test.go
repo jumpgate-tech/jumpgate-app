@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/logwatch"
@@ -15,20 +16,20 @@ import (
 )
 
 func TestLogsSinceCommand(t *testing.T) {
-	cmd, err := logsSinceCommand("", 50)
+	cmd, err := logsSinceCommand(ops.NodeUnits(catalog.LegacyNames), "", 50)
 	if err != nil || !strings.Contains(cmd, "-n 50") || strings.Contains(cmd, "--after-cursor") || !strings.Contains(cmd, "-o json") {
 		t.Fatalf("no cursor: %q %v", cmd, err)
 	}
-	cmd, _ = logsSinceCommand("s=ab12;i=9f;b=cd;m=1a;t=5;x=77", 50)
+	cmd, _ = logsSinceCommand(ops.NodeUnits(catalog.LegacyNames), "s=ab12;i=9f;b=cd;m=1a;t=5;x=77", 50)
 	if !strings.Contains(cmd, "--after-cursor 's=ab12;i=9f;b=cd;m=1a;t=5;x=77'") {
 		t.Fatalf("cursor: %q", cmd)
 	}
 	for _, bad := range []string{"x'; rm -rf /", "a b", strings.Repeat("a", 600)} {
-		if _, err := logsSinceCommand(bad, 50); err == nil {
+		if _, err := logsSinceCommand(ops.NodeUnits(catalog.LegacyNames), bad, 50); err == nil {
 			t.Errorf("accepted cursor %q", bad)
 		}
 	}
-	if cmd, _ := logsSinceCommand("", 99999); !strings.Contains(cmd, "-n 2000") {
+	if cmd, _ := logsSinceCommand(ops.NodeUnits(catalog.LegacyNames), "", 99999); !strings.Contains(cmd, "-n 2000") {
 		t.Errorf("n not capped: %q", cmd)
 	}
 }
@@ -36,13 +37,13 @@ func TestLogsSinceCommand(t *testing.T) {
 // The command names exactly the node's units, as logs.read does: a payload
 // has no way to choose a unit or add a journalctl argument.
 func TestLogsSinceCommandReadsOnlyTheNodeUnits(t *testing.T) {
-	cmd, err := logsSinceCommand("", 0)
+	cmd, err := logsSinceCommand(ops.NodeUnits(catalog.LegacyNames), "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "journalctl"
-	for _, u := range ops.NodeUnits() {
-		want += " -u " + u
+	for _, u := range ops.NodeUnits(catalog.LegacyNames) {
+		want += " -u '" + u + "'"
 	}
 	want += " -n " + fmt.Sprint(intent.LogsDefaultN) + " --no-pager -o json"
 	if cmd != want {

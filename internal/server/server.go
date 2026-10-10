@@ -132,6 +132,12 @@ type Config struct {
 	// the mint API returns codes without a file, and callers only print the
 	// link (fail-safe: no browser is opened on it).
 	LoginDir string
+
+	// noJobsDriver keeps the jobs hub listing and verifying but never
+	// driving. Tests only (ruling P5): a test that inspects a job mid-way
+	// must not race the driver. Unexported, so no caller outside the
+	// package can turn the driver off.
+	noJobsDriver bool
 }
 
 // Server is the jumpgate local HTTP server.
@@ -215,6 +221,8 @@ type Server struct {
 
 	// fleet polls every box for /api/fleet while anyone watches (fleet.go).
 	fleet *fleetPoller
+	// jobs lists, verifies and serves every paired box's durable jobs (jobs.go).
+	jobs *jobsHub
 
 	// codes are the outstanding one-time browser login codes (login.go).
 	codes loginCodes
@@ -261,6 +269,12 @@ func New(cfg Config) *Server {
 	s.geteuid = cfg.Geteuid
 	if s.geteuid == nil {
 		s.geteuid = os.Geteuid
+	}
+	s.jobs = newJobsHub(s)
+	if cfg.noJobsDriver {
+		s.jobs.noDriver = true
+	} else {
+		s.jobs.wireDriver()
 	}
 	s.fleet = newFleetPoller(s)
 	s.reg.onRetire = s.fleet.retireStatus
@@ -391,8 +405,12 @@ func tokensEqual(a, b string) bool {
 
 // ListenAndServe runs the server until ctx is canceled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	// Q4: jobs this controller held when it last ran resume now, not when
+	// someone next opens the inbox.
+	go s.jobs.sweep(ctx)
 	err := serveUntil(ctx, newHTTPServer(s.cfg.Bind, s.Handler()), shutdownGrace)
 	s.fleet.stopWithin(fleetStopWait)
+	s.jobs.stopWithin(fleetStopWait)
 	s.waitCritical()
 	return err
 }
@@ -427,8 +445,10 @@ func (s *Server) ServeUnix(ctx context.Context, path string) error {
 		return err
 	}
 	srv := newHTTPServer("", s.Handler())
+	go s.jobs.sweep(ctx) // Q4, as in ListenAndServe
 	err = serveWith(ctx, srv, shutdownGrace, func() error { return srv.Serve(ln) })
 	s.fleet.stopWithin(fleetStopWait)
+	s.jobs.stopWithin(fleetStopWait)
 	s.waitCritical()
 	return err
 }

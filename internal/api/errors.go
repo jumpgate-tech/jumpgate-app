@@ -86,6 +86,25 @@ const (
 	CodeTooManyLines Code = "too_many_lines"
 	// CodeUnknownProvider: settings named an AI provider that does not exist.
 	CodeUnknownProvider Code = "unknown_provider"
+
+	// Durable jobs.
+	CodeJobNotFound Code = "job_not_found"
+	// CodeLeaseHeld: another controller drives the job.
+	CodeLeaseHeld Code = "lease_held"
+	// CodeJobActive: a box runs one job at a time.
+	CodeJobActive Code = "job_active"
+	// CodeJobsUnsupported: the box cannot run durable jobs.
+	CodeJobsUnsupported Code = "jobs_unsupported"
+	// CodeJobState: the job changed since the caller looked.
+	CodeJobState Code = "job_state"
+	// CodeApprovalUnavailable: the decision needs an approval-tier signer this server lacks.
+	CodeApprovalUnavailable Code = "approval_unavailable"
+	// CodeJobLogInvalid: the job's log does not verify against the agent key.
+	CodeJobLogInvalid Code = "job_log_invalid"
+	// CodeUnknownPlan: the agent does not know the job's format, driver or plan version.
+	CodeUnknownPlan Code = "unknown_plan"
+	// CodeJobKindNotAllowed: the server refuses to start a job kind outside its allowlist.
+	CodeJobKindNotAllowed Code = "job_kind_not_allowed"
 )
 
 // Exit classes: the CLI's process exit statuses, published in the README.
@@ -159,6 +178,17 @@ var registry = map[Code]codeInfo{
 	CodeAIUnconfigured:    {"choose an AI provider in Settings first", ExitFailed},
 	CodeTooManyLines:      {"select fewer log lines; explain takes at most 5000", ExitFailed},
 	CodeUnknownProvider:   {"use one of: gemini, groq, ollama", ExitFailed},
+
+	// Durable jobs.
+	CodeJobNotFound:         {"`jumpgate jobs` lists the jobs on every box", ExitFailed},
+	CodeLeaseHeld:           {"another controller drives this job; you can watch it, and adopt it once it has been silent for 90 s (`jumpgate jobs adopt HOST JOB`, or `a` in the jobs inbox)", ExitFailed},
+	CodeJobActive:           {"one job runs at a time on a box; finish or decide it in the jobs inbox first", ExitFailed},
+	CodeJobsUnsupported:     {"durable jobs need a Linux box with systemd; the message says what is missing", ExitFailed},
+	CodeJobState:            {"the job moved on since you looked; reload it", ExitFailed},
+	CodeApprovalUnavailable: {"this decision needs an approval-tier signature (a hardware or browser wallet), which this jumpgate cannot make yet", ExitUsage},
+	CodeJobLogInvalid:       {"this job's history on the box does not verify against the box's agent key: do not act on it; inspect /var/lib/jumpgate/jobs on the box, and re-pair the box if its key changed", ExitSecurity},
+	CodeUnknownPlan:         {"this box's agent does not know that job's plan (it was downgraded?); re-pair the box to upgrade its agent", ExitFailed},
+	CodeJobKindNotAllowed:   {"this server starts only the jobs it knows (for example `jumpgate migrate-names HOST`); other node operations have their own commands", ExitUsage},
 }
 
 // Known reports whether c is in the registry.
@@ -233,6 +263,12 @@ var rejectionHints = map[string]string{
 	intent.ReasonValidation:       "the box's node configuration is invalid; check /etc/jumpgate/node.json",
 	intent.ReasonNotSetUp:         "no node is set up on this box yet; run setup first",
 	intent.ReasonReplayState:      "the box's replay record is damaged; on the box, inspect /var/lib/jumpgate/replay.json then run `sudo jumpgate agent reset-replay --yes`",
+	intent.ReasonJobsUnsupported:  "durable jobs run only on Linux boxes with systemd as init; the reason above says which is missing",
+	intent.ReasonJobNotFound:      "no such job on this box; `jumpgate jobs HOST` lists them",
+	intent.ReasonJobActive:        "one job runs at a time on a box; wait for it, or decide it in the jobs inbox",
+	intent.ReasonLeaseHeld:        "another controller drives this job; watch it, or adopt it once its lease is stale (90 s without a heartbeat)",
+	intent.ReasonUnknownPlan:      "this box's agent does not know that job's plan (it was downgraded?); re-pair the box to upgrade its agent",
+	intent.ReasonJobState:         "the job moved on since this request was made; reload it",
 }
 
 // RejectionHint is the remedy for a signed rejection reason, or "".

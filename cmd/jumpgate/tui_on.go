@@ -33,6 +33,7 @@ func tuiOptions(c *apiclient.Client, exe, host string) tui.Options {
 		Backend:  c,
 		Self:     exe,
 		Hostname: host,
+		Bell:     func() { fmt.Fprint(os.Stderr, "\a") },
 		Location: time.Local,
 		OpenWeb:  func(ctx context.Context) error { return openWebApp(ctx, io.Discard) },
 		Restart: func(ctx context.Context) (tui.Backend, error) {

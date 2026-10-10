@@ -78,7 +78,7 @@ func TestTooSmallTerminalKeepsState(t *testing.T) {
 		t.Fatalf("frame:\n%s", f)
 	}
 	m, _ = tuitest.Send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
-	if m.(*App).active != scrJobs || !strings.Contains(tuitest.Frame(m), "Durable jobs") {
+	if m.(*App).active != scrJobs || !strings.Contains(tuitest.Frame(m), "Jobs inbox") {
 		t.Fatalf("state lost:\n%s", tuitest.Frame(m))
 	}
 }
@@ -140,8 +140,8 @@ func TestStatusBarShowsTheDataAge(t *testing.T) {
 
 func TestHelpListsGlobalKeys(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
-	// From the jobs screen, which has no keys of its own, so this frame does
-	// not change as later tasks give screens their keys.
+	// From the jobs screen: the frame lists its own keys (d, a, r) under
+	// "keys here" after the global ones.
 	m, _ := tuitest.Send(a, tuitest.Key("5"), tuitest.Key("?"))
 	fr := tuitest.Frame(m)
 	for _, want := range []string{"help", "quit", "screens", "command"} {
@@ -342,5 +342,55 @@ func TestInitFetchesPrefs(t *testing.T) {
 	}
 	if got := m.(*App).prefs; !got.Mouse || got.Units != "GiB" || got.RefreshSeconds != 15 {
 		t.Fatalf("prefs %+v", got)
+	}
+}
+
+func fleetWithJobs(needs ...int) api.Fleet {
+	f := sampleFleet()
+	for i, n := range needs {
+		f.Rows[i].Jobs = &api.JobsSummary{NeedsDecision: n}
+	}
+	return f
+}
+
+func TestStatusBarCountsJobsThatNeedYou(t *testing.T) {
+	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
+	if !strings.Contains(a.statusBar(), "jobs ⚑ –") {
+		t.Fatalf("before any box reports jobs: %q", a.statusBar())
+	}
+	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fleetWithJobs(1, 2), Has: true, State: apiclient.Live}})
+	if bar := m.(*App).statusBar(); !strings.Contains(bar, "jobs ⚑ 3") {
+		t.Fatalf("status bar %q", bar)
+	}
+}
+
+func TestTheBellRingsWhenMoreJobsNeedYou(t *testing.T) {
+	rings := 0
+	f := tuitest.NewFake()
+	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" }, Now: func() time.Time { return testNow }, Bell: func() { rings++ }})
+	t.Cleanup(func() { a.cancel() })
+	on := api.UIPrefs{Glyphs: "unicode", Bell: true}
+	m, cmds := tuitest.Send(a, tea.WindowSizeMsg{Width: 80, Height: 24}, prefsMsg{p: on},
+		fleetMsg{u: apiclient.Update[api.Fleet]{Value: fleetWithJobs(1), Has: true}}) // the first reading never rings
+	m = tuitest.Settle(m, cmds...)
+	m, cmds = tuitest.Send(m, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fleetWithJobs(2), Has: true}})
+	m = tuitest.Settle(m, cmds...)
+	m, cmds = tuitest.Send(m, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fleetWithJobs(1), Has: true}}) // fewer: no ring
+	tuitest.Settle(m, cmds...)
+	if rings != 1 {
+		t.Fatalf("rang %d times, want 1", rings)
+	}
+}
+
+func TestNoBellWhenTheSettingIsOff(t *testing.T) {
+	rings := 0
+	a := New(Options{Backend: tuitest.NewFake(), GOOS: "linux", Getenv: func(string) string { return "" }, Now: func() time.Time { return testNow }, Bell: func() { rings++ }})
+	t.Cleanup(func() { a.cancel() })
+	m, cmds := tuitest.Send(a, prefsMsg{p: api.UIPrefs{Glyphs: "unicode", Bell: false}},
+		fleetMsg{u: apiclient.Update[api.Fleet]{Value: fleetWithJobs(0), Has: true}},
+		fleetMsg{u: apiclient.Update[api.Fleet]{Value: fleetWithJobs(3), Has: true}})
+	tuitest.Settle(m, cmds...)
+	if rings != 0 {
+		t.Fatalf("rang %d times with the bell off", rings)
 	}
 }

@@ -435,6 +435,15 @@ func (p *fleetPoller) round(ctx context.Context) {
 
 	sem := make(chan struct{}, fleetWorkers)
 	var wg sync.WaitGroup
+	// The jobs hub lists every paired box's jobs beside the probes (a recent
+	// listing is reused), so the round's publish carries the job counts.
+	// The round waits for it only as long as its own context lasts: the
+	// listing is the hub's, and the hub's stop ends it.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		p.s.jobs.refresh(ctx, false)
+	}()
 fanOut:
 	for _, t := range cfg.Targets {
 		select {
@@ -656,6 +665,7 @@ func (p *fleetPoller) snapshot() api.Fleet {
 			continue
 		}
 		row := st.row
+		row.Jobs = p.s.jobs.summary(id)
 		row.Stale = api.Stale{
 			Status:   row.Status != nil && now.Sub(st.statusAt) > 3*every,
 			Disk:     row.Disk != nil && now.Sub(st.diskAt) > 3*fleetDiskEvery,
@@ -664,6 +674,16 @@ func (p *fleetPoller) snapshot() api.Fleet {
 		f.Rows = append(f.Rows, row)
 	}
 	return f
+}
+
+// jobsChanged republishes the fleet when a box's job counts change, so the
+// ⚑ count follows the inbox without waiting for the next poll round.
+func (p *fleetPoller) jobsChanged() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.subs) > 0 {
+		p.notifyLocked()
+	}
 }
 
 // notifyLocked schedules a publish fleetPublishDebounce from now, unless one

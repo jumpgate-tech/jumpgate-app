@@ -16,6 +16,11 @@ type WireConfig struct {
 	JWTPath          string // <DataDir>/jwt.hex
 	Archive          bool
 
+	// Names is the box's name set: "" (legacy, every box set up before
+	// sub-project 2) or NamesCurrent. Resolved via NodeNames(), never read
+	// directly; node.migrate-names moves a box from one to the other.
+	Names string
+
 	// ExecHTTPPort, BeaconHTTPPort, and ExecP2PPort are the ports each
 	// client is wired to. Zero value means "use the default" — resolved
 	// via the ExecHTTP/BeaconHTTP/ExecP2P methods below, never read
@@ -121,17 +126,16 @@ func (w WireConfig) RPCBind() string {
 // the plan decision — always loopback, always 8551.
 const engineEndpoint = "http://127.0.0.1:8551"
 
-// ServiceUser/ServiceGroup are the dedicated unprivileged system account
-// the execution and beacon services run as (the User=/Group= lines in the
-// rendered units). Setup's account step creates the account; the wire step
-// chowns the data dir to it.
+// ServiceUser/ServiceGroup are the legacy account, kept for the gateway's
+// systemd backend (internal/setup/gateway.go), which sub-project 6 moves onto
+// agents and renames. Node code uses WireConfig.NodeNames().
 const (
 	ServiceUser  = "valve-node-app"
 	ServiceGroup = "valve-node-app"
 )
 
 const unitTemplate = `[Unit]
-Description=valve-node-app {{.Description}}
+Description={{.Prefix}} {{.Description}}
 After=network-online.target
 Wants=network-online.target
 
@@ -160,6 +164,7 @@ WantedBy=multi-user.target
 `
 
 type unitVars struct {
+	Prefix      string
 	Description string
 	ExecStart   string
 	User, Group string
@@ -175,9 +180,12 @@ var unitTmpl = template.Must(template.New("unit").Parse(unitTemplate))
 // RenderUnits renders the systemd unit file contents for an
 // execution+beacon client pair wired up on a given network. Pure string
 // rendering: no file is written and no executor.Executor is touched — that
-// is Task 4's job. Naming/writing the units as
-// valve-node-app-exec.service / valve-node-app-beacon.service is also Task 4's job.
+// is setup's job. The account and unit descriptions come from w.NodeNames(),
+// so a legacy wire renders exactly the units it always did.
 func RenderUnits(w WireConfig) (execUnit, beaconUnit string, err error) {
+	if err := ValidateNames(w); err != nil {
+		return "", "", err
+	}
 	net, ok := NetworkByChainID(w.ChainID)
 	if !ok {
 		return "", "", fmt.Errorf("catalog: unknown chain id %d", w.ChainID)
@@ -236,8 +244,9 @@ func renderUnit(description, execStart string, w WireConfig, netBindCap bool) (s
 	err := unitTmpl.Execute(&buf, unitVars{
 		Description: description,
 		ExecStart:   execStart,
-		User:        ServiceUser,
-		Group:       ServiceGroup,
+		Prefix:      w.NodeNames().Prefix,
+		User:        w.NodeNames().User,
+		Group:       w.NodeNames().Group,
 		DataDir:     w.DataDir,
 		NetBindCap:  netBindCap,
 	})

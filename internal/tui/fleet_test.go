@@ -254,3 +254,17 @@ func TestSyncRankPutsUnavailableSecondAndStaleMarksLagPeersAge(t *testing.T) {
 		t.Error("a row with no status ranks second")
 	}
 }
+
+func TestFleetJobsColumn(t *testing.T) {
+	f := tuitest.NewFake()
+	f.PrefsV.FleetColumns = append(f.PrefsV.FleetColumns, "jobs")
+	a := fleetApp(t, f, "unicode", apiclient.Live)
+	fl := sampleFleet()
+	fl.Rows[0].Jobs = &api.JobsSummary{Running: 1, NeedsDecision: 1}
+	fl.Rows[1].Jobs = &api.JobsSummary{Running: 2}
+	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: 140, Height: 24}, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fl, Has: true, State: apiclient.Live}})
+	fr := tuitest.Frame(m)
+	if !strings.Contains(fr, "⚑1") || !strings.Contains(fr, "JOBS") {
+		t.Fatalf("frame:\n%s", fr)
+	}
+}

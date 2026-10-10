@@ -551,13 +551,14 @@ func TestWire_VerifyFailsOnContentMismatchAndRunRewritesAndRestarts(t *testing.T
 	e := newFakeExecutor().
 		script("test -f", executor.Result{ExitCode: 0}). // jwt + both unit files present
 		script("stat -c %U", executor.Result{Stdout: catalog.ServiceUser + "\n", ExitCode: 0}).
+		script("cat '"+catalog.OwnerMarkerPath(testWire())+"'", executor.Result{Stdout: catalog.ServiceUser + "\n"}).
 		script("systemctl is-enabled", executor.Result{Stdout: "enabled\nenabled\n", ExitCode: 0}).
 		script("systemctl daemon-reload", executor.Result{ExitCode: 0}).
 		script("systemctl restart", executor.Result{ExitCode: 0})
 	// Stale on-target content from a previous setup run with a different
 	// WireConfig (e.g. different chain/client selection).
-	e.files[execUnitPath] = []byte("stale exec unit content")
-	e.files[beaconUnitPath] = []byte("stale beacon unit content")
+	e.files[catalog.UnitPath(catalog.LegacyNames.ExecUnit())] = []byte("stale exec unit content")
+	e.files[catalog.UnitPath(catalog.LegacyNames.BeaconUnit())] = []byte("stale beacon unit content")
 
 	step := wireStep()
 	st := &State{Wire: w, Events: make(chan Event, 100)}
@@ -570,16 +571,16 @@ func TestWire_VerifyFailsOnContentMismatchAndRunRewritesAndRestarts(t *testing.T
 		t.Fatalf("Run: %v", err)
 	}
 
-	if got := string(e.files[execUnitPath]); got != wantExec {
+	if got := string(e.files[catalog.UnitPath(catalog.LegacyNames.ExecUnit())]); got != wantExec {
 		t.Errorf("exec unit not rewritten to desired content; got %q, want %q", got, wantExec)
 	}
-	if got := string(e.files[beaconUnitPath]); got != wantBeacon {
+	if got := string(e.files[catalog.UnitPath(catalog.LegacyNames.BeaconUnit())]); got != wantBeacon {
 		t.Errorf("beacon unit not rewritten to desired content; got %q, want %q", got, wantBeacon)
 	}
 
 	restarted := false
 	for _, c := range e.callLog() {
-		if strings.Contains(c, "systemctl restart") && strings.Contains(c, execUnitName) && strings.Contains(c, beaconUnitName) {
+		if strings.Contains(c, "systemctl restart") && strings.Contains(c, catalog.LegacyNames.ExecUnit()) && strings.Contains(c, catalog.LegacyNames.BeaconUnit()) {
 			restarted = true
 		}
 	}
@@ -606,9 +607,10 @@ func TestWire_VerifyPassesWhenContentMatchesDesiredRender(t *testing.T) {
 	e := newFakeExecutor().
 		script("test -f", executor.Result{ExitCode: 0}).
 		script("stat -c %U", executor.Result{Stdout: catalog.ServiceUser + "\n", ExitCode: 0}).
+		script("cat '"+catalog.OwnerMarkerPath(testWire())+"'", executor.Result{Stdout: catalog.ServiceUser + "\n"}).
 		script("systemctl is-enabled", executor.Result{Stdout: "enabled\nenabled\n", ExitCode: 0})
-	e.files[execUnitPath] = []byte(wantExec)
-	e.files[beaconUnitPath] = []byte(wantBeacon)
+	e.files[catalog.UnitPath(catalog.LegacyNames.ExecUnit())] = []byte(wantExec)
+	e.files[catalog.UnitPath(catalog.LegacyNames.BeaconUnit())] = []byte(wantBeacon)
 
 	step := wireStep()
 	st := &State{Wire: w, Events: make(chan Event, 100)}
@@ -830,7 +832,7 @@ func TestPlan_InvalidComboErrors(t *testing.T) {
 
 func TestAccount_RunCreatesSystemUserIdempotently(t *testing.T) {
 	e := newFakeExecutor()
-	step := accountStep()
+	step := accountStep(catalog.LegacyNames)
 	if err := step.Run(context.Background(), e, &State{Wire: testWire()}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -858,7 +860,7 @@ func TestAccount_RunCreatesSystemUserIdempotently(t *testing.T) {
 func TestAccount_RunFailsWhenUseraddFails(t *testing.T) {
 	e := newFakeExecutor().
 		script("useradd", executor.Result{ExitCode: 1, Stderr: "useradd: cannot lock /etc/passwd"})
-	step := accountStep()
+	step := accountStep(catalog.LegacyNames)
 	err := step.Run(context.Background(), e, &State{Wire: testWire()})
 	if err == nil {
 		t.Fatal("want error when useradd fails, got nil")
@@ -871,7 +873,7 @@ func TestAccount_RunFailsWhenUseraddFails(t *testing.T) {
 func TestAccount_VerifyChecksUserExists(t *testing.T) {
 	e := newFakeExecutor().
 		script("id -u "+catalog.ServiceUser, executor.Result{ExitCode: 1, Stderr: "no such user"})
-	step := accountStep()
+	step := accountStep(catalog.LegacyNames)
 	if err := step.Verify(context.Background(), e, &State{Wire: testWire()}); err == nil {
 		t.Fatal("want Verify error when the service user does not exist, got nil")
 	}
@@ -944,6 +946,7 @@ func TestWire_VerifyFailsWhenDataDirNotOwnedByServiceUser(t *testing.T) {
 	}
 
 	e.scripts["stat -c %U"] = executor.Result{Stdout: catalog.ServiceUser + "\n", ExitCode: 0}
+	e.scripts["cat '"+catalog.OwnerMarkerPath(testWire())+"'"] = executor.Result{Stdout: catalog.ServiceUser + "\n"}
 	if err := step.Verify(context.Background(), e, &State{Wire: w}); err != nil {
 		t.Fatalf("want Verify to pass once the data dir is owned by %s, got %v", catalog.ServiceUser, err)
 	}

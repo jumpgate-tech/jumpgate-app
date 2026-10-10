@@ -297,24 +297,29 @@ func TestSnapshot_FailsWhenNoSnapshotMatchesTheRethVersion(t *testing.T) {
 // node would then start and sync from genesis, which is exactly what the
 // operator paid a download to avoid, while every step reported success.
 func TestSnapshot_VerifyFailsUntilTheDataDirIsPopulated(t *testing.T) {
-	e := newFakeExecutor().script("test -d", executor.Result{ExitCode: 1})
+	e := newFakeExecutor().
+		script("test -f", executor.Result{ExitCode: 1}).
+		script("test -d", executor.Result{ExitCode: 1})
 
 	err := snapshotStep().Verify(context.Background(), e, &State{Wire: snapshotWire()})
 	if err == nil {
 		t.Fatal("verify passed on a datadir with no db/ in it")
 	}
-	if !strings.Contains(err.Error(), "db/") {
+	if !strings.Contains(err.Error(), "marker") {
 		t.Errorf("error %q does not name the marker it looked for", err)
 	}
 }
 
-func TestSnapshot_VerifyPassesOnceTheDataDirHasADatabase(t *testing.T) {
-	e := newFakeExecutor().script("test -d", executor.Result{ExitCode: 0})
+func TestSnapshot_VerifyPassesOnceTheCompletionMarkerExists(t *testing.T) {
+	w := snapshotWire()
+	e := newFakeExecutor().
+		script("cat", executor.Result{Stdout: w.DataDir + "\n"}).
+		script("test -d", executor.Result{ExitCode: 0})
 
-	if err := snapshotStep().Verify(context.Background(), e, &State{Wire: snapshotWire()}); err != nil {
+	if err := snapshotStep().Verify(context.Background(), e, &State{Wire: w}); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if !ran(e, "test -d", "/mnt/reth/db") {
+	if !ran(e, "cat", catalog.SnapshotMarkerPath(w)) {
 		t.Errorf("verify looked in the wrong place: %q", e.callLog())
 	}
 }
@@ -333,7 +338,7 @@ func TestStart_StartsBothUnits(t *testing.T) {
 	if err := startStep().Run(context.Background(), e, &State{Wire: testWire()}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !ran(e, "systemctl start", execUnitName, beaconUnitName) {
+	if !ran(e, "systemctl start", catalog.LegacyNames.ExecUnit(), catalog.LegacyNames.BeaconUnit()) {
 		t.Errorf("both units must be started in one call; ran: %q", e.callLog())
 	}
 }
@@ -398,5 +403,134 @@ func TestStart_VerifyReportsWhatSystemdSaidOnNonZeroExit(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "inactive") {
 		t.Errorf("error %q does not carry systemd's own words", err)
+	}
+}
+
+// A half-unpacked snapshot has a db/ directory too: only the marker written
+// after a successful download proves the restore finished.
+func TestSnapshot_VerifyNeedsTheCompletionMarker(t *testing.T) {
+	w := snapshotWire() // ExecSnapshot set
+	f := newFakeExecutor().
+		script("cat '"+catalog.SnapshotMarkerPath(w)+"'", executor.Result{ExitCode: 1}).
+		script("test -d '"+w.DataDir+"/db'", executor.Result{ExitCode: 0}).
+		script("test -f '"+catalog.UnitPath(w.NodeNames().ExecUnit())+"'", executor.Result{ExitCode: 1})
+	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err == nil {
+		t.Fatal("a db/ directory without the marker or a finished setup passed as restored")
+	}
+}
+
+// A box set up before markers existed has db/ and its units: Verify adopts it
+// (writes the marker) instead of downloading the snapshot again over live data.
+func TestSnapshot_VerifyAdoptsAFinishedPreMarkerInstall(t *testing.T) {
+	w := snapshotWire()
+	f := newFakeExecutor().
+		script("cat '"+catalog.SnapshotMarkerPath(w)+"'", executor.Result{ExitCode: 1}).
+		script("test -d '"+w.DataDir+"/db'", executor.Result{ExitCode: 0}).
+		script("test -f '"+catalog.UnitPath(w.NodeNames().ExecUnit())+"'", executor.Result{ExitCode: 0})
+	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err != nil {
+		t.Fatalf("a finished pre-marker install failed Verify: %v", err)
+	}
+	if indexContaining(f, `mv -f "$t" '`+catalog.SnapshotMarkerPath(w)+`'`) < 0 {
+		t.Fatalf("the marker was not written; calls %v", f.callLog())
+	}
+}
+
+func TestSnapshot_RunWritesTheMarkerOnlyAfterTheDownload(t *testing.T) {
+	w := snapshotWire()
+	f := resolvable(newFakeExecutor()) // the network calls succeed, as in TestSnapshot_CreatesTheDataDirThenDownloadsIntoIt
+	if err := snapshotStep().Run(context.Background(), f, &State{Wire: w}); err != nil {
+		t.Fatal(err)
+	}
+	dl, mk := indexContaining(f, "reth download"), indexContaining(f, catalog.SnapshotMarkerPath(w))
+	if dl < 0 || mk < 0 || mk < dl {
+		t.Fatalf("marker at %d, download at %d: %v", mk, dl, f.callLog())
+	}
+}
+
+// A marker the service account can write is a marker it can forge: one left in
+// the data dir must not stand in for the root-only one. Verify must not even
+// look there, so the test fails on any command naming the in-tree marker
+// rather than relying on a script that could shadow it.
+func TestSnapshot_AMarkerInTheDataDirIsNotTrusted(t *testing.T) {
+	w := snapshotWire()
+	f := newFakeExecutor().
+		script("cat", executor.Result{ExitCode: 1}).
+		script("test -f", executor.Result{ExitCode: 1}).
+		script("test -d", executor.Result{ExitCode: 1})
+	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err == nil {
+		t.Fatal("Verify passed with no root-only marker")
+	}
+	if ran(f, w.DataDir+"/.jumpgate") {
+		t.Fatalf("Verify consulted a path under the data dir: %v", f.callLog())
+	}
+}
+
+// The marker names the data dir it vouches for. One that names another (a move
+// to a new disk, or a dir wiped by hand and re-pointed) must not skip the restore.
+func TestSnapshot_AMarkerForAnotherDataDirDoesNotSatisfyVerify(t *testing.T) {
+	w := snapshotWire()
+	f := newFakeExecutor().
+		script("cat", executor.Result{Stdout: "/mnt/old-disk/reth\n"}).
+		script("test -f", executor.Result{ExitCode: 1}).
+		script("test -d", executor.Result{ExitCode: 1})
+	if err := snapshotStep().Verify(context.Background(), f, &State{Wire: w}); err == nil {
+		t.Fatal("a marker for a different data dir satisfied Verify")
+	}
+}
+
+func TestMarkers_LiveOutsideTheDataDirAndAreNeverChowned(t *testing.T) {
+	w := snapshotWire()
+	for _, m := range []string{catalog.SnapshotMarkerPath(w), catalog.OwnerMarkerPath(w)} {
+		if !strings.HasPrefix(m, catalog.MarkersDir+"/") || strings.HasPrefix(m, w.DataDir) {
+			t.Errorf("marker %q is not in the root-only markers dir", m)
+		}
+	}
+	f := resolvable(newFakeExecutor())
+	if err := snapshotStep().Run(context.Background(), f, &State{Wire: w}); err != nil {
+		t.Fatal(err)
+	}
+	if err := wireStep().Run(context.Background(), f, &State{Wire: w}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.callLog() {
+		if strings.Contains(c, catalog.MarkersDir) && strings.Contains(c, "chown") {
+			t.Errorf("a marker is chowned: %s", c)
+		}
+		if strings.Contains(c, "> '"+w.DataDir) {
+			t.Errorf("a command redirects into the data dir: %s", c)
+		}
+	}
+}
+
+// A marker for another dir is never adopted over, even when the new dir has a
+// db/ and the exec unit survives from the old one: that db/ may be the
+// half-unpacked remains of an interrupted restore.
+func TestSnapshot_AMarkerForAnotherDataDirIsNeverAdopted(t *testing.T) {
+	w := snapshotWire()
+	f := newFakeExecutor().
+		script("cat", executor.Result{Stdout: "/mnt/old-disk/reth\n"}).
+		script("test -d", executor.Result{ExitCode: 0}).
+		script("test -f", executor.Result{ExitCode: 0})
+	err := snapshotStep().Verify(context.Background(), f, &State{Wire: w})
+	if err == nil {
+		t.Fatal("a marker naming another data dir was adopted")
+	}
+	if !strings.Contains(err.Error(), "/mnt/old-disk/reth") || !strings.Contains(err.Error(), w.DataDir) {
+		t.Errorf("error %q should name both dirs", err)
+	}
+	if indexContaining(f, "mv -f") >= 0 {
+		t.Fatalf("the marker was rewritten: %v", f.callLog())
+	}
+}
+
+// A data dir emptied in place keeps its marker; the db/ it vouched for is gone.
+func TestSnapshot_AMatchingMarkerNeedsTheDatabaseStillThere(t *testing.T) {
+	w := snapshotWire()
+	f := newFakeExecutor().
+		script("cat", executor.Result{Stdout: w.DataDir + "\n"}).
+		script("test -d", executor.Result{ExitCode: 1})
+	err := snapshotStep().Verify(context.Background(), f, &State{Wire: w})
+	if err == nil || !strings.Contains(err.Error(), "is gone") {
+		t.Fatalf("want a db-is-gone error, got %v", err)
 	}
 }

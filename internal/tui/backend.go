@@ -41,6 +41,12 @@ type Backend interface {
 	CheckAgent(ctx context.Context, target string) (api.AgentCheck, error)
 	SSHCommand(ctx context.Context, target string) (api.SSHCommand, error)
 	Gateways(ctx context.Context) ([]api.GatewaySummary, error)
+	Jobs(ctx context.Context) (api.JobsInbox, error)
+	WatchJobs(ctx context.Context) <-chan apiclient.Update[api.JobsInbox]
+	Job(ctx context.Context, target, id string) (api.JobDetail, error)
+	MigrateNames(ctx context.Context, target string) (api.JobView, error)
+	Decide(ctx context.Context, target, id string, d api.JobDecision) (api.JobView, error)
+	Adopt(ctx context.Context, target, id string) (api.JobView, error)
 }
 
 var _ Backend = (*apiclient.Client)(nil)
@@ -48,6 +54,10 @@ var _ Backend = (*apiclient.Client)(nil)
 // Options are what cmd/jumpgate hands the TUI.
 type Options struct {
 	Backend Backend
+	// Bell rings the terminal bell (the Settings "bell on jobs that need you"
+	// choice); nil is silent. cmd/jumpgate writes BEL to stderr: stdout is
+	// Bubble Tea's.
+	Bell func()
 	// Self is this jumpgate executable. Pairing this machine as a non-root
 	// user and `keys init` run as foreground children of the TUI (spec D17).
 	Self    string

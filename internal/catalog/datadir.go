@@ -17,6 +17,23 @@ var systemTrees = map[string]bool{
 	"/usr": true, "/var": true, "/var/lib": true,
 }
 
+// ownTrees are jumpgate's own root-managed directories (agent key, completion
+// markers, config). A DataDir equal to, containing or inside one would let
+// wire's chown -R hand them to the service account, which could then forge
+// markers or plant symlinks root follows.
+var ownTrees = []string{"/var/lib/jumpgate", "/etc/jumpgate", "/usr/local/lib/jumpgate"}
+
+// overlapsOwnTree compares on path-segment boundaries, so the sibling
+// /var/lib/jumpgate-node is not mistaken for /var/lib/jumpgate.
+func overlapsOwnTree(p string) (string, bool) {
+	for _, t := range ownTrees {
+		if p == t || strings.HasPrefix(p, t+"/") || strings.HasPrefix(t, p+"/") {
+			return t, true
+		}
+	}
+	return "", false
+}
+
 // ValidateDataDir checks a node data directory before anything acts on it.
 //
 // It must be absolute (a relative path resolves against the SSH login
@@ -44,6 +61,9 @@ func ValidateDataDir(p string) error {
 	}
 	if systemTrees[p] {
 		return fmt.Errorf("data directory %q is a system directory; use a directory inside it", p)
+	}
+	if t, bad := overlapsOwnTree(p); bad {
+		return fmt.Errorf("data directory %q overlaps %s, which jumpgate manages as root", p, t)
 	}
 	return nil
 }

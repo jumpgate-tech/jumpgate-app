@@ -2,6 +2,7 @@ package apiclient
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -440,5 +441,52 @@ func TestRestartWaitStopsWithItsContext(t *testing.T) {
 	_, err := Restart(ctx, c)
 	if !errors.Is(err, context.Canceled) || time.Since(start) > 3*time.Second {
 		t.Fatalf("err %v after %s", err, time.Since(start))
+	}
+}
+
+func TestJobMethodsUseTheJobRoutes(t *testing.T) {
+	var seen []string
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		switch {
+		case r.URL.Path == "/api/jobs":
+			fmt.Fprint(w, `{"at":"2026-10-09T00:00:00Z","jobs":[{"target":"box","id":"0123456789abcdef","state":"needs-decision"}],"errors":[]}`)
+		case strings.HasSuffix(r.URL.Path, "/decide"):
+			var d api.JobDecision
+			_ = json.NewDecoder(r.Body).Decode(&d)
+			if d.Decision != "q" || d.Option != "retry" {
+				http.Error(w, "bad body", 400)
+				return
+			}
+			fmt.Fprint(w, `{"target":"box","id":"0123456789abcdef","state":"waiting"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/jobs/box":
+			var s api.JobStart
+			_ = json.NewDecoder(r.Body).Decode(&s)
+			if s.Kind != intent.KindNodeMigrateNames {
+				http.Error(w, "bad kind", 400)
+				return
+			}
+			fmt.Fprint(w, `{"target":"box","id":"fedcba9876543210","state":"waiting"}`)
+		default:
+			fmt.Fprint(w, `{"target":"box","id":"0123456789abcdef","state":"waiting"}`)
+		}
+	})
+	ctx := context.Background()
+	in, err := c.Jobs(ctx)
+	if err != nil || in.NeedsDecision() != 1 {
+		t.Fatalf("Jobs = %+v, %v", in, err)
+	}
+	if v, err := c.Decide(ctx, "box", "0123456789abcdef", api.JobDecision{Decision: "q", Option: "retry"}); err != nil || v.State != "waiting" {
+		t.Fatalf("Decide = %+v, %v", v, err)
+	}
+	if v, err := c.MigrateNames(ctx, "box"); err != nil || v.ID != "fedcba9876543210" {
+		t.Fatalf("MigrateNames = %+v, %v", v, err)
+	}
+	if _, err := c.Adopt(ctx, "box", "0123456789abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"GET /api/jobs", "POST /api/jobs/box/0123456789abcdef/decide", "POST /api/jobs/box", "POST /api/jobs/box/0123456789abcdef/adopt"}
+	if strings.Join(seen, ",") != strings.Join(want, ",") {
+		t.Fatalf("routes %v", seen)
 	}
 }
