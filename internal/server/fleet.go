@@ -193,6 +193,9 @@ type fleetPoller struct {
 	// Test hooks: testIdleStopped runs after a loop decides to stop and
 	// before it returns; testLoopDone as it returns.
 	testIdleStopped, testLoopDone func()
+	// testProbeHandedOver runs in a probe's goroutine right after it hands
+	// its reading to the worker.
+	testProbeHandedOver func()
 }
 
 func (p *fleetPoller) maxActiveLoops() int {
@@ -494,12 +497,18 @@ func (p *fleetPoller) pollOne(ctx context.Context, cfg config.Config, t config.T
 	done := make(chan fleetReading, 1)
 	st.busy = p.goLocked(func() {
 		r := p.read(probeCtx, cfg, t, needChain, diskDue, fwDue)
-		done <- r
+		// The box is free before the reading is handed over: once the
+		// worker has it, the round can end and the next one must find the
+		// box ready to probe, not still busy with this finished probe.
 		p.mu.Lock()
 		if !p.stopped {
 			st.busy = false
 		}
 		p.mu.Unlock()
+		done <- r
+		if p.testProbeHandedOver != nil {
+			p.testProbeHandedOver()
+		}
 	})
 	started := st.busy
 	p.mu.Unlock()

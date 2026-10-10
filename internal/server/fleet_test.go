@@ -709,6 +709,25 @@ func TestFleetProbeErrorsAreKeptPerSection(t *testing.T) {
 	}
 }
 
+// A box whose probe has answered is probed again by the next round, however
+// late its probe goroutine is scheduled after handing its reading over: the
+// round must not find the box still busy and skip it.
+func TestFleetNextRoundProbesABoxWhoseProbeAnswered(t *testing.T) {
+	s, fp, _, _ := fleetServer(t, config.Target{ID: "a", Mode: "ssh", Agent: paired})
+	held := make(chan struct{})
+	defer close(held)
+	s.fleet.testProbeHandedOver = func() { <-held }
+	s.fleet.round(context.Background())
+	fp.down["a"] = true
+	s.fleet.round(context.Background())
+	if n := fp.callsFor("a"); n != 2 {
+		t.Fatalf("the box was probed %d times in two rounds, want 2", n)
+	}
+	if a, _ := s.fleet.snapshot().Row("a"); a.StatusError == nil || a.StatusError.Code != api.CodeUnreachable {
+		t.Fatalf("status error %+v, want unreachable", a.StatusError)
+	}
+}
+
 // An SSH-only box whose cached connection dropped is dialled again on the
 // next poll, so it recovers without restarting the server.
 func TestFleetSSHOnlyBoxRecoversAfterTheConnectionDrops(t *testing.T) {
