@@ -2,6 +2,7 @@ package api
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -116,5 +117,40 @@ func TestCheckSSHArgvAcceptsWindowsKnownHostsPaths(t *testing.T) {
 	a[8] = `UserKnownHostsFile=C:\Users\x\.jumpgate\confirmed_hosts "C:\Users\John Smith\.ssh\known_hosts" C:\ProgramData\ssh\ssh_known_hosts`
 	if err := CheckSSHArgv(a); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A command cut short anywhere is refused: every proper prefix of a good
+// argv, whichever element it stops at, fails the check.
+func TestCheckSSHArgvRefusesEveryTruncation(t *testing.T) {
+	good := goodArgv()
+	for n := 1; n < len(good); n++ {
+		if err := CheckSSHArgv(good[:n]); err == nil {
+			t.Errorf("the first %d elements passed: %q", n, good[:n])
+		}
+	}
+}
+
+// The known_hosts list and the names around it have shapes beyond the
+// character rules: the option itself, the list's separators, and lengths.
+func TestCheckSSHArgvRefusesMalformedListsAndOverlongNames(t *testing.T) {
+	replace := func(i int, v string) []string { a := goodArgv(); a[i] = v; return a }
+	for name, argv := range map[string][]string{
+		"kh option swapped": replace(8, "IdentityFile=/k/id"),
+		"kh unterminated":   replace(8, `UserKnownHostsFile="/h/with space`),
+		"kh trailing space": replace(8, "UserKnownHostsFile=/h/c "),
+		"kh double space":   replace(8, "UserKnownHostsFile=/h/c  /h/d"),
+		"kh glued to quote": replace(8, `UserKnownHostsFile="/h/a b"/h/c`),
+		"user over 64":      replace(16, strings.Repeat("u", 65)),
+		"host over 253":     replace(18, strings.Repeat("h", 254)),
+		"carriage return":   replace(4, "/k/id\r"),
+	} {
+		if err := CheckSSHArgv(argv); err == nil {
+			t.Errorf("%s: %q passed", name, argv)
+		}
+	}
+	// The limits themselves are allowed.
+	if err := CheckSSHArgv(replace(16, strings.Repeat("u", 64))); err != nil {
+		t.Errorf("a 64-character user: %v", err)
 	}
 }
