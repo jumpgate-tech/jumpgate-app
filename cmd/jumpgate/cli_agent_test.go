@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/agent"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/jobs"
@@ -117,5 +118,91 @@ func TestAJobStoreThatWillNotOpenRunsWithoutJobs(t *testing.T) {
 	defer held.Close()
 	if _, _, err := agentJobManager(io.Discard, state, conf, k, executor.NewLocal()); !errors.Is(err, jobs.ErrStoreInUse) {
 		t.Fatalf("a held store: %v", err)
+	}
+}
+
+// reset-replay wants --yes; with it, a broken replay record is kept beside
+// the new one as evidence, never deleted, and the agent can open the fresh,
+// empty record.
+func TestAgentResetReplayKeepsTheBrokenRecord(t *testing.T) {
+	testutil.RequireUnix(t) // agent-side code, Linux-only
+	stderr := captureStderr(t)
+	state := t.TempDir()
+	path := filepath.Join(state, "replay.json")
+	if err := os.WriteFile(path, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"reset-replay", "--state-dir", state}
+	if code := cmdAgent(args); code != exitCode("usage") || !strings.Contains(stderr(), "--yes") {
+		t.Fatalf("without --yes: exit %d, stderr %q", code, stderr())
+	}
+	if b, _ := os.ReadFile(path); string(b) != "{broken" {
+		t.Fatalf("the record changed without --yes: %q", b)
+	}
+	if code := cmdAgent(append(args, "--yes")); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr())
+	}
+	if _, err := agent.OpenReplay(path); err != nil {
+		t.Fatalf("the new record does not open: %v", err)
+	}
+	kept, _ := filepath.Glob(path + ".broken-*")
+	if len(kept) != 1 {
+		t.Fatalf("broken records kept: %v", kept)
+	}
+	if b, _ := os.ReadFile(kept[0]); string(b) != "{broken" {
+		t.Fatalf("the kept record holds %q", b)
+	}
+}
+
+// With no record at all, reset-replay just starts one.
+func TestAgentResetReplayWithoutARecordStartsOne(t *testing.T) {
+	testutil.RequireUnix(t)
+	state := t.TempDir()
+	if err := agentResetReplay(state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.OpenReplay(filepath.Join(state, "replay.json")); err != nil {
+		t.Fatalf("the record does not open: %v", err)
+	}
+}
+
+// The agent's key comes from systemd's credentials directory when systemd
+// hands one in, and from the state directory otherwise.
+func TestAgentKeyPathPrefersSystemdCredentials(t *testing.T) {
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	if got := agentKeyPath("/var/lib/jumpgate"); got != filepath.Join("/var/lib/jumpgate", "agent.key") {
+		t.Fatalf("outside systemd: %q", got)
+	}
+	t.Setenv("CREDENTIALS_DIRECTORY", "/run/credentials/jumpgate-agent.service")
+	if got := agentKeyPath("/var/lib/jumpgate"); got != filepath.Join("/run/credentials/jumpgate-agent.service", "agent.key") {
+		t.Fatalf("under systemd: %q", got)
+	}
+}
+
+// agent run with no key never listens: the box has no identity to answer
+// with.
+func TestAgentRunWithoutAKeyFails(t *testing.T) {
+	testutil.RequireUnix(t)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	stderr := captureStderr(t)
+	if code := cmdAgent([]string{"run", "--state-dir", t.TempDir(), "--config-dir", t.TempDir()}); code != 1 || !strings.Contains(stderr(), "agent.key") {
+		t.Fatalf("exit %d, stderr %q", code, stderr())
+	}
+}
+
+// Unknown subcommands and job-abandon without a well-formed id are usage
+// errors, and an agent on Windows is refused outright.
+func TestAgentRefusesWhatItCannotRun(t *testing.T) {
+	captureStderr(t)
+	for _, args := range [][]string{{}, {"bogus"}, {"job-abandon", "nope", "--yes"}, {"job-abandon", "0123456789abcdef", "extra"}, {"init", "--no-such-flag"}} {
+		if code := cmdAgent(args); code != exitCode("usage") {
+			t.Errorf("agent %v: exit %d", args, code)
+		}
+	}
+	old := hostGOOS
+	hostGOOS = "windows"
+	t.Cleanup(func() { hostGOOS = old })
+	if code := cmdAgent([]string{"run"}); code != exitCode("failed") {
+		t.Fatalf("agent run on Windows: exit %d", code)
 	}
 }
