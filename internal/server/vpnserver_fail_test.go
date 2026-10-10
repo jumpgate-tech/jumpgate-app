@@ -169,3 +169,49 @@ func TestVPNServerRoutesRefuseAnUnknownServer(t *testing.T) {
 		t.Fatalf("an unknown server reached the host: %v", host.calls)
 	}
 }
+
+// A full subnet is a conflict, and nothing reaches the host.
+func TestVPNServerEnrollIntoAFullSubnet(t *testing.T) {
+	a, host := newFaultyVPNServer(t)
+	provision(t, a, map[string]any{"id": "home", "endpointHost": "h.example.com", "address": "10.9.0.1/30"})
+	if code := a.status(t, "POST", "/api/vpn-servers/home/peers", map[string]any{"name": "one"}); code != http.StatusCreated {
+		t.Fatalf("first device: %d", code)
+	}
+	host.mu.Lock()
+	before := len(host.calls)
+	host.mu.Unlock()
+	if code := a.status(t, "POST", "/api/vpn-servers/home/peers", map[string]any{"name": "two"}); code != http.StatusConflict {
+		t.Fatalf("enroll into a full /30: %d, want 409", code)
+	}
+	host.mu.Lock()
+	after := len(host.calls)
+	host.mu.Unlock()
+	if after != before {
+		t.Fatalf("a refused enroll reached the host: %v", host.calls[before:])
+	}
+}
+
+// What a device routes through the tunnel: the server's subnet by default,
+// everything only when asked for a full tunnel, or exactly the list given.
+func TestVPNServerEnrollRoutesOnlyWhatWasAskedFor(t *testing.T) {
+	a, _ := newFaultyVPNServer(t)
+	provision(t, a, map[string]any{"id": "home", "endpointHost": "h.example.com"})
+	for name, c := range map[string]struct {
+		body map[string]any
+		want string
+	}{
+		"default":     {map[string]any{"name": "a"}, "AllowedIPs = 10.9.0.0/24"},
+		"full tunnel": {map[string]any{"name": "b", "fullTunnel": true}, "AllowedIPs = 0.0.0.0/0"},
+		"explicit":    {map[string]any{"name": "c", "fullTunnel": true, "allowedIps": []string{"192.168.50.0/24"}}, "AllowedIPs = 192.168.50.0/24"},
+	} {
+		enr := decodeJSON[vpnEnrollResponse](t, a.do(t, "POST", "/api/vpn-servers/home/peers", c.body))
+		if !strings.Contains(enr.Config, c.want) {
+			t.Errorf("%s: config lacks %q:\n%s", name, c.want, enr.Config)
+		}
+	}
+	for _, body := range []any{map[string]any{"name": "  "}, "not an object"} {
+		if code := a.status(t, "POST", "/api/vpn-servers/home/peers", body); code != http.StatusBadRequest {
+			t.Errorf("enroll %v: %d, want 400", body, code)
+		}
+	}
+}
