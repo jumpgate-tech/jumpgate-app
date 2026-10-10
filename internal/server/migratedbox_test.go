@@ -76,3 +76,45 @@ func TestSetupRefusesLegacyNamesOnAMigratedBox(t *testing.T) {
 		}
 	}
 }
+
+// The names-marker probe runs only once setup holds the target: probed
+// earlier, a migrate job ending between the probe and the claim could let a
+// legacy-names setup through. A refusal by the probe releases the claim, so
+// the next attempt is told about the marker again, not that setup is running.
+func TestSetupProbesTheNamesMarkerOnlyOnceItHoldsTheTarget(t *testing.T) {
+	ex := &markerExec{marker: true}
+	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) { return ex, nil })
+	res := a.do(t, "POST", "/api/targets", config.Target{ID: "local", Mode: "local"})
+	res.Body.Close()
+	if _, err := config.Update(func(c *config.Config) error {
+		c.Targets[0].Wire = &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse",
+			DataDir: "/var/lib/valve-node-app/369", JWTPath: "/var/lib/valve-node-app/369/jwt.hex"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wire := catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse"}
+
+	entry := a.srv.reg.get("local")
+	entry.mu.Lock()
+	entry.opBusy = true
+	entry.mu.Unlock()
+	res = a.do(t, "POST", "/api/targets/local/setup", wire)
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusConflict || !strings.Contains(string(body), "a wipe, reset or clear is running") || ex.probes != 0 {
+		t.Fatalf("while another op holds the target: %d %s, %d probes", res.StatusCode, body, ex.probes)
+	}
+	entry.mu.Lock()
+	entry.opBusy = false
+	entry.mu.Unlock()
+
+	for i := 1; i <= 2; i++ {
+		res = a.do(t, "POST", "/api/targets/local/setup", wire)
+		body, _ = io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != http.StatusConflict || !strings.Contains(string(body), "names.json") || ex.probes != i {
+			t.Fatalf("attempt %d on a migrated box: %d %s, %d probes", i, res.StatusCode, body, ex.probes)
+		}
+	}
+}

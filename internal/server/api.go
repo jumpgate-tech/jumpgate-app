@@ -1251,16 +1251,6 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		writeDialError(w, err)
 		return
 	}
-	if err := refuseLegacyOnMigratedBox(r.Context(), ex, target.ID, wire); err != nil {
-		var conflict *setupConflict
-		if errors.As(err, &conflict) {
-			writeErrorDetail(w, http.StatusConflict, err.Error(), "", api.CodeConflict)
-		} else {
-			writeDialError(w, err)
-		}
-		return
-	}
-
 	claimed, ok := s.claimSetupRun(w, id)
 	if !ok {
 		return
@@ -1271,6 +1261,19 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	// claim, which keeps a job from starting until setup ends.
 	if s.refuseDuringJob(w, r.Context(), cfg, target) {
 		s.releaseSetupRun(id, claimed)
+		return
+	}
+	// Probed only now that setup holds the target and no job runs on it: a
+	// migrate job that ended between an earlier probe and the claim would
+	// have left a marker this setup never saw.
+	if err := refuseLegacyOnMigratedBox(r.Context(), ex, target.ID, wire); err != nil {
+		s.releaseSetupRun(id, claimed)
+		var conflict *setupConflict
+		if errors.As(err, &conflict) {
+			writeErrorDetail(w, http.StatusConflict, err.Error(), "", api.CodeConflict)
+		} else {
+			writeDialError(w, err)
+		}
 		return
 	}
 
