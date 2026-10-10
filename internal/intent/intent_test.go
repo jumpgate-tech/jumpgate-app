@@ -109,3 +109,27 @@ func TestParseRejectsMalformedFields(t *testing.T) {
 		}
 	}
 }
+
+// A receipt survives its wire form, and a malformed field is an error, never
+// a zero value a controller would then check a signature against.
+func TestReceiptRoundTripsAndRejectsMalformedFields(t *testing.T) {
+	var r Receipt
+	r.Agent[19] = 0xA
+	r.RequestHash[0], r.ResultHash[31] = 0x11, 0x22
+	r.Seq, r.Status = 9, StatusOK
+	back, err := r.JSON().Parse()
+	if err != nil || back != r {
+		t.Fatalf("Parse = %+v, %v; want %+v", back, err, r)
+	}
+	for n, mutate := range []func(j *ReceiptJSON){
+		func(j *ReceiptJSON) { j.Agent = "0x12" },
+		func(j *ReceiptJSON) { j.RequestHash = "0xzz" },
+		func(j *ReceiptJSON) { j.ResultHash = "" },
+	} {
+		j := r.JSON()
+		mutate(&j)
+		if _, err := j.Parse(); err == nil {
+			t.Errorf("case %d parsed", n)
+		}
+	}
+}
