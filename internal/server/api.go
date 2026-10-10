@@ -1168,6 +1168,34 @@ func setupExistingFrom(info intent.AgentInfo, t config.Target) (*catalog.WireCon
 	return box, nil
 }
 
+// namesMarkerPath is the names marker node.migrate-names leaves on a box it
+// migrated (D-J10).
+const namesMarkerPath = "/etc/jumpgate/names.json"
+
+// refuseLegacyOnMigratedBox refuses a setup that would render the legacy
+// names on a box that has a names marker: the box was migrated, and this
+// controller's view of it predates that (an SSH-only target's stored wire,
+// or a paired box whose agent is too old to apply the marker). Setting it up
+// as legacy would recreate the old account and units and undo the
+// migration. It is one probe, and any failure to run it refuses too.
+func refuseLegacyOnMigratedBox(ctx context.Context, ex executor.Executor, id string, wire catalog.WireConfig) error {
+	if wire.Names != catalog.NamesLegacy {
+		return nil
+	}
+	res, err := ex.Run(ctx, "test -e '"+namesMarkerPath+"'", nil)
+	if err != nil {
+		return fmt.Errorf("check whether box %s was migrated to the jumpgate names: %w", id, err)
+	}
+	switch res.ExitCode {
+	case 0:
+		return &setupConflict{fmt.Sprintf("box %s has %s: it was migrated to the jumpgate names, and setup from this controller would render the legacy ones and undo that. "+
+			"This controller's view of the box predates the migration: remove the host and add it again (and pair it, if it was paired, which also brings its agent up to date), then run setup", id, namesMarkerPath)}
+	case 1:
+		return nil
+	}
+	return fmt.Errorf("check whether box %s was migrated to the jumpgate names: test -e exited %d: %s", id, res.ExitCode, strings.TrimSpace(res.Stderr))
+}
+
 // setupConflict is a setup refused because the box and the controller
 // disagree in a way setup must not guess past.
 type setupConflict struct{ msg string }
@@ -1221,6 +1249,15 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	ex, err := s.getShellExecutor(target)
 	if err != nil {
 		writeDialError(w, err)
+		return
+	}
+	if err := refuseLegacyOnMigratedBox(r.Context(), ex, target.ID, wire); err != nil {
+		var conflict *setupConflict
+		if errors.As(err, &conflict) {
+			writeErrorDetail(w, http.StatusConflict, err.Error(), "", api.CodeConflict)
+		} else {
+			writeDialError(w, err)
+		}
 		return
 	}
 
