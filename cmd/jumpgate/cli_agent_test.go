@@ -90,9 +90,9 @@ func TestAgentJobAbandon(t *testing.T) {
 }
 
 // M3: a job store that will not open for any reason but another agent
-// holding it must not stop the agent: status, logs and service actions keep
-// working, and job kinds are refused (jobs_unsupported). The reason is
-// logged.
+// holding it must not stop the agent: status and logs keep working. The
+// failure is logged and returned as unavailable, never as "no jobs", so the
+// agent can refuse service.action while a job may sit in the store.
 func TestAJobStoreThatWillNotOpenRunsWithoutJobs(t *testing.T) {
 	testutil.RequireUnix(t) // agent-side code, Linux-only
 	state, conf := t.TempDir(), t.TempDir()
@@ -101,9 +101,9 @@ func TestAJobStoreThatWillNotOpenRunsWithoutJobs(t *testing.T) {
 	}
 	k, _ := signer.GenerateKey()
 	var log strings.Builder
-	m, err := agentJobManager(&log, state, conf, k, executor.NewLocal())
-	if err != nil || m != nil {
-		t.Fatalf("an unopenable store: %v, %v", m, err)
+	m, unavailable, err := agentJobManager(&log, state, conf, k, executor.NewLocal())
+	if err != nil || m != nil || unavailable == nil {
+		t.Fatalf("an unopenable store: %v, %v, %v", m, unavailable, err)
 	}
 	if !strings.Contains(log.String(), "without durable jobs") {
 		t.Fatalf("log %q", log.String())
@@ -115,7 +115,7 @@ func TestAJobStoreThatWillNotOpenRunsWithoutJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer held.Close()
-	if _, err := agentJobManager(io.Discard, state, conf, k, executor.NewLocal()); !errors.Is(err, jobs.ErrStoreInUse) {
+	if _, _, err := agentJobManager(io.Discard, state, conf, k, executor.NewLocal()); !errors.Is(err, jobs.ErrStoreInUse) {
 		t.Fatalf("a held store: %v", err)
 	}
 }

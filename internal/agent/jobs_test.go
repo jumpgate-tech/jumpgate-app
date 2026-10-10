@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -495,5 +496,59 @@ func TestAnAbandonedJobFreesTheNodeServices(t *testing.T) {
 	rc, res = r.send(t, intent.KindServiceAction, intent.ServiceActionPayload{Service: "exec", Action: "restart"}, nil)
 	if rc.Status != intent.StatusOK {
 		t.Fatalf("service.action after the abandon: %d %s", rc.Status, res)
+	}
+}
+
+// unavailableJobs is a rig whose job store did not open, for why.
+func unavailableJobs(t *testing.T, why string) *rig {
+	t.Helper()
+	r := newRig(t, true)
+	r.a.cfg.JobsDir = filepath.Join(r.dir, "jobs")
+	r.a.cfg.JobsUnavailable = errors.New(why)
+	return r
+}
+
+// M3, fail closed: a job store that did not open may still hold a job that
+// owns the node services. While it has anything in it, service.action is
+// refused (J1) and says why; job kinds are refused with the reason.
+func TestAnUnopenedJobStoreWithJobsRefusesServiceActions(t *testing.T) {
+	r := unavailableJobs(t, "permission denied")
+	if err := os.MkdirAll(r.a.cfg.JobsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.a.cfg.JobsDir, "0123456789abcdef.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rc, res := r.send(t, intent.KindServiceAction, intent.ServiceActionPayload{Service: "exec", Action: "restart"}, nil)
+	got := rejection(t, rc, res)
+	if got.Code != intent.ReasonJobActive || !strings.Contains(got.Message, "job store") || !strings.Contains(got.Message, "permission denied") {
+		t.Fatalf("service.action with an unopened job store: %+v", got)
+	}
+	if len(r.exec.cmds) != 0 {
+		t.Fatalf("service.action ran commands: %v", r.exec.cmds)
+	}
+	rc, res = r.send(t, intent.KindJobRead, intent.JobReadPayload{ID: "0123456789abcdef"}, nil)
+	if got := rejection(t, rc, res); got.Code != intent.ReasonJobsUnsupported || !strings.Contains(got.Message, "permission denied") {
+		t.Fatalf("job.read with an unopened job store: %+v", got)
+	}
+	// job.list is how a controller decides whether setup or a clear may
+	// run (C1); it must not read as "this box runs no jobs".
+	rc, res = r.send(t, intent.KindJobList, struct{}{}, nil)
+	if rc.Status != intent.StatusFailed || !strings.Contains(string(res), "permission denied") {
+		t.Fatalf("job.list with an unopened job store: %d %s", rc.Status, res)
+	}
+}
+
+// With no jobs directory at all there can be no job, so the node services
+// are the operator's.
+func TestAnUnopenedJobStoreWithoutAJobsDirAllowsServiceActions(t *testing.T) {
+	r := unavailableJobs(t, "read-only file system")
+	rc, res := r.send(t, intent.KindServiceAction, intent.ServiceActionPayload{Service: "exec", Action: "restart"}, nil)
+	if rc.Status != intent.StatusOK {
+		t.Fatalf("service.action with no jobs dir: %d %s", rc.Status, res)
+	}
+	rc, res = r.send(t, intent.KindJobList, struct{}{}, nil)
+	if got := rejection(t, rc, res); got.Code != intent.ReasonJobsUnsupported || !strings.Contains(got.Message, "read-only file system") {
+		t.Fatalf("job.list with no jobs dir: %+v", got)
 	}
 }

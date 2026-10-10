@@ -191,6 +191,9 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, env intent.Envelo
 			return nil, 0, reject(intent.ReasonInvalidPayload, fmt.Sprintf("service %q / action %q", pl.Service, pl.Action))
 		}
 		// J1: the node services belong to a running job until it ends.
+		if rej := a.unopenedJobStore(); rej != nil {
+			return nil, 0, rej
+		}
 		if j, busy, err := a.activeJob(); err != nil {
 			return failed(err)
 		} else if busy {

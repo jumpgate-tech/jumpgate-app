@@ -39,6 +39,11 @@ type Config struct {
 	Now       func() time.Time
 	// Jobs runs durable jobs; nil refuses every job kind (jobs_unsupported).
 	Jobs *jobs.Manager
+	// JobsUnavailable is why the job store at JobsDir did not open, when it
+	// did not (Jobs is then nil). It is not "no jobs": a job already on disk
+	// may own the node services, so service.action fails closed on it.
+	JobsUnavailable error
+	JobsDir         string
 	// Log takes what the agent reports outside any answer, such as a failed
 	// reconcile pass; nil discards it.
 	Log io.Writer

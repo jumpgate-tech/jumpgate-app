@@ -217,19 +217,21 @@ func agentJobAbandon(out io.Writer, stateDir, id string) error {
 
 // agentJobManager is the job store agentRun serves with. Only another agent
 // holding the store stops the agent. Any other failure to open it (a broken
-// directory, a full disk) is logged, and the agent runs without durable
-// jobs: every job kind is refused (jobs_unsupported), and status, logs and
-// service actions keep working, so the box can still be looked at and fixed.
-func agentJobManager(log io.Writer, stateDir, configDir string, k signer.Signer, ex executor.Executor) (*jobs.Manager, error) {
-	mgr, err := openJobManager(stateDir, configDir, k, ex)
+// directory, a full disk) is logged and returned as unavailable, and the
+// agent runs without durable jobs, so status and logs keep working. That is
+// not "no jobs": a job already in the store may own the node services, so
+// the agent refuses service.action while the store holds anything (J1), and
+// answers every job kind with the reason.
+func agentJobManager(log io.Writer, stateDir, configDir string, k signer.Signer, ex executor.Executor) (mgr *jobs.Manager, unavailable, err error) {
+	mgr, err = openJobManager(stateDir, configDir, k, ex)
 	if errors.Is(err, jobs.ErrStoreInUse) {
-		return nil, err
+		return nil, nil, err
 	}
 	if err != nil {
 		fmt.Fprintf(log, "jumpgate agent: running without durable jobs, the job store did not open: %v\n", err)
-		return nil, nil
+		return nil, err, nil
 	}
-	return mgr, nil
+	return mgr, nil, nil
 }
 
 // openJobManager opens the job store, which it locks until Close. A second
@@ -260,7 +262,7 @@ func agentRun(stateDir, configDir string) error {
 	ex := executor.NewLocal()
 	// The job store first: its lock is what tells a second agent to stop,
 	// and Listen below replaces whatever socket is at the path.
-	mgr, err := agentJobManager(os.Stderr, stateDir, configDir, k, ex)
+	mgr, unavailable, err := agentJobManager(os.Stderr, stateDir, configDir, k, ex)
 	if err != nil {
 		return err
 	}
@@ -269,6 +271,7 @@ func agentRun(stateDir, configDir string) error {
 	}
 	a := agent.New(agent.Config{
 		Key: k, Exec: ex, Jobs: mgr, Log: os.Stderr,
+		JobsUnavailable: unavailable, JobsDir: filepath.Join(stateDir, "jobs"),
 		PolicyPath: filepath.Join(configDir, "policy.json"),
 		ReplayPath: filepath.Join(stateDir, "replay.json"),
 		NodePath:   filepath.Join(configDir, "node.json"),

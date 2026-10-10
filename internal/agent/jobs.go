@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
@@ -92,6 +94,17 @@ func (a *Agent) checkStart(kind string, inputs []byte, env intent.Envelope, sign
 // reflects units that finished since the last pass.
 func (a *Agent) dispatchJob(ctx context.Context, i intent.Intent, env intent.Envelope, signers []eip712.Address, p Policy) ([]byte, uint8, *Reject) {
 	m := a.cfg.Jobs
+	if m == nil && a.cfg.JobsUnavailable != nil {
+		// A controller lists a box's jobs to decide whether setup or a
+		// clear may run (C1), and takes jobs_unsupported for "no jobs". A
+		// store that may hold a job answers a failure instead, so the
+		// controller refuses rather than run under it.
+		if i.Kind == intent.KindJobList && a.unopenedJobStore() != nil {
+			return failed(fmt.Errorf("the job store did not open (%v), and it may hold a job; fix it and restart the agent", a.cfg.JobsUnavailable))
+		}
+		return nil, 0, reject(intent.ReasonJobsUnsupported, fmt.Sprintf(
+			"this agent runs without durable jobs: its job store did not open (%v); fix that and restart the agent", a.cfg.JobsUnavailable))
+	}
 	if m == nil {
 		return nil, 0, reject(intent.ReasonJobsUnsupported, "this agent runs without durable jobs (no job store)")
 	}
@@ -199,6 +212,31 @@ func (a *Agent) activeJob() (intent.JobRecord, bool, error) {
 		}
 	}
 	return intent.JobRecord{}, false, nil
+}
+
+// unopenedJobStore is J1's refusal on an agent whose job store did not open:
+// a job already in it may own the node services, and nothing can tell. Only
+// a jobs directory that is absent, or holds nothing but its lock file,
+// proves there is no job; one that cannot be read refuses too.
+func (a *Agent) unopenedJobStore() *Reject {
+	if a.cfg.Jobs != nil || a.cfg.JobsUnavailable == nil {
+		return nil
+	}
+	ents, err := os.ReadDir(a.cfg.JobsDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err == nil {
+		empty := true
+		for _, e := range ents {
+			empty = empty && e.Name() == ".lock"
+		}
+		if empty {
+			return nil
+		}
+	}
+	return reject(intent.ReasonJobActive, fmt.Sprintf(
+		"the job store could not be opened (%v), so a job in it may own the node services; fix the store and restart the agent", a.cfg.JobsUnavailable))
 }
 
 // jobOutput is a job's journal through logsSince, the one bounded read
