@@ -199,7 +199,7 @@ desktop anyway, use a WSL2 or Lima VM as an ordinary Linux box; see
 
 ## Durable jobs
 
-A durable job is a multi-step operation that the box itself carries out. Each step runs as a transient systemd unit (`jumpgate-job-<id>-<step>`), so the job outlives the TUI, the controller server and even the agent process. The agent records every start, step outcome and answer in a signed, append-only log that any controller verifies against the box's agent key. A job never takes shell from anyone: the agent runs a fixed plan for each kind of job, as far as it can, until a step needs your decision.
+A durable job is a multi-step operation that the box itself carries out. Each step runs as a transient systemd unit (`jumpgate-job-<id>-<step>-<attempt>`), so the job outlives the TUI, the controller server and even the agent process. The agent records every start, step outcome and answer in a signed, append-only log that any controller verifies against the box's agent key. A job never takes shell from anyone: the agent runs a fixed plan for each kind of job, as far as it can, until a step needs your decision.
 
 Jobs run on Linux boxes with systemd only. Any controller, on macOS, Windows or Linux, can list a box's jobs, watch them, decide their questions and adopt them. A box without systemd refuses to start one (`jobs_unsupported`). A second agent process on the same box fails at startup, because the job store allows only one.
 
@@ -207,7 +207,7 @@ Jobs run on Linux boxes with systemd only. Any controller, on macOS, Windows or 
 
 **Who drives.** One controller drives a job at a time, by holding its lease; every other controller only watches. The box judges the lease on its own clock: a lease silent for 90 seconds is stale. A controller picks up its own jobs again by itself when it restarts. Taking over a stale lease held by another controller is an operator's decision: use `jobs adopt`. A driver stops on any refusal from the box, and when the box is unreachable it retries with a pause that grows to 60 seconds.
 
-**Questions.** A step that cannot choose safely asks you, and the job waits. Each question has a signature tier. A question that needs approval signers answers `409 approval_unavailable` until the box has some, and the agent enforces the tier whatever the controller sends.
+**Questions.** A step that cannot choose safely asks you, and the job waits. Each question has a signature tier. This jumpgate holds no approval-tier signer yet, so it refuses an approval-tier question with `409 approval_unavailable`. The box enforces each question's tier regardless of what a controller sends.
 
 ```bash
 jumpgate jobs [HOST]                    # every job on every box (or one box): state, step, lease, open question
@@ -232,7 +232,14 @@ Older installs run the node as the `valve-node-app` account, with `valve-node-ap
 
 The job asks before anything it cannot take back. If other processes of the old account are running, it asks to stop them with SIGTERM, then asks a second time before any SIGKILL. If the box rebooted partway and the old account is busy again, it asks again. If a mount point sits at or under the old data root, the data stays at its path, once you agree. A moved data root is recorded in the root-only `/etc/jumpgate/names.json`, which overrides `node.json` on every read, so a controller with an older copy cannot point the agent back at names that are gone. When the job succeeds, the controller refreshes its stored copy from the box.
 
-Before it renames anything, the job refuses a box where another unit runs as `valve-node-app` (the systemd eRPC gateway, for one: remove it first), a box that has both accounts' groups, and a box that has neither. A node data directory may not be inside, contain or equal `/var/lib/jumpgate`, `/etc/jumpgate` or `/usr/local/lib/jumpgate`, which hold jumpgate's own keys and completion markers.
+Before it renames anything, the job refuses:
+
+- a box where another unit runs as `valve-node-app` (the systemd eRPC gateway, for one: remove it first);
+- a box where other units use paths under `/var/lib/valve-node-app`, which the job moves: remove or repoint them first;
+- a box that has both the `valve-node-app` and `jumpgate-node` accounts, or neither;
+- a box that has both groups, or neither.
+
+A node data directory may not be inside, contain or equal `/var/lib/jumpgate`, `/etc/jumpgate` or `/usr/local/lib/jumpgate`, which hold jumpgate's own keys and completion markers.
 
 ## Requirements
 
