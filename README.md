@@ -207,6 +207,8 @@ Jobs run on Linux boxes with systemd only. Any controller, on macOS, Windows or 
 
 **Who drives.** One controller drives a job at a time, by holding its lease; every other controller only watches. The box judges the lease on its own clock: a lease silent for 90 seconds is stale. A controller picks up its own jobs again by itself when it restarts. Taking over a stale lease held by another controller is an operator's decision: use `jobs adopt`. A driver stops on any refusal from the box, and when the box is unreachable it retries with a pause that grows to 60 seconds.
 
+**The node is the job's.** While any job on a box has not finished, the box refuses service start, stop and restart, and the controller refuses node setup and service clear on it (`409 job_active`). If the controller cannot list the box's jobs, it refuses setup and clear too, because it cannot tell that no job is running. A job does not start while setup, a wipe, a reset or a clear is running on its box.
+
 **Questions.** A step that cannot choose safely asks you, and the job waits. Each question has a signature tier. This jumpgate holds no approval-tier signer yet, so it refuses an approval-tier question with `409 approval_unavailable`. The box enforces each question's tier regardless of what a controller sends.
 
 ```bash
@@ -224,7 +226,11 @@ In the TUI, `5` opens the jobs inbox, with each job's steps, lease and question.
 
 ### Renaming a node's account: `node.migrate-names`
 
-Older installs run the node as the `valve-node-app` account, with `valve-node-app-exec` and `-beacon` units and data under `/var/lib/valve-node-app`. A new setup uses `jumpgate-node` from the start, and the controller accepts both names while boxes move over. `jumpgate migrate-names HOST --yes` (`--yes` is required, as with `agent reset-replay`, because the node stops while it runs) starts a job that:
+Older installs run the node as the `valve-node-app` account, with `valve-node-app-exec` and `-beacon` units and data under `/var/lib/valve-node-app`. A new setup uses `jumpgate-node` from the start, and the controller accepts both names while boxes move over.
+
+**Upgrade every controller that manages a box before you migrate it.** A controller from before this release does not know about the migration. Running setup from it afterwards would set the box up under the legacy names again and undo the migration. A current controller refuses to set up a migrated box (one that has `/etc/jumpgate/names.json`) under the legacy names, whether or not the box is paired.
+
+`jumpgate migrate-names HOST --yes` (`--yes` is required, as with `agent reset-replay`, because the node stops while it runs) starts a job that:
 
 - stops the node services, then renames the account, its group, the units and the data root;
 - keeps each unit enabled or disabled as it was, and starts again the ones that were running;
@@ -240,6 +246,13 @@ Before it renames anything, the job refuses:
 - a box that has both groups, or neither.
 
 A node data directory may not be inside, contain or equal `/var/lib/jumpgate`, `/etc/jumpgate` or `/usr/local/lib/jumpgate`, which hold jumpgate's own keys and completion markers.
+
+### When a job is stuck
+
+- **Its controller is gone.** A lease that has been silent for 90 seconds, by the box's clock, is stale. Take the job over with `jumpgate jobs adopt HOST JOB`, or with adopt in the jobs inbox. A heartbeat more than 90 seconds ahead of the box's clock also counts as stale, so a clock that jumped forward and back cannot keep a lease alive.
+- **No signed request can move it.** For example, a step's result file can no longer be read, so every request on the job fails. Run `sudo jumpgate agent job-abandon JOB --yes` on the box. It needs the agent stopped (`systemctl stop jumpgate-agent`), because it opens the job store itself, and it says so if the agent is still running. It refuses a job whose unit is still running. It ends the job as `failed`, with a log entry signed by the agent's key that says a local operator abandoned it, so the log still verifies. Start the agent again afterwards. Whatever the job's steps left undone is still undone: look at the job's log and output before you start another one.
+- **The job store does not open.** The agent still starts, so you can check status and read logs, but it runs no jobs. While the store holds anything, it refuses service actions, and the controller refuses setup and clear, because a job in the store may still own the node. The agent's log says why the store did not open.
+- **The box's node config was removed on purpose.** A box whose `/etc/jumpgate/node.json` is gone, while the controller still holds a config for it, refuses setup. Pairing again would only write the old config back. To start over, remove the host from the controller and add it again, which forgets the stored config. Then pair it and run setup.
 
 ## Requirements
 
