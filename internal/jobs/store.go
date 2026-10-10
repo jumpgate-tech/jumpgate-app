@@ -126,6 +126,10 @@ func (s *Store) checkFresh(m *Manifest, allowMissing bool) error {
 	return nil
 }
 
+// verifyLog checks a whole log against the agent's key. It is a variable so a
+// test can count how often a log is verified.
+var verifyLog = joblog.Verify
+
 // syncFile fsyncs a log file. It is a variable so a test can make the fsync
 // of an append fail.
 var syncFile = func(f *os.File) error { return f.Sync() }
@@ -200,7 +204,7 @@ func (s *Store) appendLocked(ctx context.Context, m *Manifest, kind string, body
 	if err != nil {
 		return err
 	}
-	head, err := joblog.Verify(s.key.Address(), m.ID, entries, 0, [32]byte{})
+	head, err := verifyLog(s.key.Address(), m.ID, entries, 0, [32]byte{})
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrDamaged, err)
 	}
@@ -336,7 +340,7 @@ func (s *Store) loadLocked(id string) (Manifest, error) {
 	if err != nil {
 		return m, err
 	}
-	head, err := joblog.Verify(s.key.Address(), id, entries, 0, [32]byte{})
+	head, err := verifyLog(s.key.Address(), id, entries, 0, [32]byte{})
 	if err != nil {
 		return m, fmt.Errorf("%w: %v", ErrDamaged, err)
 	}
@@ -430,6 +434,23 @@ func (s *Store) List() ([]Manifest, error) {
 		out[i] = j.m
 	}
 	return out, err
+}
+
+// IDs is the id of every job with a manifest, read from the directory alone.
+func (s *Store) IDs() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ents, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, e := range ents {
+		if id, ok := strings.CutSuffix(e.Name(), ".json"); ok && ValidID(id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 // listed is a job with whether it checked out. Prune must tell the two apart:

@@ -501,27 +501,45 @@ func (m *Manager) Decide(ctx context.Context, id, decision, option string, who e
 // for the next pass, never guessed at; a damaged job, or one whose plan this
 // agent does not know, is left alone. One job's error does not hold up the
 // others.
+//
+// A finished job whose log ends with its job.finished has nothing left to
+// repair, and is passed over without verifying its log: this runs every 5 s
+// under the manager's lock, and a box keeps up to a hundred finished jobs.
+// Every other job is verified once, by load.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	m.lock()
 	defer m.unlock()
-	ms, err := m.store.List()
+	ids, err := m.store.IDs()
 	if err != nil {
 		return err
 	}
 	var errs []error
-	for _, j := range ms {
-		if j.State == intent.JobDamaged {
-			continue // evidence: never written to
+	for _, id := range ids {
+		if m.settled(id) {
+			continue
 		}
-		man, plan, err := m.load(j.ID)
+		man, plan, err := m.load(id)
 		if err != nil {
 			continue // unknown plan or damage: shown by List, never advanced
 		}
 		if err := m.reconcileJob(ctx, &man, plan); err != nil {
-			errs = append(errs, fmt.Errorf("job %s: %w", j.ID, err))
+			errs = append(errs, fmt.Errorf("job %s: %w", id, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// settled reports whether job id is finished and its log's last entry, by
+// its manifest's count, is its job.finished. It reads one log line and
+// verifies nothing, so any doubt (a manifest or line that does not read, a
+// log ahead of its manifest) answers false and the job is loaded in full.
+func (m *Manager) settled(id string) bool {
+	man, err := LoadManifest(m.store.Dir(), id)
+	if err != nil || !intent.JobTerminal(man.State) || man.LogLen == 0 {
+		return false
+	}
+	es, more, err := m.store.ReadLog(id, man.LogLen-1, 1)
+	return err == nil && !more && len(es) == 1 && es[0].Kind == joblog.KindFinished
 }
 
 func (m *Manager) reconcileJob(ctx context.Context, man *Manifest, plan Plan) error {

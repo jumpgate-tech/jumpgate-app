@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/joblog"
 )
@@ -956,5 +957,33 @@ func TestAdvanceRefusesWhileAUnitOfTheJobRuns(t *testing.T) {
 	}
 	if len(g.r.started) != 0 {
 		t.Fatalf("units started: %v", g.r.started)
+	}
+}
+
+// M1: Reconcile runs every 5 s under the manager's lock, so it must not
+// verify the whole log of every finished job the box keeps. A finished job
+// whose log ends with its job.finished is left unread; an unfinished one is
+// verified once.
+func TestReconcileDoesNotVerifyFinishedJobs(t *testing.T) {
+	g := newRig(t)
+	for i := 0; i < 3; i++ {
+		rec, _ := g.start(t, g.a, `{}`)
+		g.advance(t, g.a, rec.ID)
+		if rec = g.advance(t, g.a, rec.ID); rec.State != intent.JobSucceeded {
+			t.Fatalf("job %d: %+v", i, rec)
+		}
+	}
+	waiting, _ := g.start(t, g.a, `{}`)
+	orig, calls := verifyLog, 0
+	verifyLog = func(agent eip712.Address, id string, es []joblog.Entry, from uint64, prev [32]byte) ([32]byte, error) {
+		calls++
+		return orig(agent, id, es, from, prev)
+	}
+	t.Cleanup(func() { verifyLog = orig })
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("reconcile verified %d logs; want 1, the unfinished job %s's", calls, waiting.ID)
 	}
 }
