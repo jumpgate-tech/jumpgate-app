@@ -140,13 +140,34 @@ func TestMaskTextIsFastOnWorstCaseInput(t *testing.T) {
 		strings.Repeat("a ", maxMaskText/2),
 		strings.Repeat("@ ", 100000), // capped first
 	}
+	// The budget scales with this machine: a slow CI VM (an emulated CPU)
+	// takes several times longer on any input, but a worst case that went
+	// quadratic would still blow far past a multiple of plain text's time.
+	budget := 5 * time.Millisecond
+	if base := 20 * fastestOf(3, func() { maskText(strings.Repeat("a", maxMaskText)) }); base > budget {
+		budget = base
+	}
 	for _, in := range worst {
 		start := time.Now()
 		maskText(in)
-		if d := time.Since(start); d > 5*time.Millisecond {
-			t.Errorf("maskText took %v on %d bytes", d, len(in))
+		if d := time.Since(start); d > budget {
+			t.Errorf("maskText took %v on %d bytes (budget %v)", d, len(in), budget)
 		}
 	}
+}
+
+// fastestOf runs f n times and returns the quickest run, so one scheduling
+// hiccup does not inflate a timing baseline.
+func fastestOf(n int, f func()) time.Duration {
+	best := time.Duration(1<<63 - 1)
+	for i := 0; i < n; i++ {
+		start := time.Now()
+		f()
+		if d := time.Since(start); d < best {
+			best = d
+		}
+	}
+	return best
 }
 
 // Round 4 leaks: each must be masked, raw and after sanitize.
