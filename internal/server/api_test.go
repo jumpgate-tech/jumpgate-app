@@ -1947,6 +1947,23 @@ func TestSetupWithAnOlderAgentFallsBackToTheControllersWire(t *testing.T) {
 	}
 }
 
+// I3: a current agent (it reports its plan versions, and says why when it
+// refuses its node config) that reports no node set up really has no node
+// config: its node.json was removed. Upgrading the agent is no remedy, and
+// re-pairing writes node.json back from the stale wire, so the refusal
+// names the one that works: forget the stored config by removing the host
+// and adding it again.
+func TestSetupRefusalForAWipedBoxNamesTheRemedy(t *testing.T) {
+	paired := config.Target{ID: "box", Agent: &config.AgentPairing{Transport: "local"},
+		Wire: &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/srv/pulse"}}
+	_, err := setupExistingFrom(intent.AgentInfo{PlanVersions: []string{"node.migrate-names/1"}}, paired)
+	var conflict *setupConflict
+	if !errors.As(err, &conflict) || strings.Contains(err.Error(), "upgrade the agent") ||
+		!strings.Contains(err.Error(), "has no node config") || !strings.Contains(err.Error(), "remove the host") {
+		t.Fatalf("a wiped box with a current agent: %v", err)
+	}
+}
+
 // End to end: a paired box with no node.json while the controller holds a
 // wire for it is refused as a conflict, never set up as new.
 func TestSetupRefusesAPairedBoxThatLostItsNode(t *testing.T) {
@@ -1965,7 +1982,7 @@ func TestSetupRefusesAPairedBoxThatLostItsNode(t *testing.T) {
 	defer res.Body.Close()
 	var e api.Error
 	_ = json.NewDecoder(res.Body).Decode(&e)
-	if res.StatusCode != http.StatusConflict || e.Code != api.CodeConflict || !strings.Contains(e.Message, "reports no node set up") {
+	if res.StatusCode != http.StatusConflict || e.Code != api.CodeConflict || !strings.Contains(e.Message, "has no node config") {
 		t.Fatalf("status %d %+v", res.StatusCode, e)
 	}
 }
@@ -1990,5 +2007,40 @@ func TestSetupRefusesABoxWhoseNodeConfigIsBroken(t *testing.T) {
 	}
 	if status, e := apiErrorFor(err); status != http.StatusConflict || e.Reason != intent.ReasonValidation {
 		t.Fatalf("answered %d %+v", status, e)
+	}
+}
+
+// I3's remedy: removing a host and adding it again forgets the node config
+// this controller stored for it, so pairing the box again writes no stale
+// node.json, and setup takes the box for the new one it is.
+func TestRemovingAndReaddingAHostForgetsItsNodeConfig(t *testing.T) {
+	requireAgentPeer(t)
+	ts, token := pairedBoxWith(t, nopExec{}, pairedOpts{target: func(tg *config.Target) {
+		tg.Wire = &catalog.WireConfig{ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/srv/pulse"}
+	}})
+	do := func(method, path, body string) int {
+		req, _ := http.NewRequest(method, ts.URL+path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if code := do(http.MethodDelete, "/api/targets/box", ""); code != http.StatusNoContent {
+		t.Fatalf("remove = %d", code)
+	}
+	if code := do(http.MethodPost, "/api/targets", `{"id":"box","mode":"local"}`); code >= 300 {
+		t.Fatalf("add = %d", code)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg, ok := findTarget(cfg, "box")
+	if !ok || tg.Wire != nil || tg.Agent != nil {
+		t.Fatalf("the re-added host kept %+v", tg)
 	}
 }

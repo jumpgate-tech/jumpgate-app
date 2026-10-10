@@ -1105,7 +1105,9 @@ func setupWire(req catalog.WireConfig, existing *catalog.WireConfig) catalog.Wir
 // and a box it reports as not set up while the controller holds a config
 // for it is refused (setupConflict): an older agent says the same of a node
 // config it cannot read, and taking that box for a new one would give it
-// units for an account that does not exist.
+// units for an account that does not exist. A current agent (one that
+// reports plan versions) says why it refuses a config, so the same report
+// from it means the box has none, and the refusal names that remedy.
 func (s *Server) setupExisting(ctx context.Context, cfg config.Config, t config.Target) (*catalog.WireConfig, error) {
 	if t.Agent == nil {
 		return t.Wire, nil
@@ -1125,6 +1127,17 @@ func setupExistingFrom(info intent.AgentInfo, t config.Target) (*catalog.WireCon
 	}
 	w := t.Wire
 	if !info.SetUp {
+		if w != nil && len(info.PlanVersions) > 0 {
+			// A current agent reports its plan versions, and SetUpError
+			// for a node config it refuses, so no error here means the
+			// box has no node.json: it was removed. Re-pairing would write
+			// it back from this controller's stale copy, so the remedy is
+			// to forget that copy.
+			return nil, &setupConflict{fmt.Sprintf("box %s has no node config (no /etc/jumpgate/node.json), but this controller still holds one for it (chain %d, data dir %s). "+
+				"If the node was removed on purpose, remove the host from this controller and add it again, which forgets the stored config, then pair it and run setup; "+
+				"otherwise restore the box's node.json",
+				t.ID, w.ChainID, w.DataDir)}
+		}
 		if w != nil {
 			return nil, &setupConflict{fmt.Sprintf("box %s reports no node set up, but this controller holds a node config for it (chain %d, data dir %s). "+
 				"Its agent may be older than this controller and not say why, or unable to read its config: upgrade the agent (re-pair the box) or fix its node config, then run setup again",
