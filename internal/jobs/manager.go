@@ -331,6 +331,17 @@ func (m *Manager) Advance(ctx context.Context, id string, step, attempt int, who
 		return intent.JobRecord{}, refuse(intent.ReasonJobState, fmt.Sprintf(
 			"job %s is %s at step %d attempt %d; this advance was for step %d attempt %d", id, man.State, man.Step, man.Attempt, step, attempt))
 	}
+	// Two of a job's steps must never run at once. A unit still running
+	// (one an older agent asked about after its start errored, or one
+	// started by hand) blocks the next.
+	busy, err := m.cfg.Runner.AnyActive(ctx, id)
+	if err != nil {
+		return intent.JobRecord{}, fmt.Errorf("cannot tell whether a unit of job %s still runs: %w", id, err)
+	}
+	if busy {
+		return intent.JobRecord{}, refuse(intent.ReasonJobState, fmt.Sprintf(
+			"a unit of job %s is still running; the job moves on when it ends", id))
+	}
 	_ = man.RenewLease(who, m.cfg.Now())
 	s := plan.Steps[man.Step]
 	args := StepArgs{Job: id, Step: s.ID, Attempt: man.Attempt}
@@ -347,7 +358,14 @@ func (m *Manager) Advance(ctx context.Context, id string, step, attempt int, who
 	// other step that cannot.
 	startErr := args.valid()
 	if startErr == nil {
-		startErr = m.cfg.Runner.Start(ctx, unit, m.cfg.StepArgv(args))
+		startErr = m.startUnit(ctx, unit, m.cfg.StepArgv(args))
+		if startErr != nil && !m.surelyNotRunning(ctx, unit) {
+			// systemd may have taken the unit before the start failed (the
+			// request was cancelled, a pipe broke). Asking now could start
+			// a second root process beside it, so the job stays running
+			// with this unit, and Reconcile folds it when it ends.
+			return intent.JobRecord{}, fmt.Errorf("step %s of job %s may have started (%v); the job stays running, and moves on once its unit ends", s.ID, id, startErr)
+		}
 	}
 	if startErr != nil {
 		why := "it could not start: " + startErr.Error()
@@ -358,6 +376,28 @@ func (m *Manager) Advance(ctx context.Context, id string, step, attempt int, who
 		}
 	}
 	return man.JobRecord, nil
+}
+
+// unitStartTimeout bounds a unit's start, which no longer ends with the
+// request that asked for it.
+const unitStartTimeout = 30 * time.Second
+
+// startUnit starts unit under a context of its own: a controller that gives
+// up on the request must not kill systemd-run halfway, after systemd took the
+// unit but before the agent knew.
+func (m *Manager) startUnit(ctx context.Context, unit string, argv []string) error {
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unitStartTimeout)
+	defer cancel()
+	return m.cfg.Runner.Start(sctx, unit, argv)
+}
+
+// surelyNotRunning reports whether unit is definitely not active. A check
+// that fails cannot say so.
+func (m *Manager) surelyNotRunning(ctx context.Context, unit string) bool {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unitStartTimeout)
+	defer cancel()
+	active, err := m.cfg.Runner.Active(cctx, unit)
+	return err == nil && !active
 }
 
 // QuestionTier is the tier the job's open question needs, for an early

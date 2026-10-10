@@ -24,4 +24,5 @@ func (u unsupportedRunner) Supported(context.Context) error {
 func (u unsupportedRunner) Start(ctx context.Context, _ string, _ []string) error {
 	return u.Supported(ctx)
 }
-func (unsupportedRunner) Active(context.Context, string) (bool, error) { return false, nil }
+func (unsupportedRunner) Active(context.Context, string) (bool, error)    { return false, nil }
+func (unsupportedRunner) AnyActive(context.Context, string) (bool, error) { return false, nil }

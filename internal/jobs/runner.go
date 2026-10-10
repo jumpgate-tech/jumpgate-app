@@ -22,6 +22,9 @@ type Runner interface {
 	// Active reports whether unit is still running. An error means "cannot
 	// tell", which callers treat as "still running".
 	Active(ctx context.Context, unit string) (bool, error)
+	// AnyActive reports whether any unit of job id is still running. An
+	// error means "cannot tell", which callers treat as "running".
+	AnyActive(ctx context.Context, id string) (bool, error)
 }
 
 var ErrUnsupported = errors.New("jobs: durable jobs are not available on this box")
@@ -109,6 +112,40 @@ func (r SystemdRunner) Active(ctx context.Context, unit string) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("jobs: systemctl is-active %s: %q %s", unit, strings.TrimSpace(res.Stdout), strings.TrimSpace(res.Stderr))
+}
+
+// AnyActive lists every loaded unit of job id, by UnitPattern, and reads each
+// one's active state. Only a checked id reaches the command line, quoted so
+// the shell never globs the pattern against files. A line it cannot place
+// is an error, which callers treat as "running".
+func (r SystemdRunner) AnyActive(ctx context.Context, id string) (bool, error) {
+	if !ValidID(id) {
+		return false, fmt.Errorf("jobs: %q is not a job id", id)
+	}
+	res, err := r.Exec.Run(ctx, "systemctl list-units --all --plain --no-legend --full "+shQuote(UnitPattern(id)), nil)
+	if err != nil {
+		return false, err
+	}
+	if res.ExitCode != 0 {
+		return false, fmt.Errorf("jobs: systemctl list-units for job %s exited %d: %s", id, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		f := strings.Fields(line)
+		if len(f) > 0 && (f[0] == "\u25cf" || f[0] == "*") {
+			f = f[1:] // a failed unit's marker, which some versions print even with --plain
+		}
+		if len(f) == 0 {
+			continue
+		}
+		if len(f) < 4 || !strings.HasPrefix(f[0], "jumpgate-job-"+id+"-") {
+			return false, fmt.Errorf("jobs: systemctl list-units for job %s: unexpected line %q", id, line)
+		}
+		// UNIT LOAD ACTIVE SUB: only inactive and failed are ended.
+		if f[2] != "inactive" && f[2] != "failed" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

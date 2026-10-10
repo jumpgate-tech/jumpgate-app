@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -53,6 +54,18 @@ func (r *Runner) Active(_ context.Context, unit string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.active[unit], nil
+}
+
+// AnyActive reports whether any unit of job id is still running.
+func (r *Runner) AnyActive(_ context.Context, id string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for u, on := range r.active {
+		if on && strings.HasPrefix(u, "jumpgate-job-"+id+"-") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Wait waits for every started unit's goroutine.

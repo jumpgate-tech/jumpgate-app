@@ -356,7 +356,8 @@ func (refusingRunner) Supported(context.Context) error { return ErrUnsupported }
 func (refusingRunner) Start(context.Context, string, []string) error {
 	return ErrUnsupported
 }
-func (refusingRunner) Active(context.Context, string) (bool, error) { return false, nil }
+func (refusingRunner) Active(context.Context, string) (bool, error)    { return false, nil }
+func (refusingRunner) AnyActive(context.Context, string) (bool, error) { return false, nil }
 
 // QuestionTier lets the agent demand an approval signature before admission.
 func TestQuestionTierIsTheOpenQuestions(t *testing.T) {
@@ -897,5 +898,63 @@ func TestAnUnsavedOutcomeWithoutItsResultFailsClosed(t *testing.T) {
 	}
 	if after, _ := g.read(t, rec.ID); after.LogLen != rec.LogLen || after.State != intent.JobRunning {
 		t.Fatalf("the job moved: %+v", after)
+	}
+}
+
+// I2: the controller gives up on an advance after systemd accepted the unit.
+// The step runs, so the job must stay running with that unit, for Reconcile
+// to fold, and must not ask whether to retry: a retry would start a second
+// root process beside the first.
+func TestACancelledAdvanceWhoseUnitRunsDoesNotAsk(t *testing.T) {
+	g := newRig(t)
+	g.r.hold = true
+	rec, _ := g.start(t, g.a, `{}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	var startCtxErr error
+	g.r.onStart = func(sctx context.Context) {
+		cancel() // the request goes away while systemd-run runs
+		startCtxErr = sctx.Err()
+	}
+	g.r.acceptThenFail = errors.New("signal: killed")
+	_, err := g.m.Advance(ctx, rec.ID, 0, 0, g.a.Address(),
+		g.sign(t, g.a, intent.KindJobAdvance, intent.JobAdvancePayload{ID: rec.ID, Step: 0, Attempt: 0}))
+	if err == nil {
+		t.Fatal("an advance whose start failed reported success")
+	}
+	if startCtxErr != nil {
+		t.Fatalf("the unit's start was cut short with the request: %v", startCtxErr)
+	}
+	got, _ := g.read(t, rec.ID)
+	if got.State != intent.JobRunning || got.Unit != UnitName(rec.ID, "one", 0) || got.Question != nil {
+		t.Fatalf("job after a cancelled start of a running unit: %+v", got)
+	}
+	if ks := g.kinds(t, rec.ID); count(ks, joblog.KindDecisionAsked) != 0 {
+		t.Fatalf("a question was asked about a running step: %v", ks)
+	}
+	// The unit ends; Reconcile folds it once, as any other.
+	g.r.finish(context.Background(), UnitName(rec.ID, "one", 0))
+	if err := g.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = g.read(t, rec.ID); got.State != intent.JobWaiting || got.Step != 1 {
+		t.Fatalf("job after its unit ended: %+v", got)
+	}
+}
+
+// A unit of the job still running (a start that failed after systemd took
+// it, or any unit left over) blocks the next advance: two of the job's steps
+// must never run at once.
+func TestAdvanceRefusesWhileAUnitOfTheJobRuns(t *testing.T) {
+	g := newRig(t)
+	g.r.hold = true
+	rec, _ := g.start(t, g.a, `{}`)
+	g.r.mu.Lock()
+	g.r.active[UnitName(rec.ID, "one", 7)] = true
+	g.r.mu.Unlock()
+	if _, err := g.advanceAt(t, g.a, rec.ID, 0, 0); refusalCode(err) != intent.ReasonJobState {
+		t.Fatalf("advance beside a running unit = %v", err)
+	}
+	if len(g.r.started) != 0 {
+		t.Fatalf("units started: %v", g.r.started)
 	}
 }

@@ -97,3 +97,36 @@ func TestSystemdRunnerSupportedNamesWhatIsMissing(t *testing.T) {
 		t.Fatalf("Supported = %v", err)
 	}
 }
+
+// AnyActive lists the job's units by its pattern, built from a checked id,
+// and reads each one's active state; anything it cannot place is running.
+func TestSystemdRunnerAnyActive(t *testing.T) {
+	const id = "0123456789abcdef"
+	for out, want := range map[string]struct {
+		active bool
+		err    bool
+	}{
+		"": {false, false},
+		"jumpgate-job-0123456789abcdef-one-0.service loaded inactive dead jumpgate job\n":           {false, false},
+		"jumpgate-job-0123456789abcdef-one-0.service loaded failed failed jumpgate job\n":           {false, false},
+		"jumpgate-job-0123456789abcdef-one-0.service loaded active running jumpgate job\n":          {true, false},
+		"\u25cf jumpgate-job-0123456789abcdef-one-0.service loaded activating start jumpgate job\n": {true, false},
+		"garbage\n": {false, true},
+	} {
+		ex := &recExec{answers: map[string]executor.Result{"systemctl list-units": {Stdout: out}}}
+		got, err := SystemdRunner{Exec: ex}.AnyActive(context.Background(), id)
+		if got != want.active || (err != nil) != want.err {
+			t.Errorf("list-units %q: %v, %v", out, got, err)
+		}
+		if len(ex.cmds) != 1 || !strings.Contains(ex.cmds[0], "'jumpgate-job-"+id+"-*'") {
+			t.Errorf("command %v", ex.cmds)
+		}
+	}
+	if _, err := (SystemdRunner{Exec: &recExec{}}).AnyActive(context.Background(), "x; rm -rf /"); err == nil {
+		t.Fatal("a bad job id was accepted")
+	}
+	ex := &recExec{answers: map[string]executor.Result{"systemctl list-units": {ExitCode: 1, Stderr: "Failed to connect to bus"}}}
+	if _, err := (SystemdRunner{Exec: ex}).AnyActive(context.Background(), id); err == nil {
+		t.Fatal("a failed listing read as no unit")
+	}
+}

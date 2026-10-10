@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,10 +29,18 @@ type stepRunner struct {
 	hold    bool
 	started []string
 	fail    error
+	// acceptThenFail is a Start whose unit systemd accepted, then errors:
+	// the unit runs, and Start reports a failure (a cancelled request, a
+	// broken pipe). onStart runs first, with Start's own context.
+	acceptThenFail error
+	onStart        func(ctx context.Context)
 }
 
 func (r *stepRunner) Supported(context.Context) error { return nil }
 func (r *stepRunner) Start(ctx context.Context, unit string, argv []string) error {
+	if r.onStart != nil {
+		r.onStart(ctx)
+	}
 	if r.fail != nil {
 		return r.fail
 	}
@@ -39,6 +48,9 @@ func (r *stepRunner) Start(ctx context.Context, unit string, argv []string) erro
 	r.started = append(r.started, unit)
 	r.active[unit], r.argv[unit] = true, argv
 	r.mu.Unlock()
+	if r.acceptThenFail != nil {
+		return r.acceptThenFail
+	}
 	if !r.hold {
 		r.finish(ctx, unit)
 	}
@@ -48,6 +60,17 @@ func (r *stepRunner) Active(_ context.Context, unit string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.active[unit], nil
+}
+
+func (r *stepRunner) AnyActive(_ context.Context, id string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for u, on := range r.active {
+		if on && strings.HasPrefix(u, "jumpgate-job-"+id+"-") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // finish runs the unit's step to completion, as the transient unit would.
