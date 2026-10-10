@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/intent"
@@ -267,5 +268,72 @@ func TestDescribeIsOneReadableLine(t *testing.T) {
 		if got == "" || len(got) > 200 {
 			t.Errorf("Describe(%s) = %q", kind, got)
 		}
+	}
+}
+
+// Each entry kind has its own line in `jumpgate jobs show` and the TUI; a
+// change in wording or a swapped field (owner for previous, controller for
+// option) would mislead the person reading the history.
+func TestDescribeGivesEachKindItsLine(t *testing.T) {
+	created := `{"envelope":{"intent":{"kind":"job.start","controller":"0xC0"}},"outcome":"created"}`
+	cases := []struct{ kind, body, want string }{
+		{KindCreated, created, "job.start by 0xC0: created"},
+		{KindIntent, `{"envelope":{"intent":{"kind":"job.decide","controller":"0xC1"}},"outcome":"decide"}`, "job.decide by 0xC1: decide"},
+		{KindStepStarted, `{"step":"stop-units","attempt":2,"unit":"jumpgate-job-x"}`, "step stop-units attempt 2 started (jumpgate-job-x)"},
+		{KindStepFinished, `{"step":"verify","attempt":0,"ok":true}`, "step verify attempt 0 finished"},
+		{KindStepFinished, `{"step":"verify","attempt":1,"error":"exit 3"}`, "step verify attempt 1 failed: exit 3"},
+		{KindStepLost, `{"step":"move-data","attempt":1}`, "step move-data attempt 1 stopped without a result"},
+		{KindDecisionAsked, `{"prompt":"two\nlines","tier":"approve"}`, "asked (approve tier): two lines"},
+		{KindDecisionAnswered, `{"question":"q","option":"stop","controller":"0xC2"}`, "answered stop by 0xC2"},
+		{KindLeaseTaken, `{"owner":"0xA"}`, "lease taken by 0xA"},
+		{KindLeaseTaken, `{"owner":"0xA","previous":"0xB"}`, "lease taken by 0xA from 0xB"},
+		{KindLeaseReleased, `{"owner":"0xA"}`, "lease released by 0xA"},
+		{KindFinished, `{"state":"succeeded"}`, "job succeeded"},
+		{KindFinished, `{"state":"failed","error":"verify failed"}`, "job failed: verify failed"},
+		{"some.future.kind", `{}`, "some.future.kind"},
+	}
+	for _, c := range cases {
+		if got := Describe(Entry{Kind: c.kind, Body: []byte(c.body)}); got != c.want {
+			t.Errorf("Describe(%s, %s) = %q, want %q", c.kind, c.body, got, c.want)
+		}
+	}
+}
+
+// A body that does not parse is named as unreadable for every kind that has
+// a body, rather than shown as an empty or zero-valued line that looks real.
+func TestDescribeNamesAnUnreadableBody(t *testing.T) {
+	for _, kind := range []string{KindCreated, KindIntent, KindStepStarted, KindStepFinished, KindStepLost,
+		KindDecisionAsked, KindDecisionAnswered, KindLeaseTaken, KindLeaseReleased, KindFinished} {
+		want := kind + " (unreadable body)"
+		if got := Describe(Entry{Kind: kind, Body: []byte(`{not json`)}); got != want {
+			t.Errorf("Describe(%s, bad body) = %q, want %q", kind, got, want)
+		}
+	}
+}
+
+// A long prompt is cut to 160 runes, not bytes: cutting bytes would split a
+// multibyte character and print garbage. A prompt of exactly 160 runes is
+// left whole.
+func TestDescribeCutsALongPromptAt160Runes(t *testing.T) {
+	line := func(prompt string) string {
+		b, err := json.Marshal(intent.JobQuestion{Prompt: prompt, Tier: "approve"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimPrefix(Describe(Entry{Kind: KindDecisionAsked, Body: b}), "asked (approve tier): ")
+	}
+	exact := strings.Repeat("é", 160)
+	if got := line(exact); got != exact {
+		t.Errorf("a 160-rune prompt was changed: %d runes", len([]rune(got)))
+	}
+	got := []rune(line(strings.Repeat("é", 100) + strings.Repeat("世", 100)))
+	if len(got) != 160 {
+		t.Fatalf("cut prompt has %d runes, want 160", len(got))
+	}
+	if got[159] != '…' || string(got[:100]) != strings.Repeat("é", 100) || string(got[100:159]) != strings.Repeat("世", 59) {
+		t.Fatalf("cut prompt = %q", string(got))
+	}
+	if !utf8.ValidString(string(got)) {
+		t.Fatal("cut prompt is not valid UTF-8")
 	}
 }
