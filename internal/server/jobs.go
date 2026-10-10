@@ -94,6 +94,9 @@ type jobsHub struct {
 	// readJob asks a box for one page of a job (job.read). It is a field so
 	// a test can stand in for an agent that lies about its log.
 	readJob func(ctx context.Context, cfg config.Config, t config.Target, p intent.JobReadPayload) (intent.JobReadResult, error)
+	// listJobs asks a box for its jobs (job.list). It is a field so a test
+	// can stand in for a box whose jobs cannot be listed.
+	listJobs func(ctx context.Context, cfg config.Config, t config.Target) (intent.JobListResult, error)
 
 	mu       sync.Mutex
 	boxes    map[string]*boxJobs
@@ -119,6 +122,9 @@ func newJobsHub(s *Server) *jobsHub {
 		settled: map[jobKey]bool{}}
 	h.readJob = func(ctx context.Context, cfg config.Config, t config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
 		return decodeResult[intent.JobReadResult](s.agentResult(ctx, cfg, t, intent.KindJobRead, p))
+	}
+	h.listJobs = func(ctx context.Context, cfg config.Config, t config.Target) (intent.JobListResult, error) {
+		return decodeResult[intent.JobListResult](s.agentResult(ctx, cfg, t, intent.KindJobList, struct{}{}))
 	}
 	return h
 }
@@ -218,11 +224,10 @@ func (h *jobsHub) list(done chan struct{}) {
 }
 
 func (h *jobsHub) listBox(ctx context.Context, cfg config.Config, t config.Target) {
-	res, err := decodeResult[intent.JobListResult](h.s.agentResult(ctx, cfg, t, intent.KindJobList, struct{}{}))
+	res, err := h.listJobs(ctx, cfg, t)
 	box := &boxJobs{jobs: res.Jobs, agentTime: res.AgentTime}
-	var rej *agentRejected
 	switch {
-	case errors.As(err, &rej) && (rej.Code == intent.ReasonJobsUnsupported || rej.Code == intent.ReasonUnknownKind):
+	case runsNoJobs(err):
 		box = &boxJobs{unsupported: true} // an old agent, or a box that cannot run jobs
 		h.dropLogs(t.ID, nil)
 	case err != nil:
@@ -249,6 +254,64 @@ func (h *jobsHub) listBox(ctx context.Context, cfg config.Config, t config.Targe
 	if err == nil && h.afterList != nil {
 		h.afterList(t, res.Jobs)
 	}
+}
+
+// runsNoJobs reports whether a listing's error is the box saying it runs no
+// jobs: an agent that predates them, or a box that cannot run them.
+func runsNoJobs(err error) bool {
+	var rej *agentRejected
+	return errors.As(err, &rej) && (rej.Code == intent.ReasonJobsUnsupported || rej.Code == intent.ReasonUnknownKind)
+}
+
+// activeJob asks box t, fresh, for its jobs, and returns one that has not
+// finished (J1). Setup and service clear run over SSH and never reach the
+// agent's own J1 check, so they ask here first. A box that runs no jobs has
+// none running; a listing that fails is an error, because nothing then
+// proves no job runs, and the caller must refuse.
+func (h *jobsHub) activeJob(ctx context.Context, cfg config.Config, t config.Target) (intent.JobRecord, bool, error) {
+	res, err := h.listJobs(ctx, cfg, t)
+	if runsNoJobs(err) {
+		return intent.JobRecord{}, false, nil
+	}
+	if err != nil {
+		return intent.JobRecord{}, false, err
+	}
+	for _, j := range res.Jobs {
+		if !intent.JobTerminal(j.State) {
+			return j, true, nil
+		}
+	}
+	return intent.JobRecord{}, false, nil
+}
+
+// errJobActive is J1's refusal, in the words the agent uses for
+// service.action, so every route that defers to a job says the same.
+func errJobActive(j intent.JobRecord) error {
+	return &agentRejected{intent.Rejection{Code: intent.ReasonJobActive,
+		Message: fmt.Sprintf("job %s (%s) is %s and owns the node services until it ends", j.ID, j.Kind, j.State)}}
+}
+
+// refuseDuringJob answers for a route that changes a paired box's node and
+// returns true when a job on the box has not finished, or when the box
+// cannot say. An SSH-only target runs no jobs.
+func (s *Server) refuseDuringJob(w http.ResponseWriter, ctx context.Context, cfg config.Config, t config.Target) bool {
+	if t.Agent == nil {
+		return false
+	}
+	j, busy, err := s.jobs.activeJob(ctx, cfg, t)
+	switch {
+	case err != nil:
+		// The listing's own status and code, so an unreachable box still
+		// reads as one; the message says what was refused.
+		status, e := apiErrorFor(err)
+		e.Message = fmt.Sprintf("cannot tell whether a job runs on box %s, so its node is left alone: %s", t.ID, e.Message)
+		writeAPIError(w, status, e)
+		return true
+	case busy:
+		writeNodeError(w, errJobActive(j))
+		return true
+	}
+	return false
 }
 
 // dropLogs forgets target's cached logs, except those of the jobs in keep.

@@ -190,6 +190,10 @@ type targetEntry struct {
 	// running against this target. See claimTargetOp.
 	opBusy bool
 
+	// jobStarting is set while a job's start is in flight to this target's
+	// agent. See claimJobStart.
+	jobStarting bool
+
 	// intentMu serialises intents to this target's agent; see handleIntent.
 	intentMu sync.Mutex
 
@@ -1211,6 +1215,14 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// J1: a job owns the node services until it ends. Setup recreates the
+	// service account and rewrites and starts the units, so during
+	// node.migrate-names it would undo the rename halfway. Checked after the
+	// claim, which keeps a job from starting until setup ends.
+	if s.refuseDuringJob(w, r.Context(), cfg, target) {
+		s.releaseSetupRun(id, claimed)
+		return
+	}
 
 	// The wizard "has run" as soon as setup is kicked off, even if it fails
 	// partway — the engine is idempotent (each step's Verify is also its
@@ -1293,6 +1305,10 @@ func (s *Server) claimSetupRun(w http.ResponseWriter, id string) (claimedRun, bo
 		writeError(w, http.StatusConflict, "a wipe, reset or clear is running on this target; start setup once it has finished")
 		return claimedRun{}, false
 	}
+	if entry.jobStarting {
+		writeError(w, http.StatusConflict, "a job is starting on this target; it owns the node services until it ends")
+		return claimedRun{}, false
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	run := newSetupRun(cancel)
 	entry.setup = run
@@ -1320,6 +1336,10 @@ func (s *Server) claimTargetOp(w http.ResponseWriter, id string) (release func()
 	}
 	if entry.opBusy {
 		writeError(w, http.StatusConflict, "another wipe, reset or clear is already running on this target")
+		return nil, false
+	}
+	if entry.jobStarting {
+		writeError(w, http.StatusConflict, "a job is starting on this target; it owns the node services until it ends")
 		return nil, false
 	}
 	entry.opBusy = true
@@ -1795,6 +1815,14 @@ func (s *Server) handleServiceClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	// J1, as for setup: clearing a service's data under a running job
+	// pulls it out from under the job's steps.
+	if cfg, err := s.loadConfig(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if s.refuseDuringJob(w, r.Context(), cfg, target) {
+		return
+	}
 
 	opCtx, opDone := s.criticalOp(r)
 	defer opDone()

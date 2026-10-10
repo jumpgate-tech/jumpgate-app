@@ -328,6 +328,34 @@ func (h *jobsHub) record(ctx context.Context, cfg config.Config, t config.Target
 	return rec, agentTime, err
 }
 
+// claimJobStart holds target id for the length of a job's start, answering
+// 409 and returning false while setup or a wipe, reset or clear runs there,
+// or another job is starting. Setup and clear claim the target before they
+// list the box's jobs (refuseDuringJob) and refuse while a start holds it,
+// so a job can never start between their check and their run.
+func (s *Server) claimJobStart(w http.ResponseWriter, id string) (release func(), ok bool) {
+	entry := s.reg.get(id)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	switch {
+	case entry.setup != nil && entry.setup.isRunning():
+		writeError(w, http.StatusConflict, "setup is running for this target; start the job once it has finished")
+		return nil, false
+	case entry.opBusy:
+		writeError(w, http.StatusConflict, "a wipe, reset or clear is running on this target; start the job once it has finished")
+		return nil, false
+	case entry.jobStarting:
+		writeError(w, http.StatusConflict, "another job is starting on this target")
+		return nil, false
+	}
+	entry.jobStarting = true
+	return func() {
+		entry.mu.Lock()
+		entry.jobStarting = false
+		entry.mu.Unlock()
+	}, true
+}
+
 func (s *Server) handleJobStart(w http.ResponseWriter, r *http.Request) {
 	cfg, t, _, ok := s.jobTarget(w, r)
 	if !ok {
@@ -345,6 +373,11 @@ func (s *Server) handleJobStart(w http.ResponseWriter, r *http.Request) {
 	if len(in.Inputs) == 0 {
 		in.Inputs = json.RawMessage(`{}`)
 	}
+	release, ok := s.claimJobStart(w, t.ID)
+	if !ok {
+		return
+	}
+	defer release()
 	rec, err := decodeResult[intent.JobRecord](s.agentResult(r.Context(), cfg, t, in.Kind, in.Inputs))
 	if err != nil {
 		writeNodeError(w, err)
