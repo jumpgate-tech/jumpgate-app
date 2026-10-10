@@ -133,6 +133,9 @@ windows:
     - |
       $goVer = (Select-String -Path go.mod -Pattern '^go\s+(\S+)').Matches[0].Groups[1].Value
       $zip = "$env:TEMP\go.zip"
+      # Windows PowerShell 5.1 draws a progress bar per chunk, which slows the
+      # download from seconds to most of an hour.
+      $ProgressPreference = 'SilentlyContinue'
       Invoke-WebRequest "https://go.dev/dl/go$goVer.windows-amd64.zip" -OutFile $zip
       Expand-Archive $zip -DestinationPath C:\goroot -Force
       $env:PATH = "C:\goroot\go\bin;$env:PATH"
