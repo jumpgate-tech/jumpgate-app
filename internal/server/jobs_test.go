@@ -122,6 +122,9 @@ func (b *boxRig) startJob(t *testing.T, inputs string) intent.JobRecord {
 	if err := json.Unmarshal(b.send(t, jobstest.TestKind, json.RawMessage(inputs)), &rec); err != nil {
 		t.Fatal(err)
 	}
+	// Listed, as a job is once the hub has seen it: only a listed job's log
+	// is cached.
+	b.srv.jobs.refresh(context.Background(), true)
 	return rec
 }
 
@@ -697,6 +700,11 @@ func TestJobLogCacheBudgetAndGenerations(t *testing.T) {
 	t.Cleanup(func() { jobLogCacheMaxBytes = prev })
 	agentAddr := eip712.Address{1}
 	k := func(id string) jobKey { return jobKey{"box", id} }
+	listed := &boxJobs{}
+	for _, id := range []string{"a", "b", "c", "d", "huge"} {
+		listed.jobs = append(listed.jobs, intent.JobRecord{ID: id})
+	}
+	h.boxes["box"] = listed
 	store := func(id string, size int) bool {
 		_, gen := h.cachedLog(k(id), agentAddr)
 		return h.storeLog(k(id), verifiedLog{agent: agentAddr, size: size}, gen)
@@ -723,5 +731,84 @@ func TestJobLogCacheBudgetAndGenerations(t *testing.T) {
 	}
 	if h.logs[k("c")] != nil || h.logs[k("a")] == nil || h.logBytes != 40 {
 		t.Fatalf("after the drop: %v, %d bytes", h.logs, h.logBytes)
+	}
+}
+
+// B3: a first read in flight, with nothing cached for its box, does not
+// cache a job a listing pruned meanwhile, nor one whose box went. The
+// generation and the listing each refuse it on their own.
+func TestJobLogIsCachedOnlyWhileListed(t *testing.T) {
+	srv := New(Config{Token: NewSessionToken(), UI: fstest.MapFS{}})
+	t.Cleanup(func() { srv.jobs.stopWithin(time.Second) })
+	h := srv.jobs
+	agentAddr := eip712.Address{1}
+	x := jobKey{"box", "x"}
+	vl := verifiedLog{agent: agentAddr, size: 10}
+	list := func(ids ...string) {
+		box := &boxJobs{}
+		for _, id := range ids {
+			box.jobs = append(box.jobs, intent.JobRecord{ID: id})
+		}
+		h.mu.Lock()
+		h.boxes["box"] = box
+		h.mu.Unlock()
+	}
+
+	// Pruned by a listing during the read: dropLogs bumps the generation
+	// though nothing was cached, and the listing no longer has x.
+	list("x")
+	_, gen := h.cachedLog(x, agentAddr)
+	list()
+	h.dropLogs("box", map[string]bool{})
+	if h.storeLog(x, vl, gen) || len(h.logs) != 0 {
+		t.Fatal("a job pruned during its first read was cached")
+	}
+
+	// The listing check alone: same generation, but x is not listed.
+	_, gen = h.cachedLog(x, agentAddr)
+	if h.storeLog(x, vl, gen) || len(h.logs) != 0 {
+		t.Fatal("a job the listing does not have was cached")
+	}
+
+	// The generation check alone: x still listed (a stale listing), but its
+	// logs were dropped since the read began.
+	list("x")
+	_, gen = h.cachedLog(x, agentAddr)
+	h.dropLogs("box", map[string]bool{"x": true})
+	if h.storeLog(x, vl, gen) || len(h.logs) != 0 {
+		t.Fatal("a log read before its target's drop was cached")
+	}
+
+	// The box removed during the read.
+	_, gen = h.cachedLog(x, agentAddr)
+	h.mu.Lock()
+	delete(h.boxes, "box")
+	h.mu.Unlock()
+	if h.storeLog(x, vl, gen) || len(h.logs) != 0 {
+		t.Fatal("a removed box's job was cached")
+	}
+
+	// Listed and undisturbed: cached.
+	list("x")
+	_, gen = h.cachedLog(x, agentAddr)
+	if !h.storeLog(x, vl, gen) || h.logs[x] == nil {
+		t.Fatal("a listed job's verified log was not cached")
+	}
+}
+
+// B3 through the listing itself: a box that disappears from the config
+// bumps its generation in list's prune, so a read that began before it
+// does not cache.
+func TestRemovedBoxBumpsItsGeneration(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	rec := b.startJob(t, `{}`)
+	_, gen := b.srv.jobs.cachedLog(jobKey{"box", rec.ID}, b.key.Address())
+	if _, err := config.Update(func(c *config.Config) error { c.Targets = nil; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	b.srv.jobs.refresh(context.Background(), true)
+	if b.srv.jobs.storeLog(jobKey{"box", rec.ID}, verifiedLog{agent: b.key.Address(), size: 10}, gen) || b.cached(rec.ID) != nil {
+		t.Fatal("a removed box's job was cached")
 	}
 }

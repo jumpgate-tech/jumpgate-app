@@ -201,6 +201,7 @@ func (h *jobsHub) list(done chan struct{}) {
 	for id := range h.boxes {
 		if !keep[id] {
 			delete(h.boxes, id)
+			h.logGen[id]++ // a read of its jobs in flight must not cache
 		}
 	}
 	for k := range h.logs {
@@ -249,6 +250,9 @@ func (h *jobsHub) listBox(ctx context.Context, cfg config.Config, t config.Targe
 func (h *jobsHub) dropLogs(target string, keep map[string]bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// Bumped even when nothing is cached: a first read of a job this drop
+	// prunes is in flight with nothing cached, and must not cache.
+	h.logGen[target]++
 	for k := range h.logs {
 		if k.target == target && !keep[k.id] {
 			h.forgetLocked(k)
@@ -266,6 +270,21 @@ func (h *jobsHub) forgetLocked(k jobKey) {
 	h.logGen[k.target]++
 }
 
+// listedLocked reports whether the last listing of k's box has k's job.
+// Callers hold h.mu.
+func (h *jobsHub) listedLocked(k jobKey) bool {
+	box := h.boxes[k.target]
+	if box == nil || box.unsupported {
+		return false
+	}
+	for _, j := range box.jobs {
+		if j.ID == k.id {
+			return true
+		}
+	}
+	return false
+}
+
 // cachedLog is k's cached log if it was verified against agent, and the
 // target's generation to hand to storeLog.
 func (h *jobsHub) cachedLog(k jobKey, agent eip712.Address) (verifiedLog, uint64) {
@@ -281,14 +300,16 @@ func (h *jobsHub) cachedLog(k jobKey, agent eip712.Address) (verifiedLog, uint64
 	return verifiedLog{agent: vl.agent, entries: append([]joblog.Entry(nil), vl.entries...), head: vl.head, size: vl.size}, gen
 }
 
-// storeLog caches vl as k's log, unless the target's logs were dropped since
-// gen (a listing pruned the job, or the box went) or vl alone is over the
-// whole budget. It evicts the least recently used logs to make room, and
-// reports whether vl was cached.
+// storeLog caches vl as k's log only while the hub's listing still has the
+// box and the job, and the target's logs were not dropped since gen (a
+// listing pruned the job, or the box went, while the read was in flight),
+// and vl alone fits the whole budget. A job not listed yet (just created)
+// is served uncached until a listing shows it. It evicts the least recently
+// used logs to make room, and reports whether vl was cached.
 func (h *jobsHub) storeLog(k jobKey, vl verifiedLog, gen uint64) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.logGen[k.target] != gen || vl.size > jobLogCacheMaxBytes {
+	if h.logGen[k.target] != gen || vl.size > jobLogCacheMaxBytes || !h.listedLocked(k) {
 		return false
 	}
 	if old := h.logs[k]; old != nil {
