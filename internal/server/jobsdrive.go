@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/jobs"
 )
 
 // jobStartKinds are the kinds POST /api/jobs/{target} starts (ruling P7).
@@ -52,8 +54,12 @@ func (h *jobsHub) wireDriver() {
 func (h *jobsHub) sweep(ctx context.Context) { h.refresh(ctx, true) }
 
 // drive starts the driver for one job, once. A hub built without a driver
-// (Config.noJobsDriver) never starts one.
+// (Config.noJobsDriver) never starts one, and an id that is not a job id
+// (a box lists what it likes) is never driven.
 func (h *jobsHub) drive(target, id string) {
+	if !jobs.ValidID(id) {
+		return
+	}
 	k := jobKey{target, id}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -77,36 +83,31 @@ func (h *jobsHub) drive(target, id string) {
 	}()
 }
 
-func isRejection(err error, codes ...string) bool {
-	var rej *agentRejected
-	if !errors.As(err, &rej) {
-		return false
-	}
-	for _, c := range codes {
-		if rej.Code == c {
-			return true
-		}
-	}
-	return false
-}
+// jobsDriveBackoffMax caps how far a driver backs off while its box cannot
+// be reached: from jobsDriveEvery, doubling (a variable so tests shorten it).
+var jobsDriveBackoffMax = 60 * time.Second
 
-// driverStops are the refusals after which driving a job again cannot help:
-// another controller holds it, or this agent cannot advance it (an unknown
-// plan, or a box that no longer runs jobs). The driver returns on them and
-// leaves the lease to age; the next listing that finds the job still this
-// controller's starts a driver again, which is how a box upgraded to know
-// the plan gets its job moving.
-var driverStops = []string{intent.ReasonLeaseHeld, intent.ReasonUnknownPlan, intent.ReasonJobsUnsupported, intent.ReasonJobNotFound}
+// refused reports whether the box answered err with a refusal. A driver
+// ends on any refusal: whether another controller holds the job, this
+// controller's key was revoked, or the box will not take the request for any
+// other reason, sending it again every few seconds only signs more intents.
+// The next listing that finds the job still this controller's starts a
+// driver again, which is how a box fixed meanwhile gets its job moving.
+func refused(err error) bool {
+	var rej *agentRejected
+	return errors.As(err, &rej)
+}
 
 // driveLoop reads the job every jobsDriveEvery: advances it at a step
 // boundary, renews the lease every jobsRenewEvery, and returns when the job
-// ends, another controller holds it, or its log does not verify (a job
-// whose history cannot be checked is never driven). It never takes a lease:
-// a job whose lease another controller took is no longer this driver's.
+// ends, another controller holds it, the box refuses a request, or its log
+// does not verify (a job whose history cannot be checked is never driven).
+// Only a box that cannot be reached is tried again, backing off to
+// jobsDriveBackoffMax. It never takes a lease: a job whose lease another
+// controller took is no longer this driver's.
 func (h *jobsHub) driveLoop(ctx context.Context, k jobKey) {
 	var lastRenew time.Time
-	tick := time.NewTicker(jobsDriveEvery)
-	defer tick.Stop()
+	wait := jobsDriveEvery
 	for {
 		cfg, err := h.s.loadConfig()
 		if err != nil {
@@ -118,36 +119,38 @@ func (h *jobsHub) driveLoop(ctx context.Context, k jobKey) {
 		}
 		rec, _, _, err := h.readVerified(ctx, cfg, t, k.id)
 		switch {
-		case errors.Is(err, errJobLogInvalid), isRejection(err, driverStops...):
+		case errors.Is(err, errJobLogInvalid), refused(err):
 			return
 		case err != nil:
-			// Unreachable or slow: keep trying; the lease ages on the box.
+			// Unreachable or slow: try again later; the lease ages on the box.
 		case intent.JobTerminal(rec.State):
 			h.finished(t, rec)
 			return
 		case !h.mine(rec):
 			return // adopted by another controller, or released
 		case rec.State == intent.JobWaiting:
-			_, err := h.s.agentResult(ctx, cfg, t, intent.KindJobAdvance, intent.JobAdvancePayload{ID: k.id, Step: rec.Step, Attempt: rec.Attempt})
-			if isRejection(err, driverStops...) {
-				return
-			}
+			_, err = h.s.agentResult(ctx, cfg, t, intent.KindJobAdvance, intent.JobAdvancePayload{ID: k.id, Step: rec.Step, Attempt: rec.Attempt})
 			if err == nil {
 				lastRenew = time.Now() // an advance renews the lease
 			}
 		case time.Since(lastRenew) >= jobsRenewEvery:
-			_, err := h.s.agentResult(ctx, cfg, t, intent.KindJobLease, intent.JobLeasePayload{ID: k.id, Op: intent.LeaseRenew})
-			if isRejection(err, driverStops...) {
-				return
-			}
+			_, err = h.s.agentResult(ctx, cfg, t, intent.KindJobLease, intent.JobLeasePayload{ID: k.id, Op: intent.LeaseRenew})
 			if err == nil {
 				lastRenew = time.Now()
 			}
 		}
+		switch {
+		case refused(err):
+			return
+		case err != nil:
+			wait = min(wait*2, max(jobsDriveBackoffMax, jobsDriveEvery))
+		default:
+			wait = jobsDriveEvery
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick.C:
+		case <-time.After(wait):
 		}
 	}
 }
@@ -179,12 +182,13 @@ func changesTheBox(rec intent.JobRecord) bool {
 
 // finished copies what a finished job changed into this controller's record
 // of the box. node.migrate-names moves the box's names, data dir and JWT;
-// without this the next setup re-run, diagnostics and the log watcher would
-// go on using units and paths that no longer exist (Review Focus 4). The new
-// values come from the box's agent.info, which applies the names marker the
-// job wrote (D-J10), not from the job's result: the box's node config is
-// what every later step and setup reads. A box that cannot answer leaves the
-// job unsettled, and the next listing tries again.
+// without this the next setup re-run and diagnostics would go on using
+// units and paths that no longer exist (Review Focus 4). The new values come
+// from the box's agent.info, which applies the names marker the job wrote
+// (D-J10), not from the job's result: the box's node config is what every
+// later step and setup reads. A box that cannot answer, or whose node config
+// it cannot read just now, leaves the job unsettled, and the next listing
+// tries again; an answer that rules the update out settles it unchanged.
 func (h *jobsHub) finished(t config.Target, rec intent.JobRecord) {
 	if !changesTheBox(rec) {
 		return
@@ -197,18 +201,32 @@ func (h *jobsHub) finished(t config.Target, rec intent.JobRecord) {
 	}
 	h.settled[k] = true
 	h.mu.Unlock()
-	if err := h.applyBoxNames(t.ID); err != nil {
+	err := h.applyBoxNames(t.ID)
+	var final *wireLeftAlone
+	if errors.As(err, &final) {
+		// Said once per job and process: retrying would ask the box the
+		// same question on every listing for the same answer.
+		log.Printf("jumpgate: %s: job %s migrated the box's names, but its stored node config was left as it was: %v", t.ID, rec.ID, final.why)
+		return
+	}
+	if err != nil {
 		h.mu.Lock()
 		delete(h.settled, k)
 		h.mu.Unlock()
 	}
 }
 
+// wireLeftAlone is an agent.info answer after which the stored wire must not
+// take the box's names: retrying would not change it.
+type wireLeftAlone struct{ why string }
+
+func (e *wireLeftAlone) Error() string { return e.why }
+
 // applyBoxNames reads the box's names and paths from agent.info and, when
 // they differ from the stored wire, saves them and retires the observers
-// built from the old wire (the log watcher tails units by name), so the next
-// viewer builds them from the new one. A target with no wire has nothing to
-// correct: a paired box's agent owns its node config.
+// built from the old wire, so the next viewer builds them from the new one.
+// A target with no wire has nothing to correct: a paired box's agent owns
+// its node config.
 func (h *jobsHub) applyBoxNames(target string) error {
 	cfg, err := h.s.loadConfig()
 	if err != nil {
@@ -232,7 +250,7 @@ func (h *jobsHub) applyBoxNames(target string) error {
 	if _, err := h.s.updateConfig(func(c *config.Config) error {
 		for i := range c.Targets {
 			w := c.Targets[i].Wire
-			if c.Targets[i].ID != target || w == nil {
+			if c.Targets[i].ID != target || w == nil || w.ChainID != box.ChainID {
 				continue
 			}
 			if w.Names != box.Names || w.DataDir != box.DataDir || w.JWTPath != box.JWTPath {
@@ -250,20 +268,27 @@ func (h *jobsHub) applyBoxNames(target string) error {
 	return nil
 }
 
-// boxNamesFrom is the names, data dir and JWT path agent.info reports, each
-// checked as setup would check them: every one reaches a root command line
-// through setup and diagnostics. A box that says less (not set up, or an
-// agent too old to report its data dir, which could not have run the job)
-// is an error. An unreported JWT path keeps the stored one while the data
-// dir stays put, as setup does (setupExistingFrom).
+// boxNamesFrom is the chain, names, data dir and JWT path agent.info
+// reports, each checked as setup would check them: every one reaches a root
+// command line through setup and diagnostics. A box set up for another
+// chain than the stored wire's, or no longer set up at all, is not the node
+// the wire describes, and gets nothing of it (wireLeftAlone). A node config
+// the box refuses, or an answer too old to name a data dir (an agent that
+// could not have run the job), is an error to retry. An unreported JWT path
+// keeps the stored one while the data dir stays put, as setup does
+// (setupExistingFrom).
 func boxNamesFrom(info intent.AgentInfo, old catalog.WireConfig) (catalog.WireConfig, error) {
-	if info.SetUpError != nil {
+	switch {
+	case info.SetUpError != nil:
 		return catalog.WireConfig{}, &agentRejected{*info.SetUpError}
+	case !info.SetUp:
+		return catalog.WireConfig{}, &wireLeftAlone{"the box reports no node set up"}
+	case info.ChainID != old.ChainID:
+		return catalog.WireConfig{}, &wireLeftAlone{fmt.Sprintf("the box runs chain %d, and the stored config is for chain %d", info.ChainID, old.ChainID)}
+	case info.DataDir == "":
+		return catalog.WireConfig{}, errors.New("the box does not report its node's data dir")
 	}
-	if !info.SetUp || info.DataDir == "" {
-		return catalog.WireConfig{}, errors.New("the box does not report its node's names and data dir")
-	}
-	box := catalog.WireConfig{Names: info.Names, DataDir: info.DataDir, JWTPath: info.JWTPath}
+	box := catalog.WireConfig{ChainID: info.ChainID, Names: info.Names, DataDir: info.DataDir, JWTPath: info.JWTPath}
 	if err := catalog.ValidateNames(box); err != nil {
 		return box, err
 	}

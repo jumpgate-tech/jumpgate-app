@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -233,6 +234,12 @@ func TestSecondControllerWatchesThenAdoptsAStaleJob(t *testing.T) {
 // stops on the lease B now holds instead of fighting for it.
 func TestTheFirstControllersDriverYieldsToAnAdoption(t *testing.T) {
 	requireAgentPeer(t)
+	// A renews only when an advance has not for jobsRenewEvery; the last
+	// advance (to step two) precedes the question, so with an hour here A
+	// sends no renewal before B adopts, however slow the machine.
+	prevRenew := jobsRenewEvery
+	jobsRenewEvery = time.Hour
+	t.Cleanup(func() { jobsRenewEvery = prevRenew })
 	a := newBoxRig(t)
 	var v api.JobView
 	a.do(t, "POST", "/api/jobs/box", api.JobStart{Kind: jobstest.TestKind, Inputs: json.RawMessage(`{"AskAt":"two"}`)}, &v)
@@ -250,7 +257,7 @@ func TestTheFirstControllersDriverYieldsToAnAdoption(t *testing.T) {
 	t.Cleanup(bTS.Close)
 	b := &boxRig{ts: bTS, token: a.token, srv: bSrv, home: a.home, target: "box"}
 
-	a.advance(91 * time.Second) // A's renewals are 20 s apart in real time: none lands
+	a.advance(91 * time.Second) // A sends no renewal (jobsRenewEvery above)
 	var got api.JobView
 	if code := b.do(t, "POST", "/api/jobs/box/"+v.ID+"/adopt", nil, &got); code != 200 || !got.Lease.Mine {
 		t.Fatalf("adopt: %d %+v", code, got)
@@ -515,18 +522,24 @@ func TestMigrateNamesRetiresTheLogWatcher(t *testing.T) {
 	b := newBoxRig(t)
 	legacyBox(t, b)
 	migrated(t, b)
-	stopped := false
+	var watchStopped, monStopped, followerStopped bool
 	e := b.srv.reg.get("box")
 	e.mu.Lock()
 	e.watch = logwatch.New(nopExec{}, catalog.LegacyNames.Units())
-	e.watchStop = func() { stopped = true }
+	e.watchStop = func() { watchStopped = true }
+	e.monStop = func() { monStopped = true }
+	// A paired box's logs come through its follower, not the watcher.
+	e.logs = newLogFollower(func() { followerStopped = true })
 	e.mu.Unlock()
 	cfg, _ := config.Load()
 	b.srv.jobs.finished(cfg.Targets[0], migrateSucceeded)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if !stopped || e.watch != nil {
-		t.Fatalf("the legacy log watcher is still running (stopped %v)", stopped)
+	if !watchStopped || e.watch != nil {
+		t.Fatalf("the legacy log watcher is still running (stopped %v)", watchStopped)
+	}
+	if !monStopped || e.monStop != nil || !followerStopped || e.logs != nil {
+		t.Fatalf("monitor stopped %v, log follower stopped %v", monStopped, followerStopped)
 	}
 }
 
@@ -570,5 +583,132 @@ func TestStopEndsEveryDriver(t *testing.T) {
 	b.srv.jobs.drive("box", v.ID) // a stopped hub starts none
 	if b.drivers() != 0 {
 		t.Fatal("a stopped hub started a driver")
+	}
+}
+
+// I1: a box that refuses the driver (here this controller's key was revoked:
+// unauthorized_kind) ends it, rather than being sent a newly signed intent
+// every few seconds for as long as the process runs.
+func TestADriverStopsWhenTheBoxRefusesIt(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	var v api.JobView
+	b.do(t, "POST", "/api/jobs/box", api.JobStart{Kind: jobstest.TestKind, Inputs: json.RawMessage(`{"AskAt":"one"}`)}, &v)
+	waitJob(t, b, v.ID, intent.JobNeedsDecision)
+	if b.drivers() != 1 {
+		t.Fatalf("%d drivers", b.drivers())
+	}
+	policy := filepath.Join(b.home, "policy.json")
+	p, err := agent.LoadPolicy(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	me := b.srv.cfg.Signer.Address().Hex()
+	var kept []agent.SignerEntry
+	for _, s := range p.Signers {
+		if s.Address != me {
+			kept = append(kept, s)
+		}
+	}
+	p.Signers = kept
+	if err := p.Save(policy); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for b.drivers() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the driver kept running against a box that refuses it")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	before, _ := config.Load()
+	time.Sleep(10 * jobsDriveEvery)
+	if after, _ := config.Load(); after.Targets[0].Agent.NextSeq != before.Targets[0].Agent.NextSeq || b.drivers() != 0 {
+		t.Fatalf("intents were still signed after the refusal (next seq %d -> %d)", before.Targets[0].Agent.NextSeq, after.Targets[0].Agent.NextSeq)
+	}
+}
+
+// I1: a box lists what it likes; an id that is not a job id is never driven,
+// even under this controller's lease.
+func TestAnInvalidJobIDIsNeverDriven(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	for _, id := range []string{"not-an-id", "../../etc", "", "0123456789ABCDEF", "0123456789abcdef0"} {
+		b.srv.jobs.drive("box", id)
+		rec := intent.JobRecord{ID: id, State: intent.JobWaiting, Lease: intent.JobLease{Owner: b.srv.cfg.Signer.Address().Hex()}}
+		b.srv.jobs.afterList(config.Target{ID: "box"}, []intent.JobRecord{rec})
+	}
+	if n := b.drivers(); n != 0 {
+		t.Fatalf("%d drivers for ids that are not job ids", n)
+	}
+}
+
+// I1: a box that cannot be reached is asked again with backoff, not every
+// jobsDriveEvery.
+func TestADriverBacksOffWhileTheBoxIsUnreachable(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	var reads atomic.Int32
+	read := b.srv.jobs.readJob // set before any driver runs
+	b.srv.jobs.readJob = func(ctx context.Context, cfg config.Config, tg config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
+		reads.Add(1)
+		return read(ctx, cfg, tg, p)
+	}
+	var v api.JobView
+	b.do(t, "POST", "/api/jobs/box", api.JobStart{Kind: jobstest.TestKind, Inputs: json.RawMessage(`{"AskAt":"one"}`)}, &v)
+	waitJob(t, b, v.ID, intent.JobNeedsDecision)
+	if _, err := config.Update(func(c *config.Config) error {
+		c.Targets[0].Agent.Socket = filepath.Join(b.home, "gone.sock")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * jobsDriveEvery) // the driver's first failures
+	reads.Store(0)
+	window := 30 * jobsDriveEvery
+	time.Sleep(window)
+	// Without backoff: about 30 reads. With it, the wait has passed 4x
+	// jobsDriveEvery by now and doubles from there: at most a few.
+	if n := reads.Load(); n > 6 || b.drivers() != 1 {
+		t.Fatalf("%d reads of an unreachable box in %v (%d drivers)", n, window, b.drivers())
+	}
+}
+
+// M1: a box now set up for another chain is not the node the stored wire
+// describes; the wire is left alone and the job settled.
+func TestAMigrationOnAnotherChainLeavesTheWire(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	legacyBox(t, b)
+	migrated(t, b)
+	if _, err := config.Update(func(c *config.Config) error { c.Targets[0].Wire.ChainID = 943; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := config.Load()
+	b.srv.jobs.finished(cfg.Targets[0], migrateSucceeded)
+	if c, _ := config.Load(); c.Targets[0].Wire.Names != "" || c.Targets[0].Wire.DataDir != "/var/lib/valve-node-app/369" {
+		t.Fatalf("wire took another chain's names: %+v", c.Targets[0].Wire)
+	}
+	if !b.srv.jobs.settled[jobKey{"box", migrateSucceeded.ID}] {
+		t.Fatal("the job is not settled: every listing would ask the box again")
+	}
+}
+
+// M2: a box that reports no node set up settles the job unchanged, rather
+// than costing an agent.info on every listing.
+func TestAMigrationOnABoxNoLongerSetUpIsSettled(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	legacyBox(t, b)
+	if err := os.Remove(filepath.Join(b.home, "node.json")); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := config.Load()
+	b.srv.jobs.finished(cfg.Targets[0], migrateSucceeded)
+	if c, _ := config.Load(); c.Targets[0].Wire.Names != "" {
+		t.Fatalf("wire %+v", c.Targets[0].Wire)
+	}
+	if !b.srv.jobs.settled[jobKey{"box", migrateSucceeded.ID}] {
+		t.Fatal("the job is not settled: every listing would ask the box again")
 	}
 }
