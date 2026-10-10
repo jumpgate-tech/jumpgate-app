@@ -336,7 +336,7 @@ func classifyNodeError(err error) (int, api.Error) {
 		if rej.Code == intent.ReasonJobNotFound {
 			status = http.StatusNotFound
 		}
-		return status, api.Error{Message: rej.Message, Code: jobRejectionCodes[rej.Code], Reason: rej.Code}
+		return status, api.Error{Message: rej.Message, Code: jobRejectionCodes[rej.Code], Reason: rej.Code, Hint: api.RejectionHint(rej.Code)}
 	case errors.As(err, &rej):
 		return http.StatusConflict, api.Error{Message: rej.Message, Code: api.CodeRejected, Reason: rej.Code, Hint: api.RejectionHint(rej.Code)}
 	case errors.As(err, &fail):

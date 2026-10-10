@@ -187,7 +187,7 @@ func TestJobDetailOfAJobThatIsNotThere(t *testing.T) {
 	b := newBoxRig(t)
 	for _, id := range []string{"0123456789abcdef", "not-an-id"} {
 		var e api.Error
-		if code := b.do(t, "/api/jobs/box/"+id, &e); code != http.StatusNotFound || e.Code != api.CodeJobNotFound {
+		if code := b.do(t, "/api/jobs/box/"+id, &e); code != http.StatusNotFound || e.Code != api.CodeJobNotFound || e.Hint == "" {
 			t.Fatalf("%s: %d %+v", id, code, e)
 		}
 	}
@@ -258,6 +258,15 @@ func (b *boxRig) otherIntent(t *testing.T, agentAddr eip712.Address, job string)
 // VerifyIntents can catch it.
 func (b *boxRig) appendSigned(t *testing.T, res *intent.JobReadResult, env intent.Envelope) {
 	t.Helper()
+	body, _ := json.Marshal(joblog.IntentBody{Envelope: env, Outcome: "lease take"})
+	b.appendEntry(t, res, joblog.KindIntent, body)
+}
+
+// appendEntry extends res's log with one entry of kind over body, signed by
+// the agent's own key and chained onto the log, and makes the record
+// describe the longer log.
+func (b *boxRig) appendEntry(t *testing.T, res *intent.JobReadResult, kind string, body []byte) {
+	t.Helper()
 	es := make([]joblog.Entry, len(res.Entries))
 	for i, j := range res.Entries {
 		es[i], _ = joblog.FromJSON(j)
@@ -266,13 +275,56 @@ func (b *boxRig) appendSigned(t *testing.T, res *intent.JobReadResult, env inten
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(joblog.IntentBody{Envelope: env, Outcome: "lease take"})
-	e, d, err := joblog.Sign(context.Background(), b.key, res.Job.ID, uint64(len(es)), head, joblog.KindIntent, body, b.clock())
+	e, d, err := joblog.Sign(context.Background(), b.key, res.Job.ID, uint64(len(es)), head, kind, body, b.clock())
 	if err != nil {
 		t.Fatal(err)
 	}
 	res.Entries = append(res.Entries, joblog.ToJSON(e))
 	res.Job.LogLen, res.Job.LogHead = uint64(len(res.Entries)), "0x"+hex.EncodeToString(d[:])
+}
+
+// detailRefused asks for job id's detail and requires job_log_invalid with
+// no log in the body, a message containing want, and nothing cached.
+func (b *boxRig) detailRefused(t *testing.T, id, want string) {
+	t.Helper()
+	code, body := b.get(t, "/api/jobs/"+b.target+"/"+id)
+	var e api.Error
+	_ = json.Unmarshal(body, &e)
+	if code != http.StatusBadGateway || e.Code != api.CodeJobLogInvalid || strings.Contains(string(body), `"log"`) || !strings.Contains(e.Message, want) {
+		t.Fatalf("answered %d %s, want job_log_invalid saying %q", code, body, want)
+	}
+	if b.cached(id) != nil {
+		t.Fatal("a log that did not verify is cached")
+	}
+}
+
+func (b *boxRig) cached(id string) *verifiedLog {
+	b.srv.jobs.mu.Lock()
+	defer b.srv.jobs.mu.Unlock()
+	return b.srv.jobs.logs[jobKey{b.target, id}]
+}
+
+// fullRead is the box's honest answer for job id, every entry in one page.
+func (b *boxRig) fullRead(t *testing.T, id string) intent.JobReadResult {
+	t.Helper()
+	var res intent.JobReadResult
+	if err := json.Unmarshal(b.send(t, intent.KindJobRead, intent.JobReadPayload{ID: id}), &res); err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+// serve makes the box answer job.read from res, paged as a real one would,
+// without asking it.
+func (b *boxRig) serve(res intent.JobReadResult) {
+	b.srv.jobs.readJob = func(_ context.Context, _ config.Config, _ config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
+		out := res
+		out.Entries = nil
+		if p.From < uint64(len(res.Entries)) {
+			out.Entries = res.Entries[p.From:]
+		}
+		return out, nil
+	}
 }
 
 // J11: whatever verifies as a prefix, a log that is not the whole log the
@@ -420,5 +472,173 @@ func TestJobOutputStreamOpens(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream") {
 		t.Fatalf("output stream %d %v", res.StatusCode, res.Header)
+	}
+}
+
+// I1: a box that holds its agent key can sign an endless valid chain. The
+// read stops at the length the job first claimed, and at an absolute
+// ceiling, quickly, and caches nothing.
+func TestJobDetailRefusesAnEndlessLog(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	rec := b.startJob(t, `{}`)
+	honest := b.fullRead(t, rec.ID)
+
+	endless := func(claim uint64) (pages *int) {
+		pages = new(int)
+		res := honest
+		res.Entries = append([]intent.JobLogEntryJSON(nil), honest.Entries...)
+		b.srv.jobs.readJob = func(_ context.Context, _ config.Config, _ config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
+			*pages++
+			for uint64(len(res.Entries)) <= p.From {
+				b.appendEntry(t, &res, joblog.KindLeaseReleased, []byte(`{}`))
+			}
+			out := res
+			out.Entries, out.More = res.Entries[p.From:p.From+1], true
+			out.Job.LogLen = claim
+			return out, nil
+		}
+		return pages
+	}
+
+	start := time.Now()
+	pages := endless(honest.Job.LogLen)
+	b.detailRefused(t, rec.ID, "more than the 1 log entries")
+	if *pages > 2 || time.Since(start) > 5*time.Second {
+		t.Fatalf("read %d pages in %v", *pages, time.Since(start))
+	}
+
+	prev := jobLogMaxEntries
+	jobLogMaxEntries = 5
+	t.Cleanup(func() { jobLogMaxEntries = prev })
+	pages = endless(1 << 40)
+	b.detailRefused(t, rec.ID, "more than the 5 this server reads")
+	if *pages != 1 {
+		t.Fatalf("read %d pages of a log longer than the ceiling", *pages)
+	}
+
+	// Within the claimed count, the byte ceiling still holds.
+	prevBytes := jobLogMaxBytes
+	jobLogMaxBytes = 64
+	t.Cleanup(func() { jobLogMaxBytes = prevBytes })
+	b.serve(honest)
+	b.detailRefused(t, rec.ID, "larger than the 64 bytes")
+}
+
+// I2: a cached log is the agent key's that verified it. After the box is
+// re-paired to another key, a box answering "nothing new" with a matching
+// record does not get the old log shown as its own: the read starts over
+// and the old entries fail against the new key.
+func TestJobLogCacheIsBoundToTheAgentKey(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	rec := b.startJob(t, `{}`)
+	honest := b.fullRead(t, rec.ID)
+	var d api.JobDetail
+	if code := b.do(t, "/api/jobs/box/"+rec.ID, &d); code != 200 || b.cached(rec.ID) == nil {
+		t.Fatalf("first read %d, cached %v", code, b.cached(rec.ID) != nil)
+	}
+	stranger, _ := signer.GenerateKey()
+	if _, err := config.Update(func(c *config.Config) error {
+		c.Targets[0].Agent.Address = stranger.Address().Hex()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b.serve(honest)
+	b.detailRefused(t, rec.ID, "not signed by agent "+stranger.Address().Hex())
+}
+
+// M1: a log starts with its one created entry.
+func TestJobDetailRefusesAMisshapenLog(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	rec := b.startJob(t, `{}`)
+	honest := b.fullRead(t, rec.ID)
+
+	// A second created entry, carrying the job's own creating intent, so
+	// every signature and binding holds and only the shape is wrong.
+	twice := honest
+	twice.Entries = append([]intent.JobLogEntryJSON(nil), honest.Entries...)
+	b.appendEntry(t, &twice, joblog.KindCreated, honest.Entries[0].Body)
+	b.serve(twice)
+	b.detailRefused(t, rec.ID, "entry 1 is \"job.created\"")
+
+	// No created entry at all: a chain the agent key signed from scratch.
+	headless := honest
+	headless.Entries = nil
+	b.appendEntry(t, &headless, joblog.KindLeaseReleased, []byte(`{}`))
+	b.serve(headless)
+	b.detailRefused(t, rec.ID, "entry 0 is \"lease.released\"")
+
+	empty := honest
+	empty.Entries, empty.Job.LogLen, empty.Job.LogHead = nil, 0, ""
+	b.serve(empty)
+	b.detailRefused(t, rec.ID, "log is empty")
+}
+
+// M4: page two from another valid chain the same agent key signed for the
+// same job is refused: each page must chain onto the last.
+func TestJobDetailRefusesASplicedLog(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	rec := b.startJob(t, `{}`)
+	b.send(t, intent.KindJobLease, intent.JobLeasePayload{ID: rec.ID, Op: intent.LeaseRelease})
+	honest := b.fullRead(t, rec.ID)
+
+	// Another chain for the job: the same created entry's body re-signed at
+	// another time, so its digest differs, then two entries on top of it.
+	other := honest
+	other.Entries = nil
+	b.advance(time.Minute)
+	b.appendEntry(t, &other, joblog.KindCreated, honest.Entries[0].Body)
+	b.appendEntry(t, &other, joblog.KindIntent, honest.Entries[1].Body)
+	b.appendEntry(t, &other, joblog.KindLeaseReleased, honest.Entries[2].Body)
+
+	spliced := honest
+	spliced.Job.LogLen, spliced.Job.LogHead = other.Job.LogLen, other.Job.LogHead
+	b.srv.jobs.readJob = func(_ context.Context, _ config.Config, _ config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
+		out := spliced
+		if p.From == 0 {
+			out.Entries, out.More = honest.Entries[:1], true // page one: the real chain
+		} else {
+			out.Entries = other.Entries[p.From:] // page two: the other chain
+		}
+		return out, nil
+	}
+	b.detailRefused(t, rec.ID, "does not follow")
+}
+
+// M2: the cache holds only what the boxes still list.
+func TestJobLogCacheFollowsTheListing(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	rec := b.startJob(t, `{}`)
+	var d api.JobDetail
+	if code := b.do(t, "/api/jobs/box/"+rec.ID, &d); code != 200 || b.cached(rec.ID) == nil {
+		t.Fatalf("first read %d", code)
+	}
+	// The box prunes the job (J6): the next listing drops its log.
+	for _, f := range []string{rec.ID + ".json", rec.ID + ".log"} {
+		if err := os.Remove(filepath.Join(b.home, "jobs", f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.srv.jobs.refresh(context.Background(), true)
+	if b.cached(rec.ID) != nil {
+		t.Fatal("a pruned job's log is still cached")
+	}
+
+	// A removed box takes its logs with it.
+	rec2 := b.startJob(t, `{}`)
+	if code := b.do(t, "/api/jobs/box/"+rec2.ID, &d); code != 200 || b.cached(rec2.ID) == nil {
+		t.Fatalf("second job read %d", code)
+	}
+	if _, err := config.Update(func(c *config.Config) error { c.Targets = nil; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	b.srv.jobs.refresh(context.Background(), true)
+	if b.cached(rec2.ID) != nil {
+		t.Fatal("a removed box's log is still cached")
 	}
 }
