@@ -42,13 +42,32 @@ func TestLeaseTakeRenewRelease(t *testing.T) {
 	}
 }
 
-// A clock that steps backwards must not make a held lease look stale.
+// A clock that steps backwards a little must not make a held lease look
+// stale.
 func TestLeaseIsFreshWhenTheClockStepsBack(t *testing.T) {
 	a, _ := signer.GenerateKey()
 	now := time.Unix(1_800_000_000, 0)
 	var m Manifest
 	_, _, _ = m.TakeLease(a.Address(), now)
-	if !m.LeaseFresh(now.Add(-time.Hour)) {
-		t.Fatal("a heartbeat in the future read as stale")
+	if !m.LeaseFresh(now.Add(-LeaseTTL / 2)) {
+		t.Fatal("a heartbeat in the near future read as stale")
+	}
+}
+
+// M2: a clock that jumped forward and back leaves a heartbeat far in the
+// future. Taken at face value it would keep the lease fresh for the whole
+// jump, and nobody could adopt a job whose controller is gone. A heartbeat
+// more than a TTL ahead of the agent's clock is stale.
+func TestAFarFutureHeartbeatIsStale(t *testing.T) {
+	a, _ := signer.GenerateKey()
+	b, _ := signer.GenerateKey()
+	now := time.Unix(1_800_000_000, 0)
+	var m Manifest
+	_, _, _ = m.TakeLease(a.Address(), now.Add(24*time.Hour)) // renewed during the jump
+	if m.LeaseFresh(now) {
+		t.Fatal("a heartbeat a day ahead read as fresh")
+	}
+	if changed, prev, err := m.TakeLease(b.Address(), now); err != nil || !changed || prev != a.Address().Hex() {
+		t.Fatalf("adoption after the clock came back: %v %q %v", changed, prev, err)
 	}
 }

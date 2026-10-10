@@ -458,7 +458,10 @@ func (h *jobsHub) viewLocked(target string, r intent.JobRecord, agentTime int64)
 		if ttl == 0 {
 			ttl = 90
 		}
-		v.Lease = api.JobLease{Owner: r.Lease.Owner, HeartbeatAt: &hb, Fresh: agentTime-r.Lease.HeartbeatAt < ttl, Mine: h.mine(r)}
+		// The agent's own rule (jobs.Manifest.LeaseFresh): a heartbeat more
+		// than a TTL ahead of the agent's clock is stale.
+		age := agentTime - r.Lease.HeartbeatAt
+		v.Lease = api.JobLease{Owner: r.Lease.Owner, HeartbeatAt: &hb, Fresh: age < ttl && age > -ttl, Mine: h.mine(r)}
 		if v.Lease.Mine {
 			v.Lease.Label = "this controller"
 		}

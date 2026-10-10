@@ -12,14 +12,19 @@ import (
 // missed 20-second renewals.
 const LeaseTTL = 90 * time.Second
 
-// LeaseFresh is judged by the agent's clock. A heartbeat in the future (the
-// clock stepped back) is fresh: losing a lease to a clock step would hand a
-// running job to whoever asks next.
+// LeaseFresh is judged by the agent's clock. A heartbeat a little in the
+// future (the clock stepped back) is fresh: losing a lease to a clock step
+// would hand a running job to whoever asks next. One more than a TTL ahead is
+// stale: it was written while the clock ran far ahead, and trusting it would
+// keep a gone controller's lease fresh, and its job unadoptable, for as long
+// as the jump was.
 func (m Manifest) LeaseFresh(now time.Time) bool {
 	if m.Lease.Owner == "" {
 		return false
 	}
-	return now.Unix()-m.Lease.HeartbeatAt < int64(LeaseTTL/time.Second)
+	ttl := int64(LeaseTTL / time.Second)
+	age := now.Unix() - m.Lease.HeartbeatAt
+	return age < ttl && age > -ttl
 }
 
 func (m Manifest) ownedBy(who eip712.Address) bool {
