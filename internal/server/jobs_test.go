@@ -642,3 +642,86 @@ func TestJobLogCacheFollowsTheListing(t *testing.T) {
 		t.Fatal("a removed box's log is still cached")
 	}
 }
+
+// I1: the byte ceiling covers the whole log, across GETs. A box that grows
+// its log one large entry per GET, each read under the ceiling, is refused
+// once the log as a whole passes it, and nothing past it is cached.
+func TestJobLogByteCapCoversTheWholeLog(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t)
+	rec := b.startJob(t, `{}`)
+	res := b.fullRead(t, rec.ID)
+	prev := jobLogMaxBytes
+	jobLogMaxBytes = 8000
+	t.Cleanup(func() { jobLogMaxBytes = prev })
+	pad := []byte(`{"pad":"` + strings.Repeat("x", 1500) + `"}`)
+
+	served := 0
+	for i := 0; i < 10; i++ {
+		b.appendEntry(t, &res, joblog.KindLeaseReleased, pad)
+		b.serve(res)
+		code, body := b.get(t, "/api/jobs/box/"+rec.ID)
+		if c := b.cached(rec.ID); c != nil && c.size > jobLogMaxBytes {
+			t.Fatalf("cached %d bytes, over the %d ceiling", c.size, jobLogMaxBytes)
+		}
+		if code == http.StatusOK {
+			served++
+			if b.cached(rec.ID) == nil {
+				t.Fatal("a verified log within the ceiling was not cached")
+			}
+			continue
+		}
+		var e api.Error
+		_ = json.Unmarshal(body, &e)
+		if code != http.StatusBadGateway || e.Code != api.CodeJobLogInvalid || !strings.Contains(e.Message, "larger than the 8000 bytes") || b.cached(rec.ID) != nil {
+			t.Fatalf("GET %d answered %d %s", i, code, body)
+		}
+		if served < 2 {
+			t.Fatalf("refused after only %d GETs: each GET's own read is under the ceiling", served)
+		}
+		return
+	}
+	t.Fatalf("a log grown one entry per GET was served %d times and never refused", served)
+}
+
+// The cache as a whole stays within jobLogCacheMaxBytes: the least recently
+// read log is evicted for a new one, and a log bigger than the budget is
+// not cached. A read that began before its target's logs were dropped does
+// not put its log back.
+func TestJobLogCacheBudgetAndGenerations(t *testing.T) {
+	srv := New(Config{Token: NewSessionToken(), UI: fstest.MapFS{}})
+	t.Cleanup(func() { srv.jobs.stopWithin(time.Second) })
+	h := srv.jobs
+	prev := jobLogCacheMaxBytes
+	jobLogCacheMaxBytes = 100
+	t.Cleanup(func() { jobLogCacheMaxBytes = prev })
+	agentAddr := eip712.Address{1}
+	k := func(id string) jobKey { return jobKey{"box", id} }
+	store := func(id string, size int) bool {
+		_, gen := h.cachedLog(k(id), agentAddr)
+		return h.storeLog(k(id), verifiedLog{agent: agentAddr, size: size}, gen)
+	}
+	if !store("a", 40) || !store("b", 40) {
+		t.Fatal("logs within the budget were not cached")
+	}
+	h.cachedLog(k("a"), agentAddr) // a is now the more recently read
+	if !store("c", 40) {
+		t.Fatal("c was not cached")
+	}
+	if h.logs[k("b")] != nil || h.logs[k("a")] == nil || h.logs[k("c")] == nil || h.logBytes != 80 {
+		t.Fatalf("after eviction: %v, %d bytes", h.logs, h.logBytes)
+	}
+	if store("huge", 101) || h.logs[k("huge")] != nil || h.logBytes != 80 {
+		t.Fatalf("a log over the whole budget was cached: %d bytes", h.logBytes)
+	}
+
+	// A read in flight while a listing prunes its job does not re-cache it.
+	_, gen := h.cachedLog(k("d"), agentAddr)
+	h.dropLogs("box", map[string]bool{"a": true})
+	if h.storeLog(k("d"), verifiedLog{agent: agentAddr, size: 10}, gen) || h.logs[k("d")] != nil {
+		t.Fatal("a log read before its target's drop was cached after it")
+	}
+	if h.logs[k("c")] != nil || h.logs[k("a")] == nil || h.logBytes != 40 {
+		t.Fatalf("after the drop: %v, %d bytes", h.logs, h.logBytes)
+	}
+}

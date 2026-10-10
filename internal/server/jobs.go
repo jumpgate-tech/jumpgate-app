@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -48,6 +49,8 @@ type verifiedLog struct {
 	agent   eip712.Address
 	entries []joblog.Entry
 	head    [32]byte
+	size    int    // the entries' encoded bytes, as received (see jobLogMaxBytes)
+	used    uint64 // the hub's use counter when last read: least recently used goes first
 }
 
 // Bounds on one job's log, against a box that holds its agent key and signs
@@ -59,10 +62,21 @@ type verifiedLog struct {
 // intent envelope or a step result, a few KiB each, so 16 MiB (one agent
 // reply's limit, agentclient.maxReply) is likewise far above a real log.
 // The deadline bounds the whole paged read, not each page.
+//
+// jobLogMaxBytes measures the whole log, not one read: the JSON encoding of
+// every entry as the box sent it (each entry re-marshalled on arrival, since
+// agentclient does not report a reply's size), carried over in the cache
+// from earlier reads, plus the encoded job record of every page of this
+// read. A box cannot grow a log past it a page, or a GET, at a time.
+//
+// jobLogCacheMaxBytes bounds every cached log together, since a box chooses
+// how many jobs it lists. Past it the least recently read logs are evicted;
+// a log larger than the whole budget is served but never cached.
 var (
-	jobLogMaxEntries  = 5000
-	jobLogMaxBytes    = 16 << 20
-	jobLogReadTimeout = 60 * time.Second
+	jobLogMaxEntries    = 5000
+	jobLogMaxBytes      = 16 << 20
+	jobLogCacheMaxBytes = 64 << 20
+	jobLogReadTimeout   = 60 * time.Second
 )
 
 // jobsHub is this server's view of every paired box's durable jobs: it lists
@@ -87,6 +101,9 @@ type jobsHub struct {
 	listing  chan struct{}
 	subs     map[chan api.JobsInbox]struct{}
 	logs     map[jobKey]*verifiedLog
+	logBytes int               // the sum of every cached log's size
+	logUses  uint64            // ticks on every cache read and store, for LRU
+	logGen   map[string]uint64 // per target, bumped whenever its logs are dropped
 	driving  map[jobKey]context.CancelFunc
 	stopped  bool
 }
@@ -94,7 +111,7 @@ type jobsHub struct {
 func newJobsHub(s *Server) *jobsHub {
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &jobsHub{s: s, ctx: ctx, cancel: cancel, boxes: map[string]*boxJobs{}, subs: map[chan api.JobsInbox]struct{}{},
-		logs: map[jobKey]*verifiedLog{}, driving: map[jobKey]context.CancelFunc{}}
+		logs: map[jobKey]*verifiedLog{}, logGen: map[string]uint64{}, driving: map[jobKey]context.CancelFunc{}}
 	h.readJob = func(ctx context.Context, cfg config.Config, t config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
 		return decodeResult[intent.JobReadResult](s.agentResult(ctx, cfg, t, intent.KindJobRead, p))
 	}
@@ -188,7 +205,7 @@ func (h *jobsHub) list(done chan struct{}) {
 	}
 	for k := range h.logs {
 		if !keep[k.target] {
-			delete(h.logs, k) // the box was removed or unpaired
+			h.forgetLocked(k) // the box was removed or unpaired
 		}
 	}
 	h.mu.Unlock()
@@ -234,9 +251,66 @@ func (h *jobsHub) dropLogs(target string, keep map[string]bool) {
 	defer h.mu.Unlock()
 	for k := range h.logs {
 		if k.target == target && !keep[k.id] {
-			delete(h.logs, k)
+			h.forgetLocked(k)
 		}
 	}
+}
+
+// forgetLocked drops one cached log and bumps its target's generation, so a
+// read that began before the drop does not put it back. Callers hold h.mu.
+func (h *jobsHub) forgetLocked(k jobKey) {
+	if vl := h.logs[k]; vl != nil {
+		h.logBytes -= vl.size
+		delete(h.logs, k)
+	}
+	h.logGen[k.target]++
+}
+
+// cachedLog is k's cached log if it was verified against agent, and the
+// target's generation to hand to storeLog.
+func (h *jobsHub) cachedLog(k jobKey, agent eip712.Address) (verifiedLog, uint64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	gen := h.logGen[k.target]
+	vl := h.logs[k]
+	if vl == nil || vl.agent != agent {
+		return verifiedLog{}, gen // nothing verified against this key: start over
+	}
+	h.logUses++
+	vl.used = h.logUses
+	return verifiedLog{agent: vl.agent, entries: append([]joblog.Entry(nil), vl.entries...), head: vl.head, size: vl.size}, gen
+}
+
+// storeLog caches vl as k's log, unless the target's logs were dropped since
+// gen (a listing pruned the job, or the box went) or vl alone is over the
+// whole budget. It evicts the least recently used logs to make room, and
+// reports whether vl was cached.
+func (h *jobsHub) storeLog(k jobKey, vl verifiedLog, gen uint64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.logGen[k.target] != gen || vl.size > jobLogCacheMaxBytes {
+		return false
+	}
+	if old := h.logs[k]; old != nil {
+		h.logBytes -= old.size
+		delete(h.logs, k)
+	}
+	for h.logBytes+vl.size > jobLogCacheMaxBytes {
+		var lru jobKey
+		var oldest *verifiedLog
+		for key, l := range h.logs {
+			if oldest == nil || l.used < oldest.used {
+				lru, oldest = key, l
+			}
+		}
+		h.logBytes -= oldest.size
+		delete(h.logs, lru) // eviction, not a drop: no generation bump
+	}
+	h.logUses++
+	vl.used = h.logUses
+	h.logs[k] = &vl
+	h.logBytes += vl.size
+	return true
 }
 
 // setRecord updates one job in the cache (after a read or a mutation).
@@ -391,17 +465,13 @@ func (h *jobsHub) readVerified(ctx context.Context, cfg config.Config, t config.
 	ctx, cancel := context.WithTimeout(ctx, jobLogReadTimeout)
 	defer cancel()
 	k := jobKey{t.ID, id}
-	h.mu.Lock()
-	vl := h.logs[k]
-	if vl == nil || vl.agent != at.Agent {
-		vl = &verifiedLog{} // nothing verified against this key: start over
-	}
-	entries, head := append([]joblog.Entry(nil), vl.entries...), vl.head
-	h.mu.Unlock()
+	vl, gen := h.cachedLog(k, at.Agent)
+	entries, head := vl.entries, vl.head
 	var rec intent.JobRecord
 	var agentTime int64
-	var claimed uint64 // the first page's LogLen: the most this read takes
-	bytes := 0
+	var claimed uint64  // the first page's LogLen: the most this read takes
+	logBytes := vl.size // the whole log's, carried over from earlier reads
+	recBytes := 0       // this read's records
 	for first := true; ; first = false {
 		res, err := h.readJob(ctx, cfg, t, intent.JobReadPayload{ID: id, From: uint64(len(entries))})
 		if err != nil {
@@ -417,10 +487,20 @@ func (h *jobsHub) readVerified(ctx context.Context, cfg config.Config, t config.
 		if uint64(len(entries)+len(res.Entries)) > claimed {
 			return h.invalid(k, rec, fmt.Errorf("the box sent more than the %d log entries the job claimed", claimed))
 		}
+		tooBig := fmt.Errorf("the job's log is larger than the %d bytes this server reads", jobLogMaxBytes)
+		if rb, err := json.Marshal(res.Job); err != nil {
+			return h.invalid(k, rec, err)
+		} else if recBytes += len(rb); logBytes+recBytes > jobLogMaxBytes {
+			return h.invalid(k, rec, tooBig)
+		}
 		page := make([]joblog.Entry, 0, len(res.Entries))
 		for _, j := range res.Entries {
-			if bytes += len(j.Body) + len(j.Kind) + len(j.Prev) + len(j.Sig); bytes > jobLogMaxBytes {
-				return h.invalid(k, rec, fmt.Errorf("the job's log is larger than the %d bytes this server reads", jobLogMaxBytes))
+			eb, err := json.Marshal(j)
+			if err != nil {
+				return h.invalid(k, rec, err)
+			}
+			if logBytes += len(eb); logBytes+recBytes > jobLogMaxBytes {
+				return h.invalid(k, rec, tooBig)
 			}
 			e, err := joblog.FromJSON(j)
 			if err != nil {
@@ -463,9 +543,7 @@ func (h *jobsHub) readVerified(ctx context.Context, cfg config.Config, t config.
 			return h.invalid(k, rec, fmt.Errorf("entry %d is %q; a job's log has its one %s entry first", i, e.Kind, joblog.KindCreated))
 		}
 	}
-	h.mu.Lock()
-	h.logs[k] = &verifiedLog{agent: at.Agent, entries: entries, head: head}
-	h.mu.Unlock()
+	h.storeLog(k, verifiedLog{agent: at.Agent, entries: entries, head: head, size: logBytes}, gen)
 	h.setRecord(t.ID, rec, agentTime)
 	return rec, entries, agentTime, nil
 }
@@ -481,7 +559,7 @@ func recordedHead(r intent.JobRecord) string {
 
 func (h *jobsHub) invalid(k jobKey, rec intent.JobRecord, err error) (intent.JobRecord, []joblog.Entry, int64, error) {
 	h.mu.Lock()
-	delete(h.logs, k)
+	h.forgetLocked(k)
 	h.mu.Unlock()
 	return rec, nil, 0, fmt.Errorf("%w: %v", errJobLogInvalid, err)
 }
