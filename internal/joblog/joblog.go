@@ -127,8 +127,14 @@ func JobIDFor(in intent.Intent) (string, error) {
 // when it admitted the intent; a controller checks it again because the log
 // is how it learns who asked for what.
 //
-// It checks controller authority only. It does not check the agent's entry
-// signatures, so the caller must also run Verify on the same entries.
+// What it proves is narrow: each recorded request was signed by the
+// controller it names, about this job, for this agent. It does not prove
+// that controller was enrolled, or held the tier the request needed, when
+// it asked: the log does not carry the box's policy, and the agent checks
+// enrollment and tier at admission, before it logs anything. Nor does it
+// guard against a compromised agent key, which signs the log itself and is
+// out of scope. It does not check the agent's entry signatures either, so
+// the caller must also run Verify on the same entries.
 func VerifyIntents(agent eip712.Address, job string, entries []Entry) error {
 	// An empty or malformed id would let an id-less payload match it.
 	if !jobIDRE.MatchString(job) {
