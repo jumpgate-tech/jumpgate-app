@@ -143,14 +143,18 @@ func TestMaskTextIsFastOnWorstCaseInput(t *testing.T) {
 	// The budget scales with this machine: a slow CI VM (an emulated CPU)
 	// takes several times longer on any input, but a worst case that went
 	// quadratic would still blow far past a multiple of plain text's time.
-	budget := 5 * time.Millisecond
-	if base := 20 * fastestOf(3, func() { maskText(strings.Repeat("a", maxMaskText)) }); base > budget {
-		budget = base
-	}
 	for _, in := range worst {
-		start := time.Now()
-		maskText(in)
-		if d := time.Since(start); d > budget {
+		// Plain text of the same length is the baseline: the 200 KB input
+		// pays to be capped, and that cost belongs in its baseline too.
+		budget := 5 * time.Millisecond
+		plain := strings.Repeat("a", len(in))
+		if base := 20 * fastestOf(3, func() { maskText(plain) }); base > budget {
+			budget = base
+		}
+		// The quickest of three runs, like the baseline: one preemption on a
+		// busy runner is not a slow algorithm. Today's worst cases cost at
+		// most about 8x plain text; a quadratic regression costs hundreds.
+		if d := fastestOf(3, func() { maskText(in) }); d > budget {
 			t.Errorf("maskText took %v on %d bytes (budget %v)", d, len(in), budget)
 		}
 	}
