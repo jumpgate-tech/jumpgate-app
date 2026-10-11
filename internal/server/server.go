@@ -186,6 +186,10 @@ type Server struct {
 	capProbe   func(context.Context, config.Config, config.Gateway) capabilitiesResponse
 	capTimeout time.Duration
 
+	// testLogsPollSent runs as a log follower sends a poll to its box's
+	// agent; nil outside tests.
+	testLogsPollSent func()
+
 	// chainsMu guards the cached full chain catalogue (id + name for every
 	// chain the feed knows) that backs the network-search picker. The feed is
 	// ~1.1 MB / ~2660 chains and changes rarely, so it is fetched once and

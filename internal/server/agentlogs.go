@@ -300,6 +300,9 @@ func (s *Server) followLogs(ctx context.Context, cfg config.Config, t config.Tar
 		cursor := f.cursor
 		f.mu.Unlock()
 		res, stopping, err := f.poll(ctx, func(pctx context.Context) (json.RawMessage, error) {
+			if s.testLogsPollSent != nil {
+				s.testLogsPollSent()
+			}
 			return s.agentResult(pctx, cfg, t, intent.KindLogsSince, intent.LogsSincePayload{Cursor: cursor, N: logsSinceN})
 		})
 		if stopping {

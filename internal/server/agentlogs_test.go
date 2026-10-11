@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -44,11 +45,17 @@ func (journalExec) Run(_ context.Context, cmd string, _ *executor.RunOpts) (exec
 type cursorJournal struct {
 	nopExec
 	calls, fresh atomic.Int32
+	// hold, when set, runs before a logs.since call is counted: a test
+	// holds the agent there to make it as slow as it likes.
+	hold atomic.Pointer[func()]
 }
 
 func (j *cursorJournal) Run(_ context.Context, cmd string, _ *executor.RunOpts) (executor.Result, error) {
 	if !strings.Contains(cmd, "-o json") {
 		return executor.Result{}, nil
+	}
+	if h := j.hold.Load(); h != nil {
+		(*h)()
 	}
 	j.calls.Add(1)
 	switch {
@@ -74,11 +81,14 @@ func (j *cursorJournal) waitCalls(t *testing.T, n int32) {
 	}
 }
 
-// settledCalls is the call count once a request the follower abandoned as
-// it stopped has had time to reach the agent's executor anyway.
-func (j *cursorJournal) settledCalls() int32 {
-	time.Sleep(5 * agentLogsFollowInterval)
-	return j.calls.Load()
+// countFollowerPolls counts the polls s's log followers send. Whether a
+// follower still polls is counted there, not at the agent: the poll in
+// flight when a follower stops is abandoned, and the agent may still run it
+// any time later, with its context cancelled.
+func countFollowerPolls(s *Server) *atomic.Int32 {
+	n := new(atomic.Int32)
+	s.testLogsPollSent = func() { n.Add(1) }
+	return n
 }
 
 // fastFollow shortens the follower's timing. Its cleanup is registered
@@ -162,7 +172,8 @@ func TestFollowerIsSharedAndStopsAfterTheLastViewerLeaves(t *testing.T) {
 	logFollowerLinger = time.Second
 	j := &cursorJournal{}
 	var srv *Server
-	ts, token := pairedBoxWith(t, j, pairedOpts{setUp: true, onServer: func(s *Server) { srv = s }})
+	var polls *atomic.Int32
+	ts, token := pairedBoxWith(t, j, pairedOpts{setUp: true, onServer: func(s *Server) { srv, polls = s, countFollowerPolls(s) }})
 	a := &apiTestServer{ts: ts, token: token}
 	r1, stop1 := openSSE(t, a, "/api/targets/box/logs/stream?backlog=0")
 	r2, stop2 := openSSE(t, a, "/api/targets/box/logs/stream?backlog=0")
@@ -175,6 +186,19 @@ func TestFollowerIsSharedAndStopsAfterTheLastViewerLeaves(t *testing.T) {
 	frames, _ := readFrames(t, ts, token, "/api/targets/box/logs/stream?backlog=1", 1)
 	if !strings.Contains(frames[0], `"three"`) || j.fresh.Load() != 1 {
 		t.Fatalf("returning viewer: %q, %d first polls (want the same follower)", frames[0], j.fresh.Load())
+	}
+	// Hold the agent on the poll in flight when the linger ends: the
+	// follower abandons it as it stops, and the agent runs it only once
+	// released, after the follower is gone.
+	held, release := make(chan struct{}), make(chan struct{})
+	var holdOnce, releaseOnce sync.Once
+	gate := func() { holdOnce.Do(func() { close(held) }); <-release }
+	j.hold.Store(&gate)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	select {
+	case <-held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no poll reached the agent")
 	}
 	entry := srv.reg.get("box")
 	deadline := time.Now().Add(5 * time.Second)
@@ -190,10 +214,13 @@ func TestFollowerIsSharedAndStopsAfterTheLastViewerLeaves(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	n := j.settledCalls()
+	n := polls.Load()
+	before := j.calls.Load()
+	releaseOnce.Do(func() { close(release) })
+	j.waitCalls(t, before+1)
 	time.Sleep(10 * agentLogsFollowInterval)
-	if j.calls.Load() != n {
-		t.Fatalf("still polling: %d calls, then %d", n, j.calls.Load())
+	if polls.Load() != n {
+		t.Fatalf("still polling: %d polls, then %d", n, polls.Load())
 	}
 }
 
@@ -248,9 +275,11 @@ func TestFollowerStopsWhenTheBoxIsUnpaired(t *testing.T) {
 	fastFollow(t)
 	j := &cursorJournal{}
 	var legacy countingExec
+	var polls *atomic.Int32
 	ts, token := pairedBoxWith(t, j, pairedOpts{setUp: true,
-		server: func(c *Config) { c.NewExecutor = legacy.newExecutor },
-		target: func(tg *config.Target) { tg.Wire = wiredForLegacy }})
+		onServer: func(s *Server) { polls = countFollowerPolls(s) },
+		server:   func(c *Config) { c.NewExecutor = legacy.newExecutor },
+		target:   func(tg *config.Target) { tg.Wire = wiredForLegacy }})
 	r, stop := openSSE(t, &apiTestServer{ts: ts, token: token}, "/api/targets/box/logs/stream?backlog=0")
 	defer stop()
 	if !readLines(r, 5*time.Second, func(l string) bool { return strings.Contains(l, `"three"`) }) {
@@ -276,10 +305,10 @@ func TestFollowerStopsWhenTheBoxIsUnpaired(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the stream outlived the pairing")
 	}
-	n := j.settledCalls()
+	n := polls.Load()
 	time.Sleep(10 * agentLogsFollowInterval)
-	if j.calls.Load() != n || legacy.n.Load() != 0 {
-		t.Fatalf("after unpairing: agent calls %d -> %d, legacy executor opened %d times", n, j.calls.Load(), legacy.n.Load())
+	if polls.Load() != n || legacy.n.Load() != 0 {
+		t.Fatalf("after unpairing: agent polls %d -> %d, legacy executor opened %d times", n, polls.Load(), legacy.n.Load())
 	}
 }
 
@@ -361,8 +390,8 @@ func TestFollowerDropsACursorThatKeepsFailing(t *testing.T) {
 func TestFollowerStopsWhenTheConfigCannotBeRead(t *testing.T) {
 	requireAgentPeer(t)
 	fastFollow(t)
-	j := &cursorJournal{}
-	ts, token := pairedBox(t, j, true)
+	var polls *atomic.Int32
+	ts, token := pairedBoxWith(t, &cursorJournal{}, pairedOpts{setUp: true, onServer: func(s *Server) { polls = countFollowerPolls(s) }})
 	r, stop := openSSE(t, &apiTestServer{ts: ts, token: token}, "/api/targets/box/logs/stream?backlog=0")
 	defer stop()
 	if !readLines(r, 5*time.Second, func(l string) bool { return strings.Contains(l, `"three"`) }) {
@@ -393,9 +422,9 @@ func TestFollowerStopsWhenTheConfigCannotBeRead(t *testing.T) {
 	if !strings.Contains(all, "event: error\n") || !strings.Contains(all, `"code":"internal"`) || !strings.Contains(all, "config") {
 		t.Fatalf("stream ended without a coded error: %q", all)
 	}
-	n := j.settledCalls()
+	n := polls.Load()
 	time.Sleep(10 * agentLogsFollowInterval)
-	if j.calls.Load() != n {
-		t.Fatalf("still polling after the config broke: %d -> %d", n, j.calls.Load())
+	if polls.Load() != n {
+		t.Fatalf("still polling after the config broke: %d -> %d", n, polls.Load())
 	}
 }
