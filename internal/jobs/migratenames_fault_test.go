@@ -11,6 +11,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 var errInjected = errors.New("injected: the command could not run")
@@ -116,6 +117,9 @@ func (c faultCase) run(t *testing.T, failAt int) (*faultExec, Outcome, error) {
 func TestEveryMigrateNamesStepStopsAtAnOperationThatCannotRun(t *testing.T) {
 	for name, c := range faultCases() {
 		t.Run(name, func(t *testing.T) {
+			if c.step == "rewrite-units" {
+				testutil.RequireUnix(t) // it writes the names marker, a directory fsync Windows refuses
+			}
 			ex, o, err := c.run(t, 0)
 			if err != nil || o.Ask != nil {
 				t.Fatalf("the happy path does not succeed: %+v, %v", o, err)

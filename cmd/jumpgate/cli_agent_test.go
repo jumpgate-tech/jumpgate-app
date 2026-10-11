@@ -194,14 +194,15 @@ func TestAgentRunWithoutAKeyFails(t *testing.T) {
 // errors, and an agent on Windows is refused outright.
 func TestAgentRefusesWhatItCannotRun(t *testing.T) {
 	captureStderr(t)
+	old := hostGOOS
+	t.Cleanup(func() { hostGOOS = old })
+	hostGOOS = "linux" // usage errors are checked as on the only OS that runs an agent
 	for _, args := range [][]string{{}, {"bogus"}, {"job-abandon", "nope", "--yes"}, {"job-abandon", "0123456789abcdef", "extra"}, {"init", "--no-such-flag"}} {
 		if code := cmdAgent(args); code != exitCode("usage") {
 			t.Errorf("agent %v: exit %d", args, code)
 		}
 	}
-	old := hostGOOS
 	hostGOOS = "windows"
-	t.Cleanup(func() { hostGOOS = old })
 	if code := cmdAgent([]string{"run"}); code != exitCode("failed") {
 		t.Fatalf("agent run on Windows: exit %d", code)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
 func legacyWire() catalog.WireConfig {
@@ -440,6 +441,7 @@ func movedResult() json.RawMessage {
 }
 
 func TestRewriteUnitsSwitchesNodeJSONAndTheMarker(t *testing.T) {
+	testutil.RequireUnix(t) // the names marker is written with a directory fsync Windows refuses
 	ex := newScript().on("test -e '"+catalog.SnapshotMarkerPath(legacyWire())+"'", fail1)
 	env := mnEnv(t, ex, legacyWire())
 	env.Results["move-data"] = movedResult()
@@ -480,6 +482,7 @@ func TestRewriteUnitsSwitchesNodeJSONAndTheMarker(t *testing.T) {
 // data moves, the marker must follow it, or setup's next Verify refuses the
 // box ("the snapshot marker names <old>, not <new>").
 func TestRewriteUnitsMovesTheSnapshotMarkerWithTheData(t *testing.T) {
+	testutil.RequireUnix(t) // the names marker is written with a directory fsync Windows refuses
 	marker := "cat '" + catalog.SnapshotMarkerPath(legacyWire()) + "'"
 	ex := newScript().on(marker, stdout("/var/lib/valve-node-app/369\n"))
 	env := mnEnv(t, ex, legacyWire())
@@ -510,6 +513,7 @@ func TestRewriteUnitsMovesTheSnapshotMarkerWithTheData(t *testing.T) {
 // Kept in place (a mount, or a custom dir), the data dir does not change, so
 // the marker already names the final dir.
 func TestRewriteUnitsKeepsTheSnapshotMarkerWhenTheDataStays(t *testing.T) {
+	testutil.RequireUnix(t) // the names marker is written with a directory fsync Windows refuses
 	ex := newScript().on("cat '"+catalog.SnapshotMarkerPath(legacyWire())+"'", stdout("/var/lib/valve-node-app/369\n"))
 	env := mnEnv(t, ex, legacyWire())
 	env.Results["move-data"] = json.RawMessage(`{"moved":false,"dataDir":"/var/lib/valve-node-app/369","jwtPath":"/var/lib/valve-node-app/369/jwt.hex"}`)
@@ -648,6 +652,7 @@ func TestNamesMarkerAppliesToAStaleNodeJSON(t *testing.T) {
 // Steps read node.json through the marker too (J10): a re-pair that wrote the
 // controller's stale wire after a migration must not restart it.
 func TestStepsReadNodeJSONThroughTheNamesMarker(t *testing.T) {
+	testutil.RequireUnix(t) // the names marker is written with a directory fsync Windows refuses
 	ex := migratedBox()
 	env := mnEnv(t, ex, legacyWire())
 	if err := writeNamesMarker(env.NamesPath, NamesMarker{Names: catalog.NamesCurrent, DataRootFrom: "/var/lib/valve-node-app", DataRootTo: "/var/lib/jumpgate-node"}); err != nil {
@@ -696,6 +701,7 @@ func rootMove() NamesMarker {
 // I1: names.json is what keeps a stale re-pair from pointing the node back at
 // the old root. A later job must carry the move it records, never drop it.
 func TestARecordedRootMoveSurvivesMoveDataAndRewriteUnits(t *testing.T) {
+	testutil.RequireUnix(t) // the names marker is written with a directory fsync Windows refuses
 	ex := newScript().on("test -d '/var/lib/valve-node-app'", fail1).on("test -e '/var/lib/jumpgate-node'", ok0)
 	env := mnEnv(t, ex, legacyWire()) // a stale re-pair: node.json at the old root
 	if err := writeNamesMarker(env.NamesPath, rootMove()); err != nil {
@@ -721,6 +727,7 @@ func TestARecordedRootMoveSurvivesMoveDataAndRewriteUnits(t *testing.T) {
 // marker still names the old account); job B finishes the migration and
 // names.json still records the move.
 func TestASecondJobAfterAnAbortKeepsTheRootMove(t *testing.T) {
+	testutil.RequireUnix(t) // the names marker is written with a directory fsync Windows refuses
 	env := mnEnv(t, nil, legacyWire())
 	runJob := func(steps []string, exFor func(id string) *scriptExec) {
 		t.Helper()
@@ -811,6 +818,7 @@ func TestRenameAccountAsksWhenTheNodeRunsAgain(t *testing.T) {
 
 // M3: an operator who disabled a unit keeps it disabled under its new name.
 func TestADisabledUnitStaysDisabled(t *testing.T) {
+	testutil.RequireUnix(t) // the names marker is written with a directory fsync Windows refuses
 	ex := legacyBox().on("systemctl is-enabled valve-node-app-beacon.service", fail1)
 	o, err := step(t, "preflight").Run(context.Background(), mnEnv(t, ex, legacyWire()))
 	var pre migratePreflight
@@ -844,6 +852,7 @@ func TestADisabledUnitStaysDisabled(t *testing.T) {
 // N2: the record of the root move outlives a data dir that is not under
 // either root; the custom dir itself stays where it is.
 func TestARecordedRootMoveSurvivesACustomDataDir(t *testing.T) {
+	testutil.RequireUnix(t) // the names marker is written with a directory fsync Windows refuses
 	w := legacyWire()
 	w.DataDir, w.JWTPath = "/data/pulse", "/data/pulse/jwt.hex"
 	ex := newScript().on("test -d '/var/lib/valve-node-app'", fail1).on("test -e '/var/lib/jumpgate-node'", ok0)
@@ -876,6 +885,7 @@ func TestARecordedRootMoveSurvivesACustomDataDir(t *testing.T) {
 // N3: a names.json that records a move the box does not show is refused, not
 // rendered: the units would name a root that does not hold the data.
 func TestARecordedRootMoveTheBoxDoesNotShowIsRefused(t *testing.T) {
+	testutil.RequireUnix(t) // the names marker is written with a directory fsync Windows refuses
 	for name, ex := range map[string]*scriptExec{
 		"old root still there": newScript().on("test -d '/var/lib/valve-node-app'", ok0).on("test -e '/var/lib/jumpgate-node'", fail1),
 		"new root missing":     newScript().on("test -d '/var/lib/valve-node-app'", fail1).on("test -e '/var/lib/jumpgate-node'", fail1),
@@ -971,6 +981,7 @@ func TestReadNodeConfigRefusesAnUnparsableNodeJSON(t *testing.T) {
 // Without a names path (setup's own read before any migration) node.json is
 // returned as written, even when a marker file sits beside it.
 func TestReadNodeConfigWithoutANamesPathReadsNodeJSONAlone(t *testing.T) {
+	testutil.RequireUnix(t) // the names marker is written with a directory fsync Windows refuses
 	env := mnEnv(t, newScript(), legacyWire())
 	if err := writeNamesMarker(env.NamesPath, rootMove()); err != nil {
 		t.Fatal(err)
