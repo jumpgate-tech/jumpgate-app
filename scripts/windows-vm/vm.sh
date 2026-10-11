@@ -19,9 +19,9 @@
 # Hardware: q35, AHCI disk and CD-ROMs, e1000e NIC; Windows has inbox drivers
 # for all of them, so no virtio-win ISO is needed. User-mode networking
 # forwards 127.0.0.1:$JUMPGATE_WIN_SSH_PORT (default 2222) to the guest's 22.
-# Other knobs: JUMPGATE_WIN_CPU (default Nehalem), JUMPGATE_WIN_CPUS (4),
-# JUMPGATE_WIN_MEM (8G), JUMPGATE_WIN_DISK_SIZE (64G, install only),
-# JUMPGATE_WIN_QEMU_EXTRA (extra qemu arguments, word-split).
+# Other knobs: JUMPGATE_WIN_CPU (default Nehalem,+invtsc,-hypervisor),
+# JUMPGATE_WIN_CPUS (4), JUMPGATE_WIN_MEM (8G), JUMPGATE_WIN_DISK_SIZE (64G,
+# install only), JUMPGATE_WIN_QEMU_EXTRA (extra qemu arguments, word-split).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +31,18 @@ SSH_PORT="${JUMPGATE_WIN_SSH_PORT:-2222}"
 # -cpu host bugchecks Windows Setup (IRQL_NOT_LESS_OR_EQUAL while applying
 # install.wim) under QEMU 11.1 + HVF on an i7-8700B, with 1 or 4 vCPUs; the
 # Nehalem model (no AVX/XSAVE) installs and runs cleanly.
-CPU="${JUMPGATE_WIN_CPU:-Nehalem}"
+# +invtsc,-hypervisor: otherwise Windows backs QueryPerformanceCounter with
+# QEMU's emulated HPET (QPF 100 MHz, ~33 us a read), whose count follows the
+# host's CLOCK_MONOTONIC, which macOS derives from wall time minus boottime;
+# QPC can then step backwards, and Go's testing package panics ("integer
+# overflow" in highPrecisionTime.sub, testing_windows.go) on the negative test
+# duration. Windows trusts an invariant TSC only when CPUID does not flag a
+# hypervisor (with the flag and invtsc it still picks HPET; without HPET, the
+# ACPI PM timer), so both bits are needed. QPC then reads the host's
+# synchronized TSC directly: QPF 10 MHz, ~0.1 us a read. Hyper-V
+# enlightenments (hv-time etc.) are the usual cure, but QEMU's HVF backend
+# accepts and ignores them.
+CPU="${JUMPGATE_WIN_CPU:-Nehalem,+invtsc,-hypervisor}"
 CPUS="${JUMPGATE_WIN_CPUS:-4}"
 MEM="${JUMPGATE_WIN_MEM:-8G}"
 DISK_SIZE="${JUMPGATE_WIN_DISK_SIZE:-64G}"
