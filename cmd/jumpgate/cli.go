@@ -163,14 +163,6 @@ func mustRequest(ctx context.Context, info daemon.Info, path string, body []byte
 // shared type every Go client decodes.
 type apiError = api.Error
 
-// readAPIError decodes an error response into the shared error type. A body
-// that is not the error JSON still yields the status and its code, so the
-// operator is never shown nothing.
-func readAPIError(res *http.Response) apiError {
-	b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-	return *api.Decode(res.StatusCode, b)
-}
-
 // reportServerErrorFrom is reportServerError for an answer from the server
 // info describes. A 404 from a server of another version is the wire contract
 // changing under the CLI, so it says to restart that server instead. Since the

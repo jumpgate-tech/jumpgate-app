@@ -54,7 +54,7 @@ func TestPaletteDestructiveCommandsNeedTheTypedWord(t *testing.T) {
 			if f.Called(strings.Fields(c.call)[0]) {
 				t.Fatalf("ran without the word: %v", f.Calls)
 			}
-			m = press(t, m, "esc")
+			press(t, m, "esc")
 			if f.Called(strings.Fields(c.call)[0]) {
 				t.Fatalf("ran after esc: %v", f.Calls)
 			}
@@ -63,7 +63,7 @@ func TestPaletteDestructiveCommandsNeedTheTypedWord(t *testing.T) {
 			m = typed(t, m, c.line)
 			m = press(t, m, "enter")
 			m = typed(t, m, c.want)
-			m = press(t, m, "enter")
+			press(t, m, "enter")
 			if !f.Called(c.call) {
 				t.Fatalf("calls %v, want %q", f.Calls, c.call)
 			}

@@ -150,6 +150,7 @@ func TestHostileDataInEndpointsSecurityAndGateways(t *testing.T) {
 	}
 	base, bad := frames(""), frames(hostile)
 	for i, fr := range bad {
+		//lint:ignore SA1011 \x9b is deliberate: the C1 CSI byte, which the sanitizer must strip
 		if strings.ContainsAny(fr, "\x1b\x07\x9b\u202e\r") {
 			t.Errorf("frame %d carries a control from data:\n%q", i, fr)
 		}

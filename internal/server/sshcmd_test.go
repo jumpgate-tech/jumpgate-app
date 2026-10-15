@@ -67,7 +67,7 @@ func TestSSHArgvRefusesAJumpAndNeverEmitsOne(t *testing.T) {
 func TestSSHArgvRefusesHostileValues(t *testing.T) {
 	bad := []string{
 		"-oProxyCommand=touch /tmp/x", "-v", "a b", "a\tb", "h%n", "h%h", "a\nb", "a\x00b", "host;rm -rf", "$(id)", "`id`",
-		"a'b", `a"b`, "", "h‮x", "host/../x", "u@h", "[::1]", "fe80::1%eth0",
+		"a'b", `a"b`, "", "h\u202ex", "host/../x", "u@h", "[::1]", "fe80::1%eth0",
 	}
 	for _, h := range bad {
 		if argv, err := sshArgv(sshTarget(h, "root", nil), []string{"/h/c"}); err == nil {

@@ -226,7 +226,7 @@ func TestReloadRestartsTheStreamAndStopsTheOldReader(t *testing.T) {
 	t.Cleanup(func() { a.cancel() })
 	var m tea.Model = a
 	m, _ = tuitest.Send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = press(t, m, "5", "r")
+	press(t, m, "5", "r")
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.chs) != 2 {

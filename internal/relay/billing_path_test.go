@@ -12,8 +12,6 @@ import (
 
 // countingCredits records spends and can be told to refuse or to break.
 type countingCredits struct {
-	spends  int
-	total   int64
 	refuse  bool
 	failure error
 }

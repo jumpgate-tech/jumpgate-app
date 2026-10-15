@@ -94,7 +94,7 @@ func TestStorageLoadsAndMeasures(t *testing.T) {
 	}
 	tuitest.Golden(t, "host_storage", fr)
 	m, cmds = tuitest.Send(m, tuitest.Key("m"))
-	m = tuitest.Settle(m, cmds...)
+	tuitest.Settle(m, cmds...)
 	if !f.Called("MeasureDisk box") {
 		t.Fatal("m did not measure")
 	}

@@ -31,7 +31,7 @@ func serve(t *testing.T, h http.HandlerFunc) *Client {
 func TestDoSendsTheTokenAndDecodesJSON(t *testing.T) {
 	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer tok" {
-			http.Error(w, "unauthorized", 401)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		fmt.Fprint(w, `{"status":0,"result":{"x":1}}`)

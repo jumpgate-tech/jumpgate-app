@@ -338,13 +338,7 @@ func TestCatalogReturnsNetworksAndClients(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", res.StatusCode)
 	}
-	var body struct {
-		Networks []catalog.Network `json:"networks"`
-		Clients  []struct {
-			ID string `json:"id"`
-		} `json:"clients"`
-	}
-	body = decodeJSON[struct {
+	body := decodeJSON[struct {
 		Networks []catalog.Network `json:"networks"`
 		Clients  []struct {
 			ID string `json:"id"`
@@ -758,8 +752,7 @@ func readSSEEventsFor(t *testing.T, res *http.Response, window time.Duration) []
 	defer res.Body.Close()
 
 	type line struct {
-		s   string
-		err error
+		s string
 	}
 	lines := make(chan line, 64)
 	go func() {
@@ -865,8 +858,7 @@ func TestLogsAfterSetupReturnsJSONArray(t *testing.T) {
 		body, _ := io.ReadAll(res.Body)
 		t.Fatalf("status = %d, want 200, body=%s", res.StatusCode, body)
 	}
-	var hits []map[string]any
-	hits = decodeJSON[[]map[string]any](t, res)
+	hits := decodeJSON[[]map[string]any](t, res)
 	_ = hits // an empty array is a perfectly valid response; just must decode
 }
 
@@ -1222,11 +1214,7 @@ func TestExplainWithProviderReturnsTextAndSentExcerpt(t *testing.T) {
 		body, _ := io.ReadAll(res.Body)
 		t.Fatalf("status = %d, want 200, body=%s", res.StatusCode, body)
 	}
-	var body struct {
-		Text        string   `json:"text"`
-		SentExcerpt []string `json:"sentExcerpt"`
-	}
-	body = decodeJSON[struct {
+	body := decodeJSON[struct {
 		Text        string   `json:"text"`
 		SentExcerpt []string `json:"sentExcerpt"`
 	}](t, res)
