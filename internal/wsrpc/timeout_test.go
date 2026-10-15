@@ -101,20 +101,31 @@ func TestConn_IdleTimeoutReapsASilentPeer(t *testing.T) {
 // ANY frame proves the peer is alive, a pong included. A subscriber that only
 // listens sends no data at all, and answering the server's pings is the only
 // sign of life it gives, so a timer that only data reset would reap it.
+//
+// The timer is the socket's read deadline, so "reset" means: before the read
+// that waits for the next frame, a fresh deadline of now+idle is set. The test
+// checks exactly that on the server's conn, frame by frame, instead of timing
+// pongs with sleeps; a starved writer goroutine on a loaded machine made the
+// sleep version fail with nothing wrong in the Conn. That the deadline, once
+// set, does reap a silent peer is TestConn_IdleTimeoutReapsASilentPeer.
 func TestConn_AnyFrameResetsTheIdleTimer(t *testing.T) {
-	c, client := pipeServer(t)
-	c.SetIdleTimeout(100 * time.Millisecond)
+	server, client := net.Pipe()
+	t.Cleanup(func() { server.Close(); client.Close() })
+	rec := &deadlineRecorder{Conn: server}
+	c := newServerConn(rec, bufio.NewReader(rec), DefaultMaxMessageBytes)
+	const idle = time.Hour // never fires: the order of calls is what is checked
+	c.SetIdleTimeout(idle)
 
+	const pongs = 10
 	mask := []byte{1, 2, 3, 4}
 	go func() {
-		// Ten pongs 20ms apart span 200ms, twice the idle timeout, and no gap
-		// between frames comes near it.
-		for i := 0; i < 10; i++ {
+		// net.Pipe has no buffer: each Write returns once the server has read
+		// the whole frame, so the server sees one frame per read.
+		for i := 0; i < pongs; i++ {
 			pong := wsFrame{fin: true, opcode: opcodePong, mask: mask}
 			if _, err := client.Write(pong.bytes()); err != nil {
 				return
 			}
-			time.Sleep(20 * time.Millisecond)
 		}
 		text := wsFrame{fin: true, opcode: opcodeText, payload: []byte("still here"), mask: mask}
 		_, _ = client.Write(text.bytes())
@@ -122,11 +133,66 @@ func TestConn_AnyFrameResetsTheIdleTimer(t *testing.T) {
 
 	got, err := c.ReadMessage()
 	if err != nil {
-		t.Fatalf("ReadMessage: %v — the pongs did not keep the connection alive", err)
+		t.Fatalf("ReadMessage: %v", err)
 	}
 	if string(got) != "still here" {
 		t.Errorf("got %q, want the message that followed the pongs", got)
 	}
+
+	events := rec.snapshot()
+	var seq []byte
+	for _, e := range events {
+		seq = append(seq, e.kind)
+	}
+	// One deadline before each of the eleven frames' reads: D R D R ... D R.
+	want := bytes.Repeat([]byte("DR"), pongs+1)
+	if !bytes.Equal(seq, want) {
+		t.Fatalf("deadline/read order = %s, want %s: some frame was read without resetting the idle timer", seq, want)
+	}
+	for i, e := range events {
+		if e.kind != 'D' {
+			continue
+		}
+		if left := e.deadline.Sub(e.at); left <= 0 || left > idle {
+			t.Errorf("event %d: deadline %v after it was set, want a fresh one within the idle timeout %v", i, left, idle)
+		}
+	}
+}
+
+// deadlineRecorder logs, in order, each read deadline set on a conn ('D', with
+// the deadline and when it was set) and each read that returned data ('R').
+type deadlineRecorder struct {
+	net.Conn
+	mu     sync.Mutex
+	events []deadlineEvent
+}
+
+type deadlineEvent struct {
+	kind         byte
+	at, deadline time.Time
+}
+
+func (r *deadlineRecorder) SetReadDeadline(d time.Time) error {
+	r.mu.Lock()
+	r.events = append(r.events, deadlineEvent{kind: 'D', at: time.Now(), deadline: d})
+	r.mu.Unlock()
+	return r.Conn.SetReadDeadline(d)
+}
+
+func (r *deadlineRecorder) Read(b []byte) (int, error) {
+	n, err := r.Conn.Read(b)
+	if n > 0 {
+		r.mu.Lock()
+		r.events = append(r.events, deadlineEvent{kind: 'R'})
+		r.mu.Unlock()
+	}
+	return n, err
+}
+
+func (r *deadlineRecorder) snapshot() []deadlineEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]deadlineEvent(nil), r.events...)
 }
 
 // WritePing sends a ping a client is required to answer. That answer is what
