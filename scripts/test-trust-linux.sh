@@ -5,7 +5,7 @@
 #
 #   scripts/test-trust-linux.sh
 set -euo pipefail
-image="${GO_IMAGE:-golang:1.25}"
+image="${GO_IMAGE:-golang:1.26}"
 # colima mounts the host's home read-only, so the files the containers hand to
 # each other live in a throwaway volume, not in a host directory.
 vol="jumpgate-trust-$$"

@@ -328,7 +328,7 @@ host and open the printed link on your machine.
 
 ### Build from source
 
-Requires Go 1.25+ and Node 22+.
+Requires Go 1.26+ and Node 22+.
 
 ```bash
 git clone https://github.com/jumpgate-tech/jumpgate-app.git

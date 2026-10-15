@@ -13,7 +13,7 @@
 set -euo pipefail
 
 if [ "${1:-}" != "--inside" ]; then
-  image="${GO_IMAGE:-golang:1.25-bookworm}"
+  image="${GO_IMAGE:-golang:1.26-bookworm}"
   docker volume create jumpgate-gocache >/dev/null
   exec docker run --rm --init \
     -v "$PWD":/src -w /src \

@@ -36,7 +36,7 @@ web:
 
 go-linux:
   stage: test
-  image: golang:1.25-bookworm
+  image: golang:1.26-bookworm
   timeout: 60m
   cache:
     key:
@@ -65,7 +65,7 @@ go-linux:
 
 cross:
   stage: test
-  image: golang:1.25-bookworm
+  image: golang:1.26-bookworm
   timeout: 60m
   cache:
     key:
@@ -90,7 +90,7 @@ cross:
 # Running the tray tests needs Windows: the local VM or the windows job.
 windows-tray-cross:
   stage: test
-  image: golang:1.25-trixie
+  image: golang:1.26-trixie
   cache:
     key:
       files: [go.sum]
@@ -131,7 +131,13 @@ windows:
   allow_failure: true
   script:
     - |
-      $goVer = (Select-String -Path go.mod -Pattern '^go\s+(\S+)').Matches[0].Groups[1].Value
+      # The newest stable release of go.mod's major.minor, not the directive
+      # itself: the directive is the minimum (1.26.0), which predates the
+      # stdlib security fixes.
+      $minor = ((Select-String -Path go.mod -Pattern '^go\s+(\S+)').Matches[0].Groups[1].Value -split '\.')[0..1] -join '.'
+      $ProgressPreference = 'SilentlyContinue'
+      $rels = Invoke-RestMethod "https://go.dev/dl/?mode=json"
+      $goVer = ($rels | Where-Object { $_.stable -and $_.version.StartsWith("go$minor.") } | Select-Object -First 1).version.Substring(2)
       $zip = "$env:TEMP\go.zip"
       # Windows PowerShell 5.1 draws a progress bar per chunk, which slows the
       # download from seconds to most of an hour.
@@ -162,7 +168,7 @@ windows:
 # runs in a Docker container on GitHub; here the job's image is that container).
 secret-service:
   stage: test
-  image: golang:1.25-bookworm
+  image: golang:1.26-bookworm
   cache:
     key:
       files: [go.sum]
@@ -196,7 +202,7 @@ icons:
 # cannot run on the shared docker runners. scripts/e2e-agent.sh is the local gate.
 e2e:
   stage: test
-  image: golang:1.25-bookworm
+  image: golang:1.26-bookworm
   when: manual
   allow_failure: true
   script:
@@ -209,7 +215,7 @@ e2e:
 # artifacts to inspect archives, checksums.txt and the raw agents.
 release-snapshot:
   stage: test
-  image: golang:1.25-bookworm
+  image: golang:1.26-bookworm
   timeout: 60m
   when: manual
   allow_failure: true

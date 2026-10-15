@@ -12,7 +12,7 @@ set -euo pipefail
 work="jumpgate-desktop-$$"
 docker volume create "$work" >/dev/null
 trap 'docker volume rm -f "$work" >/dev/null' EXIT
-go_version="${GO_VERSION:-1.25.0}"
+go_version="${GO_VERSION:-1.26.9}"
 # Resolved on the host: inside the container a linked worktree's .git file
 # points at a path that does not exist, so git there cannot describe it.
 version="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"

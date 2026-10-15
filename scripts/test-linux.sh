@@ -8,7 +8,7 @@
 #   AS_ROOT=1 scripts/test-linux.sh ./...         # as root (pairing as root)
 #   CGO_ENABLED=0 scripts/test-linux.sh ./internal/buildinfo/   # passed through
 set -euo pipefail
-image="${GO_IMAGE:-golang:1.25}"
+image="${GO_IMAGE:-golang:1.26}"
 [ $# -eq 0 ] && set -- ./...
 docker volume create jumpgate-gocache >/dev/null
 drop='exec setpriv --reuid=1000 --regid=1000 --clear-groups "$@"'

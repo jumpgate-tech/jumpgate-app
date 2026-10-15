@@ -166,7 +166,7 @@ stop_vm() {
   monitor quit; sleep 2; kill "$pid" 2>/dev/null || true; rm -f "$PIDFILE"
 }
 
-# Latest Go release with go.mod's major.minor (CI's setup-go uses "1.25" the same way).
+# Latest Go release with go.mod's major.minor (CI's setup-go uses "1.26" the same way).
 go_msi() {
   local minor
   minor="$(awk '$1=="go"{split($2,v,"."); print v[1]"."v[2]; exit}' "${GOMOD:-$repo/go.mod}")"
