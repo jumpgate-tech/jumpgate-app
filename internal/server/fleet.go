@@ -190,9 +190,10 @@ type fleetPoller struct {
 	// active counts loops that have not decided to stop, and maxActive its
 	// high-water mark, for the test that no two loops ever run at once.
 	active, maxActive int
-	// Test hooks: testIdleStopped runs after a loop decides to stop and
-	// before it returns; testLoopDone as it returns.
-	testIdleStopped, testLoopDone func()
+	// Test hooks: testRoundStarting runs in the loop before each round;
+	// testIdleStopped after a loop decides to stop and before it returns;
+	// testLoopDone as it returns.
+	testRoundStarting, testIdleStopped, testLoopDone func()
 	// testProbeHandedOver runs in a probe's goroutine right after it hands
 	// its reading to the worker.
 	testProbeHandedOver func()
@@ -313,6 +314,9 @@ func (p *fleetPoller) loop() {
 		defer p.testLoopDone()
 	}
 	for {
+		if p.testRoundStarting != nil {
+			p.testRoundStarting()
+		}
 		p.round(p.ctx)
 		if !p.sleep() {
 			p.mu.Lock()

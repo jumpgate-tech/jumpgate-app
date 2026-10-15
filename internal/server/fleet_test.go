@@ -20,6 +20,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/monitor"
 	"github.com/valve-tech/jumpgate/internal/ops"
 )
@@ -165,8 +166,15 @@ func fleetServer(t *testing.T, targets ...config.Target) (*Server, *fakeProber, 
 	fp := newFakeProber()
 	s.fleet.probe = fp
 	// Cleanups run last first: the HTTP server closes, then the poller stops
-	// and waits for its goroutines, before any test restores the timing
-	// globals it shortened (Ruling T9).
+	// and waits for its goroutines, then the jobs hub (as the server's own
+	// shutdown does: a round's listing is the hub's and outlives the
+	// poller), before any test restores the timing globals it shortened
+	// (Ruling T9).
+	t.Cleanup(func() {
+		if !s.jobs.stopWithin(5 * time.Second) {
+			t.Error("the jobs hub did not stop")
+		}
+	})
 	t.Cleanup(s.fleet.stop)
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
@@ -254,7 +262,15 @@ func TestFleetUnknownStaysUnknown(t *testing.T) {
 // Before the first poll every box is listed, as loading: no values, no
 // error and no check time, never an empty fleet.
 func TestFleetListsEveryBoxBeforeTheFirstPoll(t *testing.T) {
-	_, _, ts, token := fleetServer(t, config.Target{ID: "a", Mode: "ssh", Agent: paired}, config.Target{ID: "b", Mode: "ssh", Wire: wired})
+	s, _, ts, token := fleetServer(t, config.Target{ID: "a", Mode: "ssh", Agent: paired}, config.Target{ID: "b", Mode: "ssh", Wire: wired})
+	// The GET starts the poller, whose first round races the response.
+	// Hold that round until the poller stops, so the response is always
+	// taken before the first poll, as a slow box would make it.
+	roundHeld := make(chan struct{}, 1)
+	s.fleet.testRoundStarting = func() {
+		roundHeld <- struct{}{}
+		<-s.fleet.ctx.Done()
+	}
 	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/fleet", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	res, err := http.DefaultClient.Do(req)
@@ -275,6 +291,11 @@ func TestFleetListsEveryBoxBeforeTheFirstPoll(t *testing.T) {
 	b := f.Rows[1]
 	if b.ID != "b" || b.Link != api.LinkSSHOnly || b.ChainID != 369 || b.Network == "" || b.Status != nil || b.Error != nil || b.CheckedAt != nil || b.Reachable {
 		t.Fatalf("row b before the first poll %+v", b)
+	}
+	select {
+	case <-roundHeld: // the GET did start the poller
+	case <-time.After(5 * time.Second):
+		t.Fatal("the GET did not start the poller")
 	}
 }
 
@@ -437,11 +458,42 @@ func TestFleetPollerStopIsFinal(t *testing.T) {
 	fleetStatusEvery = 10 * time.Millisecond
 	t.Cleanup(func() { fleetStatusEvery = oldEvery })
 	s, _, _, _ := fleetServer(t, config.Target{ID: "a", Mode: "ssh", Agent: paired})
-	s.fleet.want()
-	s.fleet.stop()
-	if s.fleet.isRunning() || fleetGoroutines() != 0 {
-		t.Fatalf("running %v, %d goroutines after stop", s.fleet.isRunning(), fleetGoroutines())
+	// The round waits for the jobs hub's listing only while the round lasts:
+	// the listing is the hub's, and outlives the poller's stop until the
+	// hub's own stop. Hold it, so it reports to the poller after the stop
+	// every time, as a slow box makes it do.
+	listing, release := make(chan struct{}, 1), make(chan struct{})
+	s.jobs.listJobs = func(ctx context.Context, _ config.Config, _ config.Target) (intent.JobListResult, error) {
+		listing <- struct{}{}
+		<-release
+		return intent.JobListResult{}, errors.New("released")
 	}
+	loopDone := make(chan struct{})
+	s.fleet.testLoopDone = func() { close(loopDone) }
+	_, unsubscribe := s.fleet.subscribe() // a subscriber, so a late report would publish
+	defer unsubscribe()
+	<-listing // the first round is waiting on the listing
+	s.fleet.stop()
+	select {
+	case <-loopDone:
+	default:
+		t.Fatal("stop returned before the loop ended")
+	}
+	if s.fleet.isRunning() {
+		t.Fatal("running after stop")
+	}
+	// The listing reports to the stopped poller, which must not publish.
+	close(release)
+	if !s.jobs.stopWithin(5 * time.Second) {
+		t.Fatal("the jobs hub did not stop")
+	}
+	s.fleet.mu.Lock()
+	pending := s.fleet.pubTimer != nil
+	s.fleet.mu.Unlock()
+	if pending {
+		t.Fatal("the stopped poller scheduled a publish")
+	}
+	requireNoFleetGoroutines(t)
 	s.fleet.want()
 	if s.fleet.isRunning() {
 		t.Fatal("want restarted a stopped poller")
