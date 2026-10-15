@@ -143,6 +143,9 @@ windows:
       # download from seconds to most of an hour.
       $ProgressPreference = 'SilentlyContinue'
       Invoke-WebRequest "https://go.dev/dl/go$goVer.windows-amd64.zip" -OutFile $zip
+      # Unpacking over an older Go leaves its files behind (Go 1.25's
+      # internal/abi beside 1.26's), and the mix does not build.
+      if (Test-Path C:\goroot\go) { Remove-Item C:\goroot\go -Recurse -Force }
       Expand-Archive $zip -DestinationPath C:\goroot -Force
       $env:PATH = "C:\goroot\go\bin;$env:PATH"
       $tmp = Join-Path $env:TEMP "jg-home"
