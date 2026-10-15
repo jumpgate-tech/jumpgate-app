@@ -9,7 +9,8 @@
 #   vm.sh status      # running or not, and whether SSH answers
 #   vm.sh wait [sec]  # wait until SSH answers (default 600 s)
 #   vm.sh ssh [cmd]   # SSH in (default shell is Windows PowerShell)
-#   vm.sh provision   # (re)install Go matching go.mod's minor version, and Git for Windows
+#   vm.sh provision   # (re)install Go matching go.mod's minor version, and Git for Windows;
+#                     # enable the ssh-agent service
 #   vm.sh screenshot  # dump the VGA console to <vm dir>/screen.png (debugging)
 #
 # State lives in $JUMPGATE_WIN_VM_DIR (default ~/vms/jumpgate-win), never in the
@@ -227,6 +228,10 @@ provision() {
   else
     log "Git already installed"
   fi
+  # The agent tests (JUMPGATE_TEST_WIN_AGENT=1, set machine-wide for the CI
+  # runner) need the OpenSSH agent service; Windows ships it disabled.
+  log "enabling the ssh-agent service"
+  vm_ssh 'Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent' </dev/null
   vm_ssh '& "C:\Program Files\Go\bin\go.exe" version; & "C:\Program Files\Git\cmd\git.exe" --version; tar.exe --version' </dev/null
 }
 
