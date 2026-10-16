@@ -81,6 +81,19 @@ func Sign(ctx context.Context, s signer.Signer, job string, index uint64, prev [
 // entry count) with a length it recorded independently, such as the
 // manifest's, to detect truncation.
 func Verify(agent eip712.Address, job string, entries []Entry, start uint64, prev [32]byte) ([32]byte, error) {
+	return walk(agent, job, entries, start, prev, true)
+}
+
+// Chain is Verify without the signatures: it checks positions and the digest
+// chain only, and recovers nothing. It is for the agent reading back its own
+// log, where a signature adds nothing against damage the chain and a
+// recorded head do not catch; anyone checking a log they were handed must
+// use Verify.
+func Chain(agent eip712.Address, job string, entries []Entry, start uint64, prev [32]byte) ([32]byte, error) {
+	return walk(agent, job, entries, start, prev, false)
+}
+
+func walk(agent eip712.Address, job string, entries []Entry, start uint64, prev [32]byte, sigs bool) ([32]byte, error) {
 	for k, e := range entries {
 		want := start + uint64(k)
 		if e.Index != want {
@@ -89,9 +102,11 @@ func Verify(agent eip712.Address, job string, entries []Entry, start uint64, pre
 		if e.Prev != prev {
 			return prev, fmt.Errorf("%w: entry %d does not follow entry %d", ErrBroken, want, int64(want)-1)
 		}
-		who, err := signer.Recover(e.TypedData(agent, job), e.Sig)
-		if err != nil || who != agent {
-			return prev, fmt.Errorf("%w: entry %d is not signed by agent %s", ErrBroken, want, agent.Hex())
+		if sigs {
+			who, err := signer.Recover(e.TypedData(agent, job), e.Sig)
+			if err != nil || who != agent {
+				return prev, fmt.Errorf("%w: entry %d is not signed by agent %s", ErrBroken, want, agent.Hex())
+			}
 		}
 		d, err := e.Digest(agent, job)
 		if err != nil {

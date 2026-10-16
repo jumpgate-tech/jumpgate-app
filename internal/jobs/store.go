@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/filelock"
 	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/intent"
@@ -126,9 +127,24 @@ func (s *Store) checkFresh(m *Manifest, allowMissing bool) error {
 	return nil
 }
 
-// verifyLog checks a whole log against the agent's key. It is a variable so a
-// test can count how often a log is verified.
-var verifyLog = joblog.Verify
+// The agent's check of its own log. Root on the box holds the key and both
+// files, so re-checking the agent's own signatures defends against nothing
+// an attacker does; what it must catch is a crash or a bug, and for that
+// the digest chain from entry 0, against the count and head the manifest
+// recorded, is enough (a dropped, edited or reordered entry breaks one of
+// them). A signature is not part of the digest, so the chain cannot see a
+// torn one: Load recovers the last entry's, the one a crash mid-write can
+// leave. Every signature is checked where it matters, by a controller
+// reading the log (joblog.Verify).
+//
+// chainLog and verifyEntry are variables so a test can count calls.
+var (
+	chainLog    = joblog.Chain
+	verifyEntry = func(agent eip712.Address, job string, e joblog.Entry) error {
+		_, err := joblog.Verify(agent, job, []joblog.Entry{e}, e.Index, e.Prev)
+		return err
+	}
+)
 
 // syncFile fsyncs a log file. It is a variable so a test can make the fsync
 // of an append fail.
@@ -207,7 +223,7 @@ func (s *Store) appendLocked(ctx context.Context, m *Manifest, kind string, body
 	if err != nil {
 		return err
 	}
-	head, err := verifyLog(s.key.Address(), m.ID, entries, 0, [32]byte{})
+	head, err := chainLog(s.key.Address(), m.ID, entries, 0, [32]byte{})
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrDamaged, err)
 	}
@@ -343,24 +359,40 @@ func (s *Store) loadLocked(id string) (Manifest, error) {
 	if err != nil {
 		return m, err
 	}
-	head, err := verifyLog(s.key.Address(), id, entries, 0, [32]byte{})
+	head, err := chainLog(s.key.Address(), id, entries, 0, [32]byte{})
 	if err != nil {
 		return m, fmt.Errorf("%w: %v", ErrDamaged, err)
 	}
-	// Verify proves only a valid prefix, so the manifest's own record of the
-	// log is what catches a dropped tail: both the count and the head digest
-	// must agree.
+	// The chain proves only a valid prefix, so the manifest's own record of
+	// the log is what catches a dropped tail: both the count and the head
+	// digest must agree. A log that does is signed at its tail, or damaged.
 	n, headHex := uint64(len(entries)), "0x"+hex.EncodeToString(head[:])
 	switch {
 	case n == m.LogLen && headHex == manifestPrev(m):
-		return m, nil
+		return m, s.verifyTail(id, entries)
 	case n == m.LogLen+1 && n > 0 && "0x"+hex.EncodeToString(entries[n-1].Prev[:]) == manifestPrev(m):
 		// One entry past the manifest, chained onto the head it recorded: an
-		// append whose manifest save a crash cut off.
+		// append whose manifest save a crash cut off. Its signature is checked
+		// before the manifest adopts it.
+		if err := s.verifyTail(id, entries); err != nil {
+			return m, err
+		}
 		m.LogLen, m.LogHead = n, headHex
 		return m, s.saveLocked(&m)
 	}
 	return m, fmt.Errorf("%w: job %s's log has %d entries (head %s), its manifest expects %d (head %s)", ErrDamaged, id, n, headHex, m.LogLen, manifestPrev(m))
+}
+
+// verifyTail recovers the signature of the last of entries, if any: the one
+// damage the digest chain cannot see is a torn signature.
+func (s *Store) verifyTail(id string, entries []joblog.Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	if err := verifyEntry(s.key.Address(), id, entries[len(entries)-1]); err != nil {
+		return fmt.Errorf("%w: %v", ErrDamaged, err)
+	}
+	return nil
 }
 
 // manifestPrev is the head the manifest recorded, with the empty head of a

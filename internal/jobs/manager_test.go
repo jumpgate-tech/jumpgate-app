@@ -961,12 +961,12 @@ func TestReconcileDoesNotVerifyFinishedJobs(t *testing.T) {
 		}
 	}
 	waiting, _ := g.start(t, g.a, `{}`)
-	orig, calls := verifyLog, 0
-	verifyLog = func(agent eip712.Address, id string, es []joblog.Entry, from uint64, prev [32]byte) ([32]byte, error) {
+	orig, calls := chainLog, 0
+	chainLog = func(agent eip712.Address, id string, es []joblog.Entry, from uint64, prev [32]byte) ([32]byte, error) {
 		calls++
 		return orig(agent, id, es, from, prev)
 	}
-	t.Cleanup(func() { verifyLog = orig })
+	t.Cleanup(func() { chainLog = orig })
 	if err := g.m.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
