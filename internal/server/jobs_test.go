@@ -795,3 +795,31 @@ func TestJobLogCacheFollowsTheListing(t *testing.T) {
 		t.Fatal("a removed box's log is still cached")
 	}
 }
+
+// storeMark keeps a mark only for a job the hub's listing has: an unlisted
+// key, a removed target and an unsupported box all keep nothing.
+func TestStoreMarkKeepsOnlyListedJobs(t *testing.T) {
+	h := &jobsHub{boxes: map[string]*boxJobs{}, marks: map[jobKey]logMark{}}
+	h.boxes["a"] = &boxJobs{jobs: []intent.JobRecord{{ID: "j1"}}}
+	h.boxes["old"] = &boxJobs{unsupported: true, jobs: []intent.JobRecord{{ID: "j1"}}}
+	m := logMark{len: 3}
+
+	listed := jobKey{"a", "j1"}
+	h.storeMark(listed, m)
+	if got, ok := h.marks[listed]; !ok || got != m {
+		t.Fatalf("a listed job must keep its mark, got %+v, %v", got, ok)
+	}
+	for name, k := range map[string]jobKey{
+		"unlisted job":   {"a", "j2"},
+		"removed target": {"gone", "j1"},
+		"unsupported":    {"old", "j1"},
+	} {
+		h.storeMark(k, m)
+		if _, ok := h.marks[k]; ok {
+			t.Errorf("%s: storeMark must refuse to keep a mark", name)
+		}
+	}
+	if len(h.marks) != 1 {
+		t.Errorf("only the listed job's mark may be kept, have %d", len(h.marks))
+	}
+}
