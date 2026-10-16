@@ -675,6 +675,33 @@ func TestTheDriverReadsOnFromItsMark(t *testing.T) {
 	}
 }
 
+// A page the box cannot have sent honestly is refused: an entry that does
+// not parse, "more" with nothing in it, a record with no head for a log.
+func TestJobDetailRefusesABadPage(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t, withoutDriver)
+	rec := b.startJob(t, `{}`)
+	honest := b.fullRead(t, rec.ID)
+
+	garbled := honest
+	garbled.Entries = append([]intent.JobLogEntryJSON(nil), honest.Entries...)
+	garbled.Entries[0].Prev = "0x12"
+	b.serve(garbled)
+	b.detailRefused(t, rec.ID, "prev is not 32 bytes")
+
+	b.srv.jobs.readJob = func(_ context.Context, _ config.Config, _ config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
+		out := honest
+		out.Entries, out.More = nil, true
+		return out, nil
+	}
+	b.detailRefused(t, rec.ID, "more log but sent none")
+
+	headless := honest
+	headless.Job.LogHead = ""
+	b.serve(headless)
+	b.detailRefused(t, rec.ID, "ending \"\"")
+}
+
 // M1: a log starts with its one created entry.
 func TestJobDetailRefusesAMisshapenLog(t *testing.T) {
 	requireAgentPeer(t)

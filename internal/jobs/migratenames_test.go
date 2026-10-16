@@ -1049,4 +1049,8 @@ func TestProcsKeepsOnlyPidAndName(t *testing.T) {
 	if err != nil || strings.Join(got, ";") != "1 reth;2 lighthouse" {
 		t.Fatalf("procs = %q, %v", got, err)
 	}
+	ex.on("pgrep -l -u u", executor.Result{ExitCode: 2, Stderr: "pgrep: bad user\n"})
+	if _, err := procs(context.Background(), Env{Exec: ex}, "u"); err == nil || !strings.Contains(err.Error(), "bad user") {
+		t.Fatalf("a failing pgrep = %v", err)
+	}
 }

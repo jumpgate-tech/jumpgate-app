@@ -115,6 +115,27 @@ func TestLoadDetectsABadSignatureOnTheLastEntry(t *testing.T) {
 	}
 }
 
+// An entry one past the manifest is adopted only if its signature holds: a
+// crash can tear the entry it was writing.
+func TestLoadDoesNotAdoptAnEntryWithABadSignature(t *testing.T) {
+	s, _, _ := testStore(t)
+	m, mbody := newManifest(t)
+	ctx := context.Background()
+	mustOK(t, s.Create(ctx, &m, mbody))
+	es, _, err := s.ReadLog(m.ID, 0, 1)
+	mustOK(t, err)
+	stale := m
+	mustOK(t, s.Append(ctx, &m, joblog.KindStepStarted, joblog.StepBody{Step: "one"}))
+	writeManifest(t, s, &stale)
+	rewriteEntry(t, s, m.ID, 1, func(e *intent.JobLogEntryJSON) { e.Sig = es[0].Sig.Hex() })
+	if _, err := s.Load(m.ID); !errors.Is(err, ErrDamaged) {
+		t.Fatalf("Load = %v, want ErrDamaged", err)
+	}
+	if disk, err := LoadManifest(s.Dir(), m.ID); err != nil || disk.LogLen != stale.LogLen {
+		t.Fatalf("the manifest adopted the entry: %d, %v", disk.LogLen, err)
+	}
+}
+
 // An edited entry breaks the digest chain at the next entry, or the
 // manifest's head at the last, and is found without recovering a signature.
 func TestTheChainCatchesAnEditedEntry(t *testing.T) {

@@ -398,6 +398,30 @@ func TestStartingAJobChecksTheEnvelopeItLogs(t *testing.T) {
 	}
 }
 
+// The lease kinds reach the manager through Handle, and a request for a job
+// the box does not have is the manager's own signed refusal.
+func TestLeaseAndAdvanceThroughTheAgent(t *testing.T) {
+	r, _ := jobsRig(t)
+	rec := ok[intent.JobRecord](t)(r.send(t, jobstest.TestKind, map[string]string{}, nil))
+	if got := ok[intent.JobRecord](t)(r.send(t, intent.KindJobLease, intent.JobLeasePayload{ID: rec.ID, Op: intent.LeaseRelease}, nil)); got.Lease.Owner != "" {
+		t.Fatalf("after release: %+v", got.Lease)
+	}
+	if got := ok[intent.JobRecord](t)(r.send(t, intent.KindJobLease, intent.JobLeasePayload{ID: rec.ID, Op: intent.LeaseTake}, nil)); got.Lease.Owner != r.controller.Address().Hex() {
+		t.Fatalf("after take: %+v", got.Lease)
+	}
+	const missing = "0123456789abcdef"
+	for kind, pl := range map[string]any{
+		intent.KindJobLease:   intent.JobLeasePayload{ID: missing, Op: intent.LeaseTake},
+		intent.KindJobAdvance: intent.JobAdvancePayload{ID: missing},
+		intent.KindJobRead:    intent.JobReadPayload{ID: missing},
+	} {
+		rc, res := r.send(t, kind, pl, nil)
+		if got := rejection(t, rc, res).Code; got != intent.ReasonJobNotFound {
+			t.Errorf("%s of a missing job: %s", kind, got)
+		}
+	}
+}
+
 // syncBuffer is a log sink RunJobs writes from its own goroutine.
 type syncBuffer struct {
 	mu sync.Mutex
