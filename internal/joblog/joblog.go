@@ -118,12 +118,13 @@ func JobIDFor(in intent.Intent) (string, error) {
 }
 
 // VerifyIntents checks every entry that records a request: the intent was
-// addressed to this agent, the controller it names signed it over exactly the
-// payload recorded, and (for a later request) the payload names this job.
-// Without those bindings a genuine intent signed for another agent or job
-// would pass and wrongly credit its controller. A created entry's payload
-// (node.migrate-names) carries no job id; its intent must instead be the one
-// the job id is derived from (JobIDFor). The agent checked all this
+// addressed to this agent, the controller it names signed it, and it is
+// about this job. Without those bindings a genuine intent signed for another
+// agent or job would pass and wrongly credit its controller. A created entry
+// records no payload (D1); its intent must be the one the job id is derived
+// from (JobIDFor), and the signed intent's payloadHash commits to the inputs
+// the agent checked at admission. A later request's payload names its job,
+// and is checked against the signed payloadHash. The agent checked all this
 // when it admitted the intent; a controller checks it again because the log
 // is how it learns who asked for what.
 //
@@ -168,7 +169,12 @@ func VerifyIntents(agent eip712.Address, job string, entries []Entry) error {
 				return fmt.Errorf("%w: entry %d: the intent is not for job %s", ErrBroken, e.Index, job)
 			}
 		}
-		if intent.Hash(b.Envelope.Payload) != in.PayloadHash {
+		// A created entry written today has no payload (D1, see IntentBody),
+		// and needs none: the controller's signature below covers the intent,
+		// whose payloadHash commits to the inputs. One written before carries
+		// the payload, which must still be the one signed. A later request
+		// always carries its payload: the id check above read it.
+		if (e.Kind == KindIntent || b.Envelope.Payload != nil) && intent.Hash(b.Envelope.Payload) != in.PayloadHash {
 			return fmt.Errorf("%w: entry %d: the payload is not the one signed", ErrBroken, e.Index)
 		}
 		named := false

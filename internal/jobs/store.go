@@ -172,6 +172,9 @@ func (s *Store) Create(ctx context.Context, m *Manifest, created joblog.IntentBo
 	if err := s.saveLocked(m); err != nil {
 		return err
 	}
+	// The creating payload is the job's inputs: the manifest keeps them, the
+	// signed log never does (D1, see joblog.IntentBody).
+	created.Envelope.Payload = nil
 	return s.appendLocked(ctx, m, joblog.KindCreated, created)
 }
 

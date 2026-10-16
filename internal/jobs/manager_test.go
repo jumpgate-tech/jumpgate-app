@@ -3,6 +3,7 @@ package jobs
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -74,6 +75,39 @@ func TestAJobRunsStepByStepAndSucceeds(t *testing.T) {
 	}
 	if err := joblog.VerifyIntents(g.box.Address(), rec.ID, es); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// D1: a job's inputs may one day carry a secret, and a signed log cannot be
+// redacted. The created entry records the creating intent and its
+// signatures, which commit to the inputs through the payload hash, and not
+// the inputs; the manifest keeps them for the steps. The log still verifies.
+func TestTheLogNeverRecordsTheCreatingPayload(t *testing.T) {
+	g := newRig(t)
+	const secret = "vk_s3cr3tsnapshotkey"
+	rec, err := g.start(t, g.a, `{"Note":"`+secret+`"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = g.advance(t, g.a, rec.ID)
+	es, _, err := g.m.store.ReadLog(rec.ID, 0, 0)
+	if err != nil || len(es) < 2 {
+		t.Fatalf("log %d entries, %v", len(es), err)
+	}
+	for _, e := range es {
+		if bytes.Contains(e.Body, []byte(secret)) || bytes.Contains(e.Body, []byte(base64.StdEncoding.EncodeToString([]byte(`{"Note":"`+secret+`"}`)))) {
+			t.Fatalf("entry %d (%s) records the creating payload: %s", e.Index, e.Kind, e.Body)
+		}
+	}
+	var created joblog.IntentBody
+	if err := json.Unmarshal(es[0].Body, &created); err != nil || created.Envelope.Payload != nil || len(created.Envelope.Sigs) != 1 || created.Envelope.Intent.PayloadHash == "" {
+		t.Fatalf("created entry %s: %v", es[0].Body, err)
+	}
+	if err := joblog.VerifyIntents(g.box.Address(), rec.ID, es); err != nil {
+		t.Fatal(err)
+	}
+	if man, err := g.m.store.Load(rec.ID); err != nil || !bytes.Contains(man.Inputs, []byte(secret)) {
+		t.Fatalf("the manifest lost the inputs the steps read: %s, %v", man.Inputs, err)
 	}
 }
 
