@@ -211,6 +211,12 @@ func (s *Store) Append(ctx context.Context, m *Manifest, kind string, body any) 
 	return s.appendLocked(ctx, m, kind, body)
 }
 
+// appendLocked recovers no signatures: it chains the log's digests but never
+// verifies an entry's signature. Its safety relies on a prior Load having
+// verified the last entry's signature (verifyTail), so the entry it chains
+// onto is known to be ours. Every Manager path loads the job (Manager.load or
+// Store.Load) under the manager lock before it appends; Create appends only
+// to a log it has just made empty.
 func (s *Store) appendLocked(ctx context.Context, m *Manifest, kind string, body any) error {
 	if err := s.checkFresh(m, false); err != nil {
 		return err
