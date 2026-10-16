@@ -330,85 +330,71 @@ func TestJobIntentsRefuseABadID(t *testing.T) {
 	}
 }
 
-// startEnvelope is a signed envelope of kind over body, which mutate may
-// alter before it is signed.
-func startEnvelope(t *testing.T, r *rig, kind string, body []byte, mutate func(*intent.Intent)) (intent.Intent, intent.Envelope) {
-	t.Helper()
-	r.seq++
-	n, _ := intent.NewNonce()
-	i := intent.Intent{Agent: r.agentKey.Address(), Controller: r.controller.Address(), Seq: r.seq, Nonce: n,
-		IssuedAt: uint64(r.now.Unix()), Expiry: uint64(r.now.Unix() + 120), Kind: kind, PayloadHash: intent.Hash(body)}
-	if mutate != nil {
-		mutate(&i)
-	}
-	sig, _ := r.controller.SignTypedData(context.Background(), i.TypedData())
-	return i, intent.Envelope{Intent: i.JSON(), Payload: body, Sigs: []string{sig.Hex()}}
-}
-
-// The start-job admission checks hold at the dispatcher itself, not only in
-// Handle: a job's first log entry is the envelope that started it, so it must
-// be signed by its controller, for this box, of the kind started, over the
-// inputs passed. Each check is shown failing alone.
+// A job's first log entry is the envelope that started it, and its id is that
+// envelope's digest, so a start must be signed by the controller it names,
+// addressed to this box, of a kind this box runs and over the inputs passed.
+// Handle is the one admission: each property is shown failing alone through
+// it, and the job a good start creates is of the intent's kind and records
+// exactly the intent admitted.
 func TestStartingAJobChecksTheEnvelopeItLogs(t *testing.T) {
 	r, _ := jobsRig(t)
 	body := []byte(`{}`)
-	ctl := []eip712.Address{r.controller.Address()}
 	stranger, _ := signer.GenerateKey()
-	pol, err := LoadPolicy(filepath.Join(r.dir, "policy.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, good := startEnvelope(t, r, jobstest.TestKind, body, nil)
-	_, elsewhere := startEnvelope(t, r, jobstest.TestKind, body, func(i *intent.Intent) { i.Agent = eip712.Address{1} })
-	if rej := r.a.checkStart(jobstest.TestKind, body, good, ctl); rej != nil {
-		t.Fatalf("a good start: %+v", rej)
+	start := func(by *signer.Key, mutate func(*intent.Intent)) (intent.Intent, intent.Receipt, []byte) {
+		r.seq++
+		n, _ := intent.NewNonce()
+		i := intent.Intent{Agent: r.agentKey.Address(), Controller: r.controller.Address(), Seq: r.seq, Nonce: n,
+			IssuedAt: uint64(r.now.Unix()), Expiry: uint64(r.now.Unix() + 120), Kind: jobstest.TestKind, PayloadHash: intent.Hash(body)}
+		if mutate != nil {
+			mutate(&i)
+		}
+		sig, _ := by.SignTypedData(context.Background(), i.TypedData())
+		out := r.a.Handle(context.Background(), intent.Envelope{Intent: i.JSON(), Payload: body, Sigs: []string{sig.Hex()}})
+		rc, err := out.Receipt.Parse()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return i, rc, out.Result
 	}
 	for _, c := range []struct {
 		name     string
-		kind     string
-		inputs   []byte
-		env      intent.Envelope
-		signers  []eip712.Address
+		by       *signer.Key
+		mutate   func(*intent.Intent)
 		wantCode string
 	}{
-		{"controller is not a signer", jobstest.TestKind, body, good, []eip712.Address{stranger.Address()}, intent.ReasonUnauthorizedKind},
-		{"addressed to another box", jobstest.TestKind, body, elsewhere, ctl, intent.ReasonWrongAgent},
-		{"another kind than the job's", intent.KindNodeMigrateNames, body, good, ctl, intent.ReasonInvalidPayload},
-		{"inputs that are not the signed payload", jobstest.TestKind, []byte(`{"FailAt":"one"}`), good, ctl, intent.ReasonInvalidPayload},
+		{"controller is not a signer", stranger, nil, intent.ReasonUnauthorizedKind},
+		{"addressed to another box", r.controller, func(i *intent.Intent) { i.Agent = eip712.Address{1} }, intent.ReasonWrongAgent},
+		{"inputs that are not the signed payload", r.controller, func(i *intent.Intent) { i.PayloadHash = intent.Hash([]byte(`{"FailAt":"one"}`)) }, intent.ReasonInvalidPayload},
+		{"a kind this box does not run", r.controller, func(i *intent.Intent) { i.Kind = "job.nonesuch" }, intent.ReasonUnknownKind},
 	} {
-		if rej := r.a.checkStart(c.kind, c.inputs, c.env, c.signers); rej == nil || rej.Code != c.wantCode {
-			t.Errorf("%s: %+v, want %s", c.name, rej, c.wantCode)
+		_, rc, res := start(c.by, c.mutate)
+		if got := rejection(t, rc, res).Code; got != c.wantCode {
+			t.Errorf("%s: %s, want %s", c.name, got, c.wantCode)
 		}
-	}
-
-	// dispatchJob runs the checks, and also refuses an envelope that is not
-	// the intent Handle admitted.
-	i, env := startEnvelope(t, r, jobstest.TestKind, body, nil)
-	if _, _, rej := r.a.dispatchJob(context.Background(), i, good, ctl, pol); rej == nil || rej.Code != intent.ReasonInvalidPayload {
-		t.Errorf("another intent's envelope: %+v", rej)
-	}
-	if _, _, rej := r.a.dispatchJob(context.Background(), i, env, []eip712.Address{stranger.Address()}, pol); rej == nil || rej.Code != intent.ReasonUnauthorizedKind {
-		t.Errorf("an unsigned controller: %+v", rej)
-	}
-	iElsewhere, envElsewhere := startEnvelope(t, r, jobstest.TestKind, body, func(i *intent.Intent) { i.Agent = eip712.Address{1} })
-	if _, _, rej := r.a.dispatchJob(context.Background(), iElsewhere, envElsewhere, ctl, pol); rej == nil || rej.Code != intent.ReasonWrongAgent {
-		t.Errorf("a start for another box: %+v", rej)
 	}
 	if list, err := r.a.cfg.Jobs.List(); err != nil || len(list.Jobs) != 0 {
 		t.Fatalf("a refused start created a job: %+v %v", list, err)
 	}
 
-	// End to end, Handle refuses the same mismatches before admission.
-	for _, mutate := range []func(*intent.Intent){
-		func(i *intent.Intent) { i.Agent = eip712.Address{1} },
-		func(i *intent.Intent) { i.PayloadHash = intent.Hash([]byte(`{"FailAt":"one"}`)) },
-		func(i *intent.Intent) { i.Controller = stranger.Address() },
-	} {
-		rc, res := r.send(t, jobstest.TestKind, struct{}{}, mutate)
-		_ = rejection(t, rc, res)
+	i, rc, res := start(r.controller, nil)
+	if rc.Status != intent.StatusOK {
+		t.Fatalf("a good start: %s", res)
 	}
-	if list, _ := r.a.cfg.Jobs.List(); len(list.Jobs) != 0 {
-		t.Fatalf("a refused start created a job: %+v", list)
+	var rec intent.JobRecord
+	if err := json.Unmarshal(res, &rec); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := joblog.JobIDFor(i)
+	if rec.Kind != i.Kind || rec.ID != id || rec.CreatedBy != i.Controller.Hex() {
+		t.Fatalf("job %+v from intent %+v", rec, i)
+	}
+	read, err := r.a.cfg.Jobs.Read(rec.ID, 0)
+	if err != nil || len(read.Entries) == 0 || read.Entries[0].Kind != joblog.KindCreated {
+		t.Fatalf("the log: %+v %v", read.Entries, err)
+	}
+	var b joblog.IntentBody
+	if err := json.Unmarshal(read.Entries[0].Body, &b); err != nil || b.Envelope.Intent != i.JSON() {
+		t.Fatalf("entry 0 records %+v, not the admitted intent %+v (%v)", b.Envelope.Intent, i.JSON(), err)
 	}
 }
 
