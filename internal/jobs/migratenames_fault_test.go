@@ -73,7 +73,7 @@ func faultCases() map[string]faultCase {
 		"preflight finishing a half-migrated box": {step: "preflight", wire: migratedWire(), box: func() *scriptExec {
 			return migratedBox().on("test -e '/etc/systemd/system/valve-node-app-exec.service'", ok0)
 		}},
-		"stop-units": {step: "stop-units", wire: legacyWire(), box: func() *scriptExec { return legacyBox().on("pgrep -a -u", fail1) }},
+		"stop-units": {step: "stop-units", wire: legacyWire(), box: func() *scriptExec { return legacyBox().on("pgrep -l -u", fail1) }},
 		"rename-account": {step: "rename-account", wire: legacyWire(), box: func() *scriptExec {
 			return legacyBox().on("id -u jumpgate-node", fail1, idOK("998")).on("getent group jumpgate-node", fail1, stdout("jumpgate-node:x:998:\n"))
 		}},

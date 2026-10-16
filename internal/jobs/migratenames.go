@@ -426,18 +426,22 @@ func toEnable(pre migratePreflight) []string {
 	return units
 }
 
-// procs is every process of user, one "pid command" line each.
+// procs is every process of user, one "pid name" line each. It asks pgrep
+// for names only (-l), never argv (-a): a client's command line can carry a
+// credential, and these lines reach the journal, the signed log (a question
+// or an error) and every controller. A line holding more than a pid and a
+// name is cut to those two, so the rest never reaches a prompt or an error.
 func procs(ctx context.Context, env Env, user string) ([]string, error) {
-	res, err := run(ctx, env, "pgrep -a -u "+user)
+	res, err := run(ctx, env, "pgrep -l -u "+user)
 	if err != nil {
 		return nil, err
 	}
 	switch res.ExitCode {
 	case 0:
 		var lines []string
-		for _, l := range strings.Split(strings.TrimSpace(res.Stdout), "\n") {
-			if l != "" {
-				lines = append(lines, l)
+		for _, l := range strings.Split(res.Stdout, "\n") {
+			if f := strings.Fields(l); len(f) > 0 {
+				lines = append(lines, strings.Join(f[:min(len(f), 2)], " "))
 			}
 		}
 		return lines, nil
