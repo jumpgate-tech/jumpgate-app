@@ -38,11 +38,15 @@ type StepBody struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// AnswerBody records a decision. It names the controller only: who signed
+// the decision is proven by the signatures in the decide intent entry before
+// it, not by anything the agent writes here. Entries written before this
+// carry a "signers" list as well, agent-asserted and unverified; reading
+// ignores it.
 type AnswerBody struct {
-	Question   string   `json:"question"`
-	Option     string   `json:"option"`
-	Controller string   `json:"controller"`
-	Signers    []string `json:"signers"`
+	Question   string `json:"question"`
+	Option     string `json:"option"`
+	Controller string `json:"controller"`
 }
 
 type LeaseBody struct {

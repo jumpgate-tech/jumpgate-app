@@ -417,7 +417,7 @@ type TierCheck func(tier string) error
 // between the agent's admission of the decision and this call (a fold by
 // this request's own reconcile, or by the loop), so a tier checked earlier
 // proves nothing about it (Q5). A nil authorised refuses every decision.
-func (m *Manager) Decide(ctx context.Context, id, decision, option string, who eip712.Address, signers []eip712.Address, authorised TierCheck, env intent.Envelope) (intent.JobRecord, error) {
+func (m *Manager) Decide(ctx context.Context, id, decision, option string, who eip712.Address, authorised TierCheck, env intent.Envelope) (intent.JobRecord, error) {
 	m.lock()
 	defer m.unlock()
 	man, plan, err := m.load(id)
@@ -453,15 +453,11 @@ func (m *Manager) Decide(ctx context.Context, id, decision, option string, who e
 		return intent.JobRecord{}, refuse(intent.ReasonInvalidPayload, fmt.Sprintf("%q is not an option of %s", option, decision))
 	}
 	_ = man.RenewLease(who, m.cfg.Now())
-	hexes := make([]string, len(signers))
-	for i, s := range signers {
-		hexes[i] = s.Hex()
-	}
 	if err := m.store.Append(ctx, &man, joblog.KindIntent, joblog.IntentBody{Envelope: env, Outcome: "decide " + option}); err != nil {
 		return intent.JobRecord{}, err
 	}
 	decideState(&man, plan, option, who.Hex())
-	answered := joblog.AnswerBody{Question: decision, Option: option, Controller: who.Hex(), Signers: hexes}
+	answered := joblog.AnswerBody{Question: decision, Option: option, Controller: who.Hex()}
 	if err := m.store.Append(ctx, &man, joblog.KindDecisionAnswered, answered); err != nil {
 		return intent.JobRecord{}, err
 	}

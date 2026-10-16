@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/testutil"
@@ -199,7 +198,7 @@ func (g *rig) decide(t *testing.T, k *signer.Key, id, decision, option string) (
 // decideAs is decide with the tier check the agent would pass.
 func (g *rig) decideAs(t *testing.T, k *signer.Key, id, decision, option string, check TierCheck) (intent.JobRecord, error) {
 	t.Helper()
-	return g.m.Decide(context.Background(), id, decision, option, k.Address(), []eip712.Address{k.Address()}, check,
+	return g.m.Decide(context.Background(), id, decision, option, k.Address(), check,
 		g.sign(t, k, intent.KindJobDecide, intent.JobDecidePayload{ID: id, Decision: decision, Option: option}))
 }
 

@@ -133,7 +133,7 @@ func (a *Agent) dispatchJob(ctx context.Context, i intent.Intent, env intent.Env
 		if rej != nil {
 			return nil, 0, rej
 		}
-		rec, err := m.Decide(ctx, pl.ID, pl.Decision, pl.Option, i.Controller, signers, decisionCheck(p, i.Controller, signers), env)
+		rec, err := m.Decide(ctx, pl.ID, pl.Decision, pl.Option, i.Controller, decisionCheck(p, i.Controller, signers), env)
 		if err != nil {
 			return jobFailure(err)
 		}

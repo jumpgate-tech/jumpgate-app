@@ -285,6 +285,8 @@ func TestDescribeGivesEachKindItsLine(t *testing.T) {
 		{KindStepLost, `{"step":"move-data","attempt":1}`, "step move-data attempt 1 stopped without a result"},
 		{KindDecisionAsked, `{"prompt":"two\nlines","tier":"approve"}`, "asked (approve tier): two lines"},
 		{KindDecisionAnswered, `{"question":"q","option":"stop","controller":"0xC2"}`, "answered stop by 0xC2"},
+		// An entry written before Signers was dropped still reads; the list is ignored.
+		{KindDecisionAnswered, `{"question":"q","option":"stop","controller":"0xC2","signers":["0xC2","0xD3"]}`, "answered stop by 0xC2"},
 		{KindLeaseTaken, `{"owner":"0xA"}`, "lease taken by 0xA"},
 		{KindLeaseTaken, `{"owner":"0xA","previous":"0xB"}`, "lease taken by 0xA from 0xB"},
 		{KindLeaseReleased, `{"owner":"0xA"}`, "lease released by 0xA"},

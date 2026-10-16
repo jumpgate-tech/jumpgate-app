@@ -385,6 +385,25 @@ func TestDecideChecksTheTierOfTheQuestionItAnswers(t *testing.T) {
 	if _, err := g.decideAs(t, g.a, rec.ID, rec.Question.ID, "go", func(tier string) error { asked = tier; return nil }); err != nil || asked != intent.TierApproval {
 		t.Fatalf("with the tier covered: %v (checked %q)", err, asked)
 	}
+	// The answer names its controller and no unverified list of signers:
+	// the signatures themselves are in the decide intent entry before it.
+	_, res := g.read(t, rec.ID)
+	found := false
+	for _, e := range res.Entries {
+		if e.Kind == joblog.KindDecisionAnswered {
+			found = true
+			var b map[string]any
+			if err := json.Unmarshal(e.Body, &b); err != nil || b["controller"] != g.a.Address().Hex() {
+				t.Fatalf("answer %s: %v", e.Body, err)
+			}
+			if _, ok := b["signers"]; ok {
+				t.Fatalf("the answer records signers: %s", e.Body)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no decision.answered entry")
+	}
 }
 
 // failManifestSave makes the n-th manifest save from now fail, once: a crash
