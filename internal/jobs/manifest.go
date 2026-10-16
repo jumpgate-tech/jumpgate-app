@@ -27,6 +27,11 @@ type Manifest struct {
 	intent.JobRecord
 	// Inputs are the job's inputs as the intent carried them: decisions, never
 	// rendered commands (for setup, the wire config plus the plan version).
+	//
+	// Secrets never travel in job inputs. A step's commands and stdout are
+	// echoed to the box journal by run, which the adm group can read and which
+	// outlives job pruning, and inputs live in this manifest. A step that
+	// needs a secret reads it from a root-only file on the box.
 	Inputs json.RawMessage `json:"inputs"`
 	// Results holds each finished step's result, by step id; later steps read them.
 	Results map[string]json.RawMessage `json:"results,omitempty"`

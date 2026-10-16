@@ -99,6 +99,9 @@ func RunStep(ctx context.Context, dir string, a StepArgs, base Env) error {
 		return errors.New("jobs: the agent did not ask for this step; refusing to run it out of turn")
 	}
 	env := base
+	// Inputs are never secrets: steps' commands and stdout are echoed to the
+	// box journal (adm-readable, outliving job pruning) and inputs sit in the
+	// manifest. A step that needs a secret reads a root-only file on the box.
 	env.Inputs, env.Results = m.Inputs, m.Results
 	if m.Answer != nil && m.Answer.Step == idx && m.Answer.Attempt == a.Attempt-1 {
 		env.Answer = m.Answer
