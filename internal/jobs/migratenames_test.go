@@ -249,7 +249,7 @@ func TestPreflightFinishesAHalfMigratedBox(t *testing.T) {
 // Review Focus (also pinned): a process ignoring SIGTERM is killed only on
 // the operator's say-so.
 func TestStopUnitsAsksBeforeKillingProcesses(t *testing.T) {
-	ex := legacyBox().on("pgrep -a -u valve-node-app", stdout("4242 reth node\n"))
+	ex := legacyBox().on("pgrep -l -u valve-node-app", stdout("4242 reth node\n"))
 	env := mnEnv(t, ex, legacyWire())
 	o, err := step(t, "stop-units").Run(context.Background(), env)
 	if err != nil || o.Ask == nil || o.Ask.Key != "busy-user" || !strings.Contains(o.Ask.Prompt, "4242") {
@@ -258,7 +258,7 @@ func TestStopUnitsAsksBeforeKillingProcesses(t *testing.T) {
 	if ex.ran("pkill") {
 		t.Fatal("processes were signalled before anyone decided")
 	}
-	ex.on("pgrep -a -u valve-node-app", stdout("4242 reth node\n"), fail1)
+	ex.on("pgrep -l -u valve-node-app", stdout("4242 reth node\n"), fail1)
 	env.Answer = &Answer{Key: "busy-user", Option: "stop-processes"}
 	prev := stopGrace
 	stopGrace = 0 // no real wait in tests
@@ -277,7 +277,7 @@ func TestStopUnitsAsksAgainBeforeSIGKILL(t *testing.T) {
 	prev := stopGrace
 	stopGrace = 0
 	t.Cleanup(func() { stopGrace = prev })
-	ex := legacyBox().on("pgrep -a -u valve-node-app", stdout("4242 reth node\n"))
+	ex := legacyBox().on("pgrep -l -u valve-node-app", stdout("4242 reth node\n"))
 	env := mnEnv(t, ex, legacyWire())
 	env.Answer = &Answer{Key: "busy-user", Option: "stop-processes"}
 	o, err := step(t, "stop-units").Run(context.Background(), env)
@@ -291,7 +291,7 @@ func TestStopUnitsAsksAgainBeforeSIGKILL(t *testing.T) {
 	if !kill || ex.ran("pkill -KILL") {
 		t.Fatalf("options %+v, calls %v", o.Ask.Options, ex.calls)
 	}
-	ex.on("pgrep -a -u valve-node-app", stdout("4242 reth node\n"), fail1)
+	ex.on("pgrep -l -u valve-node-app", stdout("4242 reth node\n"), fail1)
 	env.Answer = &Answer{Key: "busy-user", Option: "kill-processes"}
 	if o, err := step(t, "stop-units").Run(context.Background(), env); err != nil || o.Ask != nil {
 		t.Fatalf("after kill-processes: %+v, %v", o.Ask, err)
@@ -302,7 +302,7 @@ func TestStopUnitsAsksAgainBeforeSIGKILL(t *testing.T) {
 }
 
 func TestStopUnitsStopsEveryUnitAndChecksThem(t *testing.T) {
-	ex := legacyBox().on("pgrep -a -u", fail1)
+	ex := legacyBox().on("pgrep -l -u", fail1)
 	if _, err := step(t, "stop-units").Run(context.Background(), mnEnv(t, ex, legacyWire())); err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestStopUnitsStopsEveryUnitAndChecksThem(t *testing.T) {
 			t.Errorf("%s was not stopped: %v", u, ex.calls)
 		}
 	}
-	ex = legacyBox().on("pgrep -a -u", fail1).on("systemctl is-active valve-node-app-exec.service", stdout("deactivating\n"))
+	ex = legacyBox().on("pgrep -l -u", fail1).on("systemctl is-active valve-node-app-exec.service", stdout("deactivating\n"))
 	if _, err := step(t, "stop-units").Run(context.Background(), mnEnv(t, ex, legacyWire())); err == nil || !strings.Contains(err.Error(), "deactivating") {
 		t.Fatalf("a unit still stopping passed: %v", err)
 	}
@@ -744,7 +744,7 @@ func TestASecondJobAfterAnAbortKeepsTheRootMove(t *testing.T) {
 	runJob([]string{"preflight", "stop-units", "rename-account", "move-data", "rewrite-units"}, func(id string) *scriptExec {
 		switch id {
 		case "stop-units":
-			return legacyBox().on("pgrep -a -u", fail1)
+			return legacyBox().on("pgrep -l -u", fail1)
 		case "rename-account":
 			return legacyBox().on("id -u jumpgate-node", fail1, idOK("998")).on("getent group jumpgate-node", fail1, stdout("jumpgate-node:x:998:\n"))
 		case "move-data":
@@ -758,7 +758,7 @@ func TestASecondJobAfterAnAbortKeepsTheRootMove(t *testing.T) {
 	// Job B: the box is renamed and moved; only the owner marker is left.
 	ownerCat := "cat '" + catalog.OwnerMarkerPath(migratedWire()) + "'"
 	box := func() *scriptExec {
-		return migratedBox().on(ownerCat, stdout("valve-node-app\n")).on("pgrep -a -u", fail1).
+		return migratedBox().on(ownerCat, stdout("valve-node-app\n")).on("pgrep -l -u", fail1).
 			on("stat -c %U", stdout("jumpgate-node\n")).on("test -d '/var/lib/valve-node-app'", fail1).on("test -e '/var/lib/jumpgate-node'", ok0)
 	}
 	var owner *scriptExec
@@ -798,7 +798,7 @@ func TestNoGroupMeansNothingIsRenamed(t *testing.T) {
 func TestRenameAccountAsksWhenTheNodeRunsAgain(t *testing.T) {
 	ex := legacyBox().on("id -u jumpgate-node", fail1, fail1, idOK("998")).on("getent group jumpgate-node", fail1, fail1, stdout("jumpgate-node:x:998:\n")).
 		on("systemctl is-active valve-node-app-exec.service", stdout("active\n"), stdout("inactive\n")).
-		on("pgrep -a -u valve-node-app", stdout("4242 reth node\n"), fail1)
+		on("pgrep -l -u valve-node-app", stdout("4242 reth node\n"), fail1)
 	env := mnEnv(t, ex, legacyWire())
 	o, err := step(t, "rename-account").Run(context.Background(), env)
 	if err != nil || o.Ask == nil || o.Ask.Key != "busy-user" || !strings.Contains(o.Ask.Prompt, "valve-node-app-exec.service") {
@@ -1007,5 +1007,50 @@ func TestWriteNamesMarkerRefusesWhatReadWouldRefuse(t *testing.T) {
 		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("a refused marker left a file: %v", err)
 		}
+	}
+}
+
+// D2: a process's argv can hold an operator's credential. Questions, errors
+// and the journal name the node account's processes by pid and name only.
+func TestBusyUserNamesProcessesWithoutTheirArguments(t *testing.T) {
+	prevGrace, prevKill := stopGrace, killWait
+	stopGrace, killWait = 0, 0
+	t.Cleanup(func() { stopGrace, killWait = prevGrace, prevKill })
+	const secret = "s3cr3t-token"
+	// A box answers like procps does: -a prints argv, -l the name alone.
+	ex := legacyBox().on("pgrep -a -u valve-node-app", stdout("4242 reth node --http.api-key="+secret+"\n")).
+		on("pgrep -l -u valve-node-app", stdout("4242 reth\n"))
+	var journal strings.Builder
+	env := mnEnv(t, ex, legacyWire())
+	env.Out = &journal
+	o, err := step(t, "stop-units").Run(context.Background(), env)
+	if err != nil || o.Ask == nil || !strings.Contains(o.Ask.Prompt, "4242 reth") {
+		t.Fatalf("stop-units = %+v, %v", o.Ask, err)
+	}
+	env.Answer = &Answer{Key: "busy-user", Option: "kill-processes"}
+	_, err = step(t, "stop-units").Run(context.Background(), env)
+	if err == nil || !strings.Contains(err.Error(), "4242 reth") {
+		t.Fatalf("after kill-processes: %v", err)
+	}
+	for what, s := range map[string]string{"prompt": o.Ask.Prompt, "error": err.Error(), "journal": journal.String()} {
+		if strings.Contains(s, secret) {
+			t.Errorf("the %s carries a process's argv: %q", what, s)
+		}
+	}
+	if ex.ran("pgrep -a") {
+		t.Fatalf("argv was read: %v", ex.calls)
+	}
+}
+
+// procs keeps a pid and one name even from a pgrep that prints more.
+func TestProcsKeepsOnlyPidAndName(t *testing.T) {
+	ex := newScript().on("pgrep -l -u u", stdout("1 reth --key=secret\n2  lighthouse\n\n"))
+	got, err := procs(context.Background(), Env{Exec: ex}, "u")
+	if err != nil || strings.Join(got, ";") != "1 reth;2 lighthouse" {
+		t.Fatalf("procs = %q, %v", got, err)
+	}
+	ex.on("pgrep -l -u u", executor.Result{ExitCode: 2, Stderr: "pgrep: bad user\n"})
+	if _, err := procs(context.Background(), Env{Exec: ex}, "u"); err == nil || !strings.Contains(err.Error(), "bad user") {
+		t.Fatalf("a failing pgrep = %v", err)
 	}
 }

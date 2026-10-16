@@ -131,12 +131,6 @@ func (a *Agent) Handle(ctx context.Context, env intent.Envelope) intent.ReceiptE
 	if err := policy.Authorise(i.Kind, i.Controller, signers); err != nil {
 		return a.answerReject(i, reqHash, asReject(err))
 	}
-	// Only an enrolled controller's decision gets as far as reading a job.
-	if extra := a.decisionTiers(i, env); len(extra) > 0 {
-		if err := policy.Authorise(i.Kind, i.Controller, signers, extra...); err != nil {
-			return a.answerReject(i, reqHash, asReject(err))
-		}
-	}
 
 	if !a.claim(i.Controller) {
 		return a.answerReject(i, reqHash, reject(intent.ReasonBusy, "another intent from this controller is running"))
@@ -158,30 +152,9 @@ func (a *Agent) Handle(ctx context.Context, env intent.Envelope) intent.ReceiptE
 	return a.answer(i, reqHash, status, result)
 }
 
-// decisionTiers is what a job.decide needs beyond the policy's requirement
-// for its kind, as an early refusal: the tier of the question it answers
-// (spec: "a signed decision of the tier the policy requires", Q5), read
-// before admission so a refused decision does not consume the controller's
-// sequence. It is not the enforcement: a question can open after this
-// (dispatchJob reconciles first, and so does the loop), so Manager.Decide
-// checks the tier of the question it answers (decisionCheck). Any tier but
-// routine is required as named, so a tier no signer holds is never
-// satisfied; a job the lookup cannot read requires approval, the strictest.
-func (a *Agent) decisionTiers(i intent.Intent, env intent.Envelope) []Tier {
-	if i.Kind != intent.KindJobDecide || a.cfg.Jobs == nil {
-		return nil
-	}
-	pl, rej := decode[intent.JobDecidePayload](env.Payload)
-	if rej != nil || !jobs.ValidID(pl.ID) {
-		return nil // dispatch refuses the payload itself
-	}
-	t, err := a.cfg.Jobs.QuestionTier(pl.ID, pl.Decision)
-	if err != nil {
-		return []Tier{TierApproval}
-	}
-	return tiersBeyondRoutine(t)
-}
-
+// tiersBeyondRoutine is what a question of tier needs beyond the policy's
+// requirement for job.decide. Any tier but routine is required as named, so
+// a tier no signer holds is never satisfied.
 func tiersBeyondRoutine(tier string) []Tier {
 	if tier == intent.TierRoutine {
 		return nil
@@ -191,7 +164,11 @@ func tiersBeyondRoutine(tier string) []Tier {
 
 // decisionCheck is the tier check Manager.Decide runs, under its lock, on the
 // question it is about to answer: the policy's requirement for job.decide
-// plus the question's own tier, against this envelope's signers.
+// plus the question's own tier, against this envelope's signers (Q5). It is
+// the only tier check a decision gets. A question can open between admission
+// and Decide (dispatchJob reconciles first, and so does the loop), so no
+// earlier check could prove anything about it; a decision refused here has
+// used its seq, which the controller advances on every signed answer anyway.
 func decisionCheck(p Policy, controller eip712.Address, signers []eip712.Address) jobs.TierCheck {
 	return func(tier string) error {
 		return p.Authorise(intent.KindJobDecide, controller, signers, tiersBeyondRoutine(tier)...)

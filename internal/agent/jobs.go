@@ -59,37 +59,6 @@ func decodeJob[T any](payload []byte, id func(T) string) (T, *Reject) {
 	return pl, rej
 }
 
-// checkStart is the admission a job start needs besides Handle's: the
-// envelope is logged as the job's first entry and its digest is the job's
-// id, so it must be one this agent would admit to start exactly this job.
-// Its controller signed it, it is addressed to this box, it is of the kind
-// being started, and its payload hash covers the inputs passed. Handle
-// checks the same of the intent it admitted; checking again here keeps a
-// caller that passes another envelope from creating a job in its name.
-func (a *Agent) checkStart(kind string, inputs []byte, env intent.Envelope, signers []eip712.Address) *Reject {
-	in, err := env.Intent.Parse()
-	if err != nil {
-		return reject(intent.ReasonInvalidPayload, "the starting intent does not parse: "+err.Error())
-	}
-	if in.Agent != a.Address() {
-		return reject(intent.ReasonWrongAgent, "this intent is addressed to "+in.Agent.Hex())
-	}
-	signed := false
-	for _, s := range signers {
-		signed = signed || s == in.Controller
-	}
-	if !signed {
-		return reject(intent.ReasonUnauthorizedKind, "the intent is not signed by the controller it names")
-	}
-	if in.Kind != kind {
-		return reject(intent.ReasonInvalidPayload, fmt.Sprintf("the starting intent is %s, not %s", in.Kind, kind))
-	}
-	if intent.Hash(inputs) != in.PayloadHash {
-		return reject(intent.ReasonInvalidPayload, "the job's inputs do not match the intent's payload hash")
-	}
-	return nil
-}
-
 // dispatchJob answers the job kinds. Reconcile runs first, so every answer
 // reflects units that finished since the last pass.
 func (a *Agent) dispatchJob(ctx context.Context, i intent.Intent, env intent.Envelope, signers []eip712.Address, p Policy) ([]byte, uint8, *Reject) {
@@ -164,35 +133,22 @@ func (a *Agent) dispatchJob(ctx context.Context, i intent.Intent, env intent.Env
 		if rej != nil {
 			return nil, 0, rej
 		}
-		rec, err := m.Decide(ctx, pl.ID, pl.Decision, pl.Option, i.Controller, signers, decisionCheck(p, i.Controller, signers), env)
+		rec, err := m.Decide(ctx, pl.ID, pl.Decision, pl.Option, i.Controller, decisionCheck(p, i.Controller, signers), env)
 		if err != nil {
 			return jobFailure(err)
 		}
 		return mustJSON(rec), intent.StatusOK, nil
 	}
 
-	// A plan's kind: start a job, from exactly the envelope Handle admitted.
-	if rej := a.checkStart(i.Kind, env.Payload, env, signers); rej != nil {
-		return nil, 0, rej
-	}
-	if in, err := env.Intent.Parse(); err != nil || !sameIntent(in, i) {
-		return nil, 0, reject(intent.ReasonInvalidPayload, "the envelope is not the intent that was admitted")
-	}
+	// A plan's kind: start a job. i is env's intent, which Handle admitted:
+	// signed by its controller, addressed to this box, of this kind, with
+	// env.Payload under its payload hash. The envelope is logged as the
+	// job's first entry, and its digest is the job's id.
 	rec, err := m.Start(ctx, i.Kind, env.Payload, i.Controller, env)
 	if err != nil {
 		return jobFailure(err)
 	}
 	return mustJSON(rec), intent.StatusOK, nil
-}
-
-// sameIntent reports whether a and b are one signed request: equal digests.
-func sameIntent(a, b intent.Intent) bool {
-	da, err := a.Digest()
-	if err != nil {
-		return false
-	}
-	db, err := b.Digest()
-	return err == nil && da == db
 }
 
 // activeJob is the box's unfinished job, if any (J1). Unlike Manager.Active

@@ -24,7 +24,23 @@ const (
 	KindFinished         = "job.finished"      // FinishedBody
 )
 
-// IntentBody records a request exactly as the controller signed it.
+// IntentBody records a request as the controller signed it: the intent and
+// its signatures, and, for a later request (KindIntent), the payload.
+//
+// A created entry (KindCreated) records no payload (D1): the creating
+// payload is the job's inputs, which may one day carry a secret, and a
+// signed log can never be redacted. Nothing in the log needs those bytes:
+// the controller's signature is over the intent, whose payloadHash commits
+// to them, the job id commits to the intent (JobIDFor), and the agent checked
+// the payload against its hash at admission. The manifest, root-only on the
+// box, keeps the inputs for the steps. Logs written before carry the payload;
+// VerifyIntents still checks it there.
+//
+// A later request keeps its payload. Its payload is the only thing that
+// binds it to this job (the intent names no job), so recording only the id,
+// or only the hash, would let an intent from another job's log be moved
+// into this one and still verify. Those payloads are the agent's fixed
+// lease, advance and decide shapes: a job id, a step position, an option.
 type IntentBody struct {
 	Envelope intent.Envelope `json:"envelope"`
 	Outcome  string          `json:"outcome"` // "created", "lease take", "advance", "decide", …
@@ -38,11 +54,15 @@ type StepBody struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// AnswerBody records a decision. It names the controller only: who signed
+// the decision is proven by the signatures in the decide intent entry before
+// it, not by anything the agent writes here. Entries written before this
+// carry a "signers" list as well, agent-asserted and unverified; reading
+// ignores it.
 type AnswerBody struct {
-	Question   string   `json:"question"`
-	Option     string   `json:"option"`
-	Controller string   `json:"controller"`
-	Signers    []string `json:"signers"`
+	Question   string `json:"question"`
+	Option     string `json:"option"`
+	Controller string `json:"controller"`
 }
 
 type LeaseBody struct {

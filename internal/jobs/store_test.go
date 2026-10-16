@@ -16,7 +16,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
-func testStore(t *testing.T) (*Store, *signer.Key, *time.Time) {
+func testStore(t testing.TB) (*Store, *signer.Key, *time.Time) {
 	t.Helper()
 	testutil.RequireUnix(t) // the store fsyncs directories, as the agent's replay record does
 	k, _ := signer.GenerateKey()
@@ -41,14 +41,14 @@ func writeManifest(t *testing.T, s *Store, m *Manifest) {
 	mustOK(t, os.WriteFile(filepath.Join(s.Dir(), m.ID+".json"), b, 0o600))
 }
 
-func mustOK(t *testing.T, err error) {
+func mustOK(t testing.TB, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
-func newManifest(t *testing.T) (Manifest, joblog.IntentBody) {
+func newManifest(t testing.TB) (Manifest, joblog.IntentBody) {
 	t.Helper()
 	ctl, _ := signer.GenerateKey()
 	agent, _ := signer.GenerateKey()

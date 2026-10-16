@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -340,10 +341,29 @@ func (b *boxRig) detailRefused(t *testing.T, id, want string) {
 	}
 }
 
-func (b *boxRig) cached(id string) *verifiedLog {
+// cached is job id's log mark, or nil.
+func (b *boxRig) cached(id string) *logMark {
 	b.srv.jobs.mu.Lock()
 	defer b.srv.jobs.mu.Unlock()
-	return b.srv.jobs.logs[jobKey{b.target, id}]
+	if m, ok := b.srv.jobs.marks[jobKey{b.target, id}]; ok {
+		return &m
+	}
+	return nil
+}
+
+// driverRead is the step driver's read of job id: on from its mark.
+func (b *boxRig) driverRead(t *testing.T, id string) (intent.JobRecord, []joblog.Entry, error) {
+	t.Helper()
+	cfg, err := b.srv.loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg, ok := findTarget(cfg, b.target)
+	if !ok {
+		t.Fatalf("no target %s", b.target)
+	}
+	rec, es, _, err := b.srv.jobs.readVerified(context.Background(), cfg, tg, id, false)
+	return rec, es, err
 }
 
 // fullRead is the box's honest answer for job id, every entry in one page.
@@ -409,11 +429,8 @@ func TestJobDetailRefusesALogTheRecordDoesNotDescribe(t *testing.T) {
 			if code != http.StatusBadGateway || e.Code != api.CodeJobLogInvalid || strings.Contains(string(body), `"log"`) || !strings.Contains(e.Message, c.want) {
 				t.Fatalf("answered %d %s", code, body)
 			}
-			b.srv.jobs.mu.Lock()
-			cached := b.srv.jobs.logs[jobKey{"box", rec.ID}]
-			b.srv.jobs.mu.Unlock()
-			if cached != nil {
-				t.Fatal("a log that did not verify is still cached")
+			if b.cached(rec.ID) != nil {
+				t.Fatal("a log that did not verify still has a mark")
 			}
 		})
 	}
@@ -567,10 +584,10 @@ func TestJobDetailRefusesAnEndlessLog(t *testing.T) {
 	b.detailRefused(t, rec.ID, "larger than the 64 bytes")
 }
 
-// I2: a cached log is the agent key's that verified it. After the box is
+// I2: a log mark is the agent key's that verified it. After the box is
 // re-paired to another key, a box answering "nothing new" with a matching
-// record does not get the old log shown as its own: the read starts over
-// and the old entries fail against the new key.
+// record does not have the old log credited to the new key: the driver's
+// read starts over, and the old entries fail against the new key.
 func TestJobLogCacheIsBoundToTheAgentKey(t *testing.T) {
 	requireAgentPeer(t)
 	b := newBoxRig(t, withoutDriver)
@@ -578,7 +595,7 @@ func TestJobLogCacheIsBoundToTheAgentKey(t *testing.T) {
 	honest := b.fullRead(t, rec.ID)
 	var d api.JobDetail
 	if code := b.do(t, "GET", "/api/jobs/box/"+rec.ID, nil, &d); code != 200 || b.cached(rec.ID) == nil {
-		t.Fatalf("first read %d, cached %v", code, b.cached(rec.ID) != nil)
+		t.Fatalf("first read %d, marked %v", code, b.cached(rec.ID) != nil)
 	}
 	stranger, _ := signer.GenerateKey()
 	if _, err := config.Update(func(c *config.Config) error {
@@ -588,7 +605,101 @@ func TestJobLogCacheIsBoundToTheAgentKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.serve(honest)
+	if _, _, err := b.driverRead(t, rec.ID); !errors.Is(err, errJobLogInvalid) || !strings.Contains(err.Error(), "not signed by agent "+stranger.Address().Hex()) {
+		t.Fatalf("the driver's read after a re-pair = %v", err)
+	}
+	if b.cached(rec.ID) != nil {
+		t.Fatal("a log that did not verify still has a mark")
+	}
 	b.detailRefused(t, rec.ID, "not signed by agent "+stranger.Address().Hex())
+}
+
+// The driver reads on from its mark and verifies only what was added, onto
+// the head it verified: a continuation from another chain the same key
+// signed is refused, and so is a log that shrank under the mark. The detail
+// view reads and verifies the whole log every time.
+func TestTheDriverReadsOnFromItsMark(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t, withoutDriver)
+	rec := b.startJob(t, `{}`)
+	honest := b.fullRead(t, rec.ID)
+	real := b.srv.jobs.readJob
+	var froms []uint64
+	b.srv.jobs.readJob = func(ctx context.Context, cfg config.Config, tg config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
+		froms = append(froms, p.From)
+		return real(ctx, cfg, tg, p)
+	}
+	b.srv.jobs.refresh(context.Background(), true) // listed, so a mark is kept
+	if _, es, err := b.driverRead(t, rec.ID); err != nil || len(es) != int(honest.Job.LogLen) {
+		t.Fatalf("first driver read: %d entries, %v", len(es), err)
+	}
+	b.send(t, intent.KindJobLease, intent.JobLeasePayload{ID: rec.ID, Op: intent.LeaseRelease})
+	r2, es, err := b.driverRead(t, rec.ID)
+	if err != nil || len(es) != int(r2.LogLen-honest.Job.LogLen) || es[0].Index != honest.Job.LogLen {
+		t.Fatalf("second driver read: %+v, %v", es, err)
+	}
+	if m := b.cached(rec.ID); m == nil || m.len != r2.LogLen {
+		t.Fatalf("mark %+v after a log of %d", m, r2.LogLen)
+	}
+	var d api.JobDetail
+	froms = nil
+	if code := b.do(t, "GET", "/api/jobs/box/"+rec.ID, nil, &d); code != 200 || len(d.Log) != int(r2.LogLen) || froms[0] != 0 {
+		t.Fatalf("detail %d: %d entries, read from %v", code, len(d.Log), froms)
+	}
+
+	// Another chain for the job, signed by the same key, as long as the
+	// marked log and one entry more.
+	grown := b.fullRead(t, rec.ID)
+	other := grown
+	other.Entries = nil
+	b.advance(time.Minute)
+	for _, e := range grown.Entries {
+		b.appendEntry(t, &other, e.Kind, e.Body)
+	}
+	b.appendEntry(t, &other, joblog.KindLeaseReleased, []byte(`{}`))
+	b.serve(other)
+	if _, _, err := b.driverRead(t, rec.ID); !errors.Is(err, errJobLogInvalid) || !strings.Contains(err.Error(), "does not follow") {
+		t.Fatalf("a continuation from another chain = %v", err)
+	}
+
+	// A log shorter than the mark: the record no longer describes it.
+	b.serve(grown)
+	b.srv.jobs.refresh(context.Background(), true)
+	if _, _, err := b.driverRead(t, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	short := honest
+	b.serve(short)
+	if _, _, err := b.driverRead(t, rec.ID); !errors.Is(err, errJobLogInvalid) {
+		t.Fatalf("a log that shrank under the mark = %v", err)
+	}
+}
+
+// A page the box cannot have sent honestly is refused: an entry that does
+// not parse, "more" with nothing in it, a record with no head for a log.
+func TestJobDetailRefusesABadPage(t *testing.T) {
+	requireAgentPeer(t)
+	b := newBoxRig(t, withoutDriver)
+	rec := b.startJob(t, `{}`)
+	honest := b.fullRead(t, rec.ID)
+
+	garbled := honest
+	garbled.Entries = append([]intent.JobLogEntryJSON(nil), honest.Entries...)
+	garbled.Entries[0].Prev = "0x12"
+	b.serve(garbled)
+	b.detailRefused(t, rec.ID, "prev is not 32 bytes")
+
+	b.srv.jobs.readJob = func(_ context.Context, _ config.Config, _ config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
+		out := honest
+		out.Entries, out.More = nil, true
+		return out, nil
+	}
+	b.detailRefused(t, rec.ID, "more log but sent none")
+
+	headless := honest
+	headless.Job.LogHead = ""
+	b.serve(headless)
+	b.detailRefused(t, rec.ID, "ending \"\"")
 }
 
 // M1: a log starts with its one created entry.
@@ -682,172 +793,5 @@ func TestJobLogCacheFollowsTheListing(t *testing.T) {
 	b.srv.jobs.refresh(context.Background(), true)
 	if b.cached(rec2.ID) != nil {
 		t.Fatal("a removed box's log is still cached")
-	}
-}
-
-// I1: the byte ceiling covers the whole log, across GETs. A box that grows
-// its log one large entry per GET, each read under the ceiling, is refused
-// once the log as a whole passes it, and nothing past it is cached.
-func TestJobLogByteCapCoversTheWholeLog(t *testing.T) {
-	requireAgentPeer(t)
-	b := newBoxRig(t, withoutDriver)
-	rec := b.startJob(t, `{}`)
-	res := b.fullRead(t, rec.ID)
-	prev := jobLogMaxBytes
-	jobLogMaxBytes = 8000
-	t.Cleanup(func() { jobLogMaxBytes = prev })
-	pad := []byte(`{"pad":"` + strings.Repeat("x", 1500) + `"}`)
-
-	served := 0
-	for i := 0; i < 10; i++ {
-		b.appendEntry(t, &res, joblog.KindLeaseReleased, pad)
-		b.serve(res)
-		code, body := b.get(t, "/api/jobs/box/"+rec.ID)
-		if c := b.cached(rec.ID); c != nil && c.size > jobLogMaxBytes {
-			t.Fatalf("cached %d bytes, over the %d ceiling", c.size, jobLogMaxBytes)
-		}
-		if code == http.StatusOK {
-			served++
-			if b.cached(rec.ID) == nil {
-				t.Fatal("a verified log within the ceiling was not cached")
-			}
-			continue
-		}
-		var e api.Error
-		_ = json.Unmarshal(body, &e)
-		if code != http.StatusBadGateway || e.Code != api.CodeJobLogInvalid || !strings.Contains(e.Message, "larger than the 8000 bytes") || b.cached(rec.ID) != nil {
-			t.Fatalf("GET %d answered %d %s", i, code, body)
-		}
-		if served < 2 {
-			t.Fatalf("refused after only %d GETs: each GET's own read is under the ceiling", served)
-		}
-		return
-	}
-	t.Fatalf("a log grown one entry per GET was served %d times and never refused", served)
-}
-
-// The cache as a whole stays within jobLogCacheMaxBytes: the least recently
-// read log is evicted for a new one, and a log bigger than the budget is
-// not cached. A read that began before its target's logs were dropped does
-// not put its log back.
-func TestJobLogCacheBudgetAndGenerations(t *testing.T) {
-	srv := New(Config{Token: NewSessionToken(), UI: fstest.MapFS{}})
-	t.Cleanup(func() { srv.jobs.stopWithin(time.Second) })
-	h := srv.jobs
-	prev := jobLogCacheMaxBytes
-	jobLogCacheMaxBytes = 100
-	t.Cleanup(func() { jobLogCacheMaxBytes = prev })
-	agentAddr := eip712.Address{1}
-	k := func(id string) jobKey { return jobKey{"box", id} }
-	listed := &boxJobs{}
-	for _, id := range []string{"a", "b", "c", "d", "huge"} {
-		listed.jobs = append(listed.jobs, intent.JobRecord{ID: id})
-	}
-	h.boxes["box"] = listed
-	store := func(id string, size int) bool {
-		_, gen := h.cachedLog(k(id), agentAddr)
-		return h.storeLog(k(id), verifiedLog{agent: agentAddr, size: size}, gen)
-	}
-	if !store("a", 40) || !store("b", 40) {
-		t.Fatal("logs within the budget were not cached")
-	}
-	h.cachedLog(k("a"), agentAddr) // a is now the more recently read
-	if !store("c", 40) {
-		t.Fatal("c was not cached")
-	}
-	if h.logs[k("b")] != nil || h.logs[k("a")] == nil || h.logs[k("c")] == nil || h.logBytes != 80 {
-		t.Fatalf("after eviction: %v, %d bytes", h.logs, h.logBytes)
-	}
-	if store("huge", 101) || h.logs[k("huge")] != nil || h.logBytes != 80 {
-		t.Fatalf("a log over the whole budget was cached: %d bytes", h.logBytes)
-	}
-
-	// A read in flight while a listing prunes its job does not re-cache it.
-	_, gen := h.cachedLog(k("d"), agentAddr)
-	h.dropLogs("box", map[string]bool{"a": true})
-	if h.storeLog(k("d"), verifiedLog{agent: agentAddr, size: 10}, gen) || h.logs[k("d")] != nil {
-		t.Fatal("a log read before its target's drop was cached after it")
-	}
-	if h.logs[k("c")] != nil || h.logs[k("a")] == nil || h.logBytes != 40 {
-		t.Fatalf("after the drop: %v, %d bytes", h.logs, h.logBytes)
-	}
-}
-
-// B3: a first read in flight, with nothing cached for its box, does not
-// cache a job a listing pruned meanwhile, nor one whose box went. The
-// generation and the listing each refuse it on their own.
-func TestJobLogIsCachedOnlyWhileListed(t *testing.T) {
-	srv := New(Config{Token: NewSessionToken(), UI: fstest.MapFS{}})
-	t.Cleanup(func() { srv.jobs.stopWithin(time.Second) })
-	h := srv.jobs
-	agentAddr := eip712.Address{1}
-	x := jobKey{"box", "x"}
-	vl := verifiedLog{agent: agentAddr, size: 10}
-	list := func(ids ...string) {
-		box := &boxJobs{}
-		for _, id := range ids {
-			box.jobs = append(box.jobs, intent.JobRecord{ID: id})
-		}
-		h.mu.Lock()
-		h.boxes["box"] = box
-		h.mu.Unlock()
-	}
-
-	// Pruned by a listing during the read: dropLogs bumps the generation
-	// though nothing was cached, and the listing no longer has x.
-	list("x")
-	_, gen := h.cachedLog(x, agentAddr)
-	list()
-	h.dropLogs("box", map[string]bool{})
-	if h.storeLog(x, vl, gen) || len(h.logs) != 0 {
-		t.Fatal("a job pruned during its first read was cached")
-	}
-
-	// The listing check alone: same generation, but x is not listed.
-	_, gen = h.cachedLog(x, agentAddr)
-	if h.storeLog(x, vl, gen) || len(h.logs) != 0 {
-		t.Fatal("a job the listing does not have was cached")
-	}
-
-	// The generation check alone: x still listed (a stale listing), but its
-	// logs were dropped since the read began.
-	list("x")
-	_, gen = h.cachedLog(x, agentAddr)
-	h.dropLogs("box", map[string]bool{"x": true})
-	if h.storeLog(x, vl, gen) || len(h.logs) != 0 {
-		t.Fatal("a log read before its target's drop was cached")
-	}
-
-	// The box removed during the read.
-	_, gen = h.cachedLog(x, agentAddr)
-	h.mu.Lock()
-	delete(h.boxes, "box")
-	h.mu.Unlock()
-	if h.storeLog(x, vl, gen) || len(h.logs) != 0 {
-		t.Fatal("a removed box's job was cached")
-	}
-
-	// Listed and undisturbed: cached.
-	list("x")
-	_, gen = h.cachedLog(x, agentAddr)
-	if !h.storeLog(x, vl, gen) || h.logs[x] == nil {
-		t.Fatal("a listed job's verified log was not cached")
-	}
-}
-
-// B3 through the listing itself: a box that disappears from the config
-// bumps its generation in list's prune, so a read that began before it
-// does not cache.
-func TestRemovedBoxBumpsItsGeneration(t *testing.T) {
-	requireAgentPeer(t)
-	b := newBoxRig(t, withoutDriver)
-	rec := b.startJob(t, `{}`)
-	_, gen := b.srv.jobs.cachedLog(jobKey{"box", rec.ID}, b.key.Address())
-	if _, err := config.Update(func(c *config.Config) error { c.Targets = nil; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	b.srv.jobs.refresh(context.Background(), true)
-	if b.srv.jobs.storeLog(jobKey{"box", rec.ID}, verifiedLog{agent: b.key.Address(), size: 10}, gen) || b.cached(rec.ID) != nil {
-		t.Fatal("a removed box's job was cached")
 	}
 }

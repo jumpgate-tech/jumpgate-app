@@ -3,7 +3,7 @@ package jobs
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -75,6 +75,39 @@ func TestAJobRunsStepByStepAndSucceeds(t *testing.T) {
 	}
 	if err := joblog.VerifyIntents(g.box.Address(), rec.ID, es); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// D1: a job's inputs may one day carry a secret, and a signed log cannot be
+// redacted. The created entry records the creating intent and its
+// signatures, which commit to the inputs through the payload hash, and not
+// the inputs; the manifest keeps them for the steps. The log still verifies.
+func TestTheLogNeverRecordsTheCreatingPayload(t *testing.T) {
+	g := newRig(t)
+	const secret = "vk_s3cr3tsnapshotkey"
+	rec, err := g.start(t, g.a, `{"Note":"`+secret+`"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = g.advance(t, g.a, rec.ID)
+	es, _, err := g.m.store.ReadLog(rec.ID, 0, 0)
+	if err != nil || len(es) < 2 {
+		t.Fatalf("log %d entries, %v", len(es), err)
+	}
+	for _, e := range es {
+		if bytes.Contains(e.Body, []byte(secret)) || bytes.Contains(e.Body, []byte(base64.StdEncoding.EncodeToString([]byte(`{"Note":"`+secret+`"}`)))) {
+			t.Fatalf("entry %d (%s) records the creating payload: %s", e.Index, e.Kind, e.Body)
+		}
+	}
+	var created joblog.IntentBody
+	if err := json.Unmarshal(es[0].Body, &created); err != nil || created.Envelope.Payload != nil || len(created.Envelope.Sigs) != 1 || created.Envelope.Intent.PayloadHash == "" {
+		t.Fatalf("created entry %s: %v", es[0].Body, err)
+	}
+	if err := joblog.VerifyIntents(g.box.Address(), rec.ID, es); err != nil {
+		t.Fatal(err)
+	}
+	if man, err := g.m.store.Load(rec.ID); err != nil || !bytes.Contains(man.Inputs, []byte(secret)) {
+		t.Fatalf("the manifest lost the inputs the steps read: %s, %v", man.Inputs, err)
 	}
 }
 
@@ -360,71 +393,6 @@ func (refusingRunner) Start(context.Context, string, []string) error {
 func (refusingRunner) Active(context.Context, string) (bool, error)    { return false, nil }
 func (refusingRunner) AnyActive(context.Context, string) (bool, error) { return false, nil }
 
-// QuestionTier lets the agent demand an approval signature before admission.
-func TestQuestionTierIsTheOpenQuestions(t *testing.T) {
-	g := newRig(t)
-	rec, _ := g.start(t, g.a, `{"FailAt":"one"}`)
-	rec = g.advance(t, g.a, rec.ID)
-	if got, err := g.m.QuestionTier(rec.ID, rec.Question.ID); err != nil || got != intent.TierRoutine {
-		t.Fatalf("tier %q %v", got, err)
-	}
-	if got, err := g.m.QuestionTier(rec.ID, "nope"); err != nil || got != intent.TierRoutine {
-		t.Fatalf("an unknown question's tier %q %v; Decide refuses it later", got, err)
-	}
-	if got, err := g.m.QuestionTier("0123456789abcdef", "nope"); err != nil || got != intent.TierRoutine {
-		t.Fatalf("no such job: %q %v; Decide refuses it later", got, err)
-	}
-}
-
-// M2: a manifest the early lookup cannot read is an error, never routine.
-func TestQuestionTierFailsClosed(t *testing.T) {
-	g := newRig(t)
-	rec, _ := g.start(t, g.a, `{"AskAt":"one"}`)
-	rec = g.advance(t, g.a, rec.ID)
-	path := filepath.Join(g.m.store.Dir(), rec.ID+".json")
-	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := g.m.QuestionTier(rec.ID, rec.Question.ID); err == nil {
-		t.Fatalf("a damaged manifest read as tier %q", got)
-	}
-}
-
-// M1: the early lookup never writes, even where a Load would save a repair.
-func TestQuestionTierNeverWrites(t *testing.T) {
-	g := newRig(t)
-	rec, _ := g.start(t, g.a, `{"AskAt":"one"}`)
-	rec = g.advance(t, g.a, rec.ID)
-	path := filepath.Join(g.m.store.Dir(), rec.ID+".json")
-	b, _ := os.ReadFile(path)
-	var m map[string]any
-	_ = json.Unmarshal(b, &m)
-	// One entry behind, chained onto the last entry's prev: the crash Load
-	// repairs, and saves.
-	last, _, err := g.m.store.ReadLog(rec.ID, rec.LogLen-1, 1)
-	if err != nil || len(last) != 1 {
-		t.Fatal(err)
-	}
-	m["logLen"] = float64(rec.LogLen - 1)
-	m["logHead"] = "0x" + hex.EncodeToString(last[0].Prev[:])
-	stale, _ := json.Marshal(m)
-	if err := os.WriteFile(path, stale, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := g.m.QuestionTier(rec.ID, rec.Question.ID); err != nil {
-		t.Fatal(err)
-	}
-	if after, _ := os.ReadFile(path); string(after) != string(stale) {
-		t.Fatal("QuestionTier rewrote the manifest")
-	}
-	if _, err := g.m.store.Load(rec.ID); err != nil {
-		t.Fatalf("the stale manifest was not the repairable kind: %v", err)
-	}
-	if after, _ := os.ReadFile(path); string(after) == string(stale) {
-		t.Fatal("Load did not repair it, so the test proves nothing")
-	}
-}
-
 // Q5, where it is answered: Decide checks the tier of the very question it
 // answers, so a question that opened after the agent admitted the decision
 // is still guarded, and stays open when refused.
@@ -450,6 +418,25 @@ func TestDecideChecksTheTierOfTheQuestionItAnswers(t *testing.T) {
 	var asked string
 	if _, err := g.decideAs(t, g.a, rec.ID, rec.Question.ID, "go", func(tier string) error { asked = tier; return nil }); err != nil || asked != intent.TierApproval {
 		t.Fatalf("with the tier covered: %v (checked %q)", err, asked)
+	}
+	// The answer names its controller and no unverified list of signers:
+	// the signatures themselves are in the decide intent entry before it.
+	_, res := g.read(t, rec.ID)
+	found := false
+	for _, e := range res.Entries {
+		if e.Kind == joblog.KindDecisionAnswered {
+			found = true
+			var b map[string]any
+			if err := json.Unmarshal(e.Body, &b); err != nil || b["controller"] != g.a.Address().Hex() {
+				t.Fatalf("answer %s: %v", e.Body, err)
+			}
+			if _, ok := b["signers"]; ok {
+				t.Fatalf("the answer records signers: %s", e.Body)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no decision.answered entry")
 	}
 }
 
@@ -974,12 +961,12 @@ func TestReconcileDoesNotVerifyFinishedJobs(t *testing.T) {
 		}
 	}
 	waiting, _ := g.start(t, g.a, `{}`)
-	orig, calls := verifyLog, 0
-	verifyLog = func(agent eip712.Address, id string, es []joblog.Entry, from uint64, prev [32]byte) ([32]byte, error) {
+	orig, calls := chainLog, 0
+	chainLog = func(agent eip712.Address, id string, es []joblog.Entry, from uint64, prev [32]byte) ([32]byte, error) {
 		calls++
 		return orig(agent, id, es, from, prev)
 	}
-	t.Cleanup(func() { verifyLog = orig })
+	t.Cleanup(func() { chainLog = orig })
 	if err := g.m.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}

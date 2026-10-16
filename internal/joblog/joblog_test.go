@@ -180,15 +180,23 @@ func TestVerifyIntentsNeedsTheNamedController(t *testing.T) {
 	}
 }
 
-// createdEntry signs a job.created entry whose intent was signed by ctl for agent.
+// createdEntry signs a job.created entry whose intent was signed by ctl for
+// agent, in the form written today: no payload.
 func createdEntry(t *testing.T, agentKey, ctl *signer.Key) (Entry, string) {
+	t.Helper()
+	return createdEntryWith(t, agentKey, ctl, []byte(`{}`), nil)
+}
+
+// createdEntryWith signs a job.created entry for an intent over payload that
+// records logged as the payload: nil as written today, the payload itself
+// as written before D1.
+func createdEntryWith(t *testing.T, agentKey, ctl *signer.Key, payload, logged []byte) (Entry, string) {
 	t.Helper()
 	n, err := intent.NewNonce()
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := []byte(`{}`)
-	in := intent.Intent{Agent: agentKey.Address(), Controller: ctl.Address(), Seq: 1, Nonce: n, IssuedAt: 1, Expiry: 2, Kind: intent.KindNodeMigrateNames, PayloadHash: intent.Hash(body)}
+	in := intent.Intent{Agent: agentKey.Address(), Controller: ctl.Address(), Seq: 1, Nonce: n, IssuedAt: 1, Expiry: 2, Kind: intent.KindNodeMigrateNames, PayloadHash: intent.Hash(payload)}
 	id, err := JobIDFor(in)
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +205,7 @@ func createdEntry(t *testing.T, agentKey, ctl *signer.Key) (Entry, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := json.Marshal(IntentBody{Envelope: intent.Envelope{Intent: in.JSON(), Payload: body, Sigs: []string{sig.Hex()}}, Outcome: "created"})
+	b, err := json.Marshal(IntentBody{Envelope: intent.Envelope{Intent: in.JSON(), Payload: logged, Sigs: []string{sig.Hex()}}, Outcome: "created"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,6 +230,59 @@ func TestVerifyIntentsBindsACreatedEntryToItsJobID(t *testing.T) {
 	foreign, otherID := createdEntry(t, agentKey, ctl)
 	if err := VerifyIntents(agentKey.Address(), id, []Entry{foreign}); !errors.Is(err, ErrBroken) {
 		t.Fatalf("a created entry from job %s accepted for job %s: %v", otherID, id, err)
+	}
+}
+
+// D1: a created entry no longer carries its payload, and needs none: the
+// controller's signature covers the intent, whose payload hash commits to
+// the inputs, and the job id commits to the intent. A log written before
+// still verifies, payload and all, and its payload must still be the signed one.
+func TestVerifyIntentsReadsCreatedEntriesWithAndWithoutThePayload(t *testing.T) {
+	agentKey, ctl, mallory := mustKey(t), mustKey(t), mustKey(t)
+	a := agentKey.Address()
+	payload := []byte(`{"snapshotKey":"vk_secret"}`)
+	for name, c := range map[string]struct {
+		logged []byte
+		ok     bool
+	}{
+		"today: no payload":            {nil, true},
+		"before D1: the payload":       {payload, true},
+		"before D1: an empty payload":  {[]byte{}, false},
+		"before D1: a swapped payload": {[]byte(`{"snapshotKey":"vk_other"}`), false},
+	} {
+		e, id := createdEntryWith(t, agentKey, ctl, payload, c.logged)
+		if err := VerifyIntents(a, id, []Entry{e}); (err == nil) != c.ok {
+			t.Errorf("%s: VerifyIntents = %v", name, err)
+		}
+	}
+	// Without its payload, a created entry still needs its controller's signature.
+	e, id := createdEntryWith(t, agentKey, ctl, payload, nil)
+	var b IntentBody
+	_ = json.Unmarshal(e.Body, &b)
+	in, _ := b.Envelope.Intent.Parse()
+	forged, _ := mallory.SignTypedData(context.Background(), in.TypedData())
+	b.Envelope.Sigs = []string{forged.Hex()}
+	body, _ := json.Marshal(b)
+	e, _, _ = Sign(context.Background(), agentKey, id, 0, [32]byte{}, KindCreated, body, time.Unix(1, 0))
+	if err := VerifyIntents(a, id, []Entry{e}); !errors.Is(err, ErrBroken) {
+		t.Fatalf("a payload-less created entry signed by another key: %v", err)
+	}
+}
+
+// A later request keeps its payload: the job id it names is bound to the
+// controller's signature only through the payload hash, so without the bytes
+// an entry moved from another job's log could not be told apart.
+func TestVerifyIntentsNeedsALaterRequestsPayload(t *testing.T) {
+	agentKey, ctl := mustKey(t), mustKey(t)
+	env := signedEnvelope(t, agentKey.Address(), job, ctl, ctl)
+	env.Payload = nil
+	body, _ := json.Marshal(IntentBody{Envelope: env, Outcome: "advance"})
+	e, _, err := Sign(context.Background(), agentKey, job, 0, [32]byte{}, KindIntent, body, time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyIntents(agentKey.Address(), job, []Entry{e}); !errors.Is(err, ErrBroken) {
+		t.Fatalf("an intent entry without its payload: %v", err)
 	}
 }
 
@@ -285,6 +346,8 @@ func TestDescribeGivesEachKindItsLine(t *testing.T) {
 		{KindStepLost, `{"step":"move-data","attempt":1}`, "step move-data attempt 1 stopped without a result"},
 		{KindDecisionAsked, `{"prompt":"two\nlines","tier":"approve"}`, "asked (approve tier): two lines"},
 		{KindDecisionAnswered, `{"question":"q","option":"stop","controller":"0xC2"}`, "answered stop by 0xC2"},
+		// An entry written before Signers was dropped still reads; the list is ignored.
+		{KindDecisionAnswered, `{"question":"q","option":"stop","controller":"0xC2","signers":["0xC2","0xD3"]}`, "answered stop by 0xC2"},
 		{KindLeaseTaken, `{"owner":"0xA"}`, "lease taken by 0xA"},
 		{KindLeaseTaken, `{"owner":"0xA","previous":"0xB"}`, "lease taken by 0xA from 0xB"},
 		{KindLeaseReleased, `{"owner":"0xA"}`, "lease released by 0xA"},
