@@ -142,6 +142,11 @@ func TestAnApprovalQuestionNeedsAnApprovalSignature(t *testing.T) {
 	if got := rejection(t, rc, res).Code; got != intent.ReasonUnauthorizedKind {
 		t.Fatalf("an approval question answered with a routine signature: %s", got)
 	}
+	// Decide refused it, after admission: there is no earlier tier check,
+	// so the refused decision used its seq.
+	if got := r.a.replay.LastSeq(r.controller.Address()); got != r.seq {
+		t.Fatalf("last seq %d after the refused decision sent as %d: refused before admission", got, r.seq)
+	}
 	wallet, _ := signer.GenerateKey()
 	enroll(t, r, wallet, TierApproval)
 	rc, res = r.sendSignedBy(t, intent.KindJobDecide, intent.JobDecidePayload{ID: rec.ID, Decision: rec.Question.ID, Option: "go"}, wallet)
@@ -151,8 +156,8 @@ func TestAnApprovalQuestionNeedsAnApprovalSignature(t *testing.T) {
 }
 
 // C1: a decision sent after the asking step finished but before its fold.
-// The early lookup sees no question and lets a routine signature through;
-// dispatchJob's reconcile then opens the approval question, and Decide must
+// At admission there is no question yet; dispatchJob's reconcile then opens
+// the approval question, and Decide must
 // still refuse it, leaving the question open. Its id is predictable
 // (<step>-<attempt>-<key>), so this is a race a routine key could win.
 func TestARoutineKeyCannotAnswerAnApprovalQuestionThatOpensLate(t *testing.T) {

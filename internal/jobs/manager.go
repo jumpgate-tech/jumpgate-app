@@ -400,28 +400,7 @@ func (m *Manager) surelyNotRunning(ctx context.Context, unit string) bool {
 	return err == nil && !active
 }
 
-// QuestionTier is the tier the job's open question needs, for an early
-// refusal before the agent admits a decision: routine when there is no such
-// job or question (Decide then refuses it as job_not_found or job_state). It
-// reads the manifest without the store, so it never writes (a Load could
-// save a crash repair), and a manifest it cannot read is an error the caller
-// must treat as the strictest tier. Decide enforces the tier itself.
-func (m *Manager) QuestionTier(id, decision string) (string, error) {
-	m.lock()
-	defer m.unlock()
-	man, err := LoadManifest(m.store.Dir(), id)
-	if errors.Is(err, ErrNotFound) {
-		return intent.TierRoutine, nil
-	}
-	if err != nil {
-		return "", err
-	}
-	if man.Question == nil || man.Question.ID != decision {
-		return intent.TierRoutine, nil
-	}
-	return questionTier(man.Question), nil
-}
-
+// questionTier is the tier q needs: routine when it names none.
 func questionTier(q *intent.JobQuestion) string {
 	if q.Tier == "" {
 		return intent.TierRoutine
