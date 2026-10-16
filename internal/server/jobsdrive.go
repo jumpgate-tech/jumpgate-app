@@ -117,7 +117,7 @@ func (h *jobsHub) driveLoop(ctx context.Context, k jobKey) {
 		if !ok || t.Agent == nil {
 			return // the box was removed or unpaired
 		}
-		rec, _, _, err := h.readVerified(ctx, cfg, t, k.id)
+		rec, _, _, err := h.readVerified(ctx, cfg, t, k.id, false)
 		switch {
 		case errors.Is(err, errJobLogInvalid), refused(err):
 			return
@@ -324,7 +324,7 @@ func (s *Server) retireObservers(id string) {
 // record reads a job fresh from the box and verifies its log, so a decision
 // is checked against what the box says now, never against a cached record.
 func (h *jobsHub) record(ctx context.Context, cfg config.Config, t config.Target, id string) (intent.JobRecord, int64, error) {
-	rec, _, agentTime, err := h.readVerified(ctx, cfg, t, id)
+	rec, _, agentTime, err := h.readVerified(ctx, cfg, t, id, true)
 	return rec, agentTime, err
 }
 

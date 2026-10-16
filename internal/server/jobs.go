@@ -42,41 +42,32 @@ type boxJobs struct {
 	unsupported bool // the agent cannot run jobs (or predates them): no summary
 }
 
-// verifiedLog is a log prefix this server verified, and the agent key it
-// verified it against: a re-paired box (or another box re-added under the
-// same id) must never be credited with entries its key did not sign.
-type verifiedLog struct {
-	agent   eip712.Address
-	entries []joblog.Entry
-	head    [32]byte
-	size    int    // the entries' encoded bytes, as received (see jobLogMaxBytes)
-	used    uint64 // the hub's use counter when last read: least recently used goes first
+// logMark is how far this server last verified a job's log: its length and
+// head digest, and the agent key it verified them against. The driver reads
+// on from it, verifying only what was added; a re-paired box (or another box
+// re-added under the same id) never has a mark another key made, so its
+// entries are never credited to a key that did not sign them. No entries are
+// kept: the detail view and a decision read and verify the whole log.
+type logMark struct {
+	agent eip712.Address
+	len   uint64
+	head  [32]byte
 }
 
-// Bounds on one job's log, against a box that holds its agent key and signs
-// an endless valid chain (variables so tests shorten them). A job logs its
-// creation, each request that changes it, and each step's start and outcome;
-// lease renewals are saved, not logged (Q7). A six-hour job of a few steps,
-// retried and decided a few times, is a few hundred entries, so 5000 is
-// over ten times anything a plan here produces. Entries carry at most an
+// Bounds on one read of a job's log, against a box that holds its agent key
+// and signs an endless valid chain (variables so tests shorten them). A job
+// logs its creation, each request that changes it, and each step's start and
+// outcome; lease renewals are saved, not logged (Q7). A six-hour job of a few
+// steps, retried and decided a few times, is a few hundred entries, so 5000
+// is over ten times anything a plan here produces. Entries carry at most an
 // intent envelope or a step result, a few KiB each, so 16 MiB (one agent
-// reply's limit, agentclient.maxReply) is likewise far above a real log.
+// reply's limit, agentclient.maxReply) is likewise far above a real log; it
+// counts the JSON encoding of every entry and job record this read received.
 // The deadline bounds the whole paged read, not each page.
-//
-// jobLogMaxBytes measures the whole log, not one read: the JSON encoding of
-// every entry as the box sent it (each entry re-marshalled on arrival, since
-// agentclient does not report a reply's size), carried over in the cache
-// from earlier reads, plus the encoded job record of every page of this
-// read. A box cannot grow a log past it a page, or a GET, at a time.
-//
-// jobLogCacheMaxBytes bounds every cached log together, since a box chooses
-// how many jobs it lists. Past it the least recently read logs are evicted;
-// a log larger than the whole budget is served but never cached.
 var (
-	jobLogMaxEntries    = 5000
-	jobLogMaxBytes      = 16 << 20
-	jobLogCacheMaxBytes = 64 << 20
-	jobLogReadTimeout   = 60 * time.Second
+	jobLogMaxEntries  = 5000
+	jobLogMaxBytes    = 16 << 20
+	jobLogReadTimeout = 60 * time.Second
 )
 
 // jobsHub is this server's view of every paired box's durable jobs: it lists
@@ -103,10 +94,7 @@ type jobsHub struct {
 	listedAt time.Time
 	listing  chan struct{}
 	subs     map[chan api.JobsInbox]struct{}
-	logs     map[jobKey]*verifiedLog
-	logBytes int               // the sum of every cached log's size
-	logUses  uint64            // ticks on every cache read and store, for LRU
-	logGen   map[string]uint64 // per target, bumped whenever its logs are dropped
+	marks    map[jobKey]logMark
 	driving  map[jobKey]context.CancelFunc
 	// settled are the finished jobs whose result this controller has copied
 	// into its record of the box (jobsdrive.go: finished), or is copying.
@@ -118,7 +106,7 @@ type jobsHub struct {
 func newJobsHub(s *Server) *jobsHub {
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &jobsHub{s: s, ctx: ctx, cancel: cancel, boxes: map[string]*boxJobs{}, subs: map[chan api.JobsInbox]struct{}{},
-		logs: map[jobKey]*verifiedLog{}, logGen: map[string]uint64{}, driving: map[jobKey]context.CancelFunc{},
+		marks: map[jobKey]logMark{}, driving: map[jobKey]context.CancelFunc{},
 		settled: map[jobKey]bool{}}
 	h.readJob = func(ctx context.Context, cfg config.Config, t config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
 		return decodeResult[intent.JobReadResult](s.agentResult(ctx, cfg, t, intent.KindJobRead, p))
@@ -212,12 +200,11 @@ func (h *jobsHub) list(done chan struct{}) {
 	for id := range h.boxes {
 		if !keep[id] {
 			delete(h.boxes, id)
-			h.logGen[id]++ // a read of its jobs in flight must not cache
 		}
 	}
-	for k := range h.logs {
+	for k := range h.marks {
 		if !keep[k.target] {
-			h.forgetLocked(k) // the box was removed or unpaired
+			delete(h.marks, k) // the box was removed or unpaired
 		}
 	}
 	h.mu.Unlock()
@@ -243,8 +230,8 @@ func (h *jobsHub) listBox(ctx context.Context, cfg config.Config, t config.Targe
 	h.boxes[t.ID] = box
 	h.mu.Unlock()
 	if err == nil {
-		// A job the box no longer lists was pruned there (J6): its cached
-		// log goes too, so the cache never outgrows what the boxes keep.
+		// A job the box no longer lists was pruned there (J6): its log
+		// mark goes too, so the marks never outgrow what the boxes keep.
 		listed := make(map[string]bool, len(res.Jobs))
 		for _, j := range res.Jobs {
 			listed[j.ID] = true
@@ -314,28 +301,15 @@ func (s *Server) refuseDuringJob(w http.ResponseWriter, ctx context.Context, cfg
 	return false
 }
 
-// dropLogs forgets target's cached logs, except those of the jobs in keep.
+// dropLogs forgets target's log marks, except those of the jobs in keep.
 func (h *jobsHub) dropLogs(target string, keep map[string]bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	// Bumped even when nothing is cached: a first read of a job this drop
-	// prunes is in flight with nothing cached, and must not cache.
-	h.logGen[target]++
-	for k := range h.logs {
+	for k := range h.marks {
 		if k.target == target && !keep[k.id] {
-			h.forgetLocked(k)
+			delete(h.marks, k)
 		}
 	}
-}
-
-// forgetLocked drops one cached log and bumps its target's generation, so a
-// read that began before the drop does not put it back. Callers hold h.mu.
-func (h *jobsHub) forgetLocked(k jobKey) {
-	if vl := h.logs[k]; vl != nil {
-		h.logBytes -= vl.size
-		delete(h.logs, k)
-	}
-	h.logGen[k.target]++
 }
 
 // listedLocked reports whether the last listing of k's box has k's job.
@@ -353,53 +327,23 @@ func (h *jobsHub) listedLocked(k jobKey) bool {
 	return false
 }
 
-// cachedLog is k's cached log if it was verified against agent, and the
-// target's generation to hand to storeLog.
-func (h *jobsHub) cachedLog(k jobKey, agent eip712.Address) (verifiedLog, uint64) {
+// mark is k's log mark if it was made against agent.
+func (h *jobsHub) mark(k jobKey, agent eip712.Address) (logMark, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	gen := h.logGen[k.target]
-	vl := h.logs[k]
-	if vl == nil || vl.agent != agent {
-		return verifiedLog{}, gen // nothing verified against this key: start over
-	}
-	h.logUses++
-	vl.used = h.logUses
-	return verifiedLog{agent: vl.agent, entries: append([]joblog.Entry(nil), vl.entries...), head: vl.head, size: vl.size}, gen
+	m, ok := h.marks[k]
+	return m, ok && m.agent == agent // another key's mark: start over
 }
 
-// storeLog caches vl as k's log only while the hub's listing still has the
-// box and the job, and the target's logs were not dropped since gen (a
-// listing pruned the job, or the box went, while the read was in flight),
-// and vl alone fits the whole budget. A job not listed yet (just created)
-// is served uncached until a listing shows it. It evicts the least recently
-// used logs to make room, and reports whether vl was cached.
-func (h *jobsHub) storeLog(k jobKey, vl verifiedLog, gen uint64) bool {
+// storeMark keeps m as k's mark while the hub's listing has the job, so the
+// marks never outgrow what the boxes list. A job not listed yet (just
+// created) has its whole log read until a listing shows it.
+func (h *jobsHub) storeMark(k jobKey, m logMark) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.logGen[k.target] != gen || vl.size > jobLogCacheMaxBytes || !h.listedLocked(k) {
-		return false
+	if h.listedLocked(k) {
+		h.marks[k] = m
 	}
-	if old := h.logs[k]; old != nil {
-		h.logBytes -= old.size
-		delete(h.logs, k)
-	}
-	for h.logBytes+vl.size > jobLogCacheMaxBytes {
-		var lru jobKey
-		var oldest *verifiedLog
-		for key, l := range h.logs {
-			if oldest == nil || l.used < oldest.used {
-				lru, oldest = key, l
-			}
-		}
-		h.logBytes -= oldest.size
-		delete(h.logs, lru) // eviction, not a drop: no generation bump
-	}
-	h.logUses++
-	vl.used = h.logUses
-	h.logs[k] = &vl
-	h.logBytes += vl.size
-	return true
 }
 
 // setRecord updates one job in the cache (after a read or a mutation).
@@ -540,16 +484,18 @@ func (h *jobsHub) viewLocked(target string, r intent.JobRecord, agentTime int64)
 	return v
 }
 
-// readVerified reads a job and its whole log, every page job.read has,
-// verifying only the entries this server has not verified before. Each page
-// must be signed by the box's agent and chained onto the last (Verify), and
-// every request in it must be one its controller signed for this agent and
-// this job (VerifyIntents). Verify proves only a valid prefix, so the log
-// read in full must then be the one the job's record describes: both its
-// length and its head digest, or a box could drop the tail or hand over
-// another log. Anything less is errJobLogInvalid, and the cache for the job
-// is dropped, so no part of that log is shown.
-func (h *jobsHub) readVerified(ctx context.Context, cfg config.Config, t config.Target, id string) (intent.JobRecord, []joblog.Entry, int64, error) {
+// readVerified reads a job and its log, every page job.read has. With full,
+// or with no mark made against this box's agent key, it reads and verifies
+// the whole log and returns it; otherwise it reads on from the mark and
+// verifies, and returns, only what was added. Each page must be signed by
+// the box's agent and chained onto the last (Verify), and every request in
+// it must be one its controller signed for this agent and this job
+// (VerifyIntents). Verify proves only a valid prefix, so the log must then
+// be the one the job's record describes: both its length and its head
+// digest, or a box could drop the tail or hand over another log. Anything
+// less is errJobLogInvalid, and the job's mark is dropped, so no part of
+// that log is shown and the next read starts over.
+func (h *jobsHub) readVerified(ctx context.Context, cfg config.Config, t config.Target, id string, full bool) (intent.JobRecord, []joblog.Entry, int64, error) {
 	at, err := agentTarget(t)
 	if err != nil {
 		return intent.JobRecord{}, nil, 0, &localError{err}
@@ -557,15 +503,19 @@ func (h *jobsHub) readVerified(ctx context.Context, cfg config.Config, t config.
 	ctx, cancel := context.WithTimeout(ctx, jobLogReadTimeout)
 	defer cancel()
 	k := jobKey{t.ID, id}
-	vl, gen := h.cachedLog(k, at.Agent)
-	entries, head := vl.entries, vl.head
+	var from logMark // from 0, chained onto the zero digest
+	if m, ok := h.mark(k, at.Agent); ok && !full {
+		from = m
+	}
+	head, n := from.head, from.len // the verified log's head and length so far
+	var entries []joblog.Entry     // what this read verified
 	var rec intent.JobRecord
 	var agentTime int64
-	var claimed uint64  // the first page's LogLen: the most this read takes
-	logBytes := vl.size // the whole log's, carried over from earlier reads
-	recBytes := 0       // this read's records
+	var claimed uint64 // the first page's LogLen: the most this read takes
+	size := 0          // this read's encoded entries and records
+	tooBig := fmt.Errorf("the job's log is larger than the %d bytes this server reads", jobLogMaxBytes)
 	for first := true; ; first = false {
-		res, err := h.readJob(ctx, cfg, t, intent.JobReadPayload{ID: id, From: uint64(len(entries))})
+		res, err := h.readJob(ctx, cfg, t, intent.JobReadPayload{ID: id, From: n})
 		if err != nil {
 			return rec, nil, 0, err
 		}
@@ -576,22 +526,23 @@ func (h *jobsHub) readVerified(ctx context.Context, cfg config.Config, t config.
 				return h.invalid(k, rec, fmt.Errorf("the job claims %d log entries, more than the %d this server reads", claimed, jobLogMaxEntries))
 			}
 		}
-		if uint64(len(entries)+len(res.Entries)) > claimed {
+		if n+uint64(len(res.Entries)) > claimed {
 			return h.invalid(k, rec, fmt.Errorf("the box sent more than the %d log entries the job claimed", claimed))
 		}
-		tooBig := fmt.Errorf("the job's log is larger than the %d bytes this server reads", jobLogMaxBytes)
 		if rb, err := json.Marshal(res.Job); err != nil {
 			return h.invalid(k, rec, err)
-		} else if recBytes += len(rb); logBytes+recBytes > jobLogMaxBytes {
+		} else if size += len(rb); size > jobLogMaxBytes {
 			return h.invalid(k, rec, tooBig)
 		}
 		page := make([]joblog.Entry, 0, len(res.Entries))
 		for _, j := range res.Entries {
+			// agentclient does not report a reply's size: each entry is
+			// measured re-encoded.
 			eb, err := json.Marshal(j)
 			if err != nil {
 				return h.invalid(k, rec, err)
 			}
-			if logBytes += len(eb); logBytes+recBytes > jobLogMaxBytes {
+			if size += len(eb); size > jobLogMaxBytes {
 				return h.invalid(k, rec, tooBig)
 			}
 			e, err := joblog.FromJSON(j)
@@ -600,13 +551,23 @@ func (h *jobsHub) readVerified(ctx context.Context, cfg config.Config, t config.
 			}
 			page = append(page, e)
 		}
-		if head, err = joblog.Verify(at.Agent, id, page, uint64(len(entries)), head); err != nil {
+		if head, err = joblog.Verify(at.Agent, id, page, n, head); err != nil {
 			return h.invalid(k, rec, err)
 		}
 		if err := joblog.VerifyIntents(at.Agent, id, page); err != nil {
 			return h.invalid(k, rec, err)
 		}
+		// A job's log starts with the request that created it, and only
+		// there: VerifyIntents binds that entry to the job id, so a log
+		// without it, or with a second one, credits a request the id does
+		// not commit to.
+		for _, e := range page {
+			if (e.Index == 0) != (e.Kind == joblog.KindCreated) {
+				return h.invalid(k, rec, fmt.Errorf("entry %d is %q; a job's log has its one %s entry first", e.Index, e.Kind, joblog.KindCreated))
+			}
+		}
 		entries = append(entries, page...)
+		n += uint64(len(page))
 		if !res.More {
 			break
 		}
@@ -618,24 +579,16 @@ func (h *jobsHub) readVerified(ctx context.Context, cfg config.Config, t config.
 	if rec.ID != id {
 		return h.invalid(k, rec, fmt.Errorf("asked for job %s, the box answered with job %q", id, rec.ID))
 	}
+	if n == 0 {
+		return h.invalid(k, rec, fmt.Errorf("the job's log is empty; it must start with its %s entry", joblog.KindCreated))
+	}
 	// The record must describe the log just verified, or the box is lying
 	// about one of them.
 	got := "0x" + hex.EncodeToString(head[:])
-	if uint64(len(entries)) != rec.LogLen || got != recordedHead(rec) {
-		return h.invalid(k, rec, fmt.Errorf("the job says its log has %d entries ending %q; %d verified, ending %s", rec.LogLen, rec.LogHead, len(entries), got))
+	if n != rec.LogLen || got != recordedHead(rec) {
+		return h.invalid(k, rec, fmt.Errorf("the job says its log has %d entries ending %q; %d verified, ending %s", rec.LogLen, rec.LogHead, n, got))
 	}
-	// A job's log starts with the request that created it, and only there:
-	// VerifyIntents binds that entry to the job id, so a log without it, or
-	// with a second one, credits a request the id does not commit to.
-	if len(entries) == 0 {
-		return h.invalid(k, rec, fmt.Errorf("the job's log is empty; it must start with its %s entry", joblog.KindCreated))
-	}
-	for i, e := range entries {
-		if (i == 0) != (e.Kind == joblog.KindCreated) {
-			return h.invalid(k, rec, fmt.Errorf("entry %d is %q; a job's log has its one %s entry first", i, e.Kind, joblog.KindCreated))
-		}
-	}
-	h.storeLog(k, verifiedLog{agent: at.Agent, entries: entries, head: head, size: logBytes}, gen)
+	h.storeMark(k, logMark{agent: at.Agent, len: n, head: head})
 	h.setRecord(t.ID, rec, agentTime)
 	return rec, entries, agentTime, nil
 }
@@ -651,7 +604,7 @@ func recordedHead(r intent.JobRecord) string {
 
 func (h *jobsHub) invalid(k jobKey, rec intent.JobRecord, err error) (intent.JobRecord, []joblog.Entry, int64, error) {
 	h.mu.Lock()
-	h.forgetLocked(k)
+	delete(h.marks, k)
 	h.mu.Unlock()
 	return rec, nil, 0, fmt.Errorf("%w: %v", errJobLogInvalid, err)
 }
@@ -763,7 +716,7 @@ func (s *Server) handleJobDetail(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rec, entries, agentTime, err := s.jobs.readVerified(r.Context(), cfg, t, id)
+	rec, entries, agentTime, err := s.jobs.readVerified(r.Context(), cfg, t, id, true)
 	if err != nil {
 		writeNodeError(w, err)
 		return
