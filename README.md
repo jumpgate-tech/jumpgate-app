@@ -25,7 +25,7 @@ Supported networks:
 | Terminal launcher | Jumpgate Terminal.app | double-click jumpgate.exe | "Jumpgate" menu entry |
 | Key store default | Keychain | Credential Manager (`wincred`) | Secret Service with a desktop session, else an owner-only file |
 | Pair this machine (`--local`) | no | no | yes (root, or sudo on the terminal) |
-| Minimum | macOS 10.15 | Windows 10 1803 / Server 2019 | WebKitGTK 4.1 for the window (Ubuntu 22.04+, Debian 12+, Fedora 38+) |
+| Minimum | macOS 12 (Monterey) | Windows 10 1803 / Server 2019 | the desktop bundle needs WebKitGTK 4.1 and GTK 3 (tested on Ubuntu 24.04, Debian 13); the `jumpgate_linux_<arch>` archive needs neither |
 
 The agent that runs on your node boxes is Linux-only (amd64 and arm64). Every release of jumpgate carries both agents inside it, so a controller on any OS can pair any Linux box without extra downloads.
 
