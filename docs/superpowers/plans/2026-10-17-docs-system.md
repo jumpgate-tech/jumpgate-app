@@ -2094,4 +2094,4 @@ The out-of-scope items are not planned.
 
 **Review Focus.** Each of the five has a named test in its owning task: 6, 4 and 7, 13, 20, and 5 and 15.
 
-**Proportion.** The spec is 191 lines and this plan is about 1,100. Code blocks are tests and signatures. The only algorithm bodies are the hash steps (Task 7) and the CI YAML, which the tests cannot determine.
+**Proportion.** The spec is 191 lines and this plan is about 2,100. Most of the length is test code, signatures and the Task 9 migration table. The only algorithm bodies are the hash steps (Task 7) and the CI YAML, which the tests cannot determine.
