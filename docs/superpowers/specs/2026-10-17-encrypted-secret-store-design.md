@@ -229,5 +229,12 @@ on `/dev/tty`. This is the only path by which the raw key leaves the vault.
    stay fixed for portability between machines?
 3. Should the desktop app hold the DEK across a window close while the tray
    is running, or lock on close?
-4. Should the on-box agent key and WireGuard server keys get
-   `LoadCredentialEncrypted=` where a TPM exists?
+
+### Resolved
+
+4. **Should the on-box agent key and WireGuard server keys get
+   `LoadCredentialEncrypted=` where a TPM exists?** Resolved 2026-10-17:
+   later, not in this work. Agents hold nothing that can sign for the fleet.
+5. **Should the controller lock itself after a period of no use?** Resolved
+   2026-10-17: idle auto-lock is a setting, off by default, because durable
+   jobs need the key unlocked to reach their next step.
