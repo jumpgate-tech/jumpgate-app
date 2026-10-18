@@ -451,18 +451,25 @@ those apply, so "Show previous steps" works across pathways.
 
 ## Open questions
 
-1. Should a user outside `jumpgate-admin` be offered an explicit per-user
-   server (for example `JUMPGATE_USER_SERVER=1`)? Or is a second controller on
-   a controller server always a mistake?
-2. Should the controller auto-lock after idle? That conflicts with
-   unattended plans. A "lock when no plan is running" option is a candidate.
-3. Pull-only agent boxes cannot be upgraded by the controller. Should there
-   be an approval-tier `agent.upgrade` intent?
-4. Should the agent key (`/var/lib/jumpgate/agent.key`) also move to
-   `LoadCredentialEncrypted=` with a TPM seal where available?
-5. Should a `--self-only` controller be able to declare that scope to other
-   agents, for example with a statement signed by its own agent that other
-   agents refuse to enroll? This needs an approval-tier enroll first.
-6. Should arm64 get its own dnf repo path, or one multi-arch repo?
-7. Is `pkg.jumpgate.app` the final name? And should the R2 bucket live in
-   the same Cloudflare account as Pages (valaxyblackdev)?
+Resolved 2026-10-17 by the user, except question 6:
+
+1. **Resolved: no per-user server for non-admins, for now.** A user outside
+   `jumpgate-admin` either joins that group or runs their own copy of
+   jumpgate elsewhere. D7's hint and its "no silent fallback" stand; there is
+   no `JUMPGATE_USER_SERVER`.
+2. **Resolved: idle auto-lock is a setting, off by default.** Unattended
+   plans keep running unless an operator turns it on.
+3. **Resolved: agents installed by pull are upgraded by the controller over
+   the existing pairing, the same as pushed agents.** This supersedes D12's
+   last bullet: a pull-only box no longer has to re-run `install.sh --agent`
+   to upgrade.
+4. **Resolved: TPM sealing for the agent key comes later.** The agent key
+   stays a root-only file loaded with `LoadCredential=`.
+5. **Resolved: no visible self-only declaration.** The controller-plus-agents
+   model makes it unnecessary; D11 stays as written (a controller-side guard
+   plus agent-side `scope: local`).
+6. Should arm64 get its own dnf repo path, or one multi-arch repo? (Open.)
+7. **Resolved: the name is `pkg.jumpgate.app`, and its R2 bucket lives in the
+   same Cloudflare account as jumpgate.app** (valaxyblackdev, account id
+   `4d950372162cef595726db63c21035ab`). Creating the bucket, the custom domain
+   and the token needs the user's OK when that step runs.
