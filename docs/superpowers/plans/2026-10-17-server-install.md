@@ -40,43 +40,74 @@
 
 ## Interfaces: Consumes (from the encrypted-secret-store plan)
 
-These names come from the vault spec (V1 to V6). The vault plan is being written in parallel, so Task 0 compiles a contract test against them. If a name differs, Task 0 renames it in this plan before any other task starts.
+These are the names the vault plan (`2026-10-17-encrypted-secret-store.md`) actually produces: Task 3's Interfaces block, Task 5 (`signer`, `secrets.VaultPath`, `readPassphrase`), Task 7 (server methods, routes, codes), Task 11 (`credentialKEK`, auto-unlock), Task 12 (client) and Task 16 (`vault seal`). Task 0 compiles a contract test against them. Earlier drafts of this plan assumed other names; the mapping is below.
+
+**Choice for what the vault plan does not produce:** a systemd-creds slot whose secret the vault generates (`AddCredSlot` returning a secret) does not exist. The vault plan's primitive is `AddKEKSlot(Slot, kek)`: the caller draws the 32-byte KEK. So this plan's Task 11 draws the KEK inside `POST /api/system/seal` and calls `AddKEKSlot`. No task is added to the vault plan. The vault plan has no `Init` that returns an unlocked vault under that name (it is `Create`), no package-level `Path` (it is `secrets.VaultPath()`), and no `LockState()` (it is `VaultState().State`).
+
+| Assumed in earlier drafts | Real name (vault plan) |
+|---|---|
+| `vault.Path()` | `secrets.VaultPath() (string, error)` (Task 5); `(*vault.Vault).Path()` also exists |
+| `vault.Init(path, pass)` | `vault.Create(path, pass, vault.DefaultParams) (*Vault, error)`, returned unlocked, clears `pass` |
+| `(*Vault).Locked()` | same (`Locked() bool`) |
+| `(*Vault).AddCredSlot(cred) (secret, err)` | `(*Vault).AddKEKSlot(vault.Slot{Kind: vault.SlotSystemdCreds, Cred: cred}, kek []byte) error`; the caller draws `kek` |
+| `(*Vault).UnlockWithCred(cred, secret)` | `(*Vault).UnlockKEK(vault.SlotSystemdCreds, kek) error` |
+| `vault.ErrWrongPassphrase`, `ErrCorrupt`, `ErrLocked` | same |
+| `signer.CreateInVault(v, name)` | `signer.CreateVault(v, ref) (*Key, error)`; `signer.OpenVault(v, ref)` opens it |
+| `signer.StoreVault` | same |
+| `server.Config.Vault` | same (`Vault *vault.Vault`; nil means look lazily) |
+| `(*Server).LockState()` string | `(*Server).VaultState() api.VaultView`; compare `.State`: `none`, `locked`, `unlocked` or `unusable` |
+| `(*Server).Lock()` | `(*Server).Lock() api.VaultView` (also `Unlock(pass) (api.VaultView, error)`, `UnlockKEK(kind, kek)`) |
+| `api.CodeLocked`, `CodeWrongPassphrase`, `CodeVaultCorrupt` | same (also `CodeVaultUnsafe`, `CodeNoVault`) |
+| `apiclient.Unlock(ctx, pass) error`, `POST /api/unlock` | `(*Client).Unlock(ctx, pass []byte) (api.VaultView, error)`, `POST /api/vault/unlock` |
+| `apiclient.Lock(ctx) error`, `POST /api/lock` | `(*Client).Lock(ctx) (api.VaultView, error)`, `POST /api/vault/lock`; also `(*Client).Vault(ctx)` and `GET /api/vault` |
+| `readPassphrase(in, fromStdin, prompt)` | `readPassphrase(prompt string, fromStdin, confirm bool) ([]byte, error)`; the `--stdin` source is the seam `stdinReader` |
+| unlock at start from `$CREDENTIALS_DIRECTORY` (`unlockFromCredentials`) | `credentialKEK(getenv)` and the `vault-auto-unlock` task in `buildServer` (vault Task 11) |
+| `vault seal --tpm2 [--allow-host-key]` | `vault seal (--tpm2 \| --allow-host-key) [--out PATH]` (vault Task 16): one mode flag, not both |
 
 ```go
 // package github.com/valve-tech/jumpgate/internal/vault
-func Path() (string, error)                              // <config.Dir()>/vault (V1)
-func Init(path string, passphrase []byte) (*Vault, error) // creates; returns it unlocked
-func Open(path string) (*Vault, error)                   // opens locked
-func (v *Vault) Unlock(passphrase []byte) error
-func (v *Vault) Lock()
+func Create(path string, passphrase []byte, p Params) (*Vault, error)
+func Open(path string) (*Vault, error)
+func (v *Vault) Path() string
 func (v *Vault) Locked() bool
-func (v *Vault) AddCredSlot(cred string) (secret []byte, err error) // V2 "systemd-creds" slot
-func (v *Vault) UnlockWithCred(cred string, secret []byte) error
+func (v *Vault) Unlock(passphrase []byte) error
+func (v *Vault) UnlockKEK(kind SlotKind, kek []byte) error
+func (v *Vault) Lock()
+func (v *Vault) AddKEKSlot(s Slot, kek []byte) error
+var DefaultParams Params
 var ErrWrongPassphrase, ErrCorrupt, ErrLocked error
+const SlotSystemdCreds SlotKind = "systemd-creds"
 
 // package signer
 const StoreVault Store = "vault"
-func CreateInVault(v *vault.Vault, name string) (*Key, error) // name "controller-key"
+func CreateVault(v *vault.Vault, ref string) (*Key, error) // ref "controller-key"
+func OpenVault(v *vault.Vault, ref string) (*Key, error)
+
+// package secrets
+func VaultPath() (string, error)
 
 // package server
 type Config struct{ /* … */ Vault *vault.Vault }
-func (s *Server) LockState() string // "locked" | "unlocked" | "none"
-func (s *Server) Lock()             // drops the DEK and the signer
+func (s *Server) VaultState() api.VaultView // .State: "none" | "locked" | "unlocked" | "unusable"
+func (s *Server) Unlock(passphrase []byte) (api.VaultView, error)
+func (s *Server) UnlockKEK(kind vault.SlotKind, kek []byte) (api.VaultView, error)
+func (s *Server) Lock() api.VaultView // drops the DEK and the signer
 
 // package api
 const CodeLocked Code = "locked"; CodeWrongPassphrase Code = "wrong_passphrase"; CodeVaultCorrupt Code = "vault_corrupt"
 
 // package apiclient
-func (c *Client) Unlock(ctx context.Context, passphrase []byte) error // POST /api/unlock
-func (c *Client) Lock(ctx context.Context) error                      // POST /api/lock
+func (c *Client) Unlock(ctx context.Context, passphrase []byte) (api.VaultView, error) // POST /api/vault/unlock
+func (c *Client) Lock(ctx context.Context) (api.VaultView, error)                      // POST /api/vault/lock
 
 // package main (cmd/jumpgate)
-func readPassphrase(in io.Reader, fromStdin bool, prompt string) ([]byte, error) // /dev/tty hidden, or one stdin line
+func readPassphrase(prompt string, fromStdin, confirm bool) ([]byte, error) // /dev/tty hidden, or one stdin line
+func credentialKEK(getenv func(string) string) ([]byte, bool)               // $CREDENTIALS_DIRECTORY/jumpgate-vault-key
 // CLI: `jumpgate unlock [--stdin]`, `jumpgate lock`, `jumpgate vault seal`, `jumpgate keys init --store vault`
-// TUI: the unlock prompt and the LOCKED header badge (V5); `jumpgate home` LOCKED line
+// TUI: the unlock prompt and the LOCKED header badge; `jumpgate home` LOCKED line
 ```
 
-The vault plan's unlock route must open the controller key named in `config.json` once the vault is unlocked. This plan relies on that in Task 9: it creates the key, locks, then unlocks through the normal path.
+The vault plan's unlock route opens the controller key named in `config.json` once the vault is unlocked (`server.Config.Unlocked`, wired in vault Task 11). This plan relies on that in Task 9: it creates the key, locks, then unlocks through the normal path.
 
 ---
 
@@ -99,6 +130,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/apiclient"
+	"github.com/valve-tech/jumpgate/internal/secrets"
 	"github.com/valve-tech/jumpgate/internal/server"
 	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/vault"
@@ -108,15 +140,18 @@ import (
 // server-install plan consumes (docs/superpowers/plans/2026-10-17-server-install.md).
 func TestVaultContract(t *testing.T) {
 	_ = []any{
-		vault.Path, vault.Init, vault.Open,
-		(*vault.Vault).Unlock, (*vault.Vault).Lock, (*vault.Vault).Locked,
-		(*vault.Vault).AddCredSlot, (*vault.Vault).UnlockWithCred,
+		vault.Create, vault.Open, vault.DefaultParams,
+		(*vault.Vault).Path, (*vault.Vault).Unlock, (*vault.Vault).UnlockKEK,
+		(*vault.Vault).Lock, (*vault.Vault).Locked, (*vault.Vault).AddKEKSlot,
+		vault.SlotSystemdCreds,
 		vault.ErrWrongPassphrase, vault.ErrCorrupt, vault.ErrLocked,
-		signer.StoreVault, signer.CreateInVault,
-		(*server.Server).LockState, (*server.Server).Lock,
+		signer.StoreVault, signer.CreateVault, signer.OpenVault,
+		secrets.VaultPath,
+		(*server.Server).VaultState, (*server.Server).Unlock,
+		(*server.Server).UnlockKEK, (*server.Server).Lock,
 		api.CodeLocked, api.CodeWrongPassphrase, api.CodeVaultCorrupt,
 		(*apiclient.Client).Unlock, (*apiclient.Client).Lock,
-		readPassphrase,
+		readPassphrase, credentialKEK,
 	}
 	_ = server.Config{Vault: (*vault.Vault)(nil)}
 }
@@ -125,7 +160,7 @@ func TestVaultContract(t *testing.T) {
 - [ ] **Step 2: Run it**
 
 Run: `go test ./cmd/jumpgate/ -run TestVaultContract -count=1`
-Expected: PASS. A compile error such as `undefined: vault.AddCredSlot` means that name differs. Find the vault plan's name for it (`grep -rn "func (v \*Vault)" internal/vault/`), replace the name everywhere in this plan document and in the test, and re-run until it passes. A missing capability (for example, no credential slot primitive) is a blocker: stop and report it, and do not invent it here.
+Expected: PASS. A compile error such as `undefined: vault.AddKEKSlot` means the vault plan has drifted from the table above. Find its name (`grep -rn "func (v \*Vault)" internal/vault/`), replace the name everywhere in this plan document and in the test, and re-run until it passes. A missing capability is a blocker: stop and report it, and do not invent it here. This plan draws the systemd-creds KEK itself (Task 11), so a credential-slot primitive that returns a secret is not needed.
 
 - [ ] **Step 3: Commit**
 
@@ -191,7 +226,7 @@ git commit -m "refactor: move peer credentials into internal/peercred"
 - Modify: `internal/server/server.go` (`Config`, `authMiddleware`), `cmd/jumpgate/buildserver.go` (`serverOptions.System`, `newServeFlagSet`), `cmd/jumpgate/cli_serve.go` (`cmdServe` branch)
 
 **Interfaces:**
-- Consumes: `peercred.Of`, `peercred.GroupID` (Task 1); `(*server.Server).LockState()` (vault plan).
+- Consumes: `peercred.Of`, `peercred.GroupID` (Task 1); `(*server.Server).VaultState()` (vault Task 7).
 - Produces:
   ```go
   // internal/daemon
@@ -251,7 +286,7 @@ Expected: FAIL, `undefined: admitPeer` (and the same for the other new names).
     6. `buildServer` with `Config.System=true`, `AdminGID=gid`, `LoginDir=""`.
     7. Log each `systemStartWarnings` line.
     8. Serve TCP plus `ServeUnixSystem(SystemDir/server.sock)` through `serveBoth`.
-    9. Publish with `daemon.PublishSystem`, never `holder.Publish`, so there is no `server.json` in system mode. Republish when `LockState()` changes: a 2 s ticker compares the last published value.
+    9. Publish with `daemon.PublishSystem`, never `holder.Publish`, so there is no `server.json` in system mode. Republish when `VaultState().State` changes: a 2 s ticker compares the last published value.
     10. `RemoveSystem` on exit.
 
 - [ ] **Step 4: Run them to verify they pass, here and on Linux**
@@ -624,7 +659,7 @@ git commit -m "feat(setup): jumpgate.service, sysusers and setup install-service
 - Test: `cmd/jumpgate/cli_setup_test.go`, `internal/server/system_test.go`
 
 **Interfaces:**
-- Consumes: `vault.Path`, `vault.Init`, `signer.CreateInVault`, `(*Server).Lock`, `apiclient.(*Client).Unlock`, `readPassphrase` (vault plan); `daemon.FindSystem` (Task 3); `factsFromServer`, `pairLocalForeground` (Task 6); `api.CustodyWarning` (Task 7).
+- Consumes: `secrets.VaultPath`, `vault.Create`, `signer.CreateVault`, `(*Server).VaultState`, `apiclient.(*Client).Unlock`, `readPassphrase` (vault plan); `daemon.FindSystem` (Task 3); `factsFromServer`, `pairLocalForeground` (Task 6); `api.CustodyWarning` (Task 7).
 - Produces:
   ```go
   type config.Controller struct{ /* existing… */ Scope string `json:"scope,omitempty"` } // "" or "self"
@@ -638,7 +673,7 @@ git commit -m "feat(setup): jumpgate.service, sysusers and setup install-service
   var reexecSudo = func(args []string) int // seam: execs `sudo -- <exe> setup server <args>`, stdin passed through
   ```
 - `POST /api/system/init-key` is system mode and socket peers only (else 404). With a recorded controller it answers 409 `controller_exists`.
-  - `vault`: `vault.Init(vault.Path(), pass)`, then `signer.CreateInVault(v, "controller-key")`, then record `Controller{KeyStore: "vault", KeyRef: "controller-key", Address, Scope}`, then `s.Lock()`. The passphrase bytes are zeroed afterwards.
+  - `vault`: `path, _ := secrets.VaultPath()`, then `vault.Create(path, pass, vault.DefaultParams)` (it clears `pass`, so pass it a copy when the same bytes are needed again), then `signer.CreateVault(v, "controller-key")`, then record `Controller{KeyStore: "vault", KeyRef: "controller-key", Address, Scope}` and `SecretStore: "vault"`, then `v.Lock()` on that handle. The server finds the new file lazily (vault S8), so its `VaultState().State` reads `locked` on the next request. The passphrase bytes are zeroed afterwards.
   - `1password`: `signer.Create(ctx, signer.StoreOnePassword, Ref)`.
   - `file`: needs `InsecurePlain` (else 400 naming `--insecure-plain-key`). The ref is always `<config.Dir()>/keys/controller.key`, and a client `Ref` is refused (400), per Review Focus 5.
 - `jumpgate setup server [--name NAME] [--store vault|1password|file] [--ref REF] [--insecure-plain-key] [--self-only] [--stdin]` runs these steps in order. Each step is skipped when it is already done.
@@ -647,8 +682,8 @@ git commit -m "feat(setup): jumpgate.service, sysusers and setup install-service
   3. `systemctl enable --now jumpgate.service`.
   4. When `$SUDO_USER` is set and not a member: `usermod -aG jumpgate-admin $SUDO_USER`.
   5. Wait up to 10 s for `daemon.FindSystem`.
-  6. With no controller: read the passphrase (`--stdin`: one line with exactly one trailing `\n` or `\r\n` stripped; otherwise `readPassphrase` on `/dev/tty`, twice, and the two must match). Print `api.CustodyWarning`. Then `SystemInitKey`.
-  7. When `LockState` is `locked`: `Unlock` with the same bytes. A `wrong_passphrase` exits 1 and names `jumpgate unlock`.
+  6. With no controller: read the passphrase (`--stdin`: `readPassphrase(prompt, true, false)`, one line with exactly one trailing `\n` or `\r\n` stripped; otherwise `readPassphrase("passphrase: ", false, true)`, which reads `/dev/tty` twice and requires a match). Print `api.CustodyWarning`. Then `SystemInitKey`.
+  7. When `VaultState().State` is `locked`: `Unlock` with the same bytes (a copy, since `Unlock` clears them). A `wrong_passphrase` exits 1 and names `jumpgate unlock`.
   8. When target `NAME` (default `os.Hostname()`) is missing or unpaired: `AddTarget{ID: NAME, Mode: "local"}`, then `pairLocalForeground(factsFromServer…)`, then `streamPair(Installed)`.
   9. Print: "log out and back in so the jumpgate-admin group applies to you, then run `jumpgate` here or `ssh -t <host> jumpgate` from your machine".
 
@@ -656,14 +691,14 @@ git commit -m "feat(setup): jumpgate.service, sysusers and setup install-service
 
 ```go
 // cmd/jumpgate/cli_setup_test.go (geteuid seam 0, runPrivileged recorder, fake API via connect seam, findSystem seam)
-func TestSetupServerRunsTheStepsInOrder(t *testing.T) // recorder+API log == ["systemctl enable --now jumpgate.service", "usermod -aG jumpgate-admin alice", "POST /api/system/init-key", "POST /api/unlock", "POST /api/targets", "POST /api/targets/box/pair"]; pair body has "installed"
+func TestSetupServerRunsTheStepsInOrder(t *testing.T) // recorder+API log == ["systemctl enable --now jumpgate.service", "usermod -aG jumpgate-admin alice", "POST /api/system/init-key", "POST /api/vault/unlock", "POST /api/targets", "POST /api/targets/box/pair"]; pair body has "installed"
 func TestSetupServerReadsOneLineFromStdin(t *testing.T) // stdin "pw\r\n" -> init-key passphrase "pw"; stdin "pw\n\n" -> "pw"
 func TestSetupServerRefusesPlainWithoutTheFlag(t *testing.T) // --store file -> exitCode("usage"), recorder empty
-func TestSetupServerSkipsDoneSteps(t *testing.T) // API: controller present, lock "unlocked", target paired -> no init-key, unlock or pair calls
+func TestSetupServerSkipsDoneSteps(t *testing.T) // API: controller present, vault state "unlocked", target paired -> no init-key, unlock or pair calls
 func TestSetupServerPrintsTheCustodyWarning(t *testing.T) // stdout contains api.CustodyWarning
 func TestSetupServerReexecsThroughSudo(t *testing.T) // geteuid seam 1000 -> reexecSudo called with ["--stdin"]; nothing else runs
 // internal/server/system_test.go
-func TestSystemInitKeyCreatesAVaultKeyAndLocks(t *testing.T) // after: config Controller.KeyStore == "vault", Address != "", LockState() == "locked"
+func TestSystemInitKeyCreatesAVaultKeyAndLocks(t *testing.T) // after: config Controller.KeyStore == "vault", Address != "", VaultState().State == "locked"
 func TestSystemInitKeyRefusesASecondKey(t *testing.T) // 409 controller_exists
 func TestSystemInitKeyRefusesPlainWithoutTheFlag(t *testing.T) // {"store":"file"} -> 400 mentioning --insecure-plain-key
 func TestSystemInitKeyRefusesAClientChosenFileRef(t *testing.T) // {"store":"file","insecurePlain":true,"ref":"/etc/shadow"} -> 400
@@ -743,25 +778,25 @@ git commit -m "feat(tui): restart the jumpgate service, warning that it comes ba
 
 **Files:**
 - Create: `cmd/jumpgate/seal_system.go`, `cmd/jumpgate/seal_system_test.go`
-- Modify: the vault plan's `vault seal` command (add the system branch), `internal/server/system.go` (`POST /api/system/seal`), `cmd/jumpgate/serve_system.go` (unlock from `$CREDENTIALS_DIRECTORY` at start)
+- Modify: the vault plan's `vault seal` command in `cmd/jumpgate/cli_vault.go` (add the system branch), `internal/server/system.go` (`POST /api/system/seal`), `cmd/jumpgate/serve_system.go` (builds the server through `buildServer`, so vault Task 11's `vault-auto-unlock` reads `$CREDENTIALS_DIRECTORY` at start)
 - Test: `internal/server/system_test.go`
 
 **Interfaces:**
-- Consumes: `(*vault.Vault).AddCredSlot`, `UnlockWithCred` (vault plan); `sysunit.SealDropInPath`, `SealCredPath` (Task 8); `peerFrom` (Task 2).
+- Consumes: `(*vault.Vault).AddKEKSlot`, `(*Server).UnlockKEK`, `credentialKEK`, `vault seal` (vault Tasks 3, 7, 11, 16); `sysunit.SealDropInPath`, `SealCredPath` (Task 8); `peerFrom` (Task 2).
 - Produces:
   ```go
-  const sealCred = "jumpgate-vault-key" // the V2 slot's "cred" name
+  const sealCred = "jumpgate-vault-key" // the slot's Cred name
   func sealSystem(ctx context.Context, out io.Writer, c *apiclient.Client, tpm2, allowHostKey bool) int
-  func unlockFromCredentials(v *vault.Vault, dir string) error // dir = $CREDENTIALS_DIRECTORY; a missing file is nil
+  func sealKEK() ([]byte, error) // 32 bytes from crypto/rand; the server draws it, the vault plan has no secret-returning slot call
   ```
-- `jumpgate vault seal --tpm2 [--allow-host-key]` against a system server:
+- `jumpgate vault seal --tpm2` or `--allow-host-key` (one mode flag, as vault Task 16 defines) against a system server:
   1. It must be root (re-exec through `sudo`).
   2. `systemd-creds has-tpm2` must succeed. Otherwise it refuses: "this machine has no TPM2; --allow-host-key seals with the host key instead, which protects only against copying the vault file alone".
-  3. `POST /api/system/seal`, which is root peers only (403 for others) and needs the vault unlocked (the vault plan's 503 `locked`). It returns `AddCredSlot(sealCred)`'s secret.
-  4. Pipe the secret to `systemd-creds encrypt --with-key=tpm2` (or `--with-key=host`) `--name=jumpgate-vault-key - /etc/jumpgate-ctl/vault-key.cred`, written root 0600 in a 0700 directory.
+  3. `POST /api/system/seal`, which is root peers only (403 for others) and needs the vault unlocked (the vault plan's 503 `locked`). The handler draws `kek := sealKEK()`, calls `v.AddKEKSlot(vault.Slot{Kind: vault.SlotSystemdCreds, Cred: sealCred}, copyOf(kek))` (it clears its argument), and returns `kek`.
+  4. Pipe the secret to `systemd-creds encrypt --with-key=tpm2` (or `--with-key=host` for `--allow-host-key`) `--name=jumpgate-vault-key - /etc/jumpgate-ctl/vault-key.cred`, written root 0600 in a 0700 directory.
   5. Write `SealDropInPath` with `[Service]\nLoadCredentialEncrypted=jumpgate-vault-key:/etc/jumpgate-ctl/vault-key.cred\n`.
   6. `systemctl daemon-reload`, then zero the secret.
-- At `serve --system` start, `unlockFromCredentials` runs after the vault opens. On failure the server stays locked and logs "the sealed credential did not open the vault (TPM changed?); unlock with the passphrase".
+- At `serve --system` start, vault Task 11's `vault-auto-unlock` task reads `credentialKEK(os.Getenv)` and calls `(*Server).UnlockKEK(vault.SlotSystemdCreds, kek)`. On failure the server stays locked and logs `vault stays locked: <reason>; the passphrase still works` (the vault plan's line). This plan adds no second unlock path.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -770,7 +805,7 @@ func TestSealRefusesWithoutATPM(t *testing.T) // recorder: "systemd-creds has-tp
 func TestSealWritesTheCredentialAndTheDropIn(t *testing.T) // encrypt argv contains "--with-key=tpm2" and "--name=jumpgate-vault-key"; its stdin == served secret; WriteFile(SealDropInPath) content == the drop-in above; last command "systemctl daemon-reload"
 func TestSealWithTheHostKeyNeedsTheFlag(t *testing.T) // no TPM + --allow-host-key -> "--with-key=host"
 func TestSealRouteIsForRootOnly(t *testing.T) // peer uid 1000 -> 403; uid 0 -> 200
-func TestStartUnlocksFromTheCredentialsDirectory(t *testing.T) // real vault: Init, AddCredSlot(sealCred), Lock; write secret to dir/jumpgate-vault-key; unlockFromCredentials -> nil, !v.Locked(); a wrong secret -> error, still locked
+func TestStartUnlocksFromTheCredentialsDirectory(t *testing.T) // real vault: Create, AddKEKSlot(Slot{Kind: SlotSystemdCreds, Cred: sealCred}, kek), Lock; write kek to dir/jumpgate-vault-key; the system-mode server built by serve_system.go has VaultState().State == "unlocked" once vault-auto-unlock ran; a wrong kek -> still "locked" and the log has "the passphrase still works"
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
@@ -794,57 +829,11 @@ git commit -m "feat(vault): seal the service's vault with systemd-creds for unat
 
 ---
 
-### Task 12: Idle auto-lock, a setting off by default (resolved Q2)
+### Task 12: Idle auto-lock (resolved Q2): delivered by the vault plan
 
-**Files:**
-- Create: `internal/server/autolock.go`, `internal/server/autolock_test.go`
-- Modify: `internal/config/config.go` (`AutoLockMinutes`), `internal/api/misc.go` (`Settings`, `SettingsUpdate`), `internal/server/api.go` (`handleGetSettings`, `handlePutSettings`, `settingsRequest`), `internal/server/server.go` (activity stamp in `authMiddleware`), `internal/server/jobsdrive.go` (`anyDriving`), `cmd/jumpgate/buildserver.go` (background task), `internal/tui/settings.go`
-- Test: `internal/tui/settings_test.go`
+**Removed from this plan.** The encrypted-secret-store plan's Task 19 already builds the idle auto-lock: setting `Config.VaultIdleLockMinutes` / `Settings.VaultIdleLockMinutes` (0 to 1440, off by default), an idle loop that locks when no POST, PUT or DELETE has arrived for N minutes and `driverCount() == 0`, the TUI and web Settings rows, and the log line `vault locked after N minutes idle`. A second implementation here (`AutoLockMinutes`, `idleFor`, `anyDriving`) would add a duplicate setting. This plan consumes Task 19 as it is; one difference is accepted: reads and streams are not activity, as in the vault plan's S9.
 
-**Interfaces:**
-- Consumes: `(*Server).Lock`, `LockState` (vault plan).
-- Produces:
-  ```go
-  type config.Config struct{ /* … */ AutoLockMinutes int `json:"autoLockMinutes,omitempty"` } // 0 = off
-  type api.Settings struct{ /* … */ AutoLockMinutes int `json:"autoLockMinutes"` }
-  type api.SettingsUpdate struct{ /* … */ AutoLockMinutes *int `json:"autoLockMinutes,omitempty"` } // 0..1440, else 400
-  func (s *Server) AutoLockLoop(ctx context.Context) // 30 s tick
-  func (s *Server) idleFor(now time.Time) time.Duration
-  func (h *jobsHub) anyDriving() bool // true while this controller holds a lease on any job
-  ```
-- Activity is any authenticated request except `GET /api/health` and any path ending `/stream`, so a TUI left watching does not count.
-- The loop locks when the minutes are above 0, the server has been idle for at least that long, `!anyDriving()`, and `LockState() == "unlocked"`. It then logs `locked after N minutes idle`.
-- The TUI Settings screen gets an `auto-lock` row; enter cycles off → 15 → 60 → 240 minutes.
-
-- [ ] **Step 1: Write the failing tests**
-
-```go
-func TestAutoLockIsOffByDefault(t *testing.T) // AutoLockMinutes 0, idle 10h -> lock seam not called
-func TestAutoLockLocksAfterIdle(t *testing.T) // 15, last activity 16m ago (s.now seam) -> lock called once
-func TestAutoLockWaitsForADrivenJob(t *testing.T) // 15, idle 16m, anyDriving true -> not called
-func TestStreamsAndHealthAreNotActivity(t *testing.T) // GET /api/fleet/stream and /api/health leave the stamp; GET /api/targets moves it
-func TestSettingsRejectsAnOutOfRangeAutoLock(t *testing.T) // PUT {"autoLockMinutes": 1441} -> 400; 60 -> saved, GET shows 60
-func TestSettingsCyclesAutoLock(t *testing.T) // tui: enter on the row sends SaveSettings with AutoLockMinutes 15, then 60
-```
-
-- [ ] **Step 2: Run them to verify they fail**
-
-Run: `go test ./internal/server/ ./internal/tui/ -run 'AutoLock|StreamsAndHealth' -count=1`
-Expected: FAIL.
-
-- [ ] **Step 3: Implement** the Produces block. Add an `s.lockNow func()` seam (default `s.Lock`) for the tests, and run the loop as a `buildServer` background task.
-
-- [ ] **Step 4: Run them to verify they pass**
-
-Run: `go test ./internal/server/ ./internal/tui/ ./internal/config/ -count=1`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add internal/server internal/config internal/api internal/tui cmd/jumpgate
-git commit -m "feat(settings): optional idle auto-lock, off by default"
-```
+Nothing to implement, test or commit in this task. The task number stays so other references keep their meaning.
 
 ---
 
@@ -1338,7 +1327,7 @@ git commit -m "feat(tui): show how many controllers a box trusts"
   - **Locking:**
     1. `restart-locks`: after `systemctl restart jumpgate`, `jumpgate status a` fails with code `locked`.
     2. `unlock`: after `printf 'pw\n' | jumpgate unlock --stdin` it answers again.
-    3. `seal-host-key`: `sudo jumpgate vault seal --tpm2 --allow-host-key`, then `systemctl restart jumpgate`, then `status` answers with no unlock.
+    3. `seal-host-key`: `sudo jumpgate vault seal --allow-host-key`, then `systemctl restart jumpgate`, then `status` answers with no unlock.
   - **Tunnel login:**
     1. `login-tunnel`: from B, `ssh -L 8799:127.0.0.1:8799 alice@A` (alice's key installed in setup), with the code from `jumpgate open --print` run as alice in A. `curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8799/login?code=…'` == 200.
     2. `login-foreign-tunnel`: the same code shape through bob's tunnel == 403.
@@ -1445,7 +1434,7 @@ The steps and scenes below belong to the docs-system plan. Each lands with the c
 | `server-install` | `tui install-controller-done` (terminal transcript) | Tasks 13 and 22; the apt and dnf variant pins the fingerprint from the Task 22 gate |
 | `server-key-vault` | `tui setup-server-passphrase` (shows `api.CustodyWarning`) | Task 9 |
 | `server-start-service` | `tui service-locked-banner` | Tasks 9 and 10 |
-| `server-unlock` | `tui unlock-prompt`; covers the optional `vault seal --tpm2` and the idle auto-lock setting | Tasks 11 and 12 |
+| `server-unlock` | `tui unlock-prompt`; covers the optional `vault seal --tpm2` and the idle auto-lock setting (vault Task 19) | Task 11 and vault Task 19 |
 | `server-pair-self` | `tui hosts-self-paired` | Task 9 |
 | `server-tui-over-ssh` | `tui fleet` | Task 3 |
 | `server-web-tunnel` (optional) | `app login-via-tunnel` | Task 4 |
@@ -1489,7 +1478,7 @@ Steps `server-key-vault`, `server-pair-self` and `server-add-agent-box` `require
    | Error table | 3, 6, 11, 13, 14, 19 |
    | Testing section | 13, 15, 21 and each task's unit tests |
    | Resolved Q1 (no fallback) | 3 |
-   | Resolved Q2 | 12 |
+   | Resolved Q2 | vault Task 19 (Task 12 here is a stub) |
    | Resolved Q3 | 17, 18 |
    | Resolved Q4, Q5 | nothing to build |
    | Resolved Q7 | 22 |

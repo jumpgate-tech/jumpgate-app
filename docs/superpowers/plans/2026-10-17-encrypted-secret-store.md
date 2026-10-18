@@ -14,6 +14,8 @@
 
 This plan covers the vault and the backend choice. The server-install plan owns `jumpgate.service` (including `LimitCORE=0` and the `LoadCredentialEncrypted=` line), the `jumpgate-ctl`/`jumpgate-admin` users, `serve --system`, `system.json`, peer-credential attach, `jumpgate setup server`, `install.sh` and the packages. This plan provides what those pieces call: `vault.Open`/`Unlock`/`Lock`/`Get`/`Put`, `secrets.VaultPath`, `(*server.Server).Unlock`/`Lock`, the `locked` state, `jumpgate unlock|lock`, `jumpgate vault seal`, and the reading of `$CREDENTIALS_DIRECTORY/jumpgate-vault-key` at start.
 
+**Resolved with the server-install plan (name alignment).** That plan's Task 0 pins exactly the API in Task 3, Task 5, Task 7 and Task 11 above, so this plan needs no added task. Its system-mode seal draws the 32-byte KEK server-side and calls `AddKEKSlot(Slot{Kind: SlotSystemdCreds, Cred: "jumpgate-vault-key"}, kek)` (no secret-returning slot call is wanted here), it reads the lock state through `(*Server).VaultState().State` (there is no `LockState()`), and it reuses Task 11's `vault-auto-unlock` and Task 19's idle auto-lock instead of building its own. `vault seal` takes one mode flag, `--tpm2` or `--allow-host-key`.
+
 ## Open questions
 
 | # | Question (spec) | Status / default implemented | Owner |
