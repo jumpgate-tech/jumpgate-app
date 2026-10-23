@@ -1095,6 +1095,8 @@ git commit -m "feat(hosts): pull pairing with hosts invite, install.sh --agent a
 
 Both pull and push boxes upgrade the same way, over the pairing: a signed intent through the tunnel, with the binary streamed in the request body. The tier is routine, so it matches re-pairing a pushed box, which needs no approval either. A box can still raise it with `policy.json` `"kinds": {"agent.upgrade": ["routine", "approval"]}`. The custody warning names it.
 
+**Decision (user):** `agent.upgrade` stays routine-tier for now. When the approval-signer spec (Spec 1) ships, agent upgrades become approval-tier by default, alongside key rotation and destructive operations. Until then, any box can require approval for them in `policy.json` as above.
+
 **Files:**
 - Create: `internal/agent/upgrade.go`, `internal/agent/upgrade_test.go`
 - Modify: `internal/intent/kinds.go`, `internal/agent/policy.go` (`DefaultRequirements`), `internal/agent/listen.go` (`Serve` route), `internal/agent/dispatch.go`, `internal/agent/agent.go` (`Config.BinaryPath`, `Config.Restart`), `cmd/jumpgate/cli_agent.go` (`agentRun` wiring), `internal/intent/kinds.go` `AgentInfo.Arch`

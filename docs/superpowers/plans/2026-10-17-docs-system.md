@@ -2087,7 +2087,7 @@ The out-of-scope items are not planned.
 - D6: pathway order is not specified.
 - D8: "step or reference page" is vacuous.
 - D9: there are no network slugs, client names or key ids.
-- D12: there is no registered `macos` runner yet, so a tag pipeline on GitLab waits until one is registered. The spec accepts that wait; the user should know.
+- D12: the macOS desktop-scene CI runs on a GitLab runner registered on the user's Mac (git.craftsmanfounder.com, tag `macos`), not on GitHub. Until that runner is registered and online, a tag pipeline on GitLab waits. The spec accepts that wait; the user should know.
 - The spec mentions "landing browser checks" that do not exist in either repo, so Task 19 creates them.
 
 **Type consistency.** These names match in every task that uses them: `docs.Model`, `Step`, `Pathway`, `Image`, `Problem`, `Tables`, `Command`, `Flag`, `Key`, `Named`, `Exit`, `EnvVar`, `Scene`, `Ref`, `Resolved`, `Block`, `Inline`, `RecapGroup`, `Section`, `Covered`, `Page`; `LoadFS`, `Embedded`, `CLI`, `Shots`, `Parse`, `ParseRef`, `Resolve`, `Blocks`, `CheckRefs`, `CheckGraph`, `CheckVerified`, `Order`, `Canonical`, `Neighbours`, `Sections`, `Recap`, `ReferencePages`; `covers.Scan`, `covers.Hash`, `covers.ModuleRoot`; `tui.DocTables`, `tui.KeyDoc.ID`, `tui.Options.Scene`; `scenes.All`, `scenes.Render`, `scenes.Text`, `scenes.Docs`; `docstables.Live`; `docsite.Options`, `docsite.Pages`, `docsite.Write`, `docsite.LoadRedirects`; `ansisvg.Render`, `ansisvg.Landing`; `appfixtures.Routes`.

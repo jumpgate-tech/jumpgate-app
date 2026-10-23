@@ -463,6 +463,10 @@ Resolved 2026-10-17 by the user, except question 6:
    the existing pairing, the same as pushed agents.** This supersedes D12's
    last bullet: a pull-only box no longer has to re-run `install.sh --agent`
    to upgrade.
+   **Tier (user decision):** `agent.upgrade` stays routine-tier for now. When
+   the approval-signer spec (Spec 1) ships, agent upgrades become approval-tier
+   by default, alongside key rotation and destructive operations. Until then,
+   any box can require approval for them in `policy.json`.
 4. **Resolved: TPM sealing for the agent key comes later.** The agent key
    stays a root-only file loaded with `LoadCredential=`.
 5. **Resolved: no visible self-only declaration.** The controller-plus-agents
