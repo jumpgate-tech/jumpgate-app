@@ -588,7 +588,11 @@ func (p *boxPlan) removeStep() Step {
 		ID:    "remove",
 		Title: "Remove " + p.b.UnitName() + " (data kept)",
 		Run: func(ctx context.Context, e executor.Executor, st *State) error {
-			cmd := "rm -f " + shQuote(p.unitPath()) + " && systemctl daemon-reload"
+			// The config dir goes too: its module.json would keep the module
+			// listed, and its config.json holds the webhook token.
+			conf := p.b.ConfigDir()
+			cmd := "rm -f " + shQuote(p.unitPath()) + " && systemctl daemon-reload && " +
+				refuseSymlinks(conf) + " && rm -rf -- " + shQuote(conf)
 			res, err := e.Run(ctx, cmd, streamOpts(ctx, st, "remove"))
 			if err != nil {
 				return fmt.Errorf("remove: %w", err)
@@ -605,6 +609,13 @@ func (p *boxPlan) removeStep() Step {
 			}
 			if present {
 				return fmt.Errorf("remove: %s is still on the box", p.unitPath())
+			}
+			res, err := e.Run(ctx, "test -e "+shQuote(p.b.SidecarPath()), nil)
+			if err != nil {
+				return fmt.Errorf("remove: verify: %w", err)
+			}
+			if res.ExitCode == 0 {
+				return fmt.Errorf("remove: %s is still on the box", p.b.SidecarPath())
 			}
 			return nil
 		},

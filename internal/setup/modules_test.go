@@ -353,6 +353,50 @@ func boxTarget() *fakeExecutor {
 		script("systemctl is-active", executor.Result{Stdout: "active\n"})
 }
 
+// Removing a module deletes its root-owned config dir (module.json and the
+// config.json holding the webhook token) behind a symlink guard, and keeps
+// the service's data dir.
+func TestRemoveStepDeletesConfigDir(t *testing.T) {
+	b := watchModule(t)
+	off, err := PlanBoxModule(b, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rm := off[1]
+	e := newFakeExecutor()
+	if err := rm.Run(context.Background(), e, &State{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var cmd string
+	for _, c := range e.callLog() {
+		if strings.Contains(c, "rm -rf") {
+			cmd = c
+		}
+	}
+	conf := shQuote(b.ConfigDir())
+	if !strings.Contains(cmd, refuseSymlinks(b.ConfigDir())) || !strings.Contains(cmd, "rm -rf -- "+conf) {
+		t.Fatalf("remove cmd = %q, want symlink guard and rm -rf -- %s", cmd, conf)
+	}
+	if strings.Index(cmd, "[ -L") > strings.Index(cmd, "rm -rf") {
+		t.Errorf("guard runs after rm: %q", cmd)
+	}
+	if strings.Contains(cmd, b.DataDir()) {
+		t.Errorf("remove touches the data dir: %q", cmd)
+	}
+	left := newFakeExecutor().
+		script("test -f", executor.Result{ExitCode: 1}).
+		script("test -e "+shQuote(b.SidecarPath()), executor.Result{ExitCode: 0})
+	if err := rm.Verify(context.Background(), left, &State{}); err == nil {
+		t.Error("Verify passed with module.json still on the box")
+	}
+	gone := newFakeExecutor().
+		script("test -f", executor.Result{ExitCode: 1}).
+		script("test -e", executor.Result{ExitCode: 1})
+	if err := rm.Verify(context.Background(), gone, &State{}); err != nil {
+		t.Errorf("Verify after removal: %v", err)
+	}
+}
+
 func TestPlanBoxModuleIdempotent(t *testing.T) {
 	b := watchModule(t)
 	shortHandshake(t)
