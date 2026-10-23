@@ -3,6 +3,9 @@
 # tests against it. Needs Docker. BASE=ubuntu:24.04 scripts/e2e-agent.sh for
 # the second distro.
 set -euo pipefail
+# -run PATTERN runs only the e2e tests matching it (default: every E2E test).
+run=E2E
+if [ "${1:-}" = -run ] && [ -n "${2:-}" ]; then run="$2"; fi
 base="${BASE:-debian:12}"
 work="$(mktemp -d)"
 name="jumpgate-e2e-$$"
@@ -46,12 +49,17 @@ if [ -z "$ready" ]; then
 fi
 docker exec -i "$name" sh -c 'cat >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys' < "$work/root.pub"
 
+# -p 1: both packages share the one container, and the server's module test
+# creates the node account the bootstrap migrate test must not see yet.
 JUMPGATE_E2E_PORT="$port" \
 JUMPGATE_E2E_ROOT_KEY="$work/root" \
 JUMPGATE_E2E_TRANSPORT_KEY="$work/transport" \
 JUMPGATE_E2E_TRANSPORT_PUB="$(cat "$work/transport.pub")" \
 JUMPGATE_E2E_AGENTS="$work/agents" \
-  go test -tags e2e -count=1 -v ./internal/bootstrap/ -run E2E
+  go test -tags e2e -count=1 -p 1 -v ./internal/bootstrap/ ./internal/server/ -run "$run"
+
+# The --local case below runs only with the full set.
+[ "$run" = E2E ] || exit 0
 
 # The --local case runs inside the box: a linux build of the same tests, run as
 # alice (a non-root sudoer) against the copied agents; bob is the stranger.
