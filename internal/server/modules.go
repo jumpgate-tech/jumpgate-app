@@ -313,6 +313,7 @@ func (s *Server) setNodeModule(w http.ResponseWriter, r *http.Request, cfg confi
 	writeJSON(w, http.StatusAccepted, moduleChangeResponse{Status: "started", Gateways: gws})
 }
 
+// setBoxModule skips refuseLegacyOnMigratedBox: box modules always use CurrentNames, never a legacy layout.
 func (s *Server) setBoxModule(w http.ResponseWriter, r *http.Request, cfg config.Config, target config.Target, m catalog.Module, req moduleRequest) {
 	b := catalog.BoxModule{ID: m.ID, ChainID: req.ChainID, Port: req.Port, BindAddr: req.BindAddr,
 		ExtIP: req.ExtIP, Upstreams: req.Upstreams, Webhook: req.Webhook}
