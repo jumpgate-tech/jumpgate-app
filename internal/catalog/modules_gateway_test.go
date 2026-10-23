@@ -186,4 +186,23 @@ func TestGatewayTier(t *testing.T) {
 			t.Errorf("%+v: %s, want %s", tc.tls, got, tc.want)
 		}
 	}
+	acme := &GatewayTLS{Enabled: true, CertSource: CertACME}
+	for _, tc := range []struct {
+		bind string
+		tls  *GatewayTLS
+		want Tier
+	}{
+		{"", nil, TierLocal},
+		{"127.0.0.1", nil, TierLocal},
+		{"::1", nil, TierLocal},
+		{"localhost", nil, TierLocal},
+		{"0.0.0.0", nil, TierPrivate},
+		{"192.168.1.20", nil, TierPrivate},
+		{"0.0.0.0", acme, TierPublic},
+		{"127.0.0.1", acme, TierPublic},
+	} {
+		if got := GatewayTier(GatewayConfig{BindAddr: tc.bind, TLS: tc.tls}); got != tc.want {
+			t.Errorf("bind %q tls %+v: %s, want %s", tc.bind, tc.tls, got, tc.want)
+		}
+	}
 }

@@ -2,7 +2,9 @@ package catalog
 
 import (
 	"fmt"
+	"net"
 	"slices"
+	"strings"
 )
 
 // GatewayRoute is one method route a gateway module adds for a chain: an
@@ -24,21 +26,34 @@ type GatewayModule struct {
 type Tier string
 
 const (
-	TierLocal   Tier = "local"   // no TLS front: loopback or the operator's own network
-	TierPrivate Tier = "private" // a TLS front with an internal or operator-supplied cert
+	TierLocal   Tier = "local"   // no TLS front, bound to loopback
+	TierPrivate Tier = "private" // reachable off the box: no TLS, or an internal or operator-supplied cert
 	TierPublic  Tier = "public"  // a publicly trusted ACME cert: anyone can reach it
 )
 
-// GatewayTier derives a gateway's tier from its TLS front.
+// GatewayTier derives a gateway's tier from its TLS front and bind address:
+// with no TLS, only a loopback bind is Local; any other bind is reachable
+// from the network, so it is Private.
 func GatewayTier(g GatewayConfig) Tier {
 	switch {
-	case !g.TLS.On():
+	case !g.TLS.On() && isLoopbackHost(g.Bind()):
 		return TierLocal
+	case !g.TLS.On():
+		return TierPrivate
 	case g.TLS.CertSourceOrDefault() == CertACME:
 		return TierPublic
 	default:
 		return TierPrivate
 	}
+}
+
+// isLoopbackHost is whether host is "localhost" or a loopback IP.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 // nsWildcards is "<ns>_*" for each of m's namespaces.
