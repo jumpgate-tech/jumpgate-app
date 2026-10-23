@@ -286,7 +286,7 @@ func TestPreflight_DefaultPortsNotFlaggedWhenCustomPortsConfigured(t *testing.T)
 // maintained copy of the chain->size table (task-1-brief.md).
 func TestMinDiskBytesFor_UsesCatalogExpectedBytes(t *testing.T) {
 	w := testWire() // ChainID 369, Archive false
-	got, err := minDiskBytesFor(w)
+	got, _, err := minDiskBytesFor(w)
 	if err != nil {
 		t.Fatalf("minDiskBytesFor: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestMinDiskBytesFor_UsesCatalogExpectedBytes(t *testing.T) {
 func TestMinDiskBytesFor_UnknownChainErrors(t *testing.T) {
 	w := testWire()
 	w.ChainID = 9999
-	if _, err := minDiskBytesFor(w); err == nil {
+	if _, _, err := minDiskBytesFor(w); err == nil {
 		t.Fatal("want error for unknown chain id")
 	}
 }

@@ -287,6 +287,11 @@ func execCommand(w WireConfig) (string, error) {
 		if w.Archive {
 			cmd += " --gcmode archive"
 		}
+		// geth defaults to mainnet; Hoodi is selected by its own flag,
+		// appended last so every other chain's unit is unchanged.
+		if w.ChainID == 560048 {
+			cmd += " --hoodi"
+		}
 		return cmd, nil
 
 	case "go-pulse":

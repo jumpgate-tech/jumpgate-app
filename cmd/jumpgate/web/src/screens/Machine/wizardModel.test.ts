@@ -91,7 +91,7 @@ describe("constants — byte-exact with wizard.ts", () => {
   });
 
   it("network order and badges", () => {
-    expect(NETWORK_ORDER).toEqual([369, 943, 1]);
+    expect(NETWORK_ORDER).toEqual([369, 943, 1, 560048]);
     expect(NETWORK_BADGE).toEqual({ 369: "default", 943: "practise here first" });
   });
 

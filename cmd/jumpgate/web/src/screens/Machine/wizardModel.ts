@@ -54,7 +54,7 @@ export const DEFAULT_EXEC_HTTP_PORT = 8545;
 export const DEFAULT_BEACON_HTTP_PORT = 5052;
 export const DEFAULT_EXEC_P2P_PORT = 30303;
 
-export const NETWORK_ORDER = [369, 943, 1];
+export const NETWORK_ORDER = [369, 943, 1, 560048];
 export const NETWORK_BADGE: Record<number, string> = {
   369: "default",
   943: "practise here first",

@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"regexp"
@@ -79,12 +80,13 @@ func preflightStep() Step {
 				warned = true
 				warnIfDesktopVM(ctx, e, st)
 			}
-			return preflightCheck(ctx, e, st.Wire)
+			return preflightCheck(ctx, e, st)
 		},
 	}
 }
 
-func preflightCheck(ctx context.Context, e executor.Executor, w catalog.WireConfig) error {
+func preflightCheck(ctx context.Context, e executor.Executor, st *State) error {
+	w := st.Wire
 	res, err := e.Run(ctx, "uname", nil)
 	if err != nil {
 		return fmt.Errorf("preflight: uname: %w", err)
@@ -102,9 +104,13 @@ func preflightCheck(ctx context.Context, e executor.Executor, w catalog.WireConf
 		return fmt.Errorf("preflight: setup needs root on the target to install systemd units, manage services with systemctl, and write binaries to /usr/local/bin (SSH as root, or run jumpgate as root in local mode); id -u reported %q.", uid)
 	}
 
-	minBytes, err := minDiskBytesFor(w)
+	minBytes, note, err := minDiskBytesFor(w)
 	if err != nil {
 		return err
+	}
+	if note != "" {
+		// No floor (minBytes is 0): df still runs, but nothing can fail it.
+		_ = emit(ctx, st, Event{StepID: "preflight", Line: note})
 	}
 	// DataDir does not exist yet on a fresh box — it's created later by
 	// wire's mkdir — so `df` must be run against the nearest existing
@@ -229,13 +235,25 @@ func accountStep(n catalog.NodeNames) Step {
 // themselves (ported verbatim from packages/web/src/learn/data/networks.ts)
 // live in the catalog package — catalog.ExpectedBytes is the single shared
 // implementation; this preflight check is its only other caller.
-func minDiskBytesFor(w catalog.WireConfig) (uint64, error) {
+//
+// A chain with no published size (catalog.ErrNoSizeGuidance, e.g. Hoodi)
+// gets no floor: 0 bytes and a note for preflight to show the operator,
+// instead of an invented number.
+func minDiskBytesFor(w catalog.WireConfig) (minBytes uint64, note string, err error) {
 	expected, err := catalog.ExpectedBytes(w.ChainID, w.Archive)
+	if errors.Is(err, catalog.ErrNoSizeGuidance) {
+		net, _ := catalog.NetworkByChainID(w.ChainID)
+		article := "a"
+		if w.Archive {
+			article = "an"
+		}
+		return 0, fmt.Sprintf("No disk size guidance for %s yet; check the disk has room for %s %s node.", net.Name, article, tierName(w.Archive)), nil
+	}
 	if err != nil {
-		return 0, fmt.Errorf("preflight: %w", err)
+		return 0, "", fmt.Errorf("preflight: %w", err)
 	}
 	const safetyMargin = catalog.FitMargin // 10% headroom above the raw dataset size
-	return uint64(float64(expected) * safetyMargin), nil
+	return uint64(float64(expected) * safetyMargin), "", nil
 }
 
 func tierName(archive bool) string {

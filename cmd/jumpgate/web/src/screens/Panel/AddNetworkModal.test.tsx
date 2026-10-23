@@ -29,8 +29,9 @@ describe("AddNetworkPicker", () => {
     expect(screen.getByText("Ethereum")).toBeInTheDocument();
     expect(screen.getByText("PulseChain")).toBeInTheDocument();
     expect(screen.getByText("Sepolia")).toBeInTheDocument();
-    // both testnets carry the tag
-    expect(screen.getAllByText("testnet")).toHaveLength(2);
+    expect(screen.getByText("Hoodi")).toBeInTheDocument();
+    // all three testnets carry the tag
+    expect(screen.getAllByText("testnet")).toHaveLength(3);
     // a catalogue-only chain is not offered until the operator searches
     expect(screen.queryByText("Arbitrum One")).not.toBeInTheDocument();
   });
