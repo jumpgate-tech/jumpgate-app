@@ -538,6 +538,12 @@ func mnStopUnits(ctx context.Context, env Env) (Outcome, error) {
 	if err != nil || len(left) == 0 {
 		return Outcome{}, err
 	}
+	// The legacy name is right here: it is the box's old account, the one this
+	// job renames. Say so, or it reads as jumpgate still using the old name.
+	who := user
+	if user == legacy.User {
+		who = fmt.Sprintf("%s (the old account this migration renames to %s)", user, current.User)
+	}
 	// Review Focus: the account's other processes are signalled only on an
 	// answer, and SIGKILL only on a second one given after SIGTERM failed:
 	// consenting to a clean stop is not consenting to a kill.
@@ -551,7 +557,7 @@ func mnStopUnits(ctx context.Context, env Env) (Outcome, error) {
 				return Outcome{}, err
 			}
 			return Outcome{Ask: &intent.JobQuestion{Key: qBusyUser, Tier: intent.TierRoutine,
-				Prompt: fmt.Sprintf("%d process(es) of %s are still running %s after SIGTERM:\n%s", len(left), user, stopGrace, firstLines(left)),
+				Prompt: fmt.Sprintf("%d process(es) of %s are still running %s after SIGTERM:\n%s", len(left), who, stopGrace, firstLines(left)),
 				Options: []intent.JobOption{
 					{ID: intent.OptRetry, Label: "Check again", Detail: "give them longer, or stop them yourself first"},
 					{ID: optKillProcesses, Label: "Kill them", Detail: "SIGKILL: they get no chance to save their state"},
@@ -564,12 +570,12 @@ func mnStopUnits(ctx context.Context, env Env) (Outcome, error) {
 			if left, err = waitGone(ctx, env, user, killWait); err != nil || len(left) == 0 {
 				return Outcome{}, err
 			}
-			return Outcome{}, fmt.Errorf("%d process(es) still run as %s after SIGKILL: %s", len(left), user, strings.Join(left, "; "))
+			return Outcome{}, fmt.Errorf("%d process(es) still run as %s after SIGKILL: %s", len(left), who, strings.Join(left, "; "))
 		}
 	}
 	return Outcome{Ask: &intent.JobQuestion{Key: qBusyUser, Tier: intent.TierRoutine,
 		Prompt: fmt.Sprintf("%d process(es) still run as %s after the node services stopped, so the account cannot be renamed:\n%s",
-			len(left), user, firstLines(left)),
+			len(left), who, firstLines(left)),
 		Options: []intent.JobOption{
 			{ID: intent.OptRetry, Label: "Check again", Detail: "stop them yourself first"},
 			{ID: optStopProcesses, Label: "Stop them", Detail: fmt.Sprintf("SIGTERM, then wait up to %s; you are asked again before any SIGKILL", stopGrace)},
