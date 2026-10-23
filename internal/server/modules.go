@@ -317,6 +317,12 @@ func (s *Server) setNodeModule(w http.ResponseWriter, r *http.Request, cfg confi
 func (s *Server) setBoxModule(w http.ResponseWriter, r *http.Request, cfg config.Config, target config.Target, m catalog.Module, req moduleRequest) {
 	b := catalog.BoxModule{ID: m.ID, ChainID: req.ChainID, Port: req.Port, BindAddr: req.BindAddr,
 		ExtIP: req.ExtIP, Upstreams: req.Upstreams, Webhook: req.Webhook}
+	// A chain-agnostic module has one instance per box; a chain would only
+	// change its instance name and so let a second copy on.
+	if len(m.Chains) == 0 && b.ChainID != 0 {
+		writeError(w, http.StatusBadRequest, m.ID+" does not take a chain")
+		return
+	}
 	if b.ChainID == 0 && len(m.Chains) > 0 && target.Wire != nil {
 		b.ChainID = target.Wire.ChainID
 	}

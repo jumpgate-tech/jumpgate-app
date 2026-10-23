@@ -56,6 +56,7 @@ func fakeModules(t *testing.T) {
 			ID: "private-send", Name: "Private send", Placement: catalog.PlaceGateway, Chains: []int{1},
 			Routes: map[int][]catalog.GatewayRoute{1: {{ID: "flashbots", Endpoint: "https://rpc.flashbots.net", Methods: []string{"eth_sendRawTransaction"}}}},
 		},
+		box("watch", "tcp", 9090),
 	})
 	t.Cleanup(restore)
 }
@@ -294,6 +295,16 @@ func TestSetBoxModuleValidates(t *testing.T) {
 	if e := readAPIError(t, res); res.StatusCode != http.StatusBadRequest || e.Code != api.CodeModuleNotApplicable {
 		t.Fatalf("other chain: %d %+v", res.StatusCode, e)
 	}
+
+	// A chain-agnostic module takes no chainId: it would only change the
+	// instance name.
+	res = a.do(t, "PUT", "/api/targets/box/modules/watch", map[string]any{"enabled": true, "chainId": 369})
+	if e := readAPIError(t, res); res.StatusCode != http.StatusBadRequest || e.Message != "watch does not take a chain" {
+		t.Fatalf("chain on chain-agnostic: %d %+v", res.StatusCode, e)
+	}
+	if got := storedTarget(t, "box").Modules; len(got) != 1 {
+		t.Fatalf("stored modules = %+v", got)
+	}
 }
 
 func TestSetBoxModuleOnTargetWithoutWire(t *testing.T) {
@@ -430,7 +441,7 @@ func TestCatalogCarriesModules(t *testing.T) {
 	for _, m := range got.Modules {
 		ids = append(ids, m.ID)
 	}
-	if strings.Join(ids, ",") != "msgboard,el-bootnode,cl-bootnode,private-send" {
+	if strings.Join(ids, ",") != "msgboard,el-bootnode,cl-bootnode,watch,private-send" {
 		t.Fatalf("ids = %v", ids)
 	}
 	mb := got.Modules[0]
@@ -451,7 +462,7 @@ func TestCatalogCarriesModules(t *testing.T) {
 	if !sawReason || !sawBeta || !sawOK {
 		t.Fatalf("msgboard applies = %+v", mb.Applies)
 	}
-	for _, ap := range got.Modules[3].Applies {
+	for _, ap := range got.Modules[4].Applies {
 		if ap.Client != "" || ap.OK != (ap.ChainID == 1) {
 			t.Fatalf("private-send applies row %+v", ap)
 		}
