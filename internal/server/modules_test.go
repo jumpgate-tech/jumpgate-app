@@ -457,3 +457,113 @@ func TestCatalogCarriesModules(t *testing.T) {
 		}
 	}
 }
+
+func TestSetGatewayModuleRefusesOtherPlacements(t *testing.T) {
+	fakeModules(t)
+	a := newAPITestServer(t)
+	provisioned := stubProvision(t)
+	moduleTarget(t, a, func(c *config.Config) {
+		c.Gateways = append(c.Gateways, config.Gateway{ID: "eth", Placement: config.GatewayPlacement{TargetID: "box"},
+			Config: catalog.GatewayConfig{Networks: []catalog.GatewayNetwork{{ChainID: 369,
+				Upstreams: []catalog.GatewayUpstream{{ID: "x", Endpoint: "https://example.org"}}}}}})
+	})
+	for _, id := range []string{"msgboard", "el-bootnode"} {
+		res := a.do(t, "PUT", "/api/gateways/eth/modules/"+id, map[string]any{"enabled": true})
+		if e := readAPIError(t, res); res.StatusCode != http.StatusBadRequest || e.Code != api.CodeModuleNotApplicable {
+			t.Fatalf("%s: %d %+v", id, res.StatusCode, e)
+		}
+	}
+	c, _ := config.Load()
+	if gw, _ := c.FindGateway("eth"); len(gw.Config.Modules) != 0 || len(*provisioned) != 0 {
+		t.Fatalf("stored %+v, provisioned %v", gw.Config.Modules, *provisioned)
+	}
+}
+
+// publicOnlyTarget is a box with msgboard on and gateways gw1, gw2 in front.
+func publicOnlyTarget(t *testing.T, a *apiTestServer) {
+	t.Helper()
+	moduleTarget(t, a, func(c *config.Config) {
+		targetByID(c, "box").Wire = rethWire(369, "reth", catalog.NodeModule{ID: "msgboard"})
+		for _, id := range []string{"gw1", "gw2"} {
+			c.Gateways = append(c.Gateways, config.Gateway{ID: id, Placement: config.GatewayPlacement{TargetID: "host-" + id},
+				Config: catalog.GatewayConfig{Networks: []catalog.GatewayNetwork{{ChainID: 369,
+					Upstreams: []catalog.GatewayUpstream{{ID: "n", Kind: catalog.UpstreamManagedNode, TargetID: "box"}}}}}})
+		}
+	})
+}
+
+func TestSetModulePublicOnlyReportsFailedGateway(t *testing.T) {
+	fakeModules(t)
+	a := newAPITestServer(t)
+	publicOnlyTarget(t, a)
+	prev := reprovisionGateway
+	reprovisionGateway = func(_ *Server, _ config.Config, gw config.Gateway) (string, error) {
+		if gw.ID == "gw2" {
+			return "", &provisionError{status: http.StatusConflict, code: api.CodeConflict, msg: "setup is already running for this target"}
+		}
+		return gw.Placement.TargetID, nil
+	}
+	t.Cleanup(func() { reprovisionGateway = prev })
+
+	res := a.do(t, "PUT", "/api/targets/box/modules/msgboard", map[string]any{"enabled": true, "public": "read"})
+	if res.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", res.StatusCode)
+	}
+	got := decodeJSON[moduleChangeResponse](t, res)
+	if strings.Join(got.Gateways, ",") != "gw1" || len(got.Failed) != 1 || got.Failed[0].ID != "gw2" ||
+		!strings.Contains(got.Failed[0].Error, "already running") {
+		t.Fatalf("response = %+v", got)
+	}
+	if storedTarget(t, "box").Wire.Modules[0].Public != "read" {
+		t.Fatal("the change was not saved")
+	}
+}
+
+func TestSetModulePublicOnlyTakesTheSlot(t *testing.T) {
+	fakeModules(t)
+	a := newAPITestServer(t)
+	provisioned := stubProvision(t)
+	publicOnlyTarget(t, a)
+	claimed, busy := a.srv.tryClaimSetupRun("box")
+	if busy != "" {
+		t.Fatal(busy)
+	}
+	res := a.do(t, "PUT", "/api/targets/box/modules/msgboard", map[string]any{"enabled": true, "public": "read"})
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", res.StatusCode)
+	}
+	res.Body.Close()
+	a.srv.releaseSetupRun("box", claimed)
+	if storedTarget(t, "box").Wire.Modules[0].Public != "" || len(*provisioned) != 0 {
+		t.Fatal("a refused change was saved or provisioned")
+	}
+	// Once free, the slot is not left held by the change.
+	res = a.do(t, "PUT", "/api/targets/box/modules/msgboard", map[string]any{"enabled": true, "public": "read"})
+	res.Body.Close()
+	if _, busy := a.srv.tryClaimSetupRun("box"); busy != "" {
+		t.Fatalf("slot left held: %s", busy)
+	}
+}
+
+func TestSetModulePublicOnlyDuringJob409(t *testing.T) {
+	requireAgentPeer(t)
+	fakeModules(t)
+	b := newBoxRig(t)
+	boxWire(t)
+	if _, err := config.Update(func(c *config.Config) error {
+		c.Targets[0].Wire.Modules = []catalog.NodeModule{{ID: "msgboard"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var v api.JobView
+	if code := b.do(t, "POST", "/api/jobs/box", api.JobStart{Kind: jobstest.TestKind, Inputs: json.RawMessage(`{"AskAt":"two"}`)}, &v); code != 200 {
+		t.Fatalf("start = %d", code)
+	}
+	waitJob(t, b, v.ID, intent.JobNeedsDecision)
+	code, raw := b.req(t, "PUT", "/api/targets/box/modules/msgboard", map[string]any{"enabled": true, "public": "read"})
+	wantJobActive(t, "public-only", code, raw, v.ID)
+	if b.setupRunning() {
+		t.Fatal("the refused change left the slot held")
+	}
+}

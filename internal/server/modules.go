@@ -113,11 +113,19 @@ type moduleRequest struct {
 }
 
 // moduleChangeResponse answers a module change: "started" with a setup run
-// to follow on .../setup/stream, or "saved" when nothing on the box changes.
-// Gateways are the gateways re-provisioned for it (now, or after the run).
+// to follow on .../setup/stream, or "saved" when nothing on the box changes
+// ("saved-gateways-failed", a 502, when a gateway could not be
+// re-provisioned). Gateways are the gateways whose re-provision started (now)
+// or will start (after the run); Failed the ones that could not, with why.
 type moduleChangeResponse struct {
-	Status   string   `json:"status"`
-	Gateways []string `json:"gateways,omitempty"`
+	Status   string           `json:"status"`
+	Gateways []string         `json:"gateways,omitempty"`
+	Failed   []gatewayFailure `json:"failed,omitempty"`
+}
+
+type gatewayFailure struct {
+	ID    string `json:"id"`
+	Error string `json:"error"`
 }
 
 // validateBoxModuleFields refuses a box module's fields that would reach a
@@ -233,18 +241,49 @@ func (s *Server) setNodeModule(w http.ResponseWriter, r *http.Request, cfg confi
 
 	// Public only decides what the gateways in front route; the node's
 	// unit is the same, so nothing on the box runs.
+	// It still takes the target's slot and the job guard, as every change
+	// to a box's node does, so it never lands mid-run or mid-job.
 	if req.Enabled && cur.HasModule(m.ID) {
-		if _, err := s.updateConfig(func(c *config.Config) error {
-			if t := findTargetPtr(c, target.ID); t != nil && t.Wire != nil {
-				wc := want
-				t.Wire = &wc
+		claimed, ok := s.claimSetupRun(w, target.ID)
+		if !ok {
+			return
+		}
+		if s.refuseDuringJob(w, r.Context(), cfg, target) {
+			s.releaseSetupRun(target.ID, claimed)
+			return
+		}
+		_, err := s.updateConfig(func(c *config.Config) error {
+			t := findTargetPtr(c, target.ID)
+			if t == nil || t.Wire == nil {
+				return fmt.Errorf("target %s has no node config any more", target.ID)
 			}
+			// Edited in place, on the config as it is now, so a change
+			// saved since this request read it is kept.
+			wc := *t.Wire
+			wc.Modules = slices.Clone(wc.Modules)
+			for i := range wc.Modules {
+				if wc.Modules[i].ID == m.ID {
+					wc.Modules[i].Public = req.Public
+				}
+			}
+			t.Wire = &wc
 			return nil
-		}); err != nil {
+		})
+		// Released before the gateways provision: one may share this box's slot.
+		s.releaseSetupRun(target.ID, claimed)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, moduleChangeResponse{Status: "saved", Gateways: s.reprovisionGatewaysFor(target.ID)})
+		ok2, failed := s.reprovisionGatewaysFor(target.ID)
+		resp := moduleChangeResponse{Status: "saved", Gateways: ok2, Failed: failed}
+		status := http.StatusOK
+		if len(failed) > 0 {
+			// Saved, but a gateway in front still routes the old way.
+			resp.Status = "saved-gateways-failed"
+			status = http.StatusBadGateway
+		}
+		writeJSON(w, status, resp)
 		return
 	}
 
@@ -307,16 +346,34 @@ func (s *Server) setBoxModule(w http.ResponseWriter, r *http.Request, cfg config
 		s.releaseSetupRun(target.ID, claimed)
 		return
 	}
+	var clash error
 	if _, err := s.updateConfig(func(c *config.Config) error {
-		if t := findTargetPtr(c, target.ID); t != nil {
-			t.Modules = mods
-			if len(t.Modules) == 0 {
-				t.Modules = nil
+		t := findTargetPtr(c, target.ID)
+		if t == nil {
+			return fmt.Errorf("target %s is gone", target.ID)
+		}
+		// Recomputed on the config as it is now, not the copy read before
+		// the claim, so a change saved in between is neither lost nor
+		// allowed to clash with this one.
+		next := slices.DeleteFunc(slices.Clone(t.Modules), func(o catalog.BoxModule) bool { return o.Instance() == b.Instance() })
+		if req.Enabled {
+			next = append(next, b)
+			if err := catalog.ValidateBoxModules(next, t.Wire); err != nil {
+				clash = err
+				return err
 			}
 		}
+		if len(next) == 0 {
+			next = nil
+		}
+		t.Modules = next
 		return nil
 	}); err != nil {
 		s.releaseSetupRun(target.ID, claimed)
+		if clash != nil {
+			writeError(w, http.StatusBadRequest, clash.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -364,20 +421,22 @@ var reprovisionGateway = (*Server).provisionGateway
 // reprovisionGatewaysFor re-provisions every gateway in front of target id,
 // from the config as it is now, and returns their ids. A gateway that cannot
 // be provisioned is logged: the module change itself has been made.
-func (s *Server) reprovisionGatewaysFor(id string) []string {
+func (s *Server) reprovisionGatewaysFor(id string) (started []string, failed []gatewayFailure) {
 	cfg, err := s.loadConfig()
 	if err != nil {
 		log.Printf("jumpgate: modules: reload config to re-provision the gateways for %s: %v", id, err)
-		return nil
+		return nil, []gatewayFailure{{ID: "*", Error: err.Error()}}
 	}
-	ids := gatewaysReferencing(cfg, id)
-	for _, gid := range ids {
+	for _, gid := range gatewaysReferencing(cfg, id) {
 		gw, _ := cfg.FindGateway(gid)
 		if _, err := reprovisionGateway(s, cfg, gw); err != nil {
 			log.Printf("jumpgate: modules: re-provision gateway %s after a module change on %s: %v", gid, id, err)
+			failed = append(failed, gatewayFailure{ID: gid, Error: redactKeys(err.Error(), providerKeys(cfg))})
+			continue
 		}
+		started = append(started, gid)
 	}
-	return ids
+	return started, failed
 }
 
 // ---------------------------------------------------------------------
@@ -470,6 +529,12 @@ func (s *Server) handleSetGatewayModule(w http.ResponseWriter, r *http.Request) 
 	m, ok := catalog.ModuleByID(r.PathValue("module"))
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("%q is not a module", r.PathValue("module")))
+		return
+	}
+	if m.Placement != catalog.PlaceGateway {
+		writeErrorDetail(w, http.StatusBadRequest,
+			fmt.Sprintf("%s is a %s module, not a gateway module: turn it on for a box (PUT /api/targets/{id}/modules/%s)", m.ID, m.Placement, m.ID),
+			"", api.CodeModuleNotApplicable)
 		return
 	}
 	g := gw.Config
