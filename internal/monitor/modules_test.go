@@ -75,8 +75,8 @@ func TestProbeModulesMethodNotFound(t *testing.T) {
 func TestProbeBoxModulesReadsSidecars(t *testing.T) {
 	a := catalog.BoxModule{ID: "el-bootnode", ChainID: 369}
 	b := catalog.BoxModule{ID: "watch"}
-	ja, _ := json.Marshal(a)
-	jb, _ := json.Marshal(b)
+	ja, _ := json.Marshal(catalog.BoxSidecar{ID: a.ID, ChainID: a.ChainID, Unit: a.UnitName()})
+	jb, _ := json.Marshal(catalog.BoxSidecar{ID: b.ID, Unit: b.UnitName()})
 	acceptBoxModules(t, "el-bootnode", "watch")
 	ex := newFakeExecutor().
 		script("ls ", executor.Result{Stdout: a.SidecarPath() + "\n" + b.SidecarPath() + "\n"}).
@@ -117,17 +117,19 @@ func acceptBoxModules(t *testing.T, ids ...string) {
 // built from it.
 func TestProbeBoxModulesRejectsHostileSidecar(t *testing.T) {
 	acceptBoxModules(t, "watch")
-	hostile := `{"id":"x; touch /tmp/pwned"}`
+	hostile := `{"id":"x; touch /tmp/pwned","unit":"jumpgate-mod-x; touch /tmp/pwned.service"}`
 	moved := catalog.BoxModule{ID: "watch"}
-	jm, _ := json.Marshal(moved)
+	jm, _ := json.Marshal(catalog.BoxSidecar{ID: moved.ID, Unit: moved.UnitName()})
 	const p1 = "/var/lib/jumpgate/modules/evil/module.json"
 	const p2 = "/var/lib/jumpgate/modules/other/module.json"
+	p3 := moved.SidecarPath()
 	ex := newFakeExecutor().
-		script("ls ", executor.Result{Stdout: p1 + "\n" + p2 + "\n"}).
+		script("ls ", executor.Result{Stdout: p1 + "\n" + p2 + "\n" + p3 + "\n"}).
 		script("cat '"+p1+"'", executor.Result{Stdout: hostile}).
-		script("cat '"+p2+"'", executor.Result{Stdout: string(jm)})
+		script("cat '"+p2+"'", executor.Result{Stdout: string(jm)}).
+		script("cat '"+p3+"'", executor.Result{Stdout: `{"id":"watch","unit":"sshd.service"}`})
 	got := ProbeBoxModules(context.Background(), ex)
-	if len(got) != 2 || got[0].Error == "" || got[1].Error == "" || got[0].Active || got[1].Active {
+	if len(got) != 3 || got[0].Error == "" || got[1].Error == "" || got[2].Error == "" || got[0].Active || got[1].Active || got[2].Active {
 		t.Fatalf("statuses %+v", got)
 	}
 	for _, c := range ex.calls {

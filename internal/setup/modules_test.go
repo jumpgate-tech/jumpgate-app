@@ -211,6 +211,7 @@ func watchModule(t *testing.T) catalog.BoxModule {
 			Files: map[string]string{
 				"/var/lib/jumpgate/modules/watch/module.json": `{"id":"watch"}`,
 				"/var/lib/jumpgate/modules/watch/watch.yaml":  "endpoints: []\n",
+				"/var/lib/jumpgate/modules/watch/config.json": `{"id":"watch","webhook":"https://hooks.example/s3cret"}`,
 			},
 		})
 	return catalog.BoxModule{ID: "watch"}
@@ -311,6 +312,7 @@ func TestWriteFilesNeverFollowsServiceOwnedPaths(t *testing.T) {
 	for f, own := range map[string]string{
 		b.SidecarPath():               "chown root:root '%s' && chmod 0644 '%s' && mv -T '%s' '" + b.SidecarPath() + "'",
 		b.ConfigDir() + "/watch.yaml": "chown root:" + n.Group + " '%s' && chmod 0640 '%s' && mv -T '%s' '" + b.ConfigDir() + "/watch.yaml'",
+		b.ConfigPath():                "chown root:" + n.Group + " '%s' && chmod 0640 '%s' && mv -T '%s' '" + b.ConfigPath() + "'",
 	} {
 		found := false
 		for _, c := range e.callLog() {

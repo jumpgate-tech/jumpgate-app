@@ -135,16 +135,17 @@ func ProbeBoxModules(ctx context.Context, ex executor.Executor) []ModuleStatus {
 		if err != nil || cat.ExitCode != 0 {
 			continue
 		}
-		var b catalog.BoxModule
-		if err := json.Unmarshal([]byte(cat.Stdout), &b); err != nil {
+		var side catalog.BoxSidecar
+		if err := json.Unmarshal([]byte(cat.Stdout), &side); err != nil {
 			out = append(out, ModuleStatus{Error: path + ": unreadable module record"})
 			continue
 		}
+		b := side.Module()
 		if err := validateBoxModule(b); err != nil {
 			out = append(out, ModuleStatus{Error: path + ": " + err.Error()})
 			continue
 		}
-		if b.SidecarPath() != path {
+		if b.SidecarPath() != path || side.Unit != b.UnitName() {
 			out = append(out, ModuleStatus{Error: path + ": the record is for " + b.Instance()})
 			continue
 		}

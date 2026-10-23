@@ -363,7 +363,7 @@ func TestListModulesOverSSH(t *testing.T) {
 	fakeModules(t)
 	ex := (&scriptedExecutor{}).
 		script("ls "+catalog.BoxModulesConfigRoot, resultOK(catalog.BoxModule{ID: "el-bootnode", ChainID: 369}.SidecarPath()+"\n")).
-		script("cat ", resultOK(`{"id":"el-bootnode","chainId":369}`)).
+		script("cat ", resultOK(`{"id":"el-bootnode","chainId":369,"unit":"jumpgate-mod-el-bootnode-369.service"}`)).
 		script("systemctl is-active", resultOK("active\n"))
 	a := newAPITestServerWithExecutor(t, func(config.Target) (executor.Executor, error) { return ex, nil })
 	moduleTarget(t, a, func(c *config.Config) {})

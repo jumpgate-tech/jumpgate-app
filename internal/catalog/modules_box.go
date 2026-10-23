@@ -8,8 +8,9 @@ import (
 )
 
 // BoxModule is one box-placed module recorded on a target (config.Target.
-// Modules). Setup also writes it, as a root-owned module.json, into the
-// module's dir so a gate or an SSH probe can list a box's modules on its own.
+// Modules). Setup writes it as config.json (root:group 0640) and its public
+// BoxSidecar as module.json (0644) into ConfigDir, so a gate or an SSH probe
+// can list a box's modules on its own.
 type BoxModule struct {
 	ID        string   `json:"id"`
 	ChainID   int      `json:"chainId,omitempty"`   // 0 for a chain-agnostic module (watch)
@@ -40,8 +41,30 @@ const BoxModulesConfigRoot = "/var/lib/jumpgate/modules"
 // record a prober reads back, nor swap a path in it.
 func (b BoxModule) ConfigDir() string { return BoxModulesConfigRoot + "/" + b.Instance() }
 
-// SidecarPath is the module's module.json, in ConfigDir.
+// SidecarPath is the module's module.json, in ConfigDir: a world-readable
+// BoxSidecar for discovery.
 func (b BoxModule) SidecarPath() string { return b.ConfigDir() + "/module.json" }
+
+// ConfigPath is the module's full record, config.json in ConfigDir,
+// readable by root and the service's group only: it may hold a webhook URL
+// or upstreams.
+func (b BoxModule) ConfigPath() string { return b.ConfigDir() + "/config.json" }
+
+// BoxSidecar is the public part of a box module record, all a gate or an
+// SSH probe needs to find and read the module. It never holds endpoints,
+// webhooks or secrets.
+type BoxSidecar struct {
+	ID      string `json:"id"`
+	ChainID int    `json:"chainId,omitempty"`
+	Unit    string `json:"unit"`
+	Port    int    `json:"port,omitempty"`
+	Proto   string `json:"proto,omitempty"`
+}
+
+// Module is the record the sidecar names, for validation and probing.
+func (s BoxSidecar) Module() BoxModule {
+	return BoxModule{ID: s.ID, ChainID: s.ChainID, Port: s.Port}
+}
 
 // DataDir is the module's service-owned state under the current account's
 // root: the unit's working and writable path. Root only creates it.
@@ -93,8 +116,8 @@ func boxModule(b BoxModule) (Module, error) {
 	return m, nil
 }
 
-// RenderBoxModule validates b, renders its unit and adds its module.json
-// sidecar to Files.
+// RenderBoxModule validates b, renders its unit and adds its public
+// module.json sidecar and its full config.json to Files.
 func RenderBoxModule(b BoxModule) (BoxUnit, error) {
 	if err := ValidateBoxModule(b); err != nil {
 		return BoxUnit{}, err
@@ -104,7 +127,15 @@ func RenderBoxModule(b BoxModule) (BoxUnit, error) {
 	if err != nil {
 		return BoxUnit{}, err
 	}
-	side, err := json.Marshal(b)
+	full, err := json.Marshal(b)
+	if err != nil {
+		return BoxUnit{}, err
+	}
+	pub := BoxSidecar{ID: b.ID, ChainID: b.ChainID, Unit: b.UnitName(), Port: b.Port}
+	if len(u.Ports) > 0 {
+		pub.Port, pub.Proto = u.Ports[0].Port, u.Ports[0].Proto
+	}
+	side, err := json.Marshal(pub)
 	if err != nil {
 		return BoxUnit{}, err
 	}
@@ -117,6 +148,7 @@ func RenderBoxModule(b BoxModule) (BoxUnit, error) {
 		}
 	}
 	u.Files[b.SidecarPath()] = string(side)
+	u.Files[b.ConfigPath()] = string(full)
 	return u, nil
 }
 

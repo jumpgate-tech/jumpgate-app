@@ -83,15 +83,27 @@ func TestRenderBoxModuleRefusesFilesOutsideConfigDir(t *testing.T) {
 }
 
 func TestRenderBoxModuleWritesSidecar(t *testing.T) {
-	withModules(t, []Module{fakePortBox("watch", "tcp", 0)})
-	b := BoxModule{ID: "watch", Upstreams: []string{"http://127.0.0.1:8545"}}
+	withModules(t, []Module{fakePortBox("watch", "tcp", 7000)})
+	b := BoxModule{ID: "watch", Upstreams: []string{"http://127.0.0.1:8545"}, Webhook: "https://hooks.example/s3cret"}
 	u, err := RenderBoxModule(b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := json.Marshal(b)
-	if got := u.Files[b.SidecarPath()]; got != string(want) {
-		t.Errorf("module.json = %q, want %q", got, want)
+	// The world-readable sidecar is for discovery only.
+	side := u.Files[b.SidecarPath()]
+	want := `{"id":"watch","unit":"jumpgate-mod-watch.service","port":7000,"proto":"tcp"}`
+	if side != want {
+		t.Errorf("module.json = %q, want %q", side, want)
+	}
+	for _, s := range []string{"webhook", "upstream", "http", "s3cret", "127.0.0.1", "secret"} {
+		if strings.Contains(strings.ToLower(side), s) {
+			t.Errorf("module.json holds %q: %s", s, side)
+		}
+	}
+	// The full record goes to the unit's own config, readable by its group.
+	full, _ := json.Marshal(b)
+	if got := u.Files[b.ConfigPath()]; got != string(full) {
+		t.Errorf("config.json = %q, want %q", got, full)
 	}
 	for _, s := range []string{"User=jumpgate-node\n", "ReadWritePaths=" + b.DataDir() + "\n"} {
 		if !strings.Contains(u.Unit, s) {
