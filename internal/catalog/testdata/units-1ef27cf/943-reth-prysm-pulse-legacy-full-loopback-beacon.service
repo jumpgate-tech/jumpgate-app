@@ -1,0 +1,25 @@
+[Unit]
+Description=valve-node-app beacon client (prysm-pulse)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=valve-node-app
+Group=valve-node-app
+ExecStart=prysm-pulse --datadir=/var/lib/valve-node-app/943/beacondata --execution-endpoint=http://127.0.0.1:8551 --jwt-secret=/var/lib/valve-node-app/943/jwt.hex --checkpoint-sync-url=https://checkpoint.v4.testnet.pulsechain.com --genesis-beacon-api-url=https://checkpoint.v4.testnet.pulsechain.com --rpc-host=127.0.0.1 --grpc-gateway-host=127.0.0.1 --grpc-gateway-port=5052 --pulsechain-testnet-v4
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/valve-node-app/943
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

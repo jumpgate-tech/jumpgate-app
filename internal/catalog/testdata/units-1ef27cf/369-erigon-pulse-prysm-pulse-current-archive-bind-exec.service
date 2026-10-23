@@ -1,0 +1,25 @@
+[Unit]
+Description=jumpgate-node execution client (erigon-pulse)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jumpgate-node
+Group=jumpgate-node
+ExecStart=erigon-pulse --chain pulsechain --datadir /var/lib/jumpgate-node/369 --authrpc.jwtsecret /var/lib/jumpgate-node/369/jwt.hex --authrpc.addr 127.0.0.1 --authrpc.port 8551 --http --http.addr 100.64.0.7 --http.port 8545 --port 30303
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/jumpgate-node/369
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
