@@ -162,6 +162,15 @@ describe("ModulesSection", () => {
     await waitFor(() => expect(api.setModule).toHaveBeenCalledWith("t1", "msgboard", { enabled: true, public: "post" }));
   });
 
+  it("shows no Public radio when the Public-tier gateway routes to another machine", async () => {
+    const gw = gateway(true);
+    gw.config.Networks![0].Upstreams![0].TargetID = "other";
+    setup(target("reth", [{ id: "msgboard" }]), { gateways: [gw] });
+    await screen.findByText("Message board");
+    await waitFor(() => expect(api.getGateways).toHaveBeenCalled());
+    expect(screen.queryByLabelText("Public reads")).toBeNull();
+  });
+
   it("puts the Public radio back on the saved value when setModule fails", async () => {
     setup(target("reth", [{ id: "msgboard" }]), { gateways: [gateway(true)] });
     vi.mocked(api.setModule).mockRejectedValue(new Error("boom"));

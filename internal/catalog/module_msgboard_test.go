@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -75,6 +76,19 @@ func TestMsgboardHTTPAPI(t *testing.T) {
 		}
 		if !strings.Contains(execUnit, " --http.api eth,net,web3,msgboard") {
 			t.Fatalf("%d: unit lacks the api list:\n%s", chain, execUnit)
+		}
+	}
+}
+
+// msgboard_content builds the whole board in one call: behind a Public-tier
+// gateway no Public choice ever routes it.
+func TestMsgboardContentNeverPublic(t *testing.T) {
+	u := GatewayUpstream{Kind: UpstreamManagedNode}
+	for _, pub := range []string{"", "read", "post"} {
+		w := &WireConfig{Modules: []NodeModule{{ID: "msgboard", Public: pub}}}
+		ign := moduleIgnoreMethods(TierPublic, u, w)
+		if !slices.Contains(ign, "msgboard_content") && !slices.Contains(ign, "msgboard_*") {
+			t.Errorf("public %q: msgboard_content is routed behind a Public-tier gateway (ignores %v)", pub, ign)
 		}
 	}
 }

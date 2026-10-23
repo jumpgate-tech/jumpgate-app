@@ -344,6 +344,29 @@ const pricePath = "/internal/price"
 // zero is not.
 const fallbackPrice = 1
 
+// defaultPrice is what the store's seeded book charges a method it does not
+// name.
+const defaultPrice = 20
+
+// priceBook is what the relay charges a named method when the store cannot be
+// asked. The store's answer always wins; this only keeps an outage from selling
+// an expensive call at fallbackPrice. msgboard_content is absent on purpose:
+// it is never public, so no key reaches it through a Public-tier gateway.
+var priceBook = map[string]int64{
+	// TODO(open-q-8): msgboard prices are undecided; both take the default.
+	// contentPage returns up to a full page in one call.
+	"msgboard_contentPage": defaultPrice,
+	"msgboard_addMessage":  defaultPrice,
+}
+
+// outagePrice is the charge for method when no good price is known.
+func outagePrice(method string) int64 {
+	if p, ok := priceBook[method]; ok {
+		return p
+	}
+	return fallbackPrice
+}
+
 // priceTTL is how long a price the store gave is trusted. Prices change on an
 // operator's clock, so minutes is fresh enough, and it keeps the store off the
 // hot path.
@@ -390,7 +413,7 @@ func (c *BillingClient) PriceOf(ctx context.Context, method string, chainID int)
 		entry.credits = cached.credits
 		entry.expires = now.Add(priceRetryAfter)
 	default:
-		entry = cachedPrice{credits: fallbackPrice, expires: now.Add(priceRetryAfter)}
+		entry = cachedPrice{credits: outagePrice(method), expires: now.Add(priceRetryAfter)}
 	}
 
 	c.priceMu.Lock()
