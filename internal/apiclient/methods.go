@@ -283,3 +283,53 @@ func (c *Client) Adopt(ctx context.Context, target, id string) (api.JobView, err
 	err := c.Do(ctx, http.MethodPost, jobPath(target, id, "/adopt"), nil, &v)
 	return v, err
 }
+
+// Catalog is /api/catalog as module screens read it: its modules only.
+func (c *Client) Catalog(ctx context.Context) ([]api.CatalogModule, error) {
+	var out struct {
+		Modules []api.CatalogModule `json:"modules"`
+	}
+	err := c.Do(ctx, http.MethodGet, "/api/catalog", nil, &out)
+	return out.Modules, err
+}
+
+// ListModules is every module's status on target.
+func (c *Client) ListModules(ctx context.Context, target string) (api.ModulesView, error) {
+	var v api.ModulesView
+	err := c.Do(ctx, http.MethodGet, targetPath(target, "/modules"), nil, &v)
+	return v, err
+}
+
+// SetModule turns a node or box module on or off on target. A 502 means the
+// change was saved but a gateway did not re-provision; it comes back as an
+// *api.Error with Status 502.
+func (c *Client) SetModule(ctx context.Context, target, module string, req api.SetModule) (api.SetModuleResult, error) {
+	var r api.SetModuleResult
+	err := c.Do(ctx, http.MethodPut, targetPath(target, "/modules/"+url.PathEscape(module)), req, &r)
+	return r, err
+}
+
+// WatchSetup follows target's current setup run; the channel closes when the
+// server ends the stream or ctx ends.
+func (c *Client) WatchSetup(ctx context.Context, target string) (<-chan api.SetupEvent, error) {
+	res, err := c.Open(ctx, http.MethodGet, targetPath(target, "/setup/stream"), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan api.SetupEvent, 16)
+	go func() {
+		defer close(ch)
+		defer res.Body.Close()
+		_ = parseSSE(res.Body, func(ev Event) {
+			var se api.SetupEvent
+			if json.Unmarshal(ev.Data, &se) != nil {
+				return
+			}
+			select {
+			case ch <- se:
+			case <-ctx.Done():
+			}
+		})
+	}()
+	return ch, nil
+}

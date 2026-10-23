@@ -15,8 +15,9 @@ import (
 	"github.com/valve-tech/jumpgate/internal/apiclient"
 )
 
-var hostKeys = struct{ Measure, Sidebar key.Binding }{
+var hostKeys = struct{ Measure, Modules, Sidebar key.Binding }{
 	Measure: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "measure disk now (Storage)")),
+	Modules: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "modules (other tabs)")),
 	Sidebar: key.NewBinding(key.WithKeys("["), key.WithHelp("[", "host list")),
 }
 
@@ -100,6 +101,11 @@ type hostScreen struct {
 	svcLast   string
 
 	scroll int // first visible line of the Endpoints or Security tab; clamped when drawn
+
+	modCat       []api.CatalogModule
+	modTarget    *api.TargetView // this box's record: its wire and box modules
+	modView      api.ModulesView
+	modRestarted time.Time // when a module change last restarted the exec client
 }
 
 // openHost shows a box's detail, closing any open one.
@@ -123,6 +129,10 @@ func (a *App) closeDetail() {
 			}
 		case *confirmModal:
 			a.modal = nil
+		case *modulesModal:
+			if m.h == h {
+				a.modal = nil
+			}
 		}
 	}
 	a.detail = nil
@@ -161,6 +171,8 @@ func (h *hostScreen) load(a *App, tab string) tea.Cmd {
 	h.loaded[tab] = true
 	id, gen, ctx, be := h.id, h.gen, h.ctx, a.be // captured: the command goroutine reads no App field
 	switch tab {
+	case "overview":
+		return h.loadModules(a)
 	case "storage":
 		return func() tea.Msg {
 			d, err := be.Disk(ctx, id)
@@ -185,7 +197,7 @@ func (h *hostScreen) load(a *App, tab string) tea.Cmd {
 func (h *hostScreen) capturing() bool { return h.logEditing }
 
 func (h *hostScreen) keys() []key.Binding {
-	return []key.Binding{navKeys.Left, navKeys.Right, globalKeys.Back, hostKeys.Measure, hostKeys.Sidebar, svcKeys.Shell, svcKeys.Actions}
+	return []key.Binding{navKeys.Left, navKeys.Right, globalKeys.Back, hostKeys.Measure, hostKeys.Modules, hostKeys.Sidebar, svcKeys.Shell, svcKeys.Actions}
 }
 
 func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
@@ -257,6 +269,31 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			m.gotExplain(msg)
 		}
 		return nil
+	case modulesMsg:
+		if msg.id != h.id || !h.current(msg.gen) || msg.err != nil {
+			return nil
+		}
+		h.modCat, h.modTarget, h.modView = msg.cat, msg.target, msg.view
+		return nil
+	case modSetMsg:
+		if msg.id != h.id || !h.current(msg.gen) {
+			return nil
+		}
+		if m, ok := a.modal.(*modulesModal); ok && m.h == h {
+			return m.gotSet(a, msg)
+		}
+		return h.reloadModules(a)
+	case setupEvMsg:
+		if msg.id != h.id || !h.current(msg.gen) {
+			return nil
+		}
+		if m, ok := a.modal.(*modulesModal); ok && m.h == h {
+			return m.gotSetupEv(a, msg)
+		}
+		if msg.closed || msg.ev.Err != "" || (msg.ev.Done && msg.ev.StepID == "") {
+			return h.reloadModules(a)
+		}
+		return h.nextSetupEv(msg.ch)
 	case gatewaysMsg:
 		if msg.err == nil {
 			h.gws = msg.gws
@@ -302,6 +339,9 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			return h.shell(a)
 		case key.Matches(msg, svcKeys.Actions):
 			a.modal = newActions(a, h)
+			return nil
+		case key.Matches(msg, hostKeys.Modules): // Storage took m first
+			a.modal = newModulesModal(a, h)
 			return nil
 		case key.Matches(msg, globalKeys.Back):
 			a.closeDetail()
@@ -395,7 +435,7 @@ func (h *hostScreen) view(a *App, w, hgt int) string {
 func (h *hostScreen) body(a *App, w, hgt int) string {
 	switch h.tabName(a) {
 	case "overview":
-		return h.viewOverview(a, w)
+		return h.viewOverview(a, w) + h.viewModules(a, w)
 	case "storage":
 		return h.viewStorage(a, w)
 	case "endpoints":

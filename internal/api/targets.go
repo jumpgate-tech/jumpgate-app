@@ -61,6 +61,7 @@ type TargetView struct {
 	SSH         *SSHView              `json:"ssh,omitempty"`
 	Wire        *catalog.WireConfig   `json:"wire,omitempty"`
 	Devnet      *catalog.DevnetConfig `json:"devnet,omitempty"`
+	Modules     []catalog.BoxModule   `json:"modules,omitempty"` // the box modules recorded on it
 	Agent       *AgentView            `json:"agent"`
 	Link        Link                  `json:"link"`
 	ThisMachine bool                  `json:"thisMachine"`

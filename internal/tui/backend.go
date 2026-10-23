@@ -47,6 +47,10 @@ type Backend interface {
 	MigrateNames(ctx context.Context, target string) (api.JobView, error)
 	Decide(ctx context.Context, target, id string, d api.JobDecision) (api.JobView, error)
 	Adopt(ctx context.Context, target, id string) (api.JobView, error)
+	Catalog(ctx context.Context) ([]api.CatalogModule, error)
+	ListModules(ctx context.Context, target string) (api.ModulesView, error)
+	SetModule(ctx context.Context, target, module string, req api.SetModule) (api.SetModuleResult, error)
+	WatchSetup(ctx context.Context, target string) (<-chan api.SetupEvent, error)
 }
 
 var _ Backend = (*apiclient.Client)(nil)

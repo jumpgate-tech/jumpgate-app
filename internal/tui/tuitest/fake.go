@@ -49,6 +49,12 @@ type Fake struct {
 	JobV         map[string]api.JobDetail // key "target/id"
 	JobViewV     api.JobView              // the answer of MigrateNames, Decide and Adopt
 	LastDecision api.JobDecision          // what Decide last received
+
+	CatalogV      []api.CatalogModule
+	ModulesV      map[string]api.ModulesView
+	SetModuleV    api.SetModuleResult
+	LastSetModule api.SetModule // what SetModule last received
+	SetupV        []api.SetupEvent
 }
 
 // NewFake is a Fake with empty data and open stream channels.
@@ -329,4 +335,42 @@ func (f *Fake) Decide(_ context.Context, target, id string, d api.JobDecision) (
 
 func (f *Fake) Adopt(_ context.Context, target, id string) (api.JobView, error) {
 	return f.JobViewV, f.call("Adopt", target, id)
+}
+
+func (f *Fake) Catalog(context.Context) ([]api.CatalogModule, error) {
+	f.mu.Lock()
+	v := f.CatalogV
+	f.mu.Unlock()
+	return v, f.call("Catalog")
+}
+
+func (f *Fake) ListModules(_ context.Context, target string) (api.ModulesView, error) {
+	f.mu.Lock()
+	v := f.ModulesV[target]
+	f.mu.Unlock()
+	return v, f.call("ListModules", target)
+}
+
+func (f *Fake) SetModule(_ context.Context, target, module string, req api.SetModule) (api.SetModuleResult, error) {
+	f.mu.Lock()
+	f.LastSetModule = req
+	v := f.SetModuleV
+	f.mu.Unlock()
+	return v, f.call("SetModule", target, module)
+}
+
+// WatchSetup replays SetupV and closes.
+func (f *Fake) WatchSetup(_ context.Context, target string) (<-chan api.SetupEvent, error) {
+	f.mu.Lock()
+	evs := append([]api.SetupEvent(nil), f.SetupV...)
+	f.mu.Unlock()
+	if err := f.call("WatchSetup", target); err != nil {
+		return nil, err
+	}
+	ch := make(chan api.SetupEvent, len(evs))
+	for _, ev := range evs {
+		ch <- ev
+	}
+	close(ch)
+	return ch, nil
 }
