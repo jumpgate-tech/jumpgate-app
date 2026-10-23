@@ -86,6 +86,8 @@ func methodsOf(m Module, classes ...MethodClass) []string {
 //     (the node has no WebSocket listener), and behind a Public-tier gateway
 //     also whatever its Public setting does not open. Unbounded reads are
 //     never public.
+//
+// docs:covers msgboard-expose
 func moduleIgnoreMethods(tier Tier, u GatewayUpstream, w *WireConfig) []string {
 	var out []string
 	for _, m := range modules {

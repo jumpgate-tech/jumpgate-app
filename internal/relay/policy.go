@@ -128,6 +128,7 @@ func CheckMethods(rec KeyRecord, methods []string) error {
 	return nil
 }
 
+// docs:covers msgboard-expose
 func checkOneMethod(rec KeyRecord, method string) error {
 	// The block list wins over everything. A deny is a deliberate act; an allow
 	// may be a broad default a later edit widened by accident.
