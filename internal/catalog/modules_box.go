@@ -177,6 +177,15 @@ func nodePorts(w *WireConfig) map[portKey]string {
 	case "lighthouse", "lighthouse-pulse":
 		add(beacon, 9000, "tcp", "udp")
 		add(beacon, 9001, "tcp", "udp")
+	case "prysm-pulse":
+		// prysm's p2p defaults, which its unit does not override: tcp 13000,
+		// udp 12000 (the pair ops checks in beaconP2PPorts).
+		add(beacon, 13000, "tcp")
+		add(beacon, 12000, "udp")
+	}
+	if w.ERPCEnabled {
+		// The node's own eRPC gateway listens on ERPCHTTP (0 → 4000).
+		add("the RPC gateway", w.ERPCHTTP(), "tcp")
 	}
 	return out
 }
@@ -206,7 +215,10 @@ func ValidateBoxModules(mods []BoxModule, w *WireConfig) error {
 			if owner, ok := node[k]; ok {
 				return fmt.Errorf("%s wants %s %d, which %s already uses", inst, p.Proto, p.Port, owner)
 			}
-			if other, ok := taken[k]; ok && other != inst {
+			if other, ok := taken[k]; ok {
+				if other == inst {
+					return fmt.Errorf("%s wants %s %d twice", inst, p.Proto, p.Port)
+				}
 				return fmt.Errorf("%s and %s both want %s %d", other, inst, p.Proto, p.Port)
 			}
 			taken[k] = inst
