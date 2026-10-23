@@ -187,10 +187,12 @@ macos:
   when: manual
   allow_failure: true
   script:
-    # A shell runner shares the host's disk: keep Go's caches in the build
-    # directory, not under the throwaway HOME, and remove HOME on exit.
-    # Each run otherwise left a ~600 MB module cache in $TMPDIR.
-    - export GOMODCACHE="$CI_PROJECT_DIR/.cache/go-mod" GOCACHE="$CI_PROJECT_DIR/.cache/go-build"
+    # A shell runner shares the host's disk: keep Go's caches beside the
+    # checkouts (outside the clone, so git clean leaves them and later jobs
+    # reuse them), not under the throwaway HOME, and remove HOME on exit.
+    # Each run otherwise left a ~600 MB module cache in $TMPDIR. -modcacherw
+    # keeps the module cache removable.
+    - export GOMODCACHE="$CI_BUILDS_DIR/.go-cache/mod" GOCACHE="$CI_BUILDS_DIR/.go-cache/build" GOFLAGS=-modcacherw
     - export HOME="$(mktemp -d)"
     - trap 'chmod -R u+w "$HOME" 2>/dev/null; rm -rf "$HOME"' EXIT
     - go vet ./...
