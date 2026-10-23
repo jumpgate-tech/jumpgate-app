@@ -15,6 +15,9 @@ type CatalogModule struct {
 	Resources ModuleResources `json:"resources"`
 	Applies   []ModuleApplies `json:"applies"`
 	Methods   []ModuleMethod  `json:"methods"`
+	// Public is the exposure choices a node module offers ("read", "post");
+	// empty offers none.
+	Public []string `json:"public"`
 }
 
 // ModuleResources is a module's rough footprint.

@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,30 @@ const (
 	// reads "Starting" (spec D8).
 	startingGrace = time.Minute
 )
+
+// publicOptions is the Public values p cycles for c: "" (local only) plus
+// what the catalog says the module offers, and only for a node module that
+// is on behind a public-tier gateway (the server's tier, never re-derived).
+// Empty offers no choice.
+func (h *hostScreen) publicOptions(c modCard) []string {
+	if c.m.Placement != "node" || c.state != "on" || len(c.m.Public) == 0 {
+		return nil
+	}
+	behindPublic := false
+	for _, g := range h.modGws {
+		behindPublic = behindPublic || (g.Tier == "public" && g.RoutesTo(h.id))
+	}
+	if !behindPublic {
+		return nil
+	}
+	out := []string{""}
+	for _, p := range publicChoices[1:] {
+		if slices.Contains(c.m.Public, p.value) {
+			out = append(out, p.value)
+		}
+	}
+	return out
+}
 
 // publicChoices are a node module's Public values in the order p cycles them.
 var publicChoices = []struct{ value, label string }{
@@ -58,6 +83,7 @@ type (
 		id     string
 		gen    uint64
 		cat    []api.CatalogModule
+		gws    []api.GatewaySummary
 		target *api.TargetView
 		view   api.ModulesView
 		err    error // the catalog or targets failed; a status failure only empties view
@@ -110,6 +136,9 @@ func (h *hostScreen) loadModules(a *App) tea.Cmd {
 				msg.target = &ts[i]
 			}
 		}
+		if gws, err := be.Gateways(ctx); err == nil {
+			msg.gws = gws // none known: no Public choice
+		}
 		if v, err := be.ListModules(ctx, id); err == nil {
 			msg.view = v
 		}
@@ -153,16 +182,10 @@ func (h *hostScreen) moduleCards(a *App) []modCard {
 			if m.Placement != place {
 				continue
 			}
-			row, ok := appliesRow(m, chain, map[string]string{"node": client}[place])
+			// A module that is on is always listed, whatever its Applies
+			// row says now, so it can be turned off; only an off module is
+			// hidden or disabled by the row.
 			c := modCard{m: m}
-			switch {
-			case ok && row.OK:
-				c.state = "off"
-			case ok && row.Reason != "":
-				c.state, c.reason = "disabled", row.Reason
-			default:
-				continue // hidden
-			}
 			if place == "node" {
 				for _, nm := range wire.Modules {
 					if nm.ID == m.ID {
@@ -175,6 +198,17 @@ func (h *hostScreen) moduleCards(a *App) []modCard {
 						c.state, c.box = "on", &h.modTarget.Modules[i]
 					}
 				}
+			}
+			row, ok := appliesRow(m, chain, map[string]string{"node": client}[place])
+			switch {
+			case c.state == "on":
+				c.reason = row.Reason
+			case ok && row.OK:
+				c.state = "off"
+			case ok && row.Reason != "":
+				c.state, c.reason = "disabled", row.Reason
+			default:
+				continue // hidden
 			}
 			if c.state != "disabled" {
 				c.status = h.moduleStatus(a, c)
@@ -212,7 +246,7 @@ func (h *hostScreen) moduleStatus(a *App, c modCard) string {
 		}
 		return "Stopped"
 	}
-	if h.statusHas && !h.status.Exec.Active {
+	if on && h.statusHas && !h.status.Exec.Active {
 		return "Node stopped"
 	}
 	if !on {
@@ -289,6 +323,8 @@ type modulesModal struct {
 	cursor int
 	pub    map[string]string // Public values sent this session, ahead of the reload
 
+	askPost string // the module whose move to public posting awaits enter
+
 	confirm *confirmModal // the typed restart, while asking
 
 	fieldsFor *modCard // the box module being turned on, while asking
@@ -346,6 +382,18 @@ func (m *modulesModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	if m.fieldsFor != nil {
 		return false, m.fieldsKey(a, k)
 	}
+	if m.askPost != "" {
+		switch k.String() {
+		case "esc":
+			m.askPost = ""
+		case "enter":
+			id := m.askPost
+			m.askPost = ""
+			m.pub[id] = "post"
+			return false, m.submit(a, id, api.SetModule{Enabled: true, Public: "post"}, false)
+		}
+		return false, nil
+	}
 	cards := m.cards(a)
 	switch {
 	case k.String() == "esc":
@@ -361,12 +409,16 @@ func (m *modulesModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	case key.Matches(k, modKeys.Public):
 		if m.cursor < len(cards) && !m.busy {
 			c := cards[m.cursor]
-			if c.m.Placement == "node" && c.state == "on" {
-				next := publicChoices[0].value
-				for i, p := range publicChoices {
-					if p.value == c.public {
-						next = publicChoices[(i+1)%len(publicChoices)].value
+			if opts := m.h.publicOptions(c); len(opts) > 0 {
+				next := opts[0]
+				for i, p := range opts {
+					if p == c.public {
+						next = opts[(i+1)%len(opts)]
 					}
+				}
+				if next == "post" { // the D11 warning comes before the request
+					m.askPost = c.m.ID
+					return false, nil
 				}
 				m.pub[c.m.ID] = next
 				return false, m.submit(a, c.m.ID, api.SetModule{Enabled: true, Public: next}, false)
@@ -620,9 +672,14 @@ func (m *modulesModal) view(a *App, w, _ int) string {
 		name := sanitizeLine(c.m.Name)
 		name += strings.Repeat(" ", pad-len([]rune(name))+2)
 		out += truncate(fmt.Sprintf(" %s %s%s", mark, name, m.h.moduleLine(a, c, sep)), w, a.gl.Ellipsis) + "\n"
-		if i == m.cursor && c.m.Placement == "node" && c.state == "on" {
-			out += "     " + a.th.Dim.Render("reachable: "+publicLabel(c.public)+" (p to change)") + "\n"
-			if c.public == "post" {
+		if i == m.cursor && len(m.h.publicOptions(c)) > 0 {
+			asking := m.askPost == c.m.ID
+			line := "reachable: " + publicLabel(c.public) + " (p to change)"
+			if asking {
+				line = "make it reachable: " + publicLabel("post") + "? enter to go ahead, esc to keep " + publicLabel(c.public)
+			}
+			out += "     " + a.th.Dim.Render(line) + "\n"
+			if c.public == "post" || asking {
 				// The D11 copy, wrapped at its sentence: a modal is narrower
 				// than the screen.
 				for _, s := range strings.SplitAfter(postWarning, ". ") {

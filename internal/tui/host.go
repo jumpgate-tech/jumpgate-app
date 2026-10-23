@@ -105,7 +105,8 @@ type hostScreen struct {
 	modCat       []api.CatalogModule
 	modTarget    *api.TargetView // this box's record: its wire and box modules
 	modView      api.ModulesView
-	modRestarted time.Time // when a module change last restarted the exec client
+	modGws       []api.GatewaySummary // for the Public choice: which gateways are public and route here
+	modRestarted time.Time            // when a module change last restarted the exec client
 }
 
 // openHost shows a box's detail, closing any open one.
@@ -273,7 +274,7 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		if msg.id != h.id || !h.current(msg.gen) || msg.err != nil {
 			return nil
 		}
-		h.modCat, h.modTarget, h.modView = msg.cat, msg.target, msg.view
+		h.modCat, h.modTarget, h.modView, h.modGws = msg.cat, msg.target, msg.view, msg.gws
 		return nil
 	case modSetMsg:
 		if msg.id != h.id || !h.current(msg.gen) {

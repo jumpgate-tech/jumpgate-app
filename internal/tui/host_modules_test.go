@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -29,6 +30,12 @@ func modulesFake() *tuitest.Fake {
 		{ID: "watch", Name: "Health watch", Placement: "box", Applies: []api.ModuleApplies{{ChainID: 0}}},
 		{ID: "private-send", Name: "Private send", Placement: "gateway", Applies: []api.ModuleApplies{{ChainID: 1, OK: true}}},
 	}
+	f.CatalogV[0].Public = []string{"read", "post"}
+	gw := api.GatewaySummary{ID: "gw", Tier: "public"}
+	gw.Config.Networks = append(gw.Config.Networks, struct{ Upstreams []api.GatewayUpstreamRef }{
+		Upstreams: []api.GatewayUpstreamRef{{Kind: "managed-node", TargetID: "box"}},
+	})
+	f.GatewaysV = []api.GatewaySummary{gw}
 	f.ModulesV = map[string]api.ModulesView{"box": {Modules: []api.ModuleStatus{{ID: "msgboard", Served: true, Accepting: true, Count: 1234, Size: 3_100_000}}}}
 	return f
 }
@@ -149,9 +156,120 @@ func TestModulesModalPublicChoice(t *testing.T) {
 	if !f.Called("SetModule box msgboard") || f.LastSetModule.Public != "read" || !f.LastSetModule.Enabled {
 		t.Fatalf("calls %v, req %+v", f.Calls, f.LastSetModule)
 	}
+	f.Calls = nil
+	// Moving to post shows the D11 warning first and sends nothing yet.
 	m = press(t, m, "p")
+	if f.Called("SetModule") {
+		t.Fatal("post was sent before the warning was seen")
+	}
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "Anyone can post through your node.\n") || !strings.Contains(fr, "Posts cost the sender proof of work, not you.") {
 		t.Fatalf("no posting warning:\n%s", fr)
+	}
+	m = press(t, m, "esc")
+	if f.Called("SetModule") || m.(*App).modal == nil {
+		t.Fatal("esc on the warning sent post or closed the modal")
+	}
+	m = press(t, m, "p", "enter")
+	if !f.Called("SetModule box msgboard") || f.LastSetModule.Public != "post" {
+		t.Fatalf("calls %v, req %+v", f.Calls, f.LastSetModule)
+	}
+}
+
+// The Public choice needs a public-tier gateway routing to the node, and a
+// module whose catalog entry offers choices.
+func TestModulesModalPublicNeedsPublicGatewayAndOptions(t *testing.T) {
+	for name, edit := range map[string]func(f *tuitest.Fake){
+		"private gateway": func(f *tuitest.Fake) { f.GatewaysV[0].Tier = "private" },
+		"other machine":   func(f *tuitest.Fake) { f.GatewaysV[0].Config.Networks[0].Upstreams[0].TargetID = "other" },
+		"no options":      func(f *tuitest.Fake) { f.CatalogV[0].Public = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := modulesFake()
+			edit(f)
+			m := press(t, openTestHost(t, f, "unicode"), "m", "p")
+			if f.Called("SetModule") || strings.Contains(tuitest.Frame(m), "p to change") {
+				t.Fatalf("p offered:\n%s", tuitest.Frame(m))
+			}
+		})
+	}
+}
+
+// A module that is on stays listed, and can be turned off, even when the
+// catalog would now hide it.
+func TestModulesOnButHiddenCanBeTurnedOff(t *testing.T) {
+	f := modulesFake()
+	f.TargetsV[0].Modules = []catalog.BoxModule{{ID: "watch"}}
+	f.SetModuleV = api.SetModuleResult{Status: "started"}
+	a := openTestHost(t, f, "unicode")
+	if fr := tuitest.Frame(a); !strings.Contains(fr, "Health watch") {
+		t.Fatalf("an on module was hidden:\n%s", fr)
+	}
+	press(t, a, "m", "down", "down", "down", "enter")
+	if !f.Called("SetModule box watch") || f.LastSetModule.Enabled {
+		t.Fatalf("calls %v, req %+v", f.Calls, f.LastSetModule)
+	}
+}
+
+// The status line's precedence, case for case with modulesModel.test.ts.
+func TestModuleStatusParityWithWeb(t *testing.T) {
+	msgboard := api.CatalogModule{ID: "msgboard", Placement: "node"}
+	cpz := api.CatalogModule{ID: "checkpointz", Placement: "box"}
+	served := &api.ModuleStatus{ID: "msgboard", Served: true, Accepting: true, Count: 1234}
+	st := func(edit func(s *api.ModuleStatus)) *api.ModuleStatus {
+		s := *served
+		edit(&s)
+		return &s
+	}
+	synced := api.NodeStatus{Exec: api.ClientStatus{Active: true, Peers: 5, State: api.SyncSynced}}
+	cases := []struct {
+		name      string
+		m         api.CatalogModule
+		on        bool
+		s         *api.ModuleStatus
+		node      *api.NodeStatus
+		restarted time.Duration // ago; 0 none
+		stale     bool
+		want      string
+	}{
+		{"node stopped", msgboard, true, st(func(s *api.ModuleStatus) { s.Served = false }), &api.NodeStatus{}, 0, false, "Node stopped"},
+		{"starting grace", msgboard, true, st(func(s *api.ModuleStatus) { s.Served = false }), nil, 30 * time.Second, false, "Starting"},
+		{"error after grace", msgboard, true, st(func(s *api.ModuleStatus) { s.Served = false; s.Error = "msgboard is not served" }), nil, 90 * time.Second, false, "msgboard is not served"},
+		{"not served", msgboard, true, st(func(s *api.ModuleStatus) { s.Served = false }), nil, 0, false, "Not served yet"},
+		{"sync before peers", msgboard, true, served, &api.NodeStatus{Exec: api.ClientStatus{Active: true, State: api.SyncSyncing}}, 0, false, "Waiting for sync"},
+		{"no peers", msgboard, true, st(func(s *api.ModuleStatus) { s.Accepting = false }), &api.NodeStatus{Exec: api.ClientStatus{Active: true, State: api.SyncSynced}}, 0, false, "No peers"},
+		{"not accepting", msgboard, true, st(func(s *api.ModuleStatus) { s.Accepting = false }), nil, 0, false, "Starting"},
+		{"accepting", msgboard, true, served, nil, 0, false, "Accepting · 1,234 msgs"},
+		{"served, not set", msgboard, false, served, &synced, 0, false, "Served but not set by jumpgate"},
+		{"off, not served", msgboard, false, st(func(s *api.ModuleStatus) { s.Served = false }), &synced, 0, false, ""},
+		{"off, node stopped", msgboard, false, st(func(s *api.ModuleStatus) { s.Served = false }), &api.NodeStatus{}, 0, false, ""},
+		{"stale gate", msgboard, true, served, nil, 0, true, "Status needs a newer gate on this box"},
+		{"box identity", cpz, true, &api.ModuleStatus{ID: "checkpointz", Active: true, Identity: "enode://x"}, nil, 0, false, "Running · enode://x"},
+		{"box running", cpz, true, &api.ModuleStatus{ID: "checkpointz", Active: true}, nil, 0, false, "Running"},
+		{"box stopped", cpz, true, &api.ModuleStatus{ID: "checkpointz"}, nil, 0, false, "Stopped"},
+		{"box error", cpz, true, &api.ModuleStatus{ID: "checkpointz", Error: "unit failed"}, nil, 0, false, "unit failed"},
+		{"box no reading", cpz, true, nil, nil, 0, false, "Stopped"},
+		{"box off", cpz, false, nil, nil, 0, false, ""},
+	}
+	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
+	for _, c := range cases {
+		h := &hostScreen{id: "box"}
+		if c.s != nil {
+			h.modView.Modules = []api.ModuleStatus{*c.s}
+		}
+		h.modView.GateStale = c.stale
+		if c.node != nil {
+			h.status, h.statusHas = *c.node, true
+		}
+		if c.restarted > 0 {
+			h.modRestarted = testNow.Add(-c.restarted)
+		}
+		state := "off"
+		if c.on {
+			state = "on"
+		}
+		if got := h.moduleStatus(a, modCard{m: c.m, state: state}); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 
