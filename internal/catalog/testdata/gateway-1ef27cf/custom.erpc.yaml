@@ -1,0 +1,36 @@
+logLevel: warn
+server:
+  httpHostV4: "0.0.0.0"
+  httpPortV4: 4100
+# The gateway counts its own requests so the app can show which endpoints are
+# carrying the load. The counters stay on this machine — they are served on
+# loopback and nothing is sent anywhere.
+metrics:
+  enabled: true
+  hostV4: "0.0.0.0"
+  port: 4101
+projects:
+  - id: valve
+    networks:
+      - architecture: evm
+        evm:
+          chainId: 560048
+    upstreams:
+      - id: hoodi-a
+        type: evm
+        endpoint: "ws://10.0.0.3:8546"
+        evm:
+          chainId: 560048
+      - id: hoodi-b
+        type: evm
+        endpoint: "https://hoodi.example.org"
+        evm:
+          chainId: 560048
+          blockAvailability:
+            lower:
+              latestBlockMinus: 128
+        tags:
+          - tier:fallback
+        routing:
+          scoreMultipliers:
+            - overall: 0.2

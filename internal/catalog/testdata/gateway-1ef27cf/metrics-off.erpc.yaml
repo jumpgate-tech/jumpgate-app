@@ -1,0 +1,23 @@
+logLevel: warn
+server:
+  httpHostV4: "127.0.0.1"
+  httpPortV4: 4000
+# The gateway counts its own requests so the app can show which endpoints are
+# carrying the load. The counters stay on this machine — they are served on
+# loopback and nothing is sent anywhere.
+metrics:
+  enabled: false
+  hostV4: "127.0.0.1"
+  port: 4001
+projects:
+  - id: main
+    networks:
+      - architecture: evm
+        evm:
+          chainId: 369
+    upstreams:
+      - id: 369-pulsechain-http-1
+        type: evm
+        endpoint: "https://rpc.pulsechain.com"
+        evm:
+          chainId: 369

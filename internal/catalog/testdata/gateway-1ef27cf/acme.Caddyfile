@@ -1,0 +1,12 @@
+gw.example.com {
+	tls ops@example.com
+	log {
+		format filter {
+			wrap console
+			fields {
+				request>uri regexp "jg_[1-9A-HJ-NP-Za-km-z]+" "jg_REDACTED"
+			}
+		}
+	}
+	reverse_proxy erpc:4000
+}

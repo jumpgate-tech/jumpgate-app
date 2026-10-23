@@ -1,0 +1,67 @@
+logLevel: warn
+server:
+  httpHostV4: "127.0.0.1"
+  httpPortV4: 4000
+# The gateway counts its own requests so the app can show which endpoints are
+# carrying the load. The counters stay on this machine — they are served on
+# loopback and nothing is sent anywhere.
+metrics:
+  enabled: true
+  hostV4: "127.0.0.1"
+  port: 4001
+projects:
+  - id: main
+    networks:
+      - architecture: evm
+        evm:
+          chainId: 369
+      - architecture: evm
+        evm:
+          chainId: 1
+      - architecture: evm
+        evm:
+          chainId: 943
+    upstreams:
+      - id: 369-local
+        type: evm
+        endpoint: "http://127.0.0.1:8545"
+        evm:
+          chainId: 369
+          blockAvailability:
+            lower:
+              latestBlockMinus: 128
+      - id: 369-pulsechain-http-2
+        type: evm
+        endpoint: "https://rpc.pulsechain.com"
+        evm:
+          chainId: 369
+        tags:
+          - tier:fallback
+        routing:
+          scoreMultipliers:
+            - overall: 0.2
+      - id: 369-pulsechain-ws-3
+        type: evm
+        endpoint: "wss://rpc.pulsechain.com"
+        evm:
+          chainId: 369
+        tags:
+          - tier:fallback
+        routing:
+          scoreMultipliers:
+            - overall: 0.2
+      - id: 1-publicnode-http-1
+        type: evm
+        endpoint: "https://ethereum-rpc.publicnode.com"
+        evm:
+          chainId: 1
+      - id: 1-drpc-http-2
+        type: evm
+        endpoint: "https://eth.drpc.org"
+        evm:
+          chainId: 1
+      - id: 943-node
+        type: evm
+        endpoint: "http://10.0.0.2:8545"
+        evm:
+          chainId: 943
