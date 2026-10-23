@@ -350,8 +350,8 @@ func (p *boxPlan) writeFilesStep() Step {
 			// path the service can write; each is staged under a random
 			// name in a root-only dir, given its owner and mode there, then
 			// renamed into place. The symlink refusals are defence in depth.
-			res, err := e.Run(ctx, fmt.Sprintf("%s && mkdir -p %s && chown -h %s:%s %s && install -d -o root -g root -m 0755 %s %s && install -d -m 0700 %s",
-				refuseSymlinks(n.DataRoot+"/modules", data, catalog.BoxModulesConfigRoot, conf),
+			res, err := e.Run(ctx, fmt.Sprintf("%s && mkdir -p %s && chown -h %s:%s %s && install -d -o root -g root -m 0755 %s %s && install -d -o root -g root -m 0700 %s",
+				refuseSymlinks(n.DataRoot+"/modules", data, catalog.BoxModulesConfigRoot, conf, stagingDir),
 				shQuote(data), n.User, n.Group, shQuote(data),
 				shQuote(catalog.BoxModulesConfigRoot), shQuote(conf), shQuote(stagingDir)), opts)
 			if err != nil {

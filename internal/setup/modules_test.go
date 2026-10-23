@@ -307,6 +307,12 @@ func TestWriteFilesNeverFollowsServiceOwnedPaths(t *testing.T) {
 	if !ran(e, "install -d -o root -g root -m 0755 '"+catalog.BoxModulesConfigRoot+"' '"+b.ConfigDir()+"'") {
 		t.Errorf("config dir not root-owned 0755; ran %q", e.callLog())
 	}
+	if !ran(e, "install -d -o root -g root -m 0700 '"+stagingDir+"'") {
+		t.Errorf("staging dir not root-owned 0700; ran %q", e.callLog())
+	}
+	if !ran(e, "[ -L '"+stagingDir+"' ]") {
+		t.Errorf("staging dir not in the symlink refusal; ran %q", e.callLog())
+	}
 	// Owner and mode are set on the staged file, then it is moved into the
 	// root-owned config dir in one rename.
 	for f, own := range map[string]string{
