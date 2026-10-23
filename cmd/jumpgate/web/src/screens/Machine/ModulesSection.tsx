@@ -22,8 +22,15 @@ import {
   POST_WARNING,
   PUBLIC_OPTIONS,
   publicGatewayRefs,
+  publicOptions,
   type ModuleCard,
 } from "./modulesModel";
+
+// boxName is how the operator knows the box: its SSH host, or "this machine"
+// for the local target (the same words the Machine header uses).
+function boxName(t: api.Target): string {
+  return t.mode === "ssh" && t.ssh ? t.ssh.Host : "this machine";
+}
 
 function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -89,7 +96,7 @@ export function ModulesSection({ targetId }: { targetId: string }) {
         restartedAt,
         gateStale,
         snapshot,
-        box: targetId,
+        box: boxName(target),
       }).filter((c) => c.state !== "hidden")
     : [];
   const boxCards = moduleCards(catalog, "box", {
@@ -100,6 +107,10 @@ export function ModulesSection({ targetId }: { targetId: string }) {
   }).filter((c) => c.state !== "hidden");
 
   const publicGateways = publicGatewayRefs(gatewaysQuery.data ?? [], targetId);
+  const publicOptionsFor = (id: string) => {
+    const m = catalog.modules?.find((x) => x.id === id);
+    return m ? publicOptions(m) : [];
+  };
 
   function followRun(module: string): void {
     streamRef.current?.();
@@ -178,17 +189,22 @@ export function ModulesSection({ targetId }: { targetId: string }) {
           {run.lines.length > 0 && <pre className="small">{run.lines.join("\n")}</pre>}
         </div>
       )}
-      {nodeCards.map((c) => (
+      {nodeCards.map((c) => {
+        const options = publicOptionsFor(c.id);
+        return (
         <ModuleCardView key={c.id} card={c} busy={busy} onToggle={() => toggle(c, "node")}>
-          {c.state === "on" && publicGateways.length > 0 && (
+          {c.state === "on" && publicGateways.length > 0 && options.length > 0 && (
             <PublicChoice
+              moduleId={c.id}
+              options={options}
               value={nodeEnabled.find((m) => m.id === c.id)?.public ?? ""}
               disabled={busy}
               onChange={(v) => void submit(c.id, { enabled: true, public: v }, false)}
             />
           )}
         </ModuleCardView>
-      ))}
+        );
+      })}
       {boxCards.length > 0 && (
         <>
           <h3>Services on this box</h3>
@@ -241,7 +257,7 @@ export function ModuleCardView({
         <button
           type="button"
           className="btn btn-ghost module-toggle"
-          disabled={busy || card.state === "disabled"}
+          disabled={busy || (card.state === "disabled" && !on)}
           aria-label={`${on ? "Turn off" : "Turn on"} ${card.name}`}
           onClick={onToggle}
         >
@@ -270,30 +286,43 @@ export function ModuleCardView({
   );
 }
 
+// PublicChoice is the Public radio (spec D11). Its options are the ones the
+// catalog says the module offers; the posting warning shows while "Public
+// reads and posting" is the selected option. The selection is held locally
+// so it reflects the click before the saved wire is re-read.
 function PublicChoice({
+  moduleId,
+  options,
   value,
   disabled,
   onChange,
 }: {
+  moduleId: string;
+  options: typeof PUBLIC_OPTIONS;
   value: api.ModulePublic;
   disabled: boolean;
   onChange: (v: api.ModulePublic) => void;
 }) {
+  const [selected, setSelected] = useState<api.ModulePublic>(value);
+  useEffect(() => setSelected(value), [value]);
   return (
     <fieldset className="module-public">
-      {PUBLIC_OPTIONS.map((o) => (
+      {options.map((o) => (
         <label key={o.value || "local"}>
           <input
             type="radio"
-            name="module-public"
-            checked={value === o.value}
+            name={`module-public-${moduleId}`}
+            checked={selected === o.value}
             disabled={disabled}
-            onChange={() => onChange(o.value)}
+            onChange={() => {
+              setSelected(o.value);
+              onChange(o.value);
+            }}
           />{" "}
           {o.label}
         </label>
       ))}
-      <p className="small warn">{POST_WARNING}</p>
+      {selected === "post" && <p className="small warn">{POST_WARNING}</p>}
     </fieldset>
   );
 }

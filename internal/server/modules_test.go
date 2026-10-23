@@ -599,3 +599,21 @@ func TestSetModulePublicOnlyDuringJob409(t *testing.T) {
 		t.Fatal("the refused change left the slot held")
 	}
 }
+
+// A node module's public options come from its method classes: reads make
+// "read" offerable, writes make "post" offerable. Other placements have none.
+func TestCatalogModulePublicOptions(t *testing.T) {
+	fakeModules(t)
+	a := newAPITestServer(t)
+	got := decodeJSON[struct {
+		Modules []catalogModule `json:"modules"`
+	}](t, a.do(t, "GET", "/api/catalog", nil))
+	if p := strings.Join(got.Modules[0].Public, ","); p != "read,post" {
+		t.Fatalf("msgboard public = %q", p)
+	}
+	for _, m := range got.Modules[1:] {
+		if m.Public == nil || len(m.Public) != 0 {
+			t.Fatalf("%s public = %#v, want []", m.ID, m.Public)
+		}
+	}
+}

@@ -206,6 +206,10 @@ type gatewayView struct {
 	ContainerName string                  `json:"containerName"`
 	Placement     config.GatewayPlacement `json:"placement"`
 
+	// Tier is catalog.GatewayTier: "local", "private" or "public". The UI
+	// reads it rather than re-deriving it from the TLS settings.
+	Tier string `json:"tier"`
+
 	// Status is ops.ContainerStatus verbatim (untagged, so PascalCase on the
 	// wire), matching containerView.
 	Status ops.ContainerStatus `json:"status"`
@@ -522,6 +526,7 @@ func (s *Server) gatewayViewFor(r *http.Request, cfg config.Config, gw config.Ga
 		Label:         gatewayLabel(gw),
 		ContainerName: ops.ERPCContainerNameFor(gw.ID),
 		Placement:     gw.Placement,
+		Tier:          string(catalog.GatewayTier(gw.Config)),
 		Config:        redactedGatewayConfig(gw.Config, keys),
 		Status:        ops.ContainerStatus{ID: "erpc:" + gw.ID, ContainerName: ops.ERPCContainerNameFor(gw.ID), State: ops.StateUnknown},
 		// The gateway owns no volumes and no host files it may delete: its

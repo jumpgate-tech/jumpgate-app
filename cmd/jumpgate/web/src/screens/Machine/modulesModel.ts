@@ -65,8 +65,11 @@ export function moduleCards(cat: Catalog, place: ModulePlacement, ctx: ModuleCtx
     .map((m) => {
       const row = appliesRow(m, place, ctx);
       const on = ctx.enabled.includes(m.id);
+      // A module that is on always shows as on, so it can be turned off even
+      // when the catalog no longer lets it be turned on here.
       let state: ModuleCardState;
-      if (row?.ok) state = on ? "on" : "off";
+      if (on) state = "on";
+      else if (row?.ok) state = "off";
       else if (row?.reason) state = "disabled";
       else state = "hidden";
       const card: ModuleCard = {
@@ -78,7 +81,7 @@ export function moduleCards(cat: Catalog, place: ModulePlacement, ctx: ModuleCtx
         docsStep: m.docsStep,
         resources: resourcesLine(m.resources),
       };
-      if (state === "disabled") card.reason = row!.reason;
+      if (!row?.ok && row?.reason) card.reason = row.reason;
       if (m.siteUrl) card.siteUrl = m.siteUrl;
       if (place === "node" && ctx.client) {
         card.restartLine = `This restarts ${ctx.client} on ${ctx.box ?? "this box"}. The beacon keeps running.`;
@@ -123,8 +126,8 @@ export function statusLine(m: CatalogModule, s: ModuleStatus | undefined, ctx: M
   }
   if (m.placement !== "node") return "";
   const snap = ctx.snapshot;
-  if (snap && !snap.execActive) return "Node stopped";
   if (!on) return s?.served ? "Served but not set by jumpgate" : "";
+  if (snap && !snap.execActive) return "Node stopped";
   if (!s?.served) {
     const now = ctx.now ?? Date.now();
     if (ctx.restartedAt !== undefined && now - ctx.restartedAt < STARTING_GRACE_MS) return "Starting";
@@ -200,25 +203,28 @@ export function boxFields(id: string): BoxField[] {
   return BOX_FIELDS[id] ?? [];
 }
 
-// publicGatewayRefs lists the gateways with a publicly trusted (ACME) TLS
-// front that route to this node — the condition for the Public radio. It
-// mirrors catalog.GatewayTier's "public" case, which /api/gateways does not
-// expose on its own.
+// publicGatewayRefs lists the Public-tier gateways that route to this node —
+// the condition for the Public radio. The tier is the server's
+// (catalog.GatewayTier on /api/gateways), never re-derived here.
 export function publicGatewayRefs(
-  gateways: {
-    id: string;
-    config: { TLS?: { Enabled: boolean; CertSource: string } | null; Networks: GatewayNetwork[] | null };
-  }[],
+  gateways: { id: string; tier?: string; config: { Networks: GatewayNetwork[] | null } }[],
   targetId: string,
 ): string[] {
   return gateways
     .filter(
       (g) =>
-        !!g.config.TLS?.Enabled &&
-        g.config.TLS.CertSource === "acme" &&
+        g.tier === "public" &&
         (g.config.Networks ?? []).some((n) =>
           n.Upstreams.some((u) => u.Kind === "managed-node" && u.TargetID === targetId),
         ),
     )
     .map((g) => g.id);
+}
+
+// publicOptions is the Public radio for a module: "Local only" plus the
+// exposure choices the catalog says it offers. Empty means no radio.
+export function publicOptions(m: CatalogModule): typeof PUBLIC_OPTIONS {
+  const offered = m.public ?? [];
+  if (offered.length === 0) return [];
+  return PUBLIC_OPTIONS.filter((o) => o.value === "" || offered.includes(o.value));
 }

@@ -92,6 +92,9 @@ export interface CatalogModule {
   resources: { ramBytes: number; diskBytes: number };
   applies: CatalogModuleApplies[];
   methods: { name: string; class: string }[];
+  // public is the exposure choices ("read", "post") a node module offers
+  // behind a Public-tier gateway. Optional: older servers omit it.
+  public?: ("read" | "post")[];
 }
 
 export interface ModuleAlert {
@@ -959,6 +962,9 @@ export interface TlsVerification {
 export interface GatewayView {
   id: string;
   label: string;
+  // tier is catalog.GatewayTier, from the server. Optional: older servers
+  // omit it.
+  tier?: "local" | "private" | "public";
   containerName: string;
   placement: GatewayPlacement;
   status: ContainerStatus;

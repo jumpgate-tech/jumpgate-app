@@ -35,6 +35,10 @@ type catalogModule struct {
 	Resources catalogResources `json:"resources"`
 	Applies   []catalogApplies `json:"applies"`
 	Methods   []catalogMethod  `json:"methods"`
+	// Public is the public-exposure choices a node module offers behind a
+	// public gateway, from its method classes: "read" when it has reads,
+	// "post" when it has writes. Never null; empty for other placements.
+	Public []string `json:"public"`
 }
 
 type catalogResources struct {
@@ -70,9 +74,19 @@ func catalogModules(networks []catalog.Network) []catalogModule {
 			Resources: catalogResources{RAMBytes: m.Resources.RAMBytes, DiskBytes: m.Resources.DiskBytes},
 			Applies:   []catalogApplies{},
 			Methods:   []catalogMethod{},
+			Public:    []string{},
 		}
+		var hasRead, hasWrite bool
 		for _, mm := range m.Methods {
 			cm.Methods = append(cm.Methods, catalogMethod{Name: mm.Name, Class: string(mm.Class)})
+			hasRead = hasRead || mm.Class == catalog.MethodRead
+			hasWrite = hasWrite || mm.Class == catalog.MethodWrite
+		}
+		if m.Placement == catalog.PlaceNode && hasRead {
+			cm.Public = append(cm.Public, "read")
+			if hasWrite {
+				cm.Public = append(cm.Public, "post")
+			}
 		}
 		row := func(chain int, client string) {
 			ok, reason := m.Applies(chain, client)

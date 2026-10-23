@@ -6,6 +6,7 @@ import {
   gatewayModuleCards,
   moduleCards,
   publicGatewayRefs,
+  publicOptions,
   resourcesLine,
   statusLine,
   type ModuleCtx,
@@ -228,17 +229,45 @@ describe("helpers", () => {
     expect(boxFields("watch")).toEqual([]);
   });
 
-  test("public gateways referencing a node", () => {
-    const gw = (id: string, acme: boolean, target: string) => ({
+  test("public gateways referencing a node (server-provided tier)", () => {
+    const gw = (id: string, tier: "local" | "private" | "public", target: string) => ({
       id,
+      tier,
       config: {
-        ProjectID: "",
-        BindAddr: "",
-        Port: 0,
-        TLS: acme ? { Enabled: true, CertSource: "acme" } : null,
+        // TLS deliberately says nothing: the tier is the server's verdict.
         Networks: [{ ChainID: 369, Upstreams: [{ ID: "u", Kind: "managed-node" as const, TargetID: target, Endpoint: "", Local: true, RecentOnly: false }] }],
       },
     });
-    expect(publicGatewayRefs([gw("a", true, "t1"), gw("b", false, "t1"), gw("c", true, "t2")], "t1")).toEqual(["a"]);
+    expect(
+      publicGatewayRefs([gw("a", "public", "t1"), gw("b", "private", "t1"), gw("c", "public", "t2"), gw("d", "local", "t1")], "t1"),
+    ).toEqual(["a"]);
+  });
+
+  test("public options come from the catalog", () => {
+    expect(publicOptions({ ...MSGBOARD, public: ["read", "post"] }).map((o) => o.value)).toEqual(["", "read", "post"]);
+    expect(publicOptions({ ...MSGBOARD, public: ["read"] }).map((o) => o.value)).toEqual(["", "read"]);
+    expect(publicOptions({ ...MSGBOARD, public: [] })).toEqual([]);
+    expect(publicOptions(MSGBOARD)).toEqual([]);
+  });
+});
+
+describe("fix round 1", () => {
+  test("an on module whose row is now disabled can still be turned off", () => {
+    const [c] = moduleCards(CAT, "node", ctx({ client: "go-pulse", enabled: ["msgboard"] }));
+    expect(c.state).toBe("on");
+    expect(c.reason).toBe(GO_PULSE_REASON);
+    const [h] = moduleCards(CAT, "node", ctx({ chainId: 1, enabled: ["msgboard"] }));
+    expect(h.state).toBe("on");
+  });
+
+  test("Node stopped only for a module that is on", () => {
+    const stopped = snap({ execActive: false });
+    expect(statusLine(MSGBOARD, st({ served: false }), ctx({ snapshot: stopped }))).toBe("");
+    expect(statusLine(MSGBOARD, st({ served: false }), ctx({ snapshot: stopped, enabled: ["msgboard"] }))).toBe("Node stopped");
+  });
+
+  test("restart line names the box", () => {
+    const [c] = moduleCards(CAT, "node", ctx({ box: "203.0.113.9" }));
+    expect(c.restartLine).toBe("This restarts reth on 203.0.113.9. The beacon keeps running.");
   });
 });

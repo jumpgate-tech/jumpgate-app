@@ -33,6 +33,7 @@ function mod(id: string, placement: CatalogModule["placement"], name: string, ap
     resources: { ramBytes: 256_000_000, diskBytes: 0 },
     applies,
     methods: [],
+    public: id === "msgboard" ? ["read", "post"] : [],
   };
 }
 
@@ -61,6 +62,8 @@ function target(exec = "reth", modules?: api.NodeModule[]): Target {
 function gateway(acme: boolean): GatewayView {
   return {
     id: "gw1",
+    // The TLS below is left contradicting nothing on purpose; the UI reads tier.
+    tier: acme ? "public" : "private",
     config: {
       ProjectID: "p",
       BindAddr: "",
@@ -106,7 +109,7 @@ describe("ModulesSection", () => {
     setup(target());
     await screen.findByText("Message board");
     fireEvent.click(card("msgboard").querySelector("button.module-toggle")!);
-    expect(await screen.findByText("This restarts reth on t1. The beacon keeps running.")).toBeTruthy();
+    expect(await screen.findByText("This restarts reth on this machine. The beacon keeps running.")).toBeTruthy();
     expect(api.setModule).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
     await waitFor(() => expect(api.setModule).toHaveBeenCalledWith("t1", "msgboard", { enabled: true, public: "" }));
@@ -152,9 +155,37 @@ describe("ModulesSection", () => {
 
     setup(target("reth", [{ id: "msgboard" }]), { gateways: [gateway(true)] });
     expect(await screen.findByLabelText("Public reads")).toBeTruthy();
+    const warning = "Anyone can post through your node. Posts cost the sender proof of work, not you.";
+    expect(screen.queryByText(warning)).toBeNull();
     fireEvent.click(screen.getByLabelText("Public reads and posting"));
-    expect(screen.getByText("Anyone can post through your node. Posts cost the sender proof of work, not you.")).toBeTruthy();
+    expect(screen.getByText(warning)).toBeTruthy();
     await waitFor(() => expect(api.setModule).toHaveBeenCalledWith("t1", "msgboard", { enabled: true, public: "post" }));
+  });
+
+  it("shows no Public radio for a module that offers no public exposure", async () => {
+    setup(target("reth", [{ id: "msgboard" }]), { gateways: [gateway(true)] });
+    cleanup();
+    vi.mocked(api.getCatalog).mockResolvedValue({
+      ...CATALOG,
+      modules: CATALOG.modules!.map((m) => (m.id === "msgboard" ? { ...m, public: [] } : m)),
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ModulesSection targetId="t1" />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("Message board");
+    await waitFor(() => expect(api.getGateways).toHaveBeenCalled());
+    expect(screen.queryByLabelText("Public reads")).toBeNull();
+  });
+
+  it("always lets an on module be turned off, even when it no longer applies", async () => {
+    setup(target("go-pulse", [{ id: "msgboard" }]));
+    const btn = await screen.findByRole("button", { name: "Turn off Message board" });
+    expect((btn as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(btn);
+    await waitFor(() => expect(api.setModule).toHaveBeenCalledWith("t1", "msgboard", { enabled: false }));
   });
 
   it("says the gate is too old and keeps the toggle usable", async () => {
