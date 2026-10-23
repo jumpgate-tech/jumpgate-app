@@ -8,6 +8,8 @@ import (
 	"net"
 	"strconv"
 	"strings"
+
+	"github.com/valve-tech/jumpgate/internal/catalog"
 )
 
 var (
@@ -22,6 +24,42 @@ var (
 	// ErrNetworkDenied is a chain the key is not scoped to.
 	ErrNetworkDenied = errors.New("relay: chain not allowed for this key")
 )
+
+// moduleWrites and moduleStreams are the catalog's module method tables,
+// behind package vars so tests can stand in a fake module.
+var (
+	moduleWrites  = catalog.ModuleWriteMethods
+	moduleStreams = catalog.ModuleStreamMethods
+)
+
+// moduleGrantError is a module write the key does not name. It is still an
+// ErrMethodDenied, but its message is shown to the caller verbatim, because
+// "method not allowed" alone would not say how to fix it.
+type moduleGrantError struct{ method string }
+
+func (e moduleGrantError) Error() string { return ErrMethodDenied.Error() + ": " + e.message() }
+func (e moduleGrantError) Unwrap() error { return ErrMethodDenied }
+func (e moduleGrantError) message() string {
+	return e.method + " needs to be on this key's method allow list"
+}
+
+// DeniedMessage returns the caller-facing text for a refusal that carries its
+// own, and false for every other refusal, which keeps its fixed body.
+func DeniedMessage(err error) (string, bool) {
+	var g moduleGrantError
+	if errors.As(err, &g) {
+		return g.message(), true
+	}
+	return "", false
+}
+
+// deniedBody is the refusal text for a CheckMethods error.
+func deniedBody(err error) string {
+	if msg, ok := DeniedMessage(err); ok {
+		return msg
+	}
+	return "method not allowed for this key"
+}
 
 // traceNamespaces are the expensive namespaces that AllowTrace gates as a pair.
 // An operator should not have to enumerate every trace method one at a time to
@@ -99,12 +137,39 @@ func checkOneMethod(rec KeyRecord, method string) error {
 	if !rec.AllowTrace && inTraceNamespace(method) {
 		return fmt.Errorf("%w: %s needs allow_trace", ErrMethodDenied, method)
 	}
+	// A module write gossips or changes node state, so the empty allow list's
+	// "everything" never covers it: the key has to name it. The lookup folds
+	// case, because eRPC folds method case in places (architecture/evm/hooks.go)
+	// and a write spelled Msgboard_addMessage must not slip through.
+	if isModuleWrite(method) && !containsFold(rec.MethodAllow, method) {
+		return moduleGrantError{method: method}
+	}
 	// An empty allow list means "everything except the block list", so a key
 	// with no policy still works. A non-empty one is exclusive.
 	if len(rec.MethodAllow) > 0 && !containsExact(rec.MethodAllow, method) {
 		return fmt.Errorf("%w: %s is not on the allow list", ErrMethodDenied, method)
 	}
 	return nil
+}
+
+// isModuleWrite reports whether method, in any case, is a module write.
+func isModuleWrite(method string) bool {
+	for w := range moduleWrites() {
+		if strings.EqualFold(w, method) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsFold is containsExact ignoring case.
+func containsFold(list []string, want string) bool {
+	for _, item := range list {
+		if strings.EqualFold(item, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // inTraceNamespace reports whether a method belongs to trace or debug. It

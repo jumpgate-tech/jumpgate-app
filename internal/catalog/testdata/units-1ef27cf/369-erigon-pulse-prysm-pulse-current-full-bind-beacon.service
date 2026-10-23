@@ -1,0 +1,25 @@
+[Unit]
+Description=jumpgate-node beacon client (prysm-pulse)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jumpgate-node
+Group=jumpgate-node
+ExecStart=prysm-pulse --datadir=/var/lib/jumpgate-node/369/beacondata --execution-endpoint=http://127.0.0.1:8551 --jwt-secret=/var/lib/jumpgate-node/369/jwt.hex --checkpoint-sync-url=https://checkpoint.pulsechain.com --genesis-beacon-api-url=https://checkpoint.pulsechain.com --rpc-host=127.0.0.1 --grpc-gateway-host=100.64.0.7 --grpc-gateway-port=5052 --pulsechain
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/jumpgate-node/369
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

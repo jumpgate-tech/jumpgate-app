@@ -11,6 +11,7 @@ package ops
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"path"
@@ -240,6 +241,11 @@ func DiskUsage(ctx context.Context, e executor.Executor, w catalog.WireConfig) (
 	du.GenesisSyncLabel = net.GenesisSyncLabel
 
 	expectedExec, err := catalog.ExpectedBytes(w.ChainID, w.Archive)
+	if errors.Is(err, catalog.ErrNoSizeGuidance) {
+		// No published size for this chain: report no expectation (0)
+		// rather than fail the whole disk readout.
+		err = nil
+	}
 	if err != nil {
 		return du, fmt.Errorf("ops: du: %w", err)
 	}

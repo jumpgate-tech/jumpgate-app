@@ -36,6 +36,7 @@ import { AttentionStrip } from "./AttentionStrip";
 import { NetworksPanel } from "./Chains";
 import { KeysSection } from "./KeysSection";
 import { ManageSection } from "./ManageSection";
+import { GatewayModules } from "./GatewayModules";
 import type { SettingsValues } from "./SettingsBlock";
 import {
   AddEndpointDialog,
@@ -491,6 +492,7 @@ export function GatewayCard({
         onAddDevnet={() => void addDevnetChain(1337)}
         onReprobe={() => void onReprobe()}
       />
+      <GatewayModules gw={gw} />
       <KeysSection
         gid={gid}
         open={keysOpen}

@@ -85,6 +85,15 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, env intent.Envelo
 		}
 		return mustJSON(info), intent.StatusOK, nil
 	}
+	// modules.read reads the box modules' sidecars, not node.json: a box
+	// may run modules and no node.
+	if i.Kind == intent.KindModulesRead {
+		mods := monitor.ProbeBoxModules(ctx, a.cfg.Exec)
+		if mods == nil {
+			mods = []monitor.ModuleStatus{}
+		}
+		return mustJSON(mods), intent.StatusOK, nil
+	}
 	// A job kind needs no node set up: node.migrate-names reports a missing
 	// node.json itself, in its preflight.
 	if isJobKind(i.Kind) {

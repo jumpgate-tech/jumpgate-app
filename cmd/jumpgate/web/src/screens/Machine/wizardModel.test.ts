@@ -5,6 +5,7 @@ import {
   archiveTierTB,
   ARCHIVE_SIZE_BASIS,
   buildStartSetupRequest,
+  wizardModules,
   checkFit,
   clientOptionLabel,
   clientProvider,
@@ -91,7 +92,7 @@ describe("constants — byte-exact with wizard.ts", () => {
   });
 
   it("network order and badges", () => {
-    expect(NETWORK_ORDER).toEqual([369, 943, 1]);
+    expect(NETWORK_ORDER).toEqual([369, 943, 1, 560048]);
     expect(NETWORK_BADGE).toEqual({ 369: "default", 943: "practise here first" });
   });
 
@@ -530,5 +531,64 @@ describe("runAllDone / runAnyError", () => {
   it("reports any error regardless of which step it's on", () => {
     expect(runAnyError([{ stepId: "preflight", err: "boom" }])).toBe(true);
     expect(runAnyError([{ stepId: "preflight", line: "ok" }])).toBe(false);
+  });
+});
+
+describe("wizard modules", () => {
+  const CAT_MODS: Catalog = {
+    networks: [],
+    clients: [],
+    modules: [
+      {
+        id: "msgboard",
+        name: "Message board",
+        summary: "",
+        siteUrl: "",
+        docsStep: "msgboard-enable",
+        placement: "node",
+        resources: { ramBytes: 0, diskBytes: 0 },
+        applies: [
+          { chainId: 369, client: "reth", ok: true, beta: false },
+          { chainId: 369, client: "go-pulse", ok: false, beta: false, reason: "needs reth" },
+        ],
+        methods: [],
+      },
+    ],
+  };
+
+  it("keeps modules the chosen client supports", () => {
+    expect(wizardModules(CAT_MODS, 369, "reth", [{ id: "msgboard", public: "read" }])).toEqual({
+      modules: [{ id: "msgboard", public: "read" }],
+      notices: [],
+    });
+  });
+
+  it("drops a module on client change, with the D10 notice", () => {
+    expect(wizardModules(CAT_MODS, 369, "go-pulse", [{ id: "msgboard" }])).toEqual({
+      modules: [],
+      notices: ["The message board will be turned off: go-pulse does not support it."],
+    });
+  });
+
+  it("sends Modules only when some are on", () => {
+    const base = {
+      chainId: 369,
+      execId: "reth",
+      beaconId: "lighthouse",
+      archive: false,
+      dataDir: "",
+      jwtPath: "",
+      execHTTPPort: "",
+      beaconHTTPPort: "",
+      execP2PPort: "",
+      rpcBindAddr: "",
+      checkpoint: true,
+      checkpointUrl: "",
+      execSnapshot: false,
+      snapshotKey: "",
+    };
+    expect(buildStartSetupRequest(base).Modules).toBeUndefined();
+    expect(buildStartSetupRequest({ ...base, modules: [] }).Modules).toBeUndefined();
+    expect(buildStartSetupRequest({ ...base, modules: [{ id: "msgboard" }] }).Modules).toEqual([{ id: "msgboard" }]);
   });
 });

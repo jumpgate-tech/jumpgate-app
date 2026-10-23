@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -1483,5 +1484,23 @@ func TestTrustNeedsRootMessageOnWindows(t *testing.T) {
 	}
 	if got := trustNeedsRootMessage("linux", "box"); !strings.Contains(got, "sudo") {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// The gateway view carries catalog.GatewayTier, so the UI never re-derives it.
+func TestGatewayViewCarriesTier(t *testing.T) {
+	a := gatewayServer(t)
+	view := addGateway(t, a, "default", "local", catalog.GatewayConfig{Port: 4100})
+	if view.Tier != "local" {
+		t.Fatalf("tier = %q, want local", view.Tier)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw, _ := cfg.FindGateway("default")
+	gw.Config.TLS = &catalog.GatewayTLS{Enabled: true, Hostname: "gw.example.com", CertSource: catalog.CertACME}
+	if got := a.srv.gatewayViewFor(httptest.NewRequest("GET", "/api/gateways", nil), cfg, gw, map[string]dockerView{}).Tier; got != "public" {
+		t.Fatalf("acme tier = %q, want public", got)
 	}
 }

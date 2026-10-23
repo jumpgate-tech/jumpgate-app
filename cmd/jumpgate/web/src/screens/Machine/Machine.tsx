@@ -30,6 +30,7 @@ import { Footer } from "../../components/Footer";
 import { SetupWizard } from "./SetupWizard";
 import { DashboardSection } from "./DashboardSection";
 import { LogsSection } from "./LogsSection";
+import { ModulesSection } from "./ModulesSection";
 import { ServicesSection } from "./ServicesSection";
 
 function formatError(err: unknown): string {
@@ -68,6 +69,20 @@ const SECTIONS: SectionDef[] = [
       </span>
     ),
     Component: DashboardSection,
+  },
+  {
+    key: "modules",
+    title: "Modules",
+    // Box modules need no node, so this is offered before setup too.
+    status: (t) => {
+      const on = (t.wire?.Modules?.length ?? 0) + (t.modules?.length ?? 0);
+      return (
+        <span className="muted small">
+          {on > 0 ? `${on} on` : t.wire ? "add-ons for this node and box" : "services on this box"}
+        </span>
+      );
+    },
+    Component: ModulesSection,
   },
   {
     key: "logs",

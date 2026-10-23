@@ -1,0 +1,25 @@
+[Unit]
+Description=jumpgate-node beacon client (lighthouse-pulse)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jumpgate-node
+Group=jumpgate-node
+ExecStart=lighthouse-pulse bn --network pulsechain --datadir /var/lib/jumpgate-node/369/beacon --execution-endpoint http://127.0.0.1:8551 --execution-jwt /var/lib/jumpgate-node/369/jwt.hex --checkpoint-sync-url https://checkpoint.pulsechain.com --genesis-beacon-api-url https://checkpoint.pulsechain.com --http --http-address 127.0.0.1 --http-port 5052
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/jumpgate-node/369
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

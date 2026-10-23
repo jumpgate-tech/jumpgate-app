@@ -39,6 +39,10 @@ var frozenTargetRoutes = []string{
 	"POST /api/targets/{id}/services/{svc}/{action}",
 	"POST /api/targets/{id}/setup",
 	"PUT /api/targets/{id}/containers/{svc}/config",
+	// Modules (plan 2026-10-23, Task 8): a module change is a setup run, so
+	// it sits beside .../setup, and its status beside it.
+	"GET /api/targets/{id}/modules",
+	"PUT /api/targets/{id}/modules/{module}",
 }
 
 func TestLegacyTargetRoutesAreFrozen(t *testing.T) {

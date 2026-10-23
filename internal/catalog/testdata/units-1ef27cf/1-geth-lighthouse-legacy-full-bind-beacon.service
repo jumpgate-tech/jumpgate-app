@@ -1,0 +1,25 @@
+[Unit]
+Description=valve-node-app beacon client (lighthouse)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=valve-node-app
+Group=valve-node-app
+ExecStart=lighthouse bn --network mainnet --datadir /var/lib/valve-node-app/1/beacon --execution-endpoint http://127.0.0.1:8551 --execution-jwt /var/lib/valve-node-app/1/jwt.hex --checkpoint-sync-url https://beaconstate.ethstaker.cc --genesis-beacon-api-url https://beaconstate.ethstaker.cc --http --http-address 100.64.0.7 --http-port 5052
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/valve-node-app/1
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

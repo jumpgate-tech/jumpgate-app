@@ -59,6 +59,121 @@ export interface CatalogClient {
 export interface Catalog {
   networks: Network[];
   clients: CatalogClient[];
+  // modules is optional only because a server that predates modules omits it.
+  modules?: CatalogModule[];
+}
+
+// ---------------------------------------------------------------------
+// modules (internal/server/modules.go)
+// ---------------------------------------------------------------------
+
+export type ModulePlacement = "node" | "box" | "gateway";
+
+// CatalogModuleApplies is Module.Applies evaluated by the server for one
+// (chain, client) pair. The UI never re-derives it: ok false with no reason
+// hides the toggle; a reason disables it and is shown verbatim. Box and
+// gateway rows carry client ""; a chain-agnostic box module has a chainId 0
+// row.
+export interface CatalogModuleApplies {
+  chainId: number;
+  client: string;
+  ok: boolean;
+  beta: boolean;
+  reason?: string;
+}
+
+export interface CatalogModule {
+  id: string;
+  name: string;
+  summary: string;
+  siteUrl: string;
+  docsStep: string;
+  placement: ModulePlacement;
+  resources: { ramBytes: number; diskBytes: number };
+  applies: CatalogModuleApplies[];
+  methods: { name: string; class: string }[];
+  // public is the exposure choices ("read", "post") a node module offers
+  // behind a Public-tier gateway. Optional: older servers omit it.
+  public?: ("read" | "post")[];
+}
+
+export interface ModuleAlert {
+  key: string;
+  message: string;
+  since: string;
+  cleared?: string | null;
+}
+
+// ModuleStatus is monitor.ModuleStatus: observed, never read from config.
+export interface ModuleStatus {
+  id: string;
+  instance?: string;
+  served: boolean;
+  active: boolean;
+  accepting: boolean;
+  count: number;
+  size: number;
+  headBlock: number;
+  identity?: string;
+  alerts?: ModuleAlert[];
+  error?: string;
+}
+
+export interface ModulesResponse {
+  modules: ModuleStatus[];
+  // gateStale: a paired gate too old to answer modules.read; message then
+  // carries "Status needs a newer gate on this box".
+  gateStale: boolean;
+  message: string;
+}
+
+export function listModules(id: string): Promise<ModulesResponse> {
+  return request<ModulesResponse>(`/api/targets/${encodeURIComponent(id)}/modules`);
+}
+
+export type ModulePublic = "" | "read" | "post";
+
+export interface SetModuleRequest {
+  enabled: boolean;
+  public?: ModulePublic;
+  // Box modules only. Zero/empty means the module's default.
+  chainId?: number;
+  port?: number;
+  bindAddr?: string;
+  extIp?: string;
+  upstreams?: string[];
+  webhook?: string;
+}
+
+// SetModuleResult: "started" (202, follow the setup stream), "saved" (200, a
+// public-only change), or "saved-gateways-failed" (502: the change is saved
+// but some referencing gateways failed to re-provision).
+export interface SetModuleResult {
+  status: "started" | "saved" | "saved-gateways-failed";
+  gateways?: string[];
+  failed?: { id: string; error: string }[];
+}
+
+export async function setModule(id: string, module: string, body: SetModuleRequest): Promise<SetModuleResult> {
+  const path = `/api/targets/${encodeURIComponent(id)}/modules/${encodeURIComponent(module)}`;
+  const init = { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(body) };
+  // A 502 here is not a failure of the change itself: its body says what was
+  // saved and which gateways failed, so it is read rather than thrown.
+  const res = await fetch(path, init);
+  if (res.status === 502) {
+    const body = (await res.clone().json().catch(() => null)) as SetModuleResult | null;
+    if (body && body.status === "saved-gateways-failed") return body;
+  }
+  if (!res.ok) throw await apiError(res);
+  const text = await res.text();
+  return text ? (JSON.parse(text) as SetModuleResult) : { status: "started" };
+}
+
+export function setGatewayModule(gid: string, module: string, enabled: boolean): Promise<{ status: string; targetId: string }> {
+  return request<{ status: string; targetId: string }>(
+    `/api/gateways/${encodeURIComponent(gid)}/modules/${encodeURIComponent(module)}`,
+    { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ enabled }) },
+  );
 }
 
 export interface Host {
@@ -106,6 +221,24 @@ export interface WireConfig {
   // loopback (the default); set to a routable address (e.g. a Tailscale IP)
   // to reach the node's RPC from another machine.
   RPCBindAddr?: string;
+  // Modules are the node modules on this node's execution client. Omitted
+  // when none are on.
+  Modules?: NodeModule[];
+}
+
+export interface NodeModule {
+  id: string;
+  public?: ModulePublic;
+}
+
+export interface BoxModule {
+  id: string;
+  chainId?: number;
+  port?: number;
+  bindAddr?: string;
+  extIp?: string;
+  upstreams?: string[];
+  webhook?: string;
 }
 
 export type TargetMode = "local" | "ssh";
@@ -115,6 +248,8 @@ export interface Target {
   mode: TargetMode;
   ssh?: SSHConfig;
   wire?: WireConfig;
+  // modules are the box modules on this target (config.Target.Modules).
+  modules?: BoxModule[];
 }
 
 export function listTargets(): Promise<Target[]> {
@@ -169,6 +304,9 @@ export interface StartSetupRequest {
   // operator opted in. SnapshotKey is the free key issued at valve.city.
   ExecSnapshot?: boolean;
   SnapshotKey?: string;
+  // Node modules to turn on in this first setup, so a new box gets them with
+  // no second restart.
+  Modules?: NodeModule[];
 }
 
 export interface DiskFree {
@@ -229,6 +367,8 @@ export interface Snapshot {
   diskKnown?: boolean;
   execActive: boolean;
   beaconActive: boolean;
+  // modules is omitted by a gate or server that predates modules (spec D8).
+  modules?: ModuleStatus[];
 }
 
 export function streamMonitor(id: string, onSnapshot: (s: Snapshot) => void): () => void {
@@ -699,6 +839,9 @@ export interface GatewayConfig {
   MetricsOff?: boolean;
   MetricsPort?: number;
   TLS?: GatewayTLS | null;
+  // Modules is the gateway-placement modules on this gateway (only the id is
+  // stored; routes are derived when the config renders).
+  Modules?: { id: string }[];
 }
 
 export interface GatewayPlacement {
@@ -819,6 +962,9 @@ export interface TlsVerification {
 export interface GatewayView {
   id: string;
   label: string;
+  // tier is catalog.GatewayTier, from the server. Optional: older servers
+  // omit it.
+  tier?: "local" | "private" | "public";
   containerName: string;
   placement: GatewayPlacement;
   status: ContainerStatus;
@@ -1675,25 +1821,28 @@ const JSON_HEADERS = { "Content-Type": "application/json" };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
-  if (!res.ok) {
-    let message = res.statusText || `HTTP ${res.status}`;
-    let hint: string | undefined;
-    let code: string | undefined;
-    try {
-      const body = (await res.json()) as { error?: string; hint?: string; code?: string };
-      if (body && typeof body.error === "string" && body.error) {
-        message = body.error;
-      }
-      if (body && typeof body.hint === "string" && body.hint) hint = body.hint;
-      if (body && typeof body.code === "string" && body.code) code = body.code;
-    } catch {
-      // body wasn't JSON (or was empty) — fall back to statusText.
-    }
-    throw new ApiError(res.status, message, hint, code);
-  }
+  if (!res.ok) throw await apiError(res);
   if (res.status === 204) {
     return undefined as T;
   }
   const text = await res.text();
   return text ? (JSON.parse(text) as T) : (undefined as T);
+}
+
+// apiError reads a failed response's {error, hint, code} body into an ApiError.
+async function apiError(res: Response): Promise<ApiError> {
+  let message = res.statusText || `HTTP ${res.status}`;
+  let hint: string | undefined;
+  let code: string | undefined;
+  try {
+    const body = (await res.json()) as { error?: string; hint?: string; code?: string };
+    if (body && typeof body.error === "string" && body.error) {
+      message = body.error;
+    }
+    if (body && typeof body.hint === "string" && body.hint) hint = body.hint;
+    if (body && typeof body.code === "string" && body.code) code = body.code;
+  } catch {
+    // body wasn't JSON (or was empty) — fall back to statusText.
+  }
+  return new ApiError(res.status, message, hint, code);
 }

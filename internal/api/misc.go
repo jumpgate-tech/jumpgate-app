@@ -83,4 +83,33 @@ type GatewaySummary struct {
 	LocalBaseURL string           `json:"localBaseUrl,omitempty"`
 	Networks     []GatewayNetwork `json:"networks"`
 	Warnings     []string         `json:"warnings,omitempty"`
+	// Tier is the server's catalog.GatewayTier: "local", "private" or
+	// "public". Clients read it, never re-derive it.
+	Tier string `json:"tier"`
+	// Config is the part of the stored config a client needs: which
+	// machines each chain's upstreams route to.
+	Config struct {
+		Networks []struct {
+			Upstreams []GatewayUpstreamRef
+		}
+	} `json:"config"`
+}
+
+// GatewayUpstreamRef is one upstream's kind and managed machine, as stored
+// (catalog.GatewayUpstream's untagged names).
+type GatewayUpstreamRef struct {
+	Kind     string
+	TargetID string
+}
+
+// RoutesTo reports whether the gateway has a managed-node upstream on target.
+func (g GatewaySummary) RoutesTo(target string) bool {
+	for _, n := range g.Config.Networks {
+		for _, u := range n.Upstreams {
+			if u.Kind == "managed-node" && u.TargetID == target {
+				return true
+			}
+		}
+	}
+	return false
 }

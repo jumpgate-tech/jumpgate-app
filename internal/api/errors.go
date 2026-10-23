@@ -105,6 +105,10 @@ const (
 	CodeUnknownPlan Code = "unknown_plan"
 	// CodeJobKindNotAllowed: the server refuses to start a job kind outside its allowlist.
 	CodeJobKindNotAllowed Code = "job_kind_not_allowed"
+
+	// CodeModuleNotApplicable: the module does not run on that chain, client
+	// or gateway; the message is the module's own reason.
+	CodeModuleNotApplicable Code = "module_not_applicable"
 )
 
 // Exit classes: the CLI's process exit statuses, published in the README.
@@ -188,6 +192,7 @@ var registry = map[Code]codeInfo{
 	CodeApprovalUnavailable: {"this decision needs an approval-tier signature (a hardware or browser wallet), which this jumpgate cannot make yet", ExitUsage},
 	CodeJobLogInvalid:       {"this job's history on the box does not verify against the box's agent key: do not act on it; inspect /var/lib/jumpgate/jobs on the box, and re-pair the box if its key changed", ExitSecurity},
 	CodeUnknownPlan:         {"this box's agent does not know that job's plan (it was downgraded?); re-pair the box to upgrade its agent", ExitFailed},
+	CodeModuleNotApplicable: {"Pick a chain and client the module supports; /api/catalog lists them.", ExitFailed},
 	CodeJobKindNotAllowed:   {"this server starts only the jobs it knows (for example `jumpgate migrate-names HOST`); other node operations have their own commands", ExitUsage},
 }
 

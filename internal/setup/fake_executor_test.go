@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +29,8 @@ type fakeExecutor struct {
 	calls []string // every command passed to Run, in call order
 	files map[string][]byte
 }
+
+var fakeMvPattern = regexp.MustCompile(`(?:mv -f|mv -T|install -o \S+ -g \S+ -m \d+) '([^']*)' '([^']*)'`)
 
 func newFakeExecutor() *fakeExecutor {
 	return &fakeExecutor{
@@ -54,6 +57,16 @@ func (f *fakeExecutor) Run(ctx context.Context, cmd string, opts *executor.RunOp
 
 	if key, err := f.matchErr(cmd); key != "" {
 		return executor.Result{}, err
+	}
+	// `mv -f 'src' 'dst'` and `install -o u -g g -m mode 'src' 'dst'` move
+	// the fake file, so staged writes land where a later ReadFile looks.
+	if m := fakeMvPattern.FindStringSubmatch(cmd); m != nil {
+		f.mu.Lock()
+		if b, ok := f.files[m[1]]; ok {
+			f.files[m[2]] = b
+			delete(f.files, m[1])
+		}
+		f.mu.Unlock()
 	}
 	if key, res := f.matchScript(cmd); key != "" {
 		if opts != nil && opts.Stream != nil {

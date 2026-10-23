@@ -364,6 +364,20 @@ func TestDiskUsage_MissingSubdirTreatedAsZeroNotError(t *testing.T) {
 	}
 }
 
+func TestDiskUsage_NoSizeGuidanceReportsZeroExpected(t *testing.T) {
+	w := catalog.WireConfig{ChainID: 560048, ExecID: "reth", BeaconID: "lighthouse", DataDir: "/mnt/reth"}
+	e := newFakeExecutor().
+		script("du -sb", executor.Result{Stdout: "1000\t/mnt/reth/db\n"}).
+		script("df -B1 --output=avail", executor.Result{Stdout: "9999999999\n"})
+	du, err := DiskUsage(context.Background(), e, w)
+	if err != nil {
+		t.Fatalf("DiskUsage on Hoodi: %v", err)
+	}
+	if du.ExpectedExecBytes != 0 {
+		t.Errorf("ExpectedExecBytes = %d, want 0 (no guidance)", du.ExpectedExecBytes)
+	}
+}
+
 func TestDiskUsage_UnknownChainErrors(t *testing.T) {
 	w := testWire()
 	w.ChainID = 9999

@@ -63,6 +63,10 @@ type WireConfig struct {
 	// valve.city, embedded in the manifest URL.
 	ExecSnapshot bool
 	SnapshotKey  string
+
+	// Modules are the node modules on this node's exec client. Empty
+	// renders exactly the units a wire without modules always rendered.
+	Modules []NodeModule `json:"Modules,omitempty"`
 }
 
 // checkpointURL resolves the effective beacon checkpoint/genesis endpoint:
@@ -186,6 +190,9 @@ func RenderUnits(w WireConfig) (execUnit, beaconUnit string, err error) {
 	if err := ValidateNames(w); err != nil {
 		return "", "", err
 	}
+	if err := ValidateModules(w); err != nil {
+		return "", "", err
+	}
 	net, ok := NetworkByChainID(w.ChainID)
 	if !ok {
 		return "", "", fmt.Errorf("catalog: unknown chain id %d", w.ChainID)
@@ -240,14 +247,20 @@ func RenderUnits(w WireConfig) (execUnit, beaconUnit string, err error) {
 }
 
 func renderUnit(description, execStart string, w WireConfig, netBindCap bool) (string, error) {
+	return renderServiceUnit(description, execStart, w.NodeNames(), w.DataDir, netBindCap)
+}
+
+// renderServiceUnit renders the one hardened unit template for any service
+// jumpgate runs under n's account: a node's two clients and every box module.
+func renderServiceUnit(description, execStart string, n NodeNames, dataDir string, netBindCap bool) (string, error) {
 	var buf bytes.Buffer
 	err := unitTmpl.Execute(&buf, unitVars{
 		Description: description,
 		ExecStart:   execStart,
-		Prefix:      w.NodeNames().Prefix,
-		User:        w.NodeNames().User,
-		Group:       w.NodeNames().Group,
-		DataDir:     w.DataDir,
+		Prefix:      n.Prefix,
+		User:        n.User,
+		Group:       n.Group,
+		DataDir:     dataDir,
 		NetBindCap:  netBindCap,
 	})
 	if err != nil {
@@ -277,7 +290,11 @@ func execCommand(w WireConfig) (string, error) {
 		if !w.Archive {
 			cmd += " --full"
 		}
-		return cmd, nil
+		tail, err := execModuleFlags(w)
+		if err != nil {
+			return "", err
+		}
+		return cmd + tail, nil
 
 	case "geth":
 		cmd := fmt.Sprintf(
@@ -286,6 +303,11 @@ func execCommand(w WireConfig) (string, error) {
 		)
 		if w.Archive {
 			cmd += " --gcmode archive"
+		}
+		// geth defaults to mainnet; Hoodi is selected by its own flag,
+		// appended last so every other chain's unit is unchanged.
+		if w.ChainID == 560048 {
+			cmd += " --hoodi"
 		}
 		return cmd, nil
 

@@ -25,6 +25,9 @@ vi.mock("./SetupWizard", () => ({
 vi.mock("./DashboardSection", () => ({
   DashboardSection: ({ targetId }: { targetId: string }) => <div>dashboard-mounted:{targetId}</div>,
 }));
+vi.mock("./ModulesSection", () => ({
+  ModulesSection: ({ targetId }: { targetId: string }) => <div>modules-mounted:{targetId}</div>,
+}));
 vi.mock("./LogsSection", () => ({
   LogsSection: ({ targetId }: { targetId: string }) => <div>logs-mounted:{targetId}</div>,
 }));
@@ -142,7 +145,7 @@ describe("Machine", () => {
       const titles = Array.from(document.querySelectorAll(".machine-section-title")).map(
         (el) => el.textContent,
       );
-      expect(titles).toEqual(["Setup", "Dashboard", "Logs", "Devnet"]);
+      expect(titles).toEqual(["Setup", "Dashboard", "Modules", "Logs", "Devnet"]);
     });
 
     it("renders the wired header status: network, both clients, and the archive badge", async () => {

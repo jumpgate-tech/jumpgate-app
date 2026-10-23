@@ -3,7 +3,8 @@
 // Port of wizard.ts's own renderModeStep — the single biggest step, so its
 // blocks are split into focused subcomponents below rather than one giant
 // JSX tree.
-import type { Network } from "../../api";
+import type { Catalog, Network, NodeModule } from "../../api";
+import { moduleCards } from "./modulesModel";
 import { fmtBytes } from "../../ui";
 import {
   approxSize,
@@ -62,9 +63,13 @@ export function ModeStep({
   rpcBindAddr,
   onRpcBindAddrChange,
   rpcBindAddrError,
+  modules,
   onBack,
   onNext,
 }: {
+  // modules is the wizard's Modules group, omitted when the caller has none
+  // to offer.
+  modules?: { catalog: Catalog; chainId: number; execId: string; selected: NodeModule[]; onChange: (m: NodeModule[]) => void };
   net: Network | undefined;
   execSnapshotSupported: boolean;
   checkpoint: boolean;
@@ -237,6 +242,8 @@ export function ModeStep({
         onRpcBindAddrChange={onRpcBindAddrChange}
         rpcBindAddrError={rpcBindAddrError}
       />
+
+      {modules && <ModulesGroup {...modules} />}
 
       <div className="wizard-actions">
         <button className="btn btn-ghost" type="button" onClick={onBack}>
@@ -555,5 +562,54 @@ function AdvancedBlock({
         the node — only bind to a trusted, private overlay, never a public address.
       </p>
     </details>
+  );
+}
+
+// ModulesGroup is the wizard's Modules group (spec D11): one checkbox per node
+// module, shown or disabled exactly as the catalog's Applies rows say for the
+// chosen chain and client, so a new box gets its modules in its first setup.
+export function ModulesGroup({
+  catalog,
+  chainId,
+  execId,
+  selected,
+  onChange,
+}: {
+  catalog: Catalog;
+  chainId: number;
+  execId: string;
+  selected: NodeModule[];
+  onChange: (m: NodeModule[]) => void;
+}) {
+  const cards = moduleCards(catalog, "node", {
+    chainId,
+    client: execId,
+    enabled: selected.map((m) => m.id),
+    statuses: [],
+    gateStale: false,
+  }).filter((c) => c.state !== "hidden");
+  if (cards.length === 0) return null;
+  return (
+    <fieldset className="wizard-modules">
+      <legend>Modules</legend>
+      {cards.map((c) => (
+        <div key={c.id} className="wizard-module">
+          <label>
+            <input
+              type="checkbox"
+              checked={c.state === "on"}
+              disabled={c.state === "disabled"}
+              onChange={(e) =>
+                onChange(e.target.checked ? [...selected, { id: c.id }] : selected.filter((m) => m.id !== c.id))
+              }
+            />{" "}
+            {c.name}
+            {c.beta ? " (beta)" : ""}
+          </label>
+          <p className="muted small">{c.summary}</p>
+          {c.reason && <p className="small">{c.reason}</p>}
+        </div>
+      ))}
+    </fieldset>
   );
 }

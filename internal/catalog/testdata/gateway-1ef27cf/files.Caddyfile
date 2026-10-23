@@ -1,0 +1,15 @@
+{
+	auto_https disable_redirects
+}
+box.tail1234.ts.net {
+	tls /var/lib/valve-node-app/tls/cert.pem /var/lib/valve-node-app/tls/key.pem
+	log {
+		format filter {
+			wrap console
+			fields {
+				request>uri regexp "jg_[1-9A-HJ-NP-Za-km-z]+" "jg_REDACTED"
+			}
+		}
+	}
+	reverse_proxy erpc:4000
+}

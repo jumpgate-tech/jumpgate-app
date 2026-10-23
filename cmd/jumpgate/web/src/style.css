@@ -2586,3 +2586,27 @@ textarea:focus {
   background: var(--bg-inset, rgba(0, 0, 0, 0.18));
   box-shadow: 0 0 0 1px var(--border);
 }
+
+/* Modules (Machine screen, wizard, gateway cards) */
+.module-card {
+  margin: 0.5rem 0;
+}
+.module-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.module-card-head .module-toggle {
+  margin-left: auto;
+}
+.module-public label {
+  display: block;
+}
+.modules-section .warn,
+.module-public .warn,
+p.warn {
+  color: var(--warn);
+}
+.wizard-modules {
+  margin: 1rem 0;
+}

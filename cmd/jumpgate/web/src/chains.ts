@@ -3,7 +3,7 @@
 // the picker comes from the full chainlist catalogue (api.allChains), searchable
 // behind these. Named imports from viem/chains are tree-shaken, so only these
 // definitions land in the bundle — not all ~200 of viem's chains.
-import { mainnet, pulsechain, sepolia, pulsechainV4, base, bsc } from "viem/chains";
+import { mainnet, pulsechain, sepolia, hoodi, pulsechainV4, base, bsc } from "viem/chains";
 import type { ChainSummary } from "./api";
 
 export interface CuratedChain extends ChainSummary {
@@ -13,7 +13,7 @@ export interface CuratedChain extends ChainSummary {
 
 // Order is deliberate and product-owned: the two mainnets first, then their
 // testnets, then the next tier down. It is NOT viem's default ordering.
-export const CURATED: CuratedChain[] = [mainnet, pulsechain, sepolia, pulsechainV4, base, bsc].map((c) => ({
+export const CURATED: CuratedChain[] = [mainnet, pulsechain, sepolia, hoodi, pulsechainV4, base, bsc].map((c) => ({
   chainId: c.id,
   name: c.name,
   testnet: Boolean(c.testnet),

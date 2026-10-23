@@ -27,6 +27,7 @@ var networks = []Network{
 		SnapshotSizeTB:   3.6, // networks.ts: snapshot.rethChain "mainnet"
 		SyncLabel:        "~12 hrs (snapshot)",
 		GenesisSyncLabel: "~10 days (genesis)",
+		SlotSeconds:      12,
 	},
 	{
 		ChainID:          369,
@@ -38,6 +39,7 @@ var networks = []Network{
 		SnapshotSizeTB:   3.9, // networks.ts: snapshot.rethChain "pulsechain"
 		SyncLabel:        "< 1 day (snapshot)",
 		GenesisSyncLabel: "~8 days (genesis)",
+		SlotSeconds:      10,
 	},
 	{
 		ChainID:          943,
@@ -49,20 +51,38 @@ var networks = []Network{
 		SnapshotSizeTB:   1.2, // networks.ts: snapshot.rethChain "pulsechain-testnet-v4"
 		SyncLabel:        "~4 hrs (snapshot)",
 		GenesisSyncLabel: "~2 days (genesis)",
+		SlotSeconds:      10,
+	},
+	{
+		// Hoodi is Ethereum's staking testnet. Valve publishes no snapshot
+		// for it, so SnapshotSizeTB is 0 and ExpectedBytes reports
+		// ErrNoSizeGuidance rather than a made-up floor. The checkpoint URL
+		// was verified to serve genesis_fork_version 0x10000910 (2026-10-23).
+		ChainID:          560048,
+		Name:             "Hoodi",
+		CheckpointURL:    "https://checkpoint-sync.hoodi.ethpandaops.io",
+		ExecClients:      []string{"reth", "geth"},
+		BeaconClients:    []string{"lighthouse"},
+		LearnURL:         learnBaseURL,
+		SyncLabel:        "",
+		GenesisSyncLabel: "~1 day (genesis)", // [estimate]
+		SlotSeconds:      12,
 	},
 }
 
 // defaultERPCUpstreams maps a chain id to the public RPC endpoint(s) shipped
 // as eRPC's default archive/backup fallback — the operator can edit or
 // remove them and add their own (e.g. a dedicated archive node). Each was
-// verified to answer eth_chainId with the matching chain id (2026-07-24).
+// verified to answer eth_chainId with the matching chain id (2026-07-24;
+// Hoodi's on 2026-10-23).
 // They provide failover and cover historical state a local full node can't;
 // whether a given public endpoint is archive varies, so operators wanting
 // guaranteed historical coverage should add a known archive upstream.
 var defaultERPCUpstreams = map[int][]string{
-	1:   {"https://ethereum-rpc.publicnode.com"},
-	369: {"https://rpc.pulsechain.com"},
-	943: {"https://rpc.v4.testnet.pulsechain.com"},
+	1:      {"https://ethereum-rpc.publicnode.com"},
+	369:    {"https://rpc.pulsechain.com"},
+	943:    {"https://rpc.v4.testnet.pulsechain.com"},
+	560048: {"https://ethereum-hoodi-rpc.publicnode.com"},
 }
 
 // DefaultUpstreams returns the shipped default eRPC fallback upstreams for a
@@ -77,16 +97,18 @@ func DefaultUpstreams(chainID int) []string {
 // share the same --chain naming convention as reth/go-pulse's fork family;
 // this is not independently confirmed by learn data — see task-3-report.md.
 var rethChainName = map[int]string{
-	1:   "mainnet",
-	369: "pulsechain",
-	943: "pulsechain-testnet-v4",
+	1:      "mainnet",
+	369:    "pulsechain",
+	943:    "pulsechain-testnet-v4",
+	560048: "hoodi",
 }
 
 // lighthouseNetworkName maps a chain id to the --network value the
 // lighthouse client family (lighthouse-pulse and upstream sigp lighthouse)
 // expects, per task-3-brief.md Step 3 verbatim.
 var lighthouseNetworkName = map[int]string{
-	1:   "mainnet",
-	369: "pulsechain",
-	943: "pulsechain_testnet_v4",
+	1:      "mainnet",
+	369:    "pulsechain",
+	943:    "pulsechain_testnet_v4",
+	560048: "hoodi",
 }

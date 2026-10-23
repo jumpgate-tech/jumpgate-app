@@ -12,6 +12,7 @@
 package catalog
 
 import (
+	"errors"
 	"fmt"
 	"path"
 )
@@ -57,6 +58,9 @@ type Network struct {
 	// GenesisSyncLabel for a from-genesis sync.
 	SyncLabel        string
 	GenesisSyncLabel string
+	// SlotSeconds is the beacon chain's slot time: 12 on Ethereum and its
+	// testnets, 10 on PulseChain.
+	SlotSeconds int
 }
 
 // fullTierFraction is the fraction of Network.SnapshotSizeTB that
@@ -82,6 +86,10 @@ type Network struct {
 // (see FULL_TIER_FRACTION in cmd/jumpgate/web/src/screens/Machine/wizardModel.ts).
 const fullTierFraction = 0.5
 
+// ErrNoSizeGuidance is ExpectedBytes' answer for a known chain that has no
+// published size figure to derive a floor from.
+var ErrNoSizeGuidance = errors.New("catalog: no disk size guidance for this chain")
+
 // ExpectedBytes returns the expected on-disk dataset size, in bytes, for a
 // chain at either the archive or full(pruned) tier. This is the single
 // shared implementation of the size heuristic — setup's preflight disk
@@ -97,10 +105,17 @@ const fullTierFraction = 0.5
 // big enough", never as a promise of how much space a given client will
 // actually consume, and never present either to an operator as measured
 // fact.
+//
+// A known chain with no published snapshot (SnapshotSizeTB 0, e.g. Hoodi)
+// returns ErrNoSizeGuidance: callers skip the size floor and say so, rather
+// than treat 0 bytes as a real figure.
 func ExpectedBytes(chainID int, archive bool) (uint64, error) {
 	net, ok := NetworkByChainID(chainID)
 	if !ok {
 		return 0, fmt.Errorf("catalog: no size guidance for chain id %d", chainID)
+	}
+	if net.SnapshotSizeTB == 0 {
+		return 0, ErrNoSizeGuidance
 	}
 	sizeTB := net.SnapshotSizeTB
 	if !archive {

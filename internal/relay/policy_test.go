@@ -2,6 +2,8 @@ package relay
 
 import (
 	"errors"
+	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -217,5 +219,90 @@ func TestCheckNetwork(t *testing.T) {
 	open := KeyRecord{Enabled: true}
 	if err := CheckNetwork(open, 137); err != nil {
 		t.Errorf("no policy: %v", err)
+	}
+}
+
+// stubModuleMethods swaps the catalog's module method tables for a fake
+// msgboard, so these tests do not depend on which modules are registered.
+func stubModuleMethods(t *testing.T) {
+	t.Helper()
+	oldW, oldS := moduleWrites, moduleStreams
+	moduleWrites = func() map[string]string { return map[string]string{"msgboard_addMessage": "msgboard"} }
+	moduleStreams = func() map[string]string {
+		return map[string]string{"msgboard_subscribe": "poll msgboard_contentPage"}
+	}
+	t.Cleanup(func() { moduleWrites, moduleStreams = oldW, oldS })
+}
+
+const moduleGrantCopy = "msgboard_addMessage needs to be on this key's method allow list"
+
+// A module write is never covered by "empty allow list means everything": it
+// gossips or changes node state, so a key must name it.
+func TestRelayWriteNeedsExplicitGrant(t *testing.T) {
+	stubModuleMethods(t)
+	for _, allow := range [][]string{nil, {"eth_call"}} {
+		err := CheckMethods(KeyRecord{Enabled: true, MethodAllow: allow}, []string{"msgboard_addMessage"})
+		if !errors.Is(err, ErrMethodDenied) {
+			t.Fatalf("allow %v: err = %v, want ErrMethodDenied", allow, err)
+		}
+		if msg, ok := DeniedMessage(err); !ok || msg != moduleGrantCopy {
+			t.Errorf("allow %v: message = %q, %v; want %q", allow, msg, ok, moduleGrantCopy)
+		}
+	}
+	if err := CheckMethods(KeyRecord{Enabled: true, MethodAllow: []string{"msgboard_addMessage"}}, []string{"msgboard_addMessage"}); err != nil {
+		t.Errorf("explicit grant: %v", err)
+	}
+}
+
+// A module read follows the key's ordinary policy.
+func TestRelayModuleReadFollowsKeyPolicy(t *testing.T) {
+	stubModuleMethods(t)
+	if err := CheckMethods(KeyRecord{Enabled: true}, []string{"msgboard_status"}); err != nil {
+		t.Errorf("msgboard_status with an empty allow list: %v", err)
+	}
+}
+
+// One hidden write in a batch refuses the whole batch, with the module copy.
+func TestRelayBatchWithOneUngrantedWriteRefused(t *testing.T) {
+	stubModuleMethods(t)
+	err := CheckMethods(KeyRecord{Enabled: true}, []string{"eth_call", "msgboard_status", "msgboard_addMessage"})
+	if msg, ok := DeniedMessage(err); !ok || msg != moduleGrantCopy {
+		t.Fatalf("err = %v; want the module refusal", err)
+	}
+
+	// Through the handler: a 403 carrying the copy, and nothing reaches eRPC.
+	var got capturedRequest
+	up := stubUpstream(t, &got)
+	h := newTestHandler(t, staticAuth{rec: KeyRecord{ID: "k1", Enabled: true}}, up, nil)
+	body := `[{"jsonrpc":"2.0","id":1,"method":"eth_call"},{"jsonrpc":"2.0","id":2,"method":"msgboard_addMessage"}]`
+	res := post(t, h, "/rpc/jg_k/evm/369", body, nil)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", res.Code)
+	}
+	if !strings.Contains(res.Body.String(), moduleGrantCopy) {
+		t.Errorf("body = %s, want %q", res.Body.String(), moduleGrantCopy)
+	}
+	if got.hits != 0 {
+		t.Error("a batch with an ungranted write reached the upstream")
+	}
+
+	// Every other refusal keeps its body.
+	h = newTestHandler(t, staticAuth{rec: KeyRecord{ID: "k1", Enabled: true, MethodBlock: []string{"eth_call"}}}, up, nil)
+	res = post(t, h, "/rpc/jg_k/evm/369", `{"jsonrpc":"2.0","id":1,"method":"eth_call"}`, nil)
+	if !strings.Contains(res.Body.String(), "method not allowed for this key") {
+		t.Errorf("ordinary refusal body = %s", res.Body.String())
+	}
+}
+
+// eRPC folds method case in places, so a module write in another case must not
+// slip past the grant check.
+func TestRelayWriteGrantIgnoresCase(t *testing.T) {
+	stubModuleMethods(t)
+	err := CheckMethods(KeyRecord{Enabled: true}, []string{"Msgboard_addMessage"})
+	if msg, ok := DeniedMessage(err); !ok || msg != "Msgboard_addMessage needs to be on this key's method allow list" {
+		t.Errorf("err = %v; want the module refusal", err)
+	}
+	if err := CheckMethods(KeyRecord{Enabled: true, MethodAllow: []string{"Msgboard_addMessage"}}, []string{"Msgboard_addMessage"}); err != nil {
+		t.Errorf("explicit grant: %v", err)
 	}
 }

@@ -1,0 +1,15 @@
+{
+	auto_https disable_redirects
+}
+default-1a2b3c.localhost-valaxy.com {
+	tls internal
+	log {
+		format filter {
+			wrap console
+			fields {
+				request>uri regexp "jg_[1-9A-HJ-NP-Za-km-z]+" "jg_REDACTED"
+			}
+		}
+	}
+	reverse_proxy valve-node-app-relay:8090
+}

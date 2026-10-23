@@ -20,7 +20,7 @@ func newActions(_ *App, h *hostScreen) *actionsModal {
 	return &actionsModal{h: h, items: []string{
 		"restart exec", "stop exec", "start exec",
 		"restart beacon", "stop beacon", "start beacon",
-		"measure disk", "open an SSH shell",
+		"measure disk", "open an SSH shell", "modules",
 	}}
 }
 
@@ -39,6 +39,9 @@ func (m *actionsModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 		case "measure disk":
 			m.h.tab = indexOf(a.prefs.HostTabs, "storage")
 			return true, tea.Batch(m.h.load(a, "storage"), m.h.measure(a))
+		case "modules":
+			a.modal = newModulesModal(a, m.h)
+			return false, nil // the modules list replaces this menu
 		case "open an SSH shell":
 			return true, m.h.shell(a)
 		}

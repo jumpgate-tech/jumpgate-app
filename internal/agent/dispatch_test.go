@@ -12,6 +12,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/monitor"
 	"github.com/valve-tech/jumpgate/internal/testutil"
 )
 
@@ -146,6 +147,25 @@ func TestDiskReadReportsUsageAndFreeSpace(t *testing.T) {
 	}
 	ran := strings.Join(r.exec.cmds, "\n")
 	if !strings.Contains(ran, "/var/lib/valve-node-app/369") {
+		t.Fatalf("commands %v", r.exec.cmds)
+	}
+}
+
+// modules.read needs no node.json: a bootnode-only box still reports its
+// modules through its gate.
+func TestModulesReadNeedsNoNode(t *testing.T) {
+	testutil.RequireUnix(t)
+	r := newRig(t, false)
+	r.exec.res = executor.Result{}
+	rc, res := r.send(t, intent.KindModulesRead, struct{}{}, nil)
+	if rc.Status != intent.StatusOK {
+		t.Fatalf("status %d: %s", rc.Status, res)
+	}
+	var got []monitor.ModuleStatus
+	if err := json.Unmarshal(res, &got); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("result %s: %v", res, err)
+	}
+	if len(r.exec.cmds) == 0 || !strings.Contains(r.exec.cmds[0], "/var/lib/jumpgate/modules/") {
 		t.Fatalf("commands %v", r.exec.cmds)
 	}
 }

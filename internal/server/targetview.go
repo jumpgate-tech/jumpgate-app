@@ -10,7 +10,7 @@ import (
 
 // targetView is how a stored target is shown to clients.
 func targetView(t config.Target) api.TargetView {
-	v := api.TargetView{ID: t.ID, Mode: t.Mode, SSH: sshView(t.SSH), Wire: t.Wire, Devnet: t.Devnet, ThisMachine: t.Mode == "local"}
+	v := api.TargetView{ID: t.ID, Mode: t.Mode, SSH: sshView(t.SSH), Wire: t.Wire, Devnet: t.Devnet, Modules: t.Modules, ThisMachine: t.Mode == "local"}
 	switch {
 	case t.Agent != nil && t.Agent.Transport == "local":
 		v.Link = api.LinkAgentLocal

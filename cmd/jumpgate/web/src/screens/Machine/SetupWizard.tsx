@@ -29,6 +29,7 @@
 // page reads as one document is the follow-up machine.ts's own comment calls
 // out, not this task.
 import { useEffect, useMemo, useRef, useState } from "react";
+import type * as api from "../../api";
 import { useCatalog, useTargets } from "../../hooks/target";
 import { useDiskProbe, useSetupRun } from "../../hooks/wizard";
 import { Footer } from "../../components/Footer";
@@ -39,6 +40,7 @@ import { ReviewStep } from "./ReviewStep";
 import { RunStep } from "./RunStep";
 import {
   buildStartSetupRequest,
+  wizardModules,
   defaultDataDir,
   defaultJwtPath,
   evaluateFit,
@@ -76,6 +78,7 @@ export function SetupWizard({ targetId }: { targetId: string }) {
   const [checkpointUrl, setCheckpointUrl] = useState("");
   const [execSnapshot, setExecSnapshot] = useState(false);
   const [snapshotKey, setSnapshotKey] = useState("");
+  const [selectedModules, setSelectedModules] = useState<api.NodeModule[]>([]);
 
   const appliedInitialRef = useRef(false);
 
@@ -96,6 +99,7 @@ export function SetupWizard({ targetId }: { targetId: string }) {
     if (existing.wire.BeaconHTTPPort) setBeaconHTTPPort(String(existing.wire.BeaconHTTPPort));
     if (existing.wire.ExecP2PPort) setExecP2PPort(String(existing.wire.ExecP2PPort));
     if (existing.wire.RPCBindAddr) setRpcBindAddr(existing.wire.RPCBindAddr);
+    if (existing.wire.Modules) setSelectedModules(existing.wire.Modules);
   }, [targetsQuery.data, targetId]);
 
   const net = catalogQuery.data?.networks.find((n) => n.ChainID === chainId);
@@ -176,10 +180,18 @@ export function SetupWizard({ targetId }: { targetId: string }) {
       checkpointUrl,
       execSnapshot,
       snapshotKey,
+      modules: wizardMods.modules,
     });
     const ok = await setupRun.start(wire);
     if (ok) setStep("run");
   }
+
+  // The modules this setup will submit: the selection minus any the chosen
+  // chain and client cannot run (dropped with a notice on the review step).
+  const wizardMods =
+    catalogQuery.data && chainId !== null && execId
+      ? wizardModules(catalogQuery.data, chainId, execId, selectedModules)
+      : { modules: [], notices: [] };
 
   const initLoading = catalogQuery.isLoading || targetsQuery.isLoading;
   const initErr = catalogQuery.error ?? targetsQuery.error;
@@ -262,6 +274,17 @@ export function SetupWizard({ targetId }: { targetId: string }) {
                 rpcBindAddr={rpcBindAddr}
                 onRpcBindAddrChange={setRpcBindAddr}
                 rpcBindAddrError={modeErrors.rpcBindAddrError}
+                modules={
+                  chainId !== null && execId
+                    ? {
+                        catalog: catalogQuery.data,
+                        chainId,
+                        execId,
+                        selected: wizardMods.modules,
+                        onChange: setSelectedModules,
+                      }
+                    : undefined
+                }
                 onBack={() => setStep("clients")}
                 onNext={handleGotoReview}
               />
@@ -282,6 +305,12 @@ export function SetupWizard({ targetId }: { targetId: string }) {
                 beaconHTTPPort={beaconHTTPPort}
                 execP2PPort={execP2PPort}
                 rpcBindAddr={rpcBindAddr}
+                modules={{
+                  names: wizardMods.modules.map(
+                    (m) => catalogQuery.data!.modules?.find((c) => c.id === m.id)?.name ?? m.id,
+                  ),
+                  notices: wizardMods.notices,
+                }}
                 startError={setupRun.startError}
                 starting={setupRun.starting}
                 onBack={() => setStep("mode")}

@@ -1,0 +1,25 @@
+[Unit]
+Description=valve-node-app execution client (go-pulse)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=valve-node-app
+Group=valve-node-app
+ExecStart=go-pulse --datadir /var/lib/valve-node-app/943 --authrpc.jwtsecret /var/lib/valve-node-app/943/jwt.hex --authrpc.addr 127.0.0.1 --authrpc.port 8551 --http --http.addr 100.64.0.7 --http.port 8545 --port 30303 --pulsechain-testnet-v4
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/valve-node-app/943
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
