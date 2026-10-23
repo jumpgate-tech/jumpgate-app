@@ -110,11 +110,14 @@ func nodeModulePublic(w WireConfig, id string) string {
 // ApplyModuleIgnores sets IgnoreMethods on every upstream of n. wires[i] is
 // the managed node behind n.Upstreams[i], nil for any other upstream.
 //
-// A module's methods are listed only on a chain where some upstream serves
-// that module. With no module on, nothing is rendered, so a gateway upgraded
-// to this jumpgate renders byte for byte what it did before and restarts
+// anyModules is whether any module is on anywhere on this gateway: a node
+// module on any upstream of any chain, or a gateway module. When it is, every
+// list is kept, so a module's writes on a chain no node serves never fall
+// over to an external upstream. When it is not, a module's methods are listed
+// only on a chain where some upstream serves that module, so a gateway with
+// no module at all renders byte for byte what it did before and restarts
 // nothing.
-func ApplyModuleIgnores(tier Tier, n GatewayNetwork, wires []*WireConfig) GatewayNetwork {
+func ApplyModuleIgnores(tier Tier, n GatewayNetwork, wires []*WireConfig, anyModules bool) GatewayNetwork {
 	served := map[string]bool{}
 	for _, w := range wires {
 		if w == nil {
@@ -127,7 +130,7 @@ func ApplyModuleIgnores(tier Tier, n GatewayNetwork, wires []*WireConfig) Gatewa
 	// The methods of modules no upstream serves, which are dropped again.
 	unserved := map[string]bool{}
 	for _, m := range modules {
-		if m.Placement == PlaceNode && !served[m.ID] {
+		if !anyModules && m.Placement == PlaceNode && !served[m.ID] {
 			for _, x := range nsWildcards(m) {
 				unserved[x] = true
 			}

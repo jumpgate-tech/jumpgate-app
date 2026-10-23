@@ -734,6 +734,7 @@ func resolveGateway(cfg config.Config, gw config.Gateway) (catalog.GatewayConfig
 	out.Networks = make([]catalog.GatewayNetwork, 0, len(gw.Config.Networks))
 
 	tier := catalog.GatewayTier(gw.Config)
+	anyModules := gatewayHasModules(cfg, gw.Config)
 	var problems []string
 	for _, n := range gw.Config.Networks {
 		ups := make([]catalog.GatewayUpstream, 0, len(n.Upstreams))
@@ -763,9 +764,25 @@ func resolveGateway(cfg config.Config, gw config.Gateway) (catalog.GatewayConfig
 		// Module method lists are derived here, beside Endpoint, from each
 		// managed node's wire: never stored, so they follow the node.
 		out.Networks = append(out.Networks, catalog.ApplyModuleIgnores(tier,
-			catalog.GatewayNetwork{ChainID: n.ChainID, Upstreams: ups}, upstreamWires(cfg, ups)))
+			catalog.GatewayNetwork{ChainID: n.ChainID, Upstreams: ups}, upstreamWires(cfg, ups), anyModules))
 	}
 	return out, problems
+}
+
+// gatewayHasModules is whether any module is on anywhere on g: a gateway
+// module, or a node module on any managed node behind any of its chains.
+func gatewayHasModules(cfg config.Config, g catalog.GatewayConfig) bool {
+	if len(g.Modules) > 0 {
+		return true
+	}
+	for _, n := range g.Networks {
+		for _, w := range upstreamWires(cfg, n.Upstreams) {
+			if w != nil && len(w.Modules) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // upstreamWires is the managed node's wire behind each of ups, nil for an

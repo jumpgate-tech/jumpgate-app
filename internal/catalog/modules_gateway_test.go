@@ -74,13 +74,13 @@ func TestApplyModuleIgnores(t *testing.T) {
 	n := GatewayNetwork{ChainID: 369, Upstreams: []GatewayUpstream{
 		{Kind: UpstreamManagedNode, TargetID: "b"}, {Endpoint: "https://x"},
 	}}
-	off := ApplyModuleIgnores(TierPublic, n, []*WireConfig{{ChainID: 369}, nil})
+	off := ApplyModuleIgnores(TierPublic, n, []*WireConfig{{ChainID: 369}, nil}, false)
 	for _, u := range off.Upstreams {
 		if len(u.IgnoreMethods) != 0 {
 			t.Errorf("no module on, yet %v", u.IgnoreMethods)
 		}
 	}
-	on := ApplyModuleIgnores(TierLocal, n, []*WireConfig{{ChainID: 369, Modules: []NodeModule{{ID: "msgboard"}}}, nil})
+	on := ApplyModuleIgnores(TierLocal, n, []*WireConfig{{ChainID: 369, Modules: []NodeModule{{ID: "msgboard"}}}, nil}, true)
 	if got := on.Upstreams[0].IgnoreMethods; !slices.Equal(got, []string{"msgboard_subscribe"}) {
 		t.Errorf("node: %v", got)
 	}
@@ -89,6 +89,15 @@ func TestApplyModuleIgnores(t *testing.T) {
 	}
 	if len(n.Upstreams[0].IgnoreMethods) != 0 {
 		t.Error("ApplyModuleIgnores changed its input")
+	}
+	// A module on somewhere else on this gateway, none on this chain: the
+	// external upstream still ignores the namespace, so msgboard_addMessage
+	// never falls over to a public endpoint.
+	elsewhere := ApplyModuleIgnores(TierPublic, n, []*WireConfig{{ChainID: 369}, nil}, true)
+	for i, u := range elsewhere.Upstreams {
+		if !slices.Equal(u.IgnoreMethods, []string{"msgboard_*"}) {
+			t.Errorf("upstream %d: %v, want [msgboard_*]", i, u.IgnoreMethods)
+		}
 	}
 }
 
