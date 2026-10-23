@@ -2,6 +2,8 @@ package setup
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -340,7 +342,15 @@ func (p *boxPlan) writeFilesStep() Step {
 		Run: func(ctx context.Context, e executor.Executor, st *State) error {
 			opts := streamOpts(ctx, st, "write-files")
 			dir := p.b.DataDir()
-			res, err := e.Run(ctx, fmt.Sprintf("mkdir -p %s && chown %s:%s %s", shQuote(dir), n.User, n.Group, shQuote(dir)), opts)
+			// The module dir belongs to the service account, which could
+			// swap any path in it for a symlink. So root never writes,
+			// chmods or follows a path there: the dir is made with a
+			// symlink refusal and `chown -h`, and each file is staged under
+			// a random name in a root-only dir, then copied in by
+			// `install`, which unlinks the destination rather than writing
+			// through it.
+			res, err := e.Run(ctx, fmt.Sprintf("%s && mkdir -p %s && chown -h %s:%s %s && install -d -m 0700 %s",
+				refuseSymlinks(n.DataRoot+"/modules", dir), shQuote(dir), n.User, n.Group, shQuote(dir), stagingDir), opts)
 			if err != nil {
 				return fmt.Errorf("write-files: mkdir %s: %w", dir, err)
 			}
@@ -348,13 +358,15 @@ func (p *boxPlan) writeFilesStep() Step {
 				return fmt.Errorf("write-files: mkdir %s failed (exit %d): %s", dir, res.ExitCode, strings.TrimSpace(res.Stderr))
 			}
 			for _, f := range p.sortedFiles() {
-				// tmp + mv: a reader never sees a half-written file.
-				tmp := f + ".tmp"
-				if err := e.WriteFile(ctx, tmp, []byte(p.u.Files[f]), 0640); err != nil {
-					return fmt.Errorf("write-files: write %s: %w", tmp, err)
+				staged, err := stagingPath()
+				if err != nil {
+					return fmt.Errorf("write-files: %w", err)
 				}
-				cmd := fmt.Sprintf("mkdir -p %s && chown %s:%s %s && chmod 0640 %s && mv -f %s %s",
-					shQuote(path.Dir(f)), n.User, n.Group, shQuote(tmp), shQuote(tmp), shQuote(tmp), shQuote(f))
+				if err := e.WriteFile(ctx, staged, []byte(p.u.Files[f]), 0600); err != nil {
+					return fmt.Errorf("write-files: stage %s: %w", f, err)
+				}
+				cmd := fmt.Sprintf("%s && install -o %s -g %s -m 0640 %s %s; rc=$?; rm -f %s; exit $rc",
+					refuseSymlinks(path.Dir(f), f), n.User, n.Group, shQuote(staged), shQuote(f), shQuote(staged))
 				res, err := e.Run(ctx, cmd, opts)
 				if err != nil {
 					return fmt.Errorf("write-files: install %s: %w", f, err)
@@ -375,6 +387,27 @@ func (p *boxPlan) writeFilesStep() Step {
 			return nil
 		},
 	}
+}
+
+// stagingDir is root-only (0700): files bound for a service-owned dir wait
+// here under a random name, out of the service account's reach.
+const stagingDir = "/var/lib/jumpgate/staging"
+
+func stagingPath() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("staging name: %w", err)
+	}
+	return stagingDir + "/" + hex.EncodeToString(b[:]), nil
+}
+
+// refuseSymlinks is a shell guard that fails when any of paths is a symlink.
+func refuseSymlinks(paths ...string) string {
+	var tests []string
+	for _, p := range paths {
+		tests = append(tests, "[ -L "+shQuote(p)+" ]")
+	}
+	return fmt.Sprintf(`if %s; then echo "refusing: a module path is a symlink" >&2; false; fi`, strings.Join(tests, " || "))
 }
 
 func (p *boxPlan) unitStep() Step {

@@ -252,6 +252,52 @@ func TestPlanBoxModuleNeedsGateForWatch(t *testing.T) {
 	}
 }
 
+// Root must never chown, chmod or write through a path the service account
+// could have swapped for a symlink: files are staged in a root-only dir
+// under a random name and installed with `install -o -g -m`, and nothing
+// uses a fixed ".tmp" name beside the destination.
+func TestWriteFilesNeverFollowsServiceOwnedPaths(t *testing.T) {
+	b := watchModule(t)
+	e := boxTarget()
+	steps, err := PlanBoxModule(b, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wf Step
+	for _, s := range steps {
+		if s.ID == "write-files" {
+			wf = s
+		}
+	}
+	if err := wf.Run(context.Background(), e, &State{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if err := wf.Verify(context.Background(), e, &State{}); err != nil {
+		t.Fatalf("Verify after Run: %v", err)
+	}
+	dir := b.DataDir()
+	for _, c := range e.callLog() {
+		if strings.Contains(c, ".tmp") {
+			t.Errorf("fixed .tmp path used: %q", c)
+		}
+		if strings.HasPrefix(c, "WriteFile "+dir) {
+			t.Errorf("root wrote straight into the service-owned dir: %q", c)
+		}
+		if strings.Contains(c, "chmod ") && strings.Contains(c, dir) {
+			t.Errorf("chmod on a service-owned path: %q", c)
+		}
+		if strings.Contains(c, "chown ") && strings.Contains(c, dir) && !strings.Contains(c, "chown -h ") {
+			t.Errorf("chown on a service-owned path without -h: %q", c)
+		}
+		if strings.Contains(c, "install -o") && !strings.Contains(c, "[ -L ") {
+			t.Errorf("install into a service-owned dir without a symlink refusal: %q", c)
+		}
+	}
+	if !ran(e, "install -o "+catalog.CurrentNames.User) {
+		t.Errorf("files were not installed with install -o; ran %q", e.callLog())
+	}
+}
+
 func boxTarget() *fakeExecutor {
 	return newFakeExecutor().
 		script("uname", executor.Result{Stdout: "Linux\n"}).

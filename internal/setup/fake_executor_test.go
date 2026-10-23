@@ -30,7 +30,7 @@ type fakeExecutor struct {
 	files map[string][]byte
 }
 
-var fakeMvPattern = regexp.MustCompile(`mv -f '([^']*)' '([^']*)'$`)
+var fakeMvPattern = regexp.MustCompile(`(?:mv -f|install -o \S+ -g \S+ -m \d+) '([^']*)' '([^']*)'`)
 
 func newFakeExecutor() *fakeExecutor {
 	return &fakeExecutor{
@@ -58,8 +58,8 @@ func (f *fakeExecutor) Run(ctx context.Context, cmd string, opts *executor.RunOp
 	if key, err := f.matchErr(cmd); key != "" {
 		return executor.Result{}, err
 	}
-	// A trailing `mv -f 'src' 'dst'` moves the fake file, so tmp + mv
-	// writes land where a later ReadFile looks.
+	// `mv -f 'src' 'dst'` and `install -o u -g g -m mode 'src' 'dst'` move
+	// the fake file, so staged writes land where a later ReadFile looks.
 	if m := fakeMvPattern.FindStringSubmatch(cmd); m != nil {
 		f.mu.Lock()
 		if b, ok := f.files[m[1]]; ok {
