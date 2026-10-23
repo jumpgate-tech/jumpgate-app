@@ -25,7 +25,8 @@ import (
 const enginePort = "8551"
 
 // Plan returns the ordered steps for the config: preflight, account,
-// toolchain, install-exec, install-beacon, snapshot, wire, start, handshake.
+// toolchain, install-exec, install-beacon, snapshot, wire, start, handshake,
+// modules.
 func Plan(w catalog.WireConfig) ([]Step, error) {
 	if err := catalog.ValidateNames(w); err != nil {
 		return nil, fmt.Errorf("setup: %w", err)
@@ -56,12 +57,13 @@ func Plan(w catalog.WireConfig) ([]Step, error) {
 		preflightStep(),
 		accountStep(w.NodeNames()),
 		toolchainStep(neededToolchains(execClient, beaconClient)),
-		installStep("install-exec", "Install execution client ("+w.ExecID+")", execClient),
+		installStep("install-exec", "Install execution client ("+w.ExecID+")", execClient, nodeModuleHelp(w)...),
 		installStep("install-beacon", "Install beacon client ("+w.BeaconID+")", beaconClient),
 		snapshotStep(),
 		wireStep(),
 		startStep(),
 		handshakeStep(),
+		modulesStep(),
 	}, nil
 }
 
@@ -310,8 +312,13 @@ func binaryNameFor(id string) string {
 
 // installStep installs one client (execution or beacon, whichever
 // `client` is) and verifies it landed at the binary path its systemd unit
-// will invoke.
-func installStep(stepID, title string, client catalog.Client) Step {
+// will invoke. Each helpFlags entry is an enabled node module's binary
+// probe (D9): Verify also needs `<bin> node --help` to list the flag, so a
+// binary that predates the module is rebuilt, and one that still lacks it
+// after the rebuild fails here, before wire writes a unit it would reject.
+//
+// docs:covers msgboard-troubleshoot
+func installStep(stepID, title string, client catalog.Client, helpFlags ...moduleHelp) Step {
 	dest := "/usr/local/bin/" + binaryNameFor(client.ID)
 
 	return Step{
@@ -334,7 +341,7 @@ func installStep(stepID, title string, client catalog.Client) Step {
 				if res.ExitCode != 0 {
 					return fmt.Errorf("install: download %s failed (exit %d): %s", client.ID, res.ExitCode, res.Stderr)
 				}
-				return nil
+				return checkHelpAfterInstall(ctx, e, client, dest, helpFlags)
 			}
 
 			// No release binary published for this platform — build from
@@ -347,7 +354,7 @@ func installStep(stepID, title string, client catalog.Client) Step {
 			if res.ExitCode != 0 {
 				return fmt.Errorf("install: build %s failed (exit %d): %s", client.ID, res.ExitCode, res.Stderr)
 			}
-			return nil
+			return checkHelpAfterInstall(ctx, e, client, dest, helpFlags)
 		},
 		Verify: func(ctx context.Context, e executor.Executor, st *State) error {
 			cmd := fmt.Sprintf("test -x %s && %s --version", shQuote(dest), shQuote(dest))
@@ -357,6 +364,14 @@ func installStep(stepID, title string, client catalog.Client) Step {
 			}
 			if res.ExitCode != 0 {
 				return fmt.Errorf("install: %s not installed/runnable at %s yet", client.ID, dest)
+			}
+			missing, err := missingHelpFlag(ctx, e, dest, helpFlags)
+			if err != nil {
+				return fmt.Errorf("install: verify %s: %w", client.ID, err)
+			}
+			if missing != nil {
+				return fmt.Errorf("install: `%s node --help` lists no %s; rebuilding %s to add %s support (tens of minutes)",
+					client.ID, missing.Flag, client.ID, missing.Support)
 			}
 			return nil
 		},
@@ -561,7 +576,8 @@ func wireStep() Step {
 			if err != nil {
 				return fmt.Errorf("wire: probe jwt: %w", err)
 			}
-			if probe.ExitCode != 0 {
+			jwtWritten := probe.ExitCode != 0
+			if jwtWritten {
 				cmd := fmt.Sprintf(
 					"umask 077 && mkdir -p %s && openssl rand -hex 32 > %s && chmod 0600 %s",
 					shQuote(path.Dir(jwtPath)), shQuote(jwtPath), shQuote(jwtPath),
@@ -575,82 +591,111 @@ func wireStep() Step {
 				}
 			}
 
-			// Stop any live services before re-owning the tree. On the
-			// migration path (a root-era install being re-run) the old
-			// root process would otherwise keep creating files BEHIND the
-			// recursive chown's walk — files that stay root-owned and
-			// break the de-rooted service after restart. Run only executes
-			// when Verify failed (fresh install, config change, or
-			// ownership mismatch), and every one of those paths
-			// starts/restarts the units below anyway, so this stop adds no
-			// downtime that wasn't already coming. Exit code deliberately
-			// unchecked: on a fresh box the units don't exist yet.
-			stopCmd := fmt.Sprintf("systemctl stop %s %s 2>/dev/null || true", n.ExecUnit(), n.BeaconUnit())
-			if _, err := e.Run(ctx, stopCmd, opts); err != nil {
-				return fmt.Errorf("wire: stop services before chown: %w", err)
-			}
-
-			// Re-own the whole data tree to the service user on every run.
-			// This covers three cases with one command: the JWT just
-			// written above as root, a fresh DataDir, and — the migration
-			// path — a pre-de-root install whose entire tree is still
-			// root-owned. It must happen before the units below are
-			// (re)written and restarted, so the services never come up
-			// unable to write their own data.
-			chownCmd := fmt.Sprintf("mkdir -p %s && chown -R %s:%s %s %s",
-				shQuote(w.DataDir), n.User, n.Group,
-				shQuote(w.DataDir), shQuote(jwtPath))
-			res, err := e.Run(ctx, chownCmd, opts)
-			if err != nil {
-				return fmt.Errorf("wire: chown data dir: %w", err)
-			}
-			if res.ExitCode != 0 {
-				return fmt.Errorf("wire: chown data dir failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
-			}
-
-			// The marker follows the chown, so its presence proves the walk
-			// finished; the top directory's owner alone cannot. It lives in
-			// the root-only markers dir, not in the tree just handed to the
-			// service account.
-			res, err = e.Run(ctx, ownerMarkerCmd(w), opts)
-			if err != nil {
-				return fmt.Errorf("wire: write owner marker: %w", err)
-			}
-			if res.ExitCode != 0 {
-				return fmt.Errorf("wire: write owner marker failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
-			}
-
 			execUnit, beaconUnit, err := catalog.RenderUnits(w)
 			if err != nil {
 				return fmt.Errorf("wire: render units: %w", err)
 			}
 
-			// Detect a genuine content change (e.g. the user switched
-			// chain/clients since the last setup run) versus a fresh
-			// install: only the former needs an explicit restart below,
-			// since `enable --now` already starts a freshly-written unit
-			// on its own. A missing file (ReadFile error) is a fresh
-			// install, not a change.
-			changed := false
-			if old, err := e.ReadFile(ctx, catalog.UnitPath(n.ExecUnit())); err == nil && string(old) != execUnit {
-				changed = true
+			// Each unit is handled on its own: a module toggle changes the
+			// exec unit only, and must leave the beacon running. A missing
+			// file is a fresh install (write it, `enable --now` starts it); a
+			// present file with other content is a change (write it, stop it
+			// before the chown, restart it after).
+			type unitPlan struct {
+				name, content  string
+				fresh, changed bool
 			}
-			if old, err := e.ReadFile(ctx, catalog.UnitPath(n.BeaconUnit())); err == nil && string(old) != beaconUnit {
-				changed = true
+			units := []*unitPlan{
+				{name: n.ExecUnit(), content: execUnit},
+				{name: n.BeaconUnit(), content: beaconUnit},
+			}
+			for _, u := range units {
+				old, err := e.ReadFile(ctx, catalog.UnitPath(u.name))
+				switch {
+				case err != nil:
+					u.fresh = true
+				case string(old) != u.content:
+					u.changed = true
+				}
 			}
 
-			if err := e.WriteFile(ctx, catalog.UnitPath(n.ExecUnit()), []byte(execUnit), 0644); err != nil {
-				return fmt.Errorf("wire: write %s: %w", catalog.UnitPath(n.ExecUnit()), err)
+			// Ownership: the marker proves the last chown -R finished for
+			// this account. Without it (a pre-de-root install, a new JWT, a
+			// fresh data dir) the whole tree is re-owned, with both services
+			// stopped first so a root-era process cannot create files behind
+			// the walk.
+			ownerOK := false
+			if res, err := e.Run(ctx, "cat "+shQuote(catalog.OwnerMarkerPath(w)), nil); err == nil &&
+				res.ExitCode == 0 && strings.TrimSpace(res.Stdout) == n.User {
+				ownerOK = !jwtWritten
 			}
-			if err := e.WriteFile(ctx, catalog.UnitPath(n.BeaconUnit()), []byte(beaconUnit), 0644); err != nil {
-				return fmt.Errorf("wire: write %s: %w", catalog.UnitPath(n.BeaconUnit()), err)
+			var stop []string
+			needChown := !ownerOK
+			for _, u := range units {
+				if u.fresh || u.changed {
+					needChown = true
+				}
+				if u.fresh || u.changed || !ownerOK {
+					stop = append(stop, u.name)
+				}
+			}
+
+			// Stop the units about to change before re-owning the tree, so
+			// the old process cannot keep creating files behind the
+			// recursive chown's walk. Exit code deliberately unchecked: on a
+			// fresh box the units don't exist yet.
+			if len(stop) > 0 {
+				stopCmd := fmt.Sprintf("systemctl stop %s 2>/dev/null || true", strings.Join(stop, " "))
+				if _, err := e.Run(ctx, stopCmd, opts); err != nil {
+					return fmt.Errorf("wire: stop services before chown: %w", err)
+				}
+			}
+
+			// Re-own the whole data tree to the service user whenever a unit
+			// changed or ownership is not proven. This covers the JWT just
+			// written as root, a fresh DataDir, and the migration path (a
+			// pre-de-root install whose tree is still root-owned). It runs
+			// before the units are (re)written and restarted, so the services
+			// never come up unable to write their own data.
+			if needChown {
+				chownCmd := fmt.Sprintf("mkdir -p %s && chown -R %s:%s %s %s",
+					shQuote(w.DataDir), n.User, n.Group,
+					shQuote(w.DataDir), shQuote(jwtPath))
+				res, err := e.Run(ctx, chownCmd, opts)
+				if err != nil {
+					return fmt.Errorf("wire: chown data dir: %w", err)
+				}
+				if res.ExitCode != 0 {
+					return fmt.Errorf("wire: chown data dir failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+				}
+
+				// The marker follows the chown, so its presence proves the
+				// walk finished; the top directory's owner alone cannot. It
+				// lives in the root-only markers dir, not in the tree just
+				// handed to the service account.
+				res, err = e.Run(ctx, ownerMarkerCmd(w), opts)
+				if err != nil {
+					return fmt.Errorf("wire: write owner marker: %w", err)
+				}
+				if res.ExitCode != 0 {
+					return fmt.Errorf("wire: write owner marker failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+				}
+			}
+
+			for _, u := range units {
+				if !u.fresh && !u.changed {
+					continue
+				}
+				if err := e.WriteFile(ctx, catalog.UnitPath(u.name), []byte(u.content), 0644); err != nil {
+					return fmt.Errorf("wire: write %s: %w", catalog.UnitPath(u.name), err)
+				}
 			}
 
 			cmd := fmt.Sprintf(
 				"systemctl daemon-reload && systemctl enable --now %s && systemctl enable --now %s",
 				n.ExecUnit(), n.BeaconUnit(),
 			)
-			res, err = e.Run(ctx, cmd, opts)
+			res, err := e.Run(ctx, cmd, opts)
 			if err != nil {
 				return fmt.Errorf("wire: systemctl: %w", err)
 			}
@@ -658,12 +703,18 @@ func wireStep() Step {
 				return fmt.Errorf("wire: systemctl daemon-reload/enable failed (exit %d): %s", res.ExitCode, res.Stderr)
 			}
 
-			if changed {
-				// A content change (not just "not yet enabled") requires
-				// an explicit restart — `enable --now` on an already-
-				// running unit with a rewritten ExecStart does not by
-				// itself relaunch the process with the new config.
-				restartCmd := fmt.Sprintf("systemctl restart %s %s", n.ExecUnit(), n.BeaconUnit())
+			// A content change (not just "not yet enabled") requires an
+			// explicit restart: `enable --now` on an already-running unit
+			// with a rewritten ExecStart does not relaunch the process with
+			// the new config. Only the changed units restart.
+			var restart []string
+			for _, u := range units {
+				if u.changed {
+					restart = append(restart, u.name)
+				}
+			}
+			if len(restart) > 0 {
+				restartCmd := "systemctl restart " + strings.Join(restart, " ")
 				res, err := e.Run(ctx, restartCmd, opts)
 				if err != nil {
 					return fmt.Errorf("wire: systemctl restart: %w", err)

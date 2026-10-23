@@ -244,7 +244,8 @@ func TestWire_RunWritesTheOwnerMarkerAfterTheChown(t *testing.T) {
 	if err := wireStep().Run(context.Background(), f, &State{Wire: w}); err != nil {
 		t.Fatal(err)
 	}
-	ch, mk := indexContaining(f, "chown -R"), indexContaining(f, catalog.OwnerMarkerPath(w))
+	// The write, not Run's earlier `cat` of the marker.
+	ch, mk := indexContaining(f, "chown -R"), indexContaining(f, `mv -f "$t" '`+catalog.OwnerMarkerPath(w))
 	if ch < 0 || mk < ch {
 		t.Fatalf("marker at %d, chown at %d: %v", mk, ch, f.callLog())
 	}

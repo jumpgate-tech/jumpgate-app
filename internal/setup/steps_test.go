@@ -803,7 +803,7 @@ func TestPlan_ReturnsOrderedSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	want := []string{"preflight", "account", "toolchain", "install-exec", "install-beacon", "snapshot", "wire", "start", "handshake"}
+	want := []string{"preflight", "account", "toolchain", "install-exec", "install-beacon", "snapshot", "wire", "start", "handshake", "modules"}
 	if len(steps) != len(want) {
 		t.Fatalf("got %d steps, want %d", len(steps), len(want))
 	}
