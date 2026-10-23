@@ -180,14 +180,19 @@ secret-service:
     - export HOME="$(mktemp -d)"
     - scripts/test-secret-service.sh --inside
 
-# Needs a macOS runner tagged `macos`; none is registered yet.
+# Runs on the shell runner on the macOS host (scripts/macos-runner/).
 macos:
   stage: test
   tags: [macos]
   when: manual
   allow_failure: true
   script:
+    # A shell runner shares the host's disk: keep Go's caches in the build
+    # directory, not under the throwaway HOME, and remove HOME on exit.
+    # Each run otherwise left a ~600 MB module cache in $TMPDIR.
+    - export GOMODCACHE="$CI_PROJECT_DIR/.cache/go-mod" GOCACHE="$CI_PROJECT_DIR/.cache/go-build"
     - export HOME="$(mktemp -d)"
+    - trap 'chmod -R u+w "$HOME" 2>/dev/null; rm -rf "$HOME"' EXIT
     - go vet ./...
     - go test -p 2 ./...
     - scripts/test-macos-bundle.sh
