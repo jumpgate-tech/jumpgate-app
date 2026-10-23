@@ -85,7 +85,7 @@ func execHTTPAPI(w WireConfig) (string, error) {
 		}
 	}
 	for _, ns := range list {
-		if ns == "all" || ns == "none" {
+		if strings.EqualFold(ns, "all") || strings.EqualFold(ns, "none") {
 			return "", fmt.Errorf("catalog: --http.api would contain %q", ns)
 		}
 	}

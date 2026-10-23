@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -42,6 +43,19 @@ func fakeExtra() Module {
 	m.Methods = nil
 	m.Flags = []string{"--extra.flag"}
 	return m
+}
+
+// The all/none guard ignores case: geth reads "ALL" as all.
+func TestExecHTTPAPIRefusesAllAnyCase(t *testing.T) {
+	for _, ns := range []string{"ALL", "None"} {
+		m := fakeMsgboard()
+		m.Namespaces = []string{ns}
+		withModules(t, []Module{m})
+		w := WireConfig{ChainID: 369, ExecID: "reth", Modules: []NodeModule{{ID: m.ID}}}
+		if got, err := execHTTPAPI(w); err == nil {
+			t.Errorf("%s: got %q, want an error", ns, got)
+		}
+	}
 }
 
 func TestExecHTTPAPIComposition(t *testing.T) {
@@ -146,7 +160,7 @@ func checkAPIValues(t *testing.T, label string, args []string) {
 	t.Helper()
 	for _, v := range apiValues(args) {
 		for _, ns := range strings.Split(v, ",") {
-			if ns == "all" || ns == "none" {
+			if strings.EqualFold(ns, "all") || strings.EqualFold(ns, "none") {
 				t.Errorf("%s: API list %q contains %q", label, v, ns)
 			}
 		}
@@ -156,6 +170,7 @@ func checkAPIValues(t *testing.T, label string, args []string) {
 // TestNoAPIListIsAll is merge-blocking: no rendered API list may hold
 // "all" or "none".
 func TestNoAPIListIsAll(t *testing.T) {
+	withAPI := 0
 	for _, reg := range [][]Module{modules, {fakeMsgboard(), fakeExtra()}} {
 		withModules(t, reg)
 		for _, n := range Networks() {
@@ -178,10 +193,16 @@ func TestNoAPIListIsAll(t *testing.T) {
 					if err != nil {
 						t.Fatalf("%d %s %v: %v", n.ChainID, exec, mods, err)
 					}
-					checkAPIValues(t, execUnit, strings.Fields(execUnit))
+					checkAPIValues(t, fmt.Sprintf("%d %s %v", n.ChainID, exec, mods), strings.Fields(execUnit))
+					if strings.Contains(execUnit, "--http.api") {
+						withAPI++
+					}
 				}
 			}
 		}
+	}
+	if withAPI == 0 {
+		t.Fatal("no rendered unit has --http.api; the guard checks nothing")
 	}
 	devnet := DevnetCommand(DevnetConfig{})
 	checkAPIValues(t, "devnet", devnet)
