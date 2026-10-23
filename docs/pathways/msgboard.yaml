@@ -1,0 +1,5 @@
+id: msgboard
+title: Run the message board
+audience: operator
+after: [first-box]
+steps: [modules-what, msgboard-enable, msgboard-status, msgboard-expose, msgboard-troubleshoot]
