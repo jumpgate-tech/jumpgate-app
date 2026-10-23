@@ -6,7 +6,8 @@
 // re-derived, so a change there has to be made here too (see wizard.ts's own
 // comments on FIT_MARGIN/FULL_TIER_FRACTION for why they can't just be read
 // from the API).
-import type { Catalog, Network, SetupEvent, StartSetupRequest } from "../../api";
+import type { Catalog, Network, NodeModule, SetupEvent, StartSetupRequest } from "../../api";
+import { droppedOnClientChange } from "./modulesModel";
 
 // ---------------------------------------------------------------------
 // wizard steps
@@ -332,6 +333,9 @@ export interface StartSetupFields {
   checkpointUrl: string;
   execSnapshot: boolean;
   snapshotKey: string;
+  // modules are the node modules to turn on in this setup (already filtered
+  // by wizardModules for the chosen chain and client).
+  modules?: NodeModule[];
 }
 
 // buildStartSetupRequest mirrors startSetup's own wire-object construction
@@ -368,7 +372,28 @@ export function buildStartSetupRequest(fields: StartSetupFields): StartSetupRequ
     wire.SnapshotKey = fields.snapshotKey;
   }
 
+  if (fields.modules && fields.modules.length > 0) wire.Modules = fields.modules;
+
   return wire;
+}
+
+// wizardModules removes the selected node modules the catalog says the chosen
+// chain and client cannot run (spec D10: the server refuses a wire that still
+// has one), returning what is kept and the notice for each one dropped.
+export function wizardModules(
+  cat: Catalog,
+  chainId: number,
+  client: string,
+  selected: NodeModule[],
+): { modules: NodeModule[]; notices: string[] } {
+  const dropped = droppedOnClientChange(
+    cat,
+    chainId,
+    client,
+    selected.map((m) => m.id),
+  );
+  const gone = new Set(dropped.map((d) => d.id));
+  return { modules: selected.filter((m) => !gone.has(m.id)), notices: dropped.map((d) => d.notice) };
 }
 
 // ---------------------------------------------------------------------

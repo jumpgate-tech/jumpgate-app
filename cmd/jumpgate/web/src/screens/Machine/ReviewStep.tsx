@@ -24,6 +24,7 @@ export function ReviewStep({
   beaconHTTPPort,
   execP2PPort,
   rpcBindAddr,
+  modules,
   startError,
   starting,
   onBack,
@@ -43,6 +44,9 @@ export function ReviewStep({
   beaconHTTPPort: string;
   execP2PPort: string;
   rpcBindAddr: string;
+  // modules: the names of the node modules this setup turns on, and the D10
+  // notice for each one dropped because the chosen client cannot run it.
+  modules?: { names: string[]; notices: string[] };
   startError: string | null;
   starting: boolean;
   onBack: () => void;
@@ -109,8 +113,19 @@ export function ReviewStep({
               </td>
             </tr>
           )}
+          {modules && modules.names.length > 0 && (
+            <tr>
+              <th>Modules</th>
+              <td>{modules.names.join(", ")}</td>
+            </tr>
+          )}
         </tbody>
       </table>
+      {modules?.notices.map((n) => (
+        <p key={n} className="warn">
+          {n}
+        </p>
+      ))}
       <p className="muted small">
         There is no preview API for the exact files/units that will be written — the list below is the fixed
         step sequence setup always runs; the actual commands and file contents stream live once you start.
