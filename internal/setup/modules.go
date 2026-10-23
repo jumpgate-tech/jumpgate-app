@@ -182,8 +182,14 @@ func unknownModuleLine(ctx context.Context, e executor.Executor, w catalog.WireC
 	if err != nil {
 		return ""
 	}
+	return lastUnknownModuleLine(res.Stdout)
+}
+
+// lastUnknownModuleLine is the last line of log that says "Unknown RPC
+// module", trimmed, or "".
+func lastUnknownModuleLine(log string) string {
 	found := ""
-	for _, line := range strings.Split(res.Stdout, "\n") {
+	for _, line := range strings.Split(log, "\n") {
 		if strings.Contains(line, "Unknown RPC module") {
 			found = strings.TrimSpace(line)
 		}

@@ -53,3 +53,15 @@ func parseHexQuantity(s string) (uint64, error) {
 	}
 	return strconv.ParseUint(h, 16, 64)
 }
+
+// ParseModuleStatus decodes a node module's status-method response with
+// that module's decoder, for callers outside the monitor (the live tests).
+func ParseModuleStatus(id, body string) (ModuleStatus, error) {
+	dec := nodeDecoders[id]
+	if dec == nil {
+		dec = decodeServed
+	}
+	st, err := dec(body)
+	st.ID = id
+	return st, err
+}
