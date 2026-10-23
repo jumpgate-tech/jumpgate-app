@@ -311,6 +311,7 @@ func (s *Server) registerGatewayRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/gateways/{gid}", s.handleGatewayDelete)
 	mux.HandleFunc("PUT /api/gateways/{gid}/config", s.handleGatewayPutConfig)
 	mux.HandleFunc("POST /api/gateways/{gid}/provision", s.handleGatewayProvision)
+	mux.HandleFunc("PUT /api/gateways/{gid}/modules/{module}", s.handleSetGatewayModule)
 	mux.HandleFunc("POST /api/gateways/{gid}/wipe", s.handleGatewayWipe)
 	// The live HTTPS check. GET because it reads — it writes nothing, touches
 	// no container and creates nothing — even though it is the one read here
@@ -1933,50 +1934,80 @@ func (s *Server) handleGatewayProvision(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	hostID, err := s.provisionGateway(cfg, gw)
+	if err != nil {
+		writeProvisionError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status": "started",
+		// The stream is per-machine, so the caller is told which one to follow
+		// rather than having to know the placement rule.
+		"targetId": hostID,
+	})
+}
 
+// provisionError is a provision refused before it ran, with the status and
+// code its route answers.
+type provisionError struct {
+	status int
+	code   api.Code
+	msg    string
+	dial   error // set for a failure to reach the host
+}
+
+func (e *provisionError) Error() string { return e.msg }
+
+func writeProvisionError(w http.ResponseWriter, err error) {
+	var pe *provisionError
+	switch {
+	case !errors.As(err, &pe):
+		writeError(w, http.StatusInternalServerError, err.Error())
+	case pe.dial != nil:
+		writeDialError(w, pe.dial)
+	default:
+		writeErrorDetail(w, pe.status, pe.msg, "", pe.code)
+	}
+}
+
+// provisionGateway resolves gw against cfg and starts its provision run on
+// the machine it is placed on, returning that machine's id (whose setup
+// stream reports the run). The provision route and a module change that
+// alters a gateway's routes both start it here.
+func (s *Server) provisionGateway(cfg config.Config, gw config.Gateway) (string, error) {
 	resolved, problems := resolveGateway(cfg, gw)
 	if len(resolved.Networks) == 0 {
 		// Redacted for the reason gatewayViewFor's Warnings are: these are the
 		// same resolveUpstream strings, reaching the same browser.
-		writeErrorDetail(w, http.StatusBadRequest,
-			gatewayUnprovisionable(gw, redactEach(problems, providerKeys(cfg))), "", api.CodeNotConfigured)
-		return
+		return "", &provisionError{status: http.StatusBadRequest, code: api.CodeNotConfigured,
+			msg: gatewayUnprovisionable(gw, redactEach(problems, providerKeys(cfg)))}
 	}
 
 	steps, err := setup.PlanGateway(gw.ID, resolved, gw.Placement.Backend)
 	if err != nil {
-		writeErrorDetail(w, http.StatusBadRequest, err.Error(), "", api.CodeNotConfigured)
-		return
+		return "", &provisionError{status: http.StatusBadRequest, code: api.CodeNotConfigured, msg: err.Error()}
 	}
 
 	host, ok := findTarget(cfg, gw.Placement.TargetID)
 	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Sprintf(
-			"this gateway is placed on machine %q, which is no longer registered", gw.Placement.TargetID))
-		return
+		return "", &provisionError{status: http.StatusNotFound, code: api.CodeForStatus(http.StatusNotFound), msg: fmt.Sprintf(
+			"this gateway is placed on machine %q, which is no longer registered", gw.Placement.TargetID)}
 	}
 	ex, err := s.getExecutor(host)
 	if err != nil {
-		writeDialError(w, err)
-		return
+		return "", &provisionError{msg: err.Error(), dial: err}
 	}
 
-	claimed, ok := s.claimSetupRun(w, host.ID)
-	if !ok {
-		return
+	claimed, busy := s.tryClaimSetupRun(host.ID)
+	if busy != "" {
+		return "", &provisionError{status: http.StatusConflict, code: api.CodeConflict, msg: busy}
 	}
 	wire := catalog.WireConfig{}
 	if host.Wire != nil {
 		wire = *host.Wire
 	}
 	s.launchSetupRun(claimed, ex, steps, wire)
-
-	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status": "started",
-		// The stream is per-machine, so the caller is told which one to follow
-		// rather than having to know the placement rule.
-		"targetId": host.ID,
-	})
+	return host.ID, nil
 }
 
 // gatewayUnprovisionable explains, in one sentence, why there is nothing to

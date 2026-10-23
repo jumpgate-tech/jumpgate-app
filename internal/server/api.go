@@ -694,6 +694,10 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/targets/{id}/setup", s.handleStartSetup)
 	mux.HandleFunc("GET /api/targets/{id}/setup/stream", s.handleSetupStream)
 
+	// Modules (modules.go): a node's add-ons and a box's own module units.
+	mux.HandleFunc("GET /api/targets/{id}/modules", s.handleListModules)
+	mux.HandleFunc("PUT /api/targets/{id}/modules/{module}", s.handleSetModule)
+
 	mux.HandleFunc("GET /api/targets/{id}/monitor/stream", s.handleTargetMonitorStream)
 
 	// The fleet: every box's row, polled only while someone watches (fleet.go).
@@ -800,6 +804,7 @@ type catalogClient struct {
 type catalogResponse struct {
 	Networks []catalog.Network `json:"networks"`
 	Clients  []catalogClient   `json:"clients"`
+	Modules  []catalogModule   `json:"modules"`
 }
 
 // handleHost reports the OS/arch jumpgate itself is running on. The
@@ -852,7 +857,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, catalogResponse{Networks: networks, Clients: clients})
+	writeJSON(w, http.StatusOK, catalogResponse{Networks: networks, Clients: clients, Modules: catalogModules(networks)})
 }
 
 // ---------------------------------------------------------------------
@@ -1224,36 +1229,58 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		writeTargetNotFound(w)
 		return
 	}
+	wire, ok = s.reconcileWire(w, r, cfg, target, wire)
+	if !ok {
+		return
+	}
+	if s.startWireSetup(w, r, cfg, target, wire, nil) {
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+	}
+}
+
+// reconcileWire fills a requested wire from what the box already has
+// (setupExisting, setupWire) and checks its data dir. It answers and returns
+// false when the box and the controller disagree or the box cannot say.
+func (s *Server) reconcileWire(w http.ResponseWriter, r *http.Request, cfg config.Config, target config.Target, wire catalog.WireConfig) (catalog.WireConfig, bool) {
 	existing, err := s.setupExisting(r.Context(), cfg, target)
 	var conflict *setupConflict
 	if errors.As(err, &conflict) {
 		writeErrorDetail(w, http.StatusConflict, err.Error(), "", api.CodeConflict)
-		return
+		return wire, false
 	}
 	if err != nil {
 		writeNodeError(w, err)
-		return
+		return wire, false
 	}
 	wire = setupWire(wire, existing)
 	if err := catalog.ValidateDataDir(wire.DataDir); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return wire, false
 	}
+	return wire, true
+}
 
+// startWireSetup runs the node wizard's plan for an already decided wire:
+// it claims the target's setup slot, refuses during a job or on a migrated
+// box, persists the wire and launches the run. afterSuccess, when set, runs
+// once the run has finished without error. It returns false once it has
+// answered with an error; on true the caller writes the 202.
+func (s *Server) startWireSetup(w http.ResponseWriter, r *http.Request, cfg config.Config, target config.Target, wire catalog.WireConfig, afterSuccess func()) bool {
+	id := target.ID
 	steps, err := setup.Plan(wire)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return false
 	}
 
 	ex, err := s.getShellExecutor(target)
 	if err != nil {
 		writeDialError(w, err)
-		return
+		return false
 	}
 	claimed, ok := s.claimSetupRun(w, id)
 	if !ok {
-		return
+		return false
 	}
 	// J1: a job owns the node services until it ends. Setup recreates the
 	// service account and rewrites and starts the units, so during
@@ -1261,7 +1288,7 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	// claim, which keeps a job from starting until setup ends.
 	if s.refuseDuringJob(w, r.Context(), cfg, target) {
 		s.releaseSetupRun(id, claimed)
-		return
+		return false
 	}
 	// Probed only now that setup holds the target and no job runs on it: a
 	// migrate job that ended between an earlier probe and the claim would
@@ -1274,7 +1301,7 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeDialError(w, err)
 		}
-		return
+		return false
 	}
 
 	// The wizard "has run" as soon as setup is kicked off, even if it fails
@@ -1296,7 +1323,7 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 		// retry must not be told setup is already in progress.
 		s.releaseSetupRun(id, claimed)
 		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return false
 	}
 
 	// The monitor and log watcher were built from the Wire this run is
@@ -1306,10 +1333,10 @@ func (s *Server) handleStartSetup(w http.ResponseWriter, r *http.Request) {
 	// read before the save landed.
 	claimed.retireObservers()
 	claimed.retireOnFinish = true
+	claimed.afterSuccess = afterSuccess
 
 	s.launchSetupRun(claimed, ex, steps, wire)
-
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+	return true
 }
 
 // claimedRun is one reserved setup slot: the run every subscriber of
@@ -1328,6 +1355,9 @@ type claimedRun struct {
 	// the node wizard sets it: it is the only run that changes the Wire they
 	// are built from.
 	retireOnFinish bool
+	// afterSuccess runs once the run has finished without error, after the
+	// slot is free (a module change re-provisions its gateways from it).
+	afterSuccess func()
 }
 
 // retireObservers stops and forgets the target's monitor and log watcher.
@@ -1347,25 +1377,33 @@ func (c claimedRun) retireObservers() {
 // that reports progress is likewise per-target. Two runs interleaving would
 // produce one event stream describing two different things.
 func (s *Server) claimSetupRun(w http.ResponseWriter, id string) (claimedRun, bool) {
+	c, busy := s.tryClaimSetupRun(id)
+	if busy != "" {
+		writeError(w, http.StatusConflict, busy)
+		return claimedRun{}, false
+	}
+	return c, true
+}
+
+// tryClaimSetupRun is claimSetupRun without a response: busy says why the
+// slot is taken, "" when the claim was made.
+func (s *Server) tryClaimSetupRun(id string) (c claimedRun, busy string) {
 	entry := s.reg.get(id)
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	if entry.setup != nil && entry.setup.isRunning() {
-		writeError(w, http.StatusConflict, "setup is already running for this target")
-		return claimedRun{}, false
+		return claimedRun{}, "setup is already running for this target"
 	}
 	if entry.opBusy {
-		writeError(w, http.StatusConflict, "a wipe, reset or clear is running on this target; start setup once it has finished")
-		return claimedRun{}, false
+		return claimedRun{}, "a wipe, reset or clear is running on this target; start setup once it has finished"
 	}
 	if entry.jobStarting {
-		writeError(w, http.StatusConflict, "a job is starting on this target; it owns the node services until it ends")
-		return claimedRun{}, false
+		return claimedRun{}, "a job is starting on this target; it owns the node services until it ends"
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	run := newSetupRun(cancel)
 	entry.setup = run
-	return claimedRun{id: id, run: run, ctx: ctx, cancel: cancel, entry: entry}, true
+	return claimedRun{id: id, run: run, ctx: ctx, cancel: cancel, entry: entry}, ""
 }
 
 // claimTargetOp reserves the target for one destructive operation (wipe,
@@ -1435,6 +1473,9 @@ func (s *Server) launchSetupRun(c claimedRun, ex executor.Executor, steps []setu
 		// waits on this before Close()ing the executor out from under a
 		// still-running setup step.
 		close(c.run.done)
+		if runErr == nil && c.afterSuccess != nil {
+			c.afterSuccess()
+		}
 	}()
 }
 
