@@ -247,14 +247,20 @@ func RenderUnits(w WireConfig) (execUnit, beaconUnit string, err error) {
 }
 
 func renderUnit(description, execStart string, w WireConfig, netBindCap bool) (string, error) {
+	return renderServiceUnit(description, execStart, w.NodeNames(), w.DataDir, netBindCap)
+}
+
+// renderServiceUnit renders the one hardened unit template for any service
+// jumpgate runs under n's account: a node's two clients and every box module.
+func renderServiceUnit(description, execStart string, n NodeNames, dataDir string, netBindCap bool) (string, error) {
 	var buf bytes.Buffer
 	err := unitTmpl.Execute(&buf, unitVars{
 		Description: description,
 		ExecStart:   execStart,
-		Prefix:      w.NodeNames().Prefix,
-		User:        w.NodeNames().User,
-		Group:       w.NodeNames().Group,
-		DataDir:     w.DataDir,
+		Prefix:      n.Prefix,
+		User:        n.User,
+		Group:       n.Group,
+		DataDir:     dataDir,
 		NetBindCap:  netBindCap,
 	})
 	if err != nil {

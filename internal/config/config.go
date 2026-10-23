@@ -60,6 +60,10 @@ type Target struct {
 	// Agent is set once a jumpgate agent on this machine has been paired
 	// with this controller. Nil means intents cannot be sent to it.
 	Agent *AgentPairing `json:"agent,omitempty"`
+
+	// Modules are the box modules on this target, each its own unit beside
+	// the node (or on a box with no node at all).
+	Modules []catalog.BoxModule `json:"modules,omitempty"`
 }
 
 // AgentPairing records that a target runs a paired jumpgate agent.
