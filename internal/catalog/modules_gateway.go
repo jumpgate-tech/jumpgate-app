@@ -166,9 +166,14 @@ func gatewayModuleUpstreams(g GatewayConfig, chainID int) (extra []GatewayUpstre
 		}
 		for _, r := range m.Routes[chainID] {
 			extra = append(extra, GatewayUpstream{
-				ID:           fmt.Sprintf("%d-mod-%s", chainID, r.ID),
-				Endpoint:     r.Endpoint,
-				AllowMethods: slices.Clone(r.Methods),
+				ID:       fmt.Sprintf("%d-mod-%s", chainID, r.ID),
+				Endpoint: r.Endpoint,
+				// eRPC ignores everything else when allowMethods is set and
+				// ignoreMethods is not (erpc common/defaults.go:2046-2051 at
+				// a72a9ddb). The "*" is written anyway, so the route stays
+				// closed even if that default changes.
+				IgnoreMethods: []string{"*"},
+				AllowMethods:  slices.Clone(r.Methods),
 			})
 			for _, meth := range r.Methods {
 				if !slices.Contains(ignoreOnOthers, meth) {

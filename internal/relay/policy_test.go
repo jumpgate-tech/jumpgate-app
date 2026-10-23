@@ -293,3 +293,16 @@ func TestRelayBatchWithOneUngrantedWriteRefused(t *testing.T) {
 		t.Errorf("ordinary refusal body = %s", res.Body.String())
 	}
 }
+
+// eRPC folds method case in places, so a module write in another case must not
+// slip past the grant check.
+func TestRelayWriteGrantIgnoresCase(t *testing.T) {
+	stubModuleMethods(t)
+	err := CheckMethods(KeyRecord{Enabled: true}, []string{"Msgboard_addMessage"})
+	if msg, ok := DeniedMessage(err); !ok || msg != "Msgboard_addMessage needs to be on this key's method allow list" {
+		t.Errorf("err = %v; want the module refusal", err)
+	}
+	if err := CheckMethods(KeyRecord{Enabled: true, MethodAllow: []string{"Msgboard_addMessage"}}, []string{"Msgboard_addMessage"}); err != nil {
+		t.Errorf("explicit grant: %v", err)
+	}
+}

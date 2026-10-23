@@ -138,8 +138,10 @@ func checkOneMethod(rec KeyRecord, method string) error {
 		return fmt.Errorf("%w: %s needs allow_trace", ErrMethodDenied, method)
 	}
 	// A module write gossips or changes node state, so the empty allow list's
-	// "everything" never covers it: the key has to name it exactly.
-	if _, write := moduleWrites()[method]; write && !containsExact(rec.MethodAllow, method) {
+	// "everything" never covers it: the key has to name it. The lookup folds
+	// case, because eRPC folds method case in places (architecture/evm/hooks.go)
+	// and a write spelled Msgboard_addMessage must not slip through.
+	if isModuleWrite(method) && !containsFold(rec.MethodAllow, method) {
 		return moduleGrantError{method: method}
 	}
 	// An empty allow list means "everything except the block list", so a key
@@ -148,6 +150,26 @@ func checkOneMethod(rec KeyRecord, method string) error {
 		return fmt.Errorf("%w: %s is not on the allow list", ErrMethodDenied, method)
 	}
 	return nil
+}
+
+// isModuleWrite reports whether method, in any case, is a module write.
+func isModuleWrite(method string) bool {
+	for w := range moduleWrites() {
+		if strings.EqualFold(w, method) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsFold is containsExact ignoring case.
+func containsFold(list []string, want string) bool {
+	for _, item := range list {
+		if strings.EqualFold(item, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // inTraceNamespace reports whether a method belongs to trace or debug. It

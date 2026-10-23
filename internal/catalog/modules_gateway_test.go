@@ -115,7 +115,7 @@ func TestGatewayModuleUpstreams(t *testing.T) {
 	}
 	for _, want := range []string{
 		"      - id: pub\n        type: evm\n        endpoint: \"https://eth.drpc.org\"\n        evm:\n          chainId: 1\n        ignoreMethods:\n          - \"eth_sendRawTransaction\"\n",
-		"      - id: 1-mod-a\n        type: evm\n        endpoint: \"https://a\"\n        evm:\n          chainId: 1\n        allowMethods:\n          - \"eth_sendRawTransaction\"\n",
+		"      - id: 1-mod-a\n        type: evm\n        endpoint: \"https://a\"\n        evm:\n          chainId: 1\n        ignoreMethods:\n          - \"*\"\n        allowMethods:\n          - \"eth_sendRawTransaction\"\n",
 		"      - id: pls\n        type: evm\n        endpoint: \"https://rpc.pulsechain.com\"\n        evm:\n          chainId: 369\n",
 	} {
 		if !strings.Contains(out, want) {
