@@ -30,7 +30,7 @@ type fakeExecutor struct {
 	files map[string][]byte
 }
 
-var fakeMvPattern = regexp.MustCompile(`(?:mv -f|install -o \S+ -g \S+ -m \d+) '([^']*)' '([^']*)'`)
+var fakeMvPattern = regexp.MustCompile(`(?:mv -f|mv -T|install -o \S+ -g \S+ -m \d+) '([^']*)' '([^']*)'`)
 
 func newFakeExecutor() *fakeExecutor {
 	return &fakeExecutor{

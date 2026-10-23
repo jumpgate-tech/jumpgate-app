@@ -178,7 +178,7 @@ func modulesCheck(ctx context.Context, e executor.Executor, w catalog.WireConfig
 // unknownModuleLine is the exec journal's last "Unknown RPC module" line, if
 // any: the binary's own words for a namespace it refused.
 func unknownModuleLine(ctx context.Context, e executor.Executor, w catalog.WireConfig) string {
-	res, err := e.Run(ctx, "journalctl -u "+w.NodeNames().ExecUnit()+" --since -10m --no-pager", nil)
+	res, err := e.Run(ctx, "journalctl -u "+shQuote(w.NodeNames().ExecUnit())+" --since -10m --no-pager", nil)
 	if err != nil {
 		return ""
 	}
@@ -202,12 +202,14 @@ func unknownModuleLine(ctx context.Context, e executor.Executor, w catalog.WireC
 // docs:covers box-modules
 func PlanBoxModule(b catalog.BoxModule, w *catalog.WireConfig, enable bool) ([]Step, error) {
 	p := &boxPlan{b: b}
+	// Even a disable builds commands from b: its id must be a registered box
+	// module (a chain it no longer applies to may still be turned off).
+	m, ok := moduleByID(b.ID)
+	if !ok || m.Placement != catalog.PlaceBox {
+		return nil, fmt.Errorf("setup: %s is not a known box module", b.ID)
+	}
 	if !enable {
 		return []Step{p.stopStep(), p.removeStep()}, nil
-	}
-	m, ok := moduleByID(b.ID)
-	if !ok {
-		return nil, fmt.Errorf("setup: %s is not a known module", b.ID)
 	}
 	u, err := renderBoxModule(b)
 	if err != nil {
@@ -341,23 +343,27 @@ func (p *boxPlan) writeFilesStep() Step {
 		Title: "Write " + p.b.Instance() + " files",
 		Run: func(ctx context.Context, e executor.Executor, st *State) error {
 			opts := streamOpts(ctx, st, "write-files")
-			dir := p.b.DataDir()
-			// The module dir belongs to the service account, which could
-			// swap any path in it for a symlink. So root never writes,
-			// chmods or follows a path there: the dir is made with a
-			// symlink refusal and `chown -h`, and each file is staged under
-			// a random name in a root-only dir, then copied in by
-			// `install`, which unlinks the destination rather than writing
-			// through it.
-			res, err := e.Run(ctx, fmt.Sprintf("%s && mkdir -p %s && chown -h %s:%s %s && install -d -m 0700 %s",
-				refuseSymlinks(n.DataRoot+"/modules", dir), shQuote(dir), n.User, n.Group, shQuote(dir), stagingDir), opts)
+			data, conf := p.b.DataDir(), p.b.ConfigDir()
+			// The data dir is the service's own: root creates the leaf and
+			// hands it over, and never operates inside it after. Every file
+			// setup writes goes in the root-owned config dir, outside any
+			// path the service can write; each is staged under a random
+			// name in a root-only dir, given its owner and mode there, then
+			// renamed into place. The symlink refusals are defence in depth.
+			res, err := e.Run(ctx, fmt.Sprintf("%s && mkdir -p %s && chown -h %s:%s %s && install -d -o root -g root -m 0755 %s %s && install -d -m 0700 %s",
+				refuseSymlinks(n.DataRoot+"/modules", data, catalog.BoxModulesConfigRoot, conf),
+				shQuote(data), n.User, n.Group, shQuote(data),
+				shQuote(catalog.BoxModulesConfigRoot), shQuote(conf), shQuote(stagingDir)), opts)
 			if err != nil {
-				return fmt.Errorf("write-files: mkdir %s: %w", dir, err)
+				return fmt.Errorf("write-files: mkdir %s: %w", conf, err)
 			}
 			if res.ExitCode != 0 {
-				return fmt.Errorf("write-files: mkdir %s failed (exit %d): %s", dir, res.ExitCode, strings.TrimSpace(res.Stderr))
+				return fmt.Errorf("write-files: mkdir %s failed (exit %d): %s", conf, res.ExitCode, strings.TrimSpace(res.Stderr))
 			}
 			for _, f := range p.sortedFiles() {
+				if path.Dir(f) != conf {
+					return fmt.Errorf("write-files: %s is not in %s", f, conf)
+				}
 				staged, err := stagingPath()
 				if err != nil {
 					return fmt.Errorf("write-files: %w", err)
@@ -365,8 +371,16 @@ func (p *boxPlan) writeFilesStep() Step {
 				if err := e.WriteFile(ctx, staged, []byte(p.u.Files[f]), 0600); err != nil {
 					return fmt.Errorf("write-files: stage %s: %w", f, err)
 				}
-				cmd := fmt.Sprintf("%s && install -o %s -g %s -m 0640 %s %s; rc=$?; rm -f %s; exit $rc",
-					refuseSymlinks(path.Dir(f), f), n.User, n.Group, shQuote(staged), shQuote(f), shQuote(staged))
+				// module.json is world-readable so any prober can list the
+				// box's modules; config the unit reads is readable by the
+				// service's group only.
+				group, mode := n.Group, "0640"
+				if f == p.b.SidecarPath() {
+					group, mode = "root", "0644"
+				}
+				q := shQuote(staged)
+				cmd := fmt.Sprintf("%s && chown root:%s %s && chmod %s %s && mv -T %s %s; rc=$?; rm -f %s; exit $rc",
+					refuseSymlinks(f), group, q, mode, q, q, shQuote(f), q)
 				res, err := e.Run(ctx, cmd, opts)
 				if err != nil {
 					return fmt.Errorf("write-files: install %s: %w", f, err)
@@ -441,7 +455,7 @@ func (p *boxPlan) unitStep() Step {
 }
 
 func (p *boxPlan) startStep() Step {
-	unit := p.b.UnitName()
+	unit := shQuote(p.b.UnitName())
 	return Step{
 		ID:    "start",
 		Title: "Start " + unit,
@@ -528,7 +542,7 @@ func (p *boxPlan) unitPresent(ctx context.Context, e executor.Executor) (bool, e
 }
 
 func (p *boxPlan) stopStep() Step {
-	unit := p.b.UnitName()
+	unit := shQuote(p.b.UnitName())
 	return Step{
 		ID:    "stop",
 		Title: "Stop " + unit,

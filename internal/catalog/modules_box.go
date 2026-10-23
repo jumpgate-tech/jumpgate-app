@@ -3,12 +3,13 @@ package catalog
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"strconv"
 )
 
 // BoxModule is one box-placed module recorded on a target (config.Target.
-// Modules). Setup also writes it, as module.json, into the module's data
-// directory so a gate or an SSH probe can list a box's modules on its own.
+// Modules). Setup also writes it, as a root-owned module.json, into the
+// module's dir so a gate or an SSH probe can list a box's modules on its own.
 type BoxModule struct {
 	ID        string   `json:"id"`
 	ChainID   int      `json:"chainId,omitempty"`   // 0 for a chain-agnostic module (watch)
@@ -30,8 +31,34 @@ func (b BoxModule) Instance() string {
 // UnitName is the module's own systemd unit.
 func (b BoxModule) UnitName() string { return "jumpgate-mod-" + b.Instance() + ".service" }
 
-// DataDir is the module's data directory under the current account's root.
+// BoxModulesConfigRoot holds every box module's root-owned config, outside
+// any path the service account can write.
+const BoxModulesConfigRoot = "/var/lib/jumpgate/modules"
+
+// ConfigDir is the module's root-owned config dir (root:root 0755): its
+// module.json and every file its unit reads. The service cannot rewrite the
+// record a prober reads back, nor swap a path in it.
+func (b BoxModule) ConfigDir() string { return BoxModulesConfigRoot + "/" + b.Instance() }
+
+// SidecarPath is the module's module.json, in ConfigDir.
+func (b BoxModule) SidecarPath() string { return b.ConfigDir() + "/module.json" }
+
+// DataDir is the module's service-owned state under the current account's
+// root: the unit's working and writable path. Root only creates it.
 func (b BoxModule) DataDir() string { return CurrentNames.DataRoot + "/modules/" + b.Instance() }
+
+// ValidateBoxModule checks a record, such as one read back from a box,
+// before anything is built from it: a registered box module that applies to
+// its chain, and the chain a known network unless it is 0 (chain-agnostic).
+func ValidateBoxModule(b BoxModule) error {
+	if b.ChainID != 0 {
+		if _, ok := NetworkByChainID(b.ChainID); !ok {
+			return fmt.Errorf("chain %d is not a known network", b.ChainID)
+		}
+	}
+	_, err := boxModule(b)
+	return err
+}
 
 // PortUse is one port a service listens on. Proto is "tcp" or "udp".
 type PortUse struct {
@@ -43,7 +70,7 @@ type PortUse struct {
 // BoxUnit is what a box module renders to.
 type BoxUnit struct {
 	Unit   string            // rendered systemd unit
-	Files  map[string]string // absolute path → content, written 0640 owner jumpgate-node
+	Files  map[string]string // path in ConfigDir → content, written root:jumpgate-node 0640; module.json root:root 0644
 	Client string            // catalog client id to install, "" = the box's gate binary
 	Ports  []PortUse
 }
@@ -69,10 +96,10 @@ func boxModule(b BoxModule) (Module, error) {
 // RenderBoxModule validates b, renders its unit and adds its module.json
 // sidecar to Files.
 func RenderBoxModule(b BoxModule) (BoxUnit, error) {
-	m, err := boxModule(b)
-	if err != nil {
+	if err := ValidateBoxModule(b); err != nil {
 		return BoxUnit{}, err
 	}
+	m, _ := ModuleByID(b.ID)
 	u, err := m.Unit(b)
 	if err != nil {
 		return BoxUnit{}, err
@@ -84,7 +111,12 @@ func RenderBoxModule(b BoxModule) (BoxUnit, error) {
 	if u.Files == nil {
 		u.Files = map[string]string{}
 	}
-	u.Files[b.DataDir()+"/module.json"] = string(side)
+	for f := range u.Files {
+		if path.Dir(f) != b.ConfigDir() {
+			return BoxUnit{}, fmt.Errorf("%s: file %s is not in %s", b.ID, f, b.ConfigDir())
+		}
+	}
+	u.Files[b.SidecarPath()] = string(side)
 	return u, nil
 }
 

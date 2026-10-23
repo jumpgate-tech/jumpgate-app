@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -191,17 +192,26 @@ func TestModulesStepMapsErrors(t *testing.T) {
 func withBoxModule(t *testing.T, m catalog.Module, u catalog.BoxUnit) {
 	t.Helper()
 	withNodeModules(t, m)
-	oldR, oldV := renderBoxModule, validateBoxModules
+	oldR, oldV, oldP := renderBoxModule, validateBoxModules, probeBoxModule
 	renderBoxModule = func(catalog.BoxModule) (catalog.BoxUnit, error) { return u, nil }
 	validateBoxModules = func([]catalog.BoxModule, *catalog.WireConfig) error { return nil }
-	t.Cleanup(func() { renderBoxModule, validateBoxModules = oldR, oldV })
+	// monitor.ProbeBoxModule checks the real registry, which has no box
+	// modules yet; stand in its systemd reading.
+	probeBoxModule = func(ctx context.Context, e executor.Executor, b catalog.BoxModule) (bool, error) {
+		res, err := e.Run(ctx, "systemctl is-active '"+b.UnitName()+"'", nil)
+		return err == nil && strings.TrimSpace(res.Stdout) == "active", err
+	}
+	t.Cleanup(func() { renderBoxModule, validateBoxModules, probeBoxModule = oldR, oldV, oldP })
 }
 
 func watchModule(t *testing.T) catalog.BoxModule {
 	withBoxModule(t, catalog.Module{ID: "watch", Name: "Health watch", Placement: catalog.PlaceBox},
 		catalog.BoxUnit{
-			Unit:  "[Unit]\nDescription=watch\n",
-			Files: map[string]string{"/var/lib/jumpgate-node/modules/watch/module.json": `{"id":"watch"}`},
+			Unit: "[Unit]\nDescription=watch\n",
+			Files: map[string]string{
+				"/var/lib/jumpgate/modules/watch/module.json": `{"id":"watch"}`,
+				"/var/lib/jumpgate/modules/watch/watch.yaml":  "endpoints: []\n",
+			},
 		})
 	return catalog.BoxModule{ID: "watch"}
 }
@@ -275,26 +285,56 @@ func TestWriteFilesNeverFollowsServiceOwnedPaths(t *testing.T) {
 	if err := wf.Verify(context.Background(), e, &State{}); err != nil {
 		t.Fatalf("Verify after Run: %v", err)
 	}
-	dir := b.DataDir()
+	data := b.DataDir()
+	n := catalog.CurrentNames
 	for _, c := range e.callLog() {
 		if strings.Contains(c, ".tmp") {
 			t.Errorf("fixed .tmp path used: %q", c)
 		}
-		if strings.HasPrefix(c, "WriteFile "+dir) {
-			t.Errorf("root wrote straight into the service-owned dir: %q", c)
+		// Nothing privileged runs inside the service-owned dir: root only
+		// creates the leaf and hands it over.
+		if strings.Contains(c, data+"/") {
+			t.Errorf("root operated inside the service-owned dir: %q", c)
 		}
-		if strings.Contains(c, "chmod ") && strings.Contains(c, dir) {
-			t.Errorf("chmod on a service-owned path: %q", c)
-		}
-		if strings.Contains(c, "chown ") && strings.Contains(c, dir) && !strings.Contains(c, "chown -h ") {
-			t.Errorf("chown on a service-owned path without -h: %q", c)
-		}
-		if strings.Contains(c, "install -o") && !strings.Contains(c, "[ -L ") {
-			t.Errorf("install into a service-owned dir without a symlink refusal: %q", c)
+		if strings.Contains(c, "WriteFile ") && !strings.HasPrefix(c, "WriteFile "+stagingDir+"/") {
+			t.Errorf("root wrote outside the staging dir: %q", c)
 		}
 	}
-	if !ran(e, "install -o "+catalog.CurrentNames.User) {
-		t.Errorf("files were not installed with install -o; ran %q", e.callLog())
+	if !ran(e, "mkdir -p '"+data+"' && chown -h "+n.User+":"+n.Group+" '"+data+"'") {
+		t.Errorf("data dir not created and handed over; ran %q", e.callLog())
+	}
+	if !ran(e, "install -d -o root -g root -m 0755 '"+catalog.BoxModulesConfigRoot+"' '"+b.ConfigDir()+"'") {
+		t.Errorf("config dir not root-owned 0755; ran %q", e.callLog())
+	}
+	// Owner and mode are set on the staged file, then it is moved into the
+	// root-owned config dir in one rename.
+	for f, own := range map[string]string{
+		b.SidecarPath():               "chown root:root '%s' && chmod 0644 '%s' && mv -T '%s' '" + b.SidecarPath() + "'",
+		b.ConfigDir() + "/watch.yaml": "chown root:" + n.Group + " '%s' && chmod 0640 '%s' && mv -T '%s' '" + b.ConfigDir() + "/watch.yaml'",
+	} {
+		found := false
+		for _, c := range e.callLog() {
+			if i := strings.Index(c, "chown root:"); i >= 0 && strings.Contains(c, "'"+f+"'") {
+				staged := strings.SplitN(c[i:], "'", 3)[1]
+				if strings.HasPrefix(staged, stagingDir+"/") && strings.Contains(c, fmt.Sprintf(own, staged, staged, staged)) {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s not staged, owned and moved in; ran %q", f, e.callLog())
+		}
+	}
+}
+
+// A record that is not a registered box module plans nothing, even to turn
+// it off, so its id never reaches a command.
+func TestPlanBoxModuleRefusesUnknownIDEvenToDisable(t *testing.T) {
+	watchModule(t)
+	for _, enable := range []bool{true, false} {
+		if _, err := PlanBoxModule(catalog.BoxModule{ID: "x; touch /tmp/pwned"}, nil, enable); err == nil {
+			t.Errorf("enable=%v: planned a hostile id", enable)
+		}
 	}
 }
 

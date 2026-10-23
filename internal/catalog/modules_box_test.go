@@ -33,12 +33,52 @@ func TestBoxModuleNames(t *testing.T) {
 	if got := b.UnitName(); got != "jumpgate-mod-el-bootnode-369.service" {
 		t.Errorf("UnitName = %q", got)
 	}
+	if got := b.ConfigDir(); got != "/var/lib/jumpgate/modules/el-bootnode-369" {
+		t.Errorf("ConfigDir = %q", got)
+	}
 	if got := b.DataDir(); got != "/var/lib/jumpgate-node/modules/el-bootnode-369" {
 		t.Errorf("DataDir = %q", got)
+	}
+	if got := b.SidecarPath(); got != "/var/lib/jumpgate/modules/el-bootnode-369/module.json" {
+		t.Errorf("SidecarPath = %q", got)
 	}
 	w := BoxModule{ID: "watch"}
 	if w.Instance() != "watch" || w.UnitName() != "jumpgate-mod-watch.service" {
 		t.Errorf("watch names = %q %q", w.Instance(), w.UnitName())
+	}
+}
+
+// A record read back from a box is data: an unknown id, a non-box module or
+// a chain jumpgate does not know is refused before any name is built from it.
+func TestValidateBoxModuleRefusesHostileRecords(t *testing.T) {
+	withModules(t, []Module{fakeBox("watch"), fakeBox("el-bootnode"), fakeMsgboard()})
+	for _, b := range []BoxModule{
+		{ID: "x; touch /tmp/pwned"},
+		{ID: "msgboard", ChainID: 369},
+		{ID: "el-bootnode", ChainID: 424242},
+		{ID: "el-bootnode", ChainID: -1},
+	} {
+		if err := ValidateBoxModule(b); err == nil {
+			t.Errorf("%+v accepted", b)
+		}
+	}
+	for _, b := range []BoxModule{{ID: "watch"}, {ID: "el-bootnode", ChainID: 369}} {
+		if err := ValidateBoxModule(b); err != nil {
+			t.Errorf("%+v: %v", b, err)
+		}
+	}
+}
+
+// A unit's config files go in its root-owned ConfigDir, never the
+// service-owned DataDir.
+func TestRenderBoxModuleRefusesFilesOutsideConfigDir(t *testing.T) {
+	m := fakeBox("watch")
+	m.Unit = func(b BoxModule) (BoxUnit, error) {
+		return BoxUnit{Files: map[string]string{b.DataDir() + "/conf.yaml": "x"}}, nil
+	}
+	withModules(t, []Module{m})
+	if _, err := RenderBoxModule(BoxModule{ID: "watch"}); err == nil {
+		t.Fatal("a file in DataDir was accepted")
 	}
 }
 
@@ -50,7 +90,7 @@ func TestRenderBoxModuleWritesSidecar(t *testing.T) {
 		t.Fatal(err)
 	}
 	want, _ := json.Marshal(b)
-	if got := u.Files[b.DataDir()+"/module.json"]; got != string(want) {
+	if got := u.Files[b.SidecarPath()]; got != string(want) {
 		t.Errorf("module.json = %q, want %q", got, want)
 	}
 	for _, s := range []string{"User=jumpgate-node\n", "ReadWritePaths=" + b.DataDir() + "\n"} {

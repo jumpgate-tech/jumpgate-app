@@ -36,10 +36,15 @@ type Alert struct {
 	Cleared *time.Time `json:"cleared,omitempty"`
 }
 
-// boxModulesGlob is where setup writes each box module's sidecar (D-B).
-const boxModulesGlob = "/var/lib/jumpgate-node/modules/*/module.json"
+// boxModulesGlob is where setup writes each box module's root-owned sidecar.
+const boxModulesGlob = catalog.BoxModulesConfigRoot + "/*/module.json"
 
 var (
+	// validateBoxModule vets a record read back from a box before any
+	// command is built from it; a var so tests can stand in modules the
+	// catalog does not register yet.
+	validateBoxModule = catalog.ValidateBoxModule
+
 	// nodeModules is the registry probeModules walks; a var so tests can
 	// stand in modules the catalog does not register yet.
 	nodeModules = catalog.Modules
@@ -131,7 +136,16 @@ func ProbeBoxModules(ctx context.Context, ex executor.Executor) []ModuleStatus {
 			continue
 		}
 		var b catalog.BoxModule
-		if err := json.Unmarshal([]byte(cat.Stdout), &b); err != nil || b.ID == "" {
+		if err := json.Unmarshal([]byte(cat.Stdout), &b); err != nil {
+			out = append(out, ModuleStatus{Error: path + ": unreadable module record"})
+			continue
+		}
+		if err := validateBoxModule(b); err != nil {
+			out = append(out, ModuleStatus{Error: path + ": " + err.Error()})
+			continue
+		}
+		if b.SidecarPath() != path {
+			out = append(out, ModuleStatus{Error: path + ": the record is for " + b.Instance()})
 			continue
 		}
 		out = append(out, ProbeBoxModule(ctx, ex, b))
@@ -140,15 +154,19 @@ func ProbeBoxModules(ctx context.Context, ex executor.Executor) []ModuleStatus {
 }
 
 // ProbeBoxModule reads one box module: whether its unit is active, then its
-// own probe, if it has one.
+// own probe, if it has one. A record that is not a known box module is an
+// error and runs nothing.
 func ProbeBoxModule(ctx context.Context, ex executor.Executor, b catalog.BoxModule) ModuleStatus {
+	if err := validateBoxModule(b); err != nil {
+		return ModuleStatus{Error: err.Error()}
+	}
 	st := ModuleStatus{ID: b.ID, Instance: b.Instance()}
 	if p := boxProbes[b.ID]; p != nil {
 		st = p(ctx, ex, b)
 		st.ID, st.Instance = b.ID, b.Instance()
 	}
 	// systemctl is-active exits non-zero for an inactive unit: a reading.
-	res, err := ex.Run(ctx, "systemctl is-active "+b.UnitName(), nil)
+	res, err := ex.Run(ctx, "systemctl is-active "+shQuote(b.UnitName()), nil)
 	if err != nil {
 		if st.Error == "" {
 			st.Error = err.Error()

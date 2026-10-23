@@ -165,7 +165,7 @@ func TestModulesReadNeedsNoNode(t *testing.T) {
 	if err := json.Unmarshal(res, &got); err != nil || got == nil || len(got) != 0 {
 		t.Fatalf("result %s: %v", res, err)
 	}
-	if len(r.exec.cmds) == 0 || !strings.Contains(r.exec.cmds[0], "/var/lib/jumpgate-node/modules/") {
+	if len(r.exec.cmds) == 0 || !strings.Contains(r.exec.cmds[0], "/var/lib/jumpgate/modules/") {
 		t.Fatalf("commands %v", r.exec.cmds)
 	}
 }

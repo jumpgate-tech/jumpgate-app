@@ -77,12 +77,13 @@ func TestProbeBoxModulesReadsSidecars(t *testing.T) {
 	b := catalog.BoxModule{ID: "watch"}
 	ja, _ := json.Marshal(a)
 	jb, _ := json.Marshal(b)
+	acceptBoxModules(t, "el-bootnode", "watch")
 	ex := newFakeExecutor().
-		script("ls ", executor.Result{Stdout: a.DataDir() + "/module.json\n" + b.DataDir() + "/module.json\n"}).
-		script("cat '"+a.DataDir(), executor.Result{Stdout: string(ja)}).
-		script("cat '"+b.DataDir(), executor.Result{Stdout: string(jb)}).
-		script("is-active "+a.UnitName(), executor.Result{Stdout: "active\n"}).
-		script("is-active "+b.UnitName(), executor.Result{Stdout: "inactive\n", ExitCode: 3})
+		script("ls ", executor.Result{Stdout: a.SidecarPath() + "\n" + b.SidecarPath() + "\n"}).
+		script("cat '"+a.SidecarPath()+"'", executor.Result{Stdout: string(ja)}).
+		script("cat '"+b.SidecarPath()+"'", executor.Result{Stdout: string(jb)}).
+		script("is-active '"+a.UnitName()+"'", executor.Result{Stdout: "active\n"}).
+		script("is-active '"+b.UnitName()+"'", executor.Result{Stdout: "inactive\n", ExitCode: 3})
 	got := ProbeBoxModules(context.Background(), ex)
 	if len(got) != 2 {
 		t.Fatalf("statuses %+v (calls %v)", got, ex.calls)
@@ -92,6 +93,60 @@ func TestProbeBoxModulesReadsSidecars(t *testing.T) {
 	}
 	if got[1].ID != "watch" || got[1].Instance != "watch" || got[1].Active {
 		t.Errorf("second %+v", got[1])
+	}
+}
+
+// acceptBoxModules makes ids the only valid box modules for one test (the
+// catalog registers none yet).
+func acceptBoxModules(t *testing.T, ids ...string) {
+	t.Helper()
+	old := validateBoxModule
+	validateBoxModule = func(b catalog.BoxModule) error {
+		for _, id := range ids {
+			if b.ID == id {
+				return nil
+			}
+		}
+		return errors.New(b.ID + " is not a known module")
+	}
+	t.Cleanup(func() { validateBoxModule = old })
+}
+
+// A sidecar is data the box hands back. One naming an unknown module, or
+// sitting in another module's dir, is reported as an error and nothing is
+// built from it.
+func TestProbeBoxModulesRejectsHostileSidecar(t *testing.T) {
+	acceptBoxModules(t, "watch")
+	hostile := `{"id":"x; touch /tmp/pwned"}`
+	moved := catalog.BoxModule{ID: "watch"}
+	jm, _ := json.Marshal(moved)
+	const p1 = "/var/lib/jumpgate/modules/evil/module.json"
+	const p2 = "/var/lib/jumpgate/modules/other/module.json"
+	ex := newFakeExecutor().
+		script("ls ", executor.Result{Stdout: p1 + "\n" + p2 + "\n"}).
+		script("cat '"+p1+"'", executor.Result{Stdout: hostile}).
+		script("cat '"+p2+"'", executor.Result{Stdout: string(jm)})
+	got := ProbeBoxModules(context.Background(), ex)
+	if len(got) != 2 || got[0].Error == "" || got[1].Error == "" || got[0].Active || got[1].Active {
+		t.Fatalf("statuses %+v", got)
+	}
+	for _, c := range ex.calls {
+		if strings.Contains(c, "pwned") || strings.Contains(c, "systemctl") {
+			t.Errorf("a hostile sidecar reached a command: %q", c)
+		}
+	}
+}
+
+// ProbeBoxModule validates its record too, and quotes the unit it asks for.
+func TestProbeBoxModuleValidatesAndQuotes(t *testing.T) {
+	acceptBoxModules(t, "watch")
+	ex := newFakeExecutor()
+	if st := ProbeBoxModule(context.Background(), ex, catalog.BoxModule{ID: "x; touch /tmp/pwned"}); st.Error == "" || len(ex.calls) != 0 {
+		t.Fatalf("status %+v, calls %v", st, ex.calls)
+	}
+	ProbeBoxModule(context.Background(), ex, catalog.BoxModule{ID: "watch"})
+	if len(ex.calls) != 1 || ex.calls[0] != "systemctl is-active 'jumpgate-mod-watch.service'" {
+		t.Fatalf("calls %v", ex.calls)
 	}
 }
 
