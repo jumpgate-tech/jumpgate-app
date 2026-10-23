@@ -64,6 +64,10 @@ type Snapshot struct {
 	// rather than making DiskUsedPct nullable, so existing readers of
 	// diskUsedPct keep getting a number.
 	DiskKnown bool `json:"diskKnown"`
+
+	// Modules reads the node modules that apply to this node. A node with
+	// none omits the key, so older readers see the snapshot unchanged.
+	Modules []ModuleStatus `json:"modules,omitempty"`
 }
 
 // Config configures a Monitor.
@@ -222,6 +226,7 @@ func (m *Monitor) poll(ctx context.Context) Snapshot {
 		snap.ExecActive, snap.BeaconActive = parseActive(res.Stdout)
 	}
 
+	snap.Modules = probeModules(ctx, m.cfg.Exec, m.cfg.Wire)
 	snap.RefHead = m.fetchRefHead(ctx)
 
 	return snap

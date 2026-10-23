@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/monitor"
 )
 
 // gateBinary is where pairing installs the box's gate. A box module with no
@@ -25,15 +27,14 @@ var (
 	renderBoxModule    = catalog.RenderBoxModule
 	validateBoxModules = catalog.ValidateBoxModules
 
-	// probeBoxModule reports whether a box module is up. monitor.
-	// ProbeBoxModule replaces it at init (monitor imports setup, so setup
-	// cannot import monitor); the default asks systemd.
+	// probeBoxModule reports whether a box module is up, through the same
+	// probe status uses. A reading the shell could not take is an error.
 	probeBoxModule = func(ctx context.Context, e executor.Executor, b catalog.BoxModule) (bool, error) {
-		res, err := e.Run(ctx, "systemctl is-active "+b.UnitName(), nil)
-		if err != nil {
-			return false, err
+		st := monitor.ProbeBoxModule(ctx, e, b)
+		if !st.Active && st.Error != "" {
+			return false, errors.New(st.Error)
 		}
-		return strings.TrimSpace(res.Stdout) == "active", nil
+		return st.Active, nil
 	}
 )
 

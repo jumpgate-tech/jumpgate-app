@@ -10,6 +10,9 @@ const (
 	KindLogsRead      = "logs.read"
 	KindLogsSince     = "logs.since"
 	KindServiceAction = "service.action"
+	// KindModulesRead reads the box's box modules. Like agent.info it needs
+	// no node.json, so a bootnode-only box reports status.
+	KindModulesRead = "modules.read"
 )
 
 // Reason codes carried by a rejected receipt's result. They are stable: the
