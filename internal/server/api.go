@@ -1043,7 +1043,7 @@ func validateWirePorts(wire catalog.WireConfig) error {
 				wire.SnapshotKey, snapshotKeyMinLen, snapshotKeyMaxLen)
 		}
 	}
-	return nil
+	return catalog.ValidateModules(wire)
 }
 
 // snapshotKeyPattern is the accepted shape for a Valve snapshot key: a "vk_"

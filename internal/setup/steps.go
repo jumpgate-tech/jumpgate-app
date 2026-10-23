@@ -30,6 +30,9 @@ func Plan(w catalog.WireConfig) ([]Step, error) {
 	if err := catalog.ValidateNames(w); err != nil {
 		return nil, fmt.Errorf("setup: %w", err)
 	}
+	if err := catalog.ValidateModules(w); err != nil {
+		return nil, fmt.Errorf("setup: %w", err)
+	}
 	if err := catalog.ValidateDataDir(w.DataDir); err != nil {
 		return nil, fmt.Errorf("setup: %w", err)
 	}

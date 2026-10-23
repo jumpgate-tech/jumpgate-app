@@ -63,6 +63,10 @@ type WireConfig struct {
 	// valve.city, embedded in the manifest URL.
 	ExecSnapshot bool
 	SnapshotKey  string
+
+	// Modules are the node modules on this node's exec client. Empty
+	// renders exactly the units a wire without modules always rendered.
+	Modules []NodeModule `json:"Modules,omitempty"`
 }
 
 // checkpointURL resolves the effective beacon checkpoint/genesis endpoint:
@@ -186,6 +190,9 @@ func RenderUnits(w WireConfig) (execUnit, beaconUnit string, err error) {
 	if err := ValidateNames(w); err != nil {
 		return "", "", err
 	}
+	if err := ValidateModules(w); err != nil {
+		return "", "", err
+	}
 	net, ok := NetworkByChainID(w.ChainID)
 	if !ok {
 		return "", "", fmt.Errorf("catalog: unknown chain id %d", w.ChainID)
@@ -277,7 +284,11 @@ func execCommand(w WireConfig) (string, error) {
 		if !w.Archive {
 			cmd += " --full"
 		}
-		return cmd, nil
+		tail, err := execModuleFlags(w)
+		if err != nil {
+			return "", err
+		}
+		return cmd + tail, nil
 
 	case "geth":
 		cmd := fmt.Sprintf(
