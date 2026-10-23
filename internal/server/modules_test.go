@@ -519,6 +519,38 @@ func TestSetModulePublicOnlyReportsFailedGateway(t *testing.T) {
 	}
 }
 
+// Two gateways placed on one host cannot both stand: config keeps one
+// managed eRPC per device (mergeGatewaysPerTarget), so the re-provision fan-out
+// never claims one host's slot twice. This pins that invariant, which the
+// one-claim-per-gateway loop in reprovisionGatewaysFor relies on, through
+// the real provision path (no stub).
+func TestSetModulePublicOnlyTwoGatewaysOneHost(t *testing.T) {
+	fakeModules(t)
+	a := newAPITestServer(t)
+	moduleTarget(t, a, func(c *config.Config) {
+		targetByID(c, "box").Wire = rethWire(369, "reth", catalog.NodeModule{ID: "msgboard"})
+		for _, id := range []string{"gw1", "gw2"} {
+			c.Gateways = append(c.Gateways, config.Gateway{ID: id, Placement: config.GatewayPlacement{TargetID: "box", Backend: "docker"},
+				Config: catalog.GatewayConfig{Networks: []catalog.GatewayNetwork{{ChainID: 369,
+					Upstreams: []catalog.GatewayUpstream{{ID: "n" + id, Kind: catalog.UpstreamManagedNode, TargetID: "box"}}}}}})
+		}
+	})
+	c, _ := config.Load()
+	if n := len(c.GatewaysOn("box")); n != 1 {
+		t.Fatalf("gateways on one host after load = %d, want 1 (merged)", n)
+	}
+	res := a.do(t, "PUT", "/api/targets/box/modules/msgboard", map[string]any{"enabled": true, "public": "read"})
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("status = %d, body %s", res.StatusCode, body)
+	}
+	got := decodeJSON[moduleChangeResponse](t, res)
+	if len(got.Gateways) != 1 || len(got.Failed) != 0 {
+		t.Fatalf("response = %+v", got)
+	}
+	waitSetupIdle(t, a, "box")
+}
+
 func TestSetModulePublicOnlyTakesTheSlot(t *testing.T) {
 	fakeModules(t)
 	a := newAPITestServer(t)

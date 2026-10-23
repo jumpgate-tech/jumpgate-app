@@ -427,6 +427,9 @@ func (s *Server) reprovisionGatewaysFor(id string) (started []string, failed []g
 		log.Printf("jumpgate: modules: reload config to re-provision the gateways for %s: %v", id, err)
 		return nil, []gatewayFailure{{ID: "*", Error: err.Error()}}
 	}
+	// One claim per gateway is one claim per host: config keeps a single
+	// managed eRPC per device (config.mergeGatewaysPerTarget), so no two of
+	// these share a slot, and a busy slot is always someone else's run.
 	for _, gid := range gatewaysReferencing(cfg, id) {
 		gw, _ := cfg.FindGateway(gid)
 		if _, err := reprovisionGateway(s, cfg, gw); err != nil {
