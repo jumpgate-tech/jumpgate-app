@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -503,7 +504,7 @@ func TestAdoptDevnetReferences_NoDevnetLeavesEverythingAlone(t *testing.T) {
 
 	adoptDevnetReferences(&g, Target{ID: "box"})
 
-	if g.Networks[0].Upstreams[0] != before {
+	if !reflect.DeepEqual(g.Networks[0].Upstreams[0], before) {
 		t.Errorf("a target with no devnet still rewrote an upstream: %+v", g.Networks[0].Upstreams[0])
 	}
 }

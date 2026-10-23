@@ -727,6 +727,7 @@ func resolveGateway(cfg config.Config, gw config.Gateway) (catalog.GatewayConfig
 	out := gw.Config
 	out.Networks = make([]catalog.GatewayNetwork, 0, len(gw.Config.Networks))
 
+	tier := catalog.GatewayTier(gw.Config)
 	var problems []string
 	for _, n := range gw.Config.Networks {
 		ups := make([]catalog.GatewayUpstream, 0, len(n.Upstreams))
@@ -753,9 +754,27 @@ func resolveGateway(cfg config.Config, gw config.Gateway) (catalog.GatewayConfig
 			problems = append(problems, fmt.Sprintf("chain %d has no usable upstream, so it is not served", n.ChainID))
 			continue
 		}
-		out.Networks = append(out.Networks, catalog.GatewayNetwork{ChainID: n.ChainID, Upstreams: ups})
+		// Module method lists are derived here, beside Endpoint, from each
+		// managed node's wire: never stored, so they follow the node.
+		out.Networks = append(out.Networks, catalog.ApplyModuleIgnores(tier,
+			catalog.GatewayNetwork{ChainID: n.ChainID, Upstreams: ups}, upstreamWires(cfg, ups)))
 	}
 	return out, problems
+}
+
+// upstreamWires is the managed node's wire behind each of ups, nil for an
+// upstream that is not a managed node.
+func upstreamWires(cfg config.Config, ups []catalog.GatewayUpstream) []*catalog.WireConfig {
+	out := make([]*catalog.WireConfig, len(ups))
+	for i, u := range ups {
+		if u.KindOrDefault() != catalog.UpstreamManagedNode {
+			continue
+		}
+		if t, ok := findTarget(cfg, u.TargetID); ok {
+			out[i] = t.Wire
+		}
+	}
+	return out
 }
 
 // resolveUpstream derives one upstream's dialable URL and a human label.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"text/template"
@@ -114,6 +115,14 @@ type GatewayUpstream struct {
 	// RecentOnly bounds this upstream to recent history, for a full/pruned
 	// node that cannot answer historical state.
 	RecentOnly bool
+
+	// IgnoreMethods and AllowMethods are eRPC's per-upstream method lists
+	// (yaml ignoreMethods/allowMethods, checked in erpc common/config.go at
+	// a72a9ddb). They are derived from modules at render time, like a managed
+	// Endpoint, and never stored: see ApplyModuleIgnores and
+	// gatewayModuleUpstreams.
+	IgnoreMethods []string `json:"-"`
+	AllowMethods  []string `json:"-"`
 }
 
 // KindOrDefault resolves the kind ("" → UpstreamExternal).
@@ -187,6 +196,9 @@ type GatewayConfig struct {
 	// front — a Fronted flag stored somewhere else would be a second source
 	// of truth able to disagree with the container that is actually in front.
 	TLS *GatewayTLS
+
+	// Modules are the gateway modules turned on. Only the ids are stored.
+	Modules []GatewayModule `json:"Modules,omitempty"`
 }
 
 // Fronted reports whether something terminates TLS in front of this gateway.
@@ -245,6 +257,18 @@ projects:
           scoreMultipliers:
             - overall: 0.2
 {{- end}}
+{{- if .IgnoreMethods}}
+        ignoreMethods:
+{{- range .IgnoreMethods}}
+          - {{.}}
+{{- end}}
+{{- end}}
+{{- if .AllowMethods}}
+        allowMethods:
+{{- range .AllowMethods}}
+          - {{.}}
+{{- end}}
+{{- end}}
 {{- end}}
 `
 
@@ -260,6 +284,9 @@ type gatewayUpstreamVars struct {
 	ChainID    int
 	RecentOnly bool
 	Fallback   bool
+
+	IgnoreMethods []string // quoted
+	AllowMethods  []string // quoted
 }
 
 type gatewayVars struct {
@@ -354,6 +381,9 @@ func RenderGatewayConfig(g GatewayConfig) (string, error) {
 	if err := g.TLS.ValidateSettings(); err != nil {
 		return "", err
 	}
+	if err := ValidateGatewayModules(g); err != nil {
+		return "", fmt.Errorf("catalog: gateway: %w", err)
+	}
 
 	// The two listeners cannot share a port. eRPC would bind whichever it
 	// starts first and fail the second, so the gateway would come up serving
@@ -401,7 +431,22 @@ func RenderGatewayConfig(g GatewayConfig) (string, error) {
 			}
 		}
 
-		for i, u := range n.Upstreams {
+		// Gateway modules add their own upstreams, which serve only their
+		// methods; every other upstream on the chain then ignores those
+		// methods, so they never fall over to a public endpoint. A route is
+		// never a fallback: it is the only path for what it serves.
+		extra, ignoreOnOthers := gatewayModuleUpstreams(g, n.ChainID)
+		ups := n.Upstreams
+		if len(extra) > 0 {
+			ups = make([]GatewayUpstream, 0, len(n.Upstreams)+len(extra))
+			for _, u := range n.Upstreams {
+				u.IgnoreMethods = append(slices.Clone(u.IgnoreMethods), ignoreOnOthers...)
+				ups = append(ups, u)
+			}
+			ups = append(ups, extra...)
+		}
+
+		for i, u := range ups {
 			endpoint := strings.TrimSpace(u.Endpoint)
 			if endpoint == "" {
 				return "", fmt.Errorf("catalog: gateway: chain %d upstream %d has no endpoint", n.ChainID, i+1)
@@ -426,7 +471,10 @@ func RenderGatewayConfig(g GatewayConfig) (string, error) {
 				Endpoint:   strconv.Quote(endpoint),
 				ChainID:    n.ChainID,
 				RecentOnly: u.RecentOnly,
-				Fallback:   !u.Local && hasLocal,
+				Fallback:   !u.Local && hasLocal && i < len(n.Upstreams),
+
+				IgnoreMethods: quoteAll(u.IgnoreMethods),
+				AllowMethods:  quoteAll(u.AllowMethods),
 			})
 		}
 	}
@@ -436,6 +484,18 @@ func RenderGatewayConfig(g GatewayConfig) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// quoteAll quotes each entry for YAML, nil for none.
+func quoteAll(xs []string) []string {
+	if len(xs) == 0 {
+		return nil
+	}
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = strconv.Quote(x)
+	}
+	return out
 }
 
 // validUpstreamScheme reports whether endpoint is a scheme eRPC can dial.

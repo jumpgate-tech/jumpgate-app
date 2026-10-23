@@ -339,3 +339,35 @@ func TestWSRefusesAGarbageFrame(t *testing.T) {
 		t.Error("a garbage frame reached the upstream")
 	}
 }
+
+// A module's stream methods have no listener behind the relay. The refusal
+// says so and names the bounded read to poll instead.
+func TestRelayRefusesModuleSubscribe(t *testing.T) {
+	stubModuleMethods(t)
+	h := newWSHarness(t, enabledKey())
+	h.send(t, `{"jsonrpc":"2.0","id":1,"method":"msgboard_subscribe","params":[]}`)
+
+	got := h.read(t)
+	errObj, ok := got["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("got %v, want a JSON-RPC error", got)
+	}
+	want := "subscriptions other than eth_subscribe are not supported on this endpoint; poll msgboard_contentPage"
+	if msg, _ := errObj["message"].(string); msg != want {
+		t.Errorf("message = %q, want %q", msg, want)
+	}
+	if len(h.caller.seen()) != 0 {
+		t.Error("a module subscribe reached the upstream")
+	}
+}
+
+// A module write over the stream gets the same explicit-grant copy.
+func TestWSModuleWriteNeedsExplicitGrant(t *testing.T) {
+	stubModuleMethods(t)
+	h := newWSHarness(t, enabledKey())
+	h.send(t, `{"jsonrpc":"2.0","id":1,"method":"msgboard_addMessage","params":[]}`)
+	errObj, _ := h.read(t)["error"].(map[string]any)
+	if msg, _ := errObj["message"].(string); msg != moduleGrantCopy {
+		t.Errorf("message = %q, want %q", msg, moduleGrantCopy)
+	}
+}

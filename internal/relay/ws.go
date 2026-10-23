@@ -198,10 +198,20 @@ func (s *WSSession) handleFrame(ctx context.Context, msg []byte) {
 	if !s.stillAuthorised(ctx) {
 		return
 	}
+	// A module's stream method would need a WebSocket listener on the node,
+	// and the node has none. Say so, and name the bounded read to poll.
+	if hint, stream := moduleStreams()[call.Method]; stream {
+		msg := "subscriptions other than eth_subscribe are not supported on this endpoint"
+		if hint != "" {
+			msg += "; " + hint
+		}
+		s.writeError(call.ID, codeInvalidRequest, msg)
+		return
+	}
 	if err := CheckMethods(s.cfg.Record, []string{call.Method}); err != nil {
 		// The connection survives a refusal, so one denied call does not drop a
 		// customer's whole session.
-		s.writeError(call.ID, codePolicyDenied, "method not allowed for this key")
+		s.writeError(call.ID, codePolicyDenied, deniedBody(err))
 		return
 	}
 

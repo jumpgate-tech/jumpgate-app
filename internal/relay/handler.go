@@ -177,7 +177,7 @@ func (h *Handler) serveRPC(w http.ResponseWriter, r *http.Request, route Route, 
 		return
 	}
 	if err := CheckMethods(rec, methods); err != nil {
-		writeError(w, http.StatusForbidden, "method not allowed for this key")
+		writeError(w, http.StatusForbidden, deniedBody(err))
 		return
 	}
 

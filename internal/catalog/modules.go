@@ -147,6 +147,23 @@ func ModuleWriteMethods() map[string]string {
 	return out
 }
 
+// ModuleStreamMethods maps every node module's stream method to the poll
+// hint the relay appends to its refusal ("poll msgboard_contentPage").
+func ModuleStreamMethods() map[string]string {
+	out := map[string]string{}
+	for _, m := range modules {
+		if m.Placement != PlaceNode {
+			continue
+		}
+		for _, mm := range m.Methods {
+			if mm.Class == MethodStream {
+				out[mm.Name] = m.PollHint
+			}
+		}
+	}
+	return out
+}
+
 // checkModules is the init-time check of the registry.
 func checkModules(ms []Module) error {
 	seen := map[string]bool{}
