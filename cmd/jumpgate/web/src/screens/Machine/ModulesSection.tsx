@@ -130,7 +130,7 @@ export function ModulesSection({ targetId }: { targetId: string }) {
     });
   }
 
-  async function submit(module: string, body: api.SetModuleRequest, restartsExec: boolean): Promise<void> {
+  async function submit(module: string, body: api.SetModuleRequest, restartsExec: boolean): Promise<boolean> {
     setBusy(true);
     setError(null);
     setNote(null);
@@ -148,8 +148,10 @@ export function ModulesSection({ targetId }: { targetId: string }) {
         setNote("Saved.");
       }
       void qc.invalidateQueries({ queryKey: ["targets"] });
+      return true;
     } catch (err) {
       setError(formatError(err));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -199,7 +201,7 @@ export function ModulesSection({ targetId }: { targetId: string }) {
               options={options}
               value={nodeEnabled.find((m) => m.id === c.id)?.public ?? ""}
               disabled={busy}
-              onChange={(v) => void submit(c.id, { enabled: true, public: v }, false)}
+              onChange={(v) => submit(c.id, { enabled: true, public: v }, false)}
             />
           )}
         </ModuleCardView>
@@ -289,7 +291,8 @@ export function ModuleCardView({
 // PublicChoice is the Public radio (spec D11). Its options are the ones the
 // catalog says the module offers; the posting warning shows while "Public
 // reads and posting" is the selected option. The selection is held locally
-// so it reflects the click before the saved wire is re-read.
+// so it reflects the click before the saved wire is re-read, and goes back
+// to the saved value when the change fails.
 function PublicChoice({
   moduleId,
   options,
@@ -301,7 +304,7 @@ function PublicChoice({
   options: typeof PUBLIC_OPTIONS;
   value: api.ModulePublic;
   disabled: boolean;
-  onChange: (v: api.ModulePublic) => void;
+  onChange: (v: api.ModulePublic) => Promise<boolean>;
 }) {
   const [selected, setSelected] = useState<api.ModulePublic>(value);
   useEffect(() => setSelected(value), [value]);
@@ -316,7 +319,9 @@ function PublicChoice({
             disabled={disabled}
             onChange={() => {
               setSelected(o.value);
-              onChange(o.value);
+              void onChange(o.value).then((ok) => {
+                if (!ok) setSelected(value);
+              });
             }}
           />{" "}
           {o.label}

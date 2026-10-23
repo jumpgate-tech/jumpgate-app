@@ -162,6 +162,17 @@ describe("ModulesSection", () => {
     await waitFor(() => expect(api.setModule).toHaveBeenCalledWith("t1", "msgboard", { enabled: true, public: "post" }));
   });
 
+  it("puts the Public radio back on the saved value when setModule fails", async () => {
+    setup(target("reth", [{ id: "msgboard" }]), { gateways: [gateway(true)] });
+    vi.mocked(api.setModule).mockRejectedValue(new Error("boom"));
+    const local = (await screen.findByLabelText("Local only")) as HTMLInputElement;
+    expect(local.checked).toBe(true);
+    fireEvent.click(screen.getByLabelText("Public reads and posting"));
+    await waitFor(() => expect(api.setModule).toHaveBeenCalled());
+    await waitFor(() => expect(local.checked).toBe(true));
+    expect((screen.getByLabelText("Public reads and posting") as HTMLInputElement).checked).toBe(false);
+  });
+
   it("shows no Public radio for a module that offers no public exposure", async () => {
     setup(target("reth", [{ id: "msgboard" }]), { gateways: [gateway(true)] });
     cleanup();
