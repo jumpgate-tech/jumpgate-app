@@ -11,18 +11,19 @@ const (
 
 // Layout breakpoints.
 const (
-	leftMinWidth    = 100 // at or above, a left sidebar replaces the header's view tabs
-	leftWidth       = 22  // narrower (down to leftMinW) when main needs the room
-	leftMinW        = 18
-	drawerTallRows  = 34  // auto opens, and an open drawer is boxed, at or above
-	drawerBoxedRows = 5   // 2 borders + 3 activity lines
-	kpiBoxedMinRows = 30  // at or above, the KPI strip is boxed tiles
-	kpiBoxedRows    = 4   // 2 borders + 2 lines
-	rightMinWidth   = 140 // at or above, the activity log is a right sidebar; below, ] overlays it
-	rightMinW       = 28
-	rightMaxW       = 40
-	mainMinW        = 50 // main never gets narrower than this
-	mainFleetW      = 82 // boxed main that holds the default fleet columns (80 cells)
+	leftMinWidth     = 100 // at or above, a left sidebar replaces the header's view tabs
+	leftWidth        = 22  // narrower (down to leftMinW) when main needs the room
+	leftMinW         = 18
+	drawerTallRows   = 34  // auto opens, and an open drawer is boxed, at or above
+	drawerMaxLines   = 7   // boxed: 6 bars + "+N more"
+	drawerCompactMax = 4   // compact: 3 bars + "+N more"
+	kpiBoxedMinRows  = 30  // at or above, the KPI strip is boxed tiles
+	kpiBoxedRows     = 4   // 2 borders + 2 lines
+	rightMinWidth    = 140 // at or above, the activity log is a right sidebar; below, ] overlays it
+	rightMinW        = 28
+	rightMaxW        = 40
+	mainMinW         = 50 // main never gets narrower than this
+	mainFleetW       = 82 // boxed main that holds the default fleet columns (80 cells)
 )
 
 // drawerFromPref reads a stored pref; anything unknown is auto.
@@ -62,12 +63,13 @@ type layout struct {
 	Drawer        rect // activity rows; H=0 when minimized
 	Hints         rect // 1 row, last line (minimized: the status line)
 	DrawerOpen    bool // resolved: auto -> h >= 34
-	DrawerCompact bool // open but h < 34: 1 activity line, no box
+	DrawerCompact bool // open but h < 34: up to 4 activity lines, no box
 }
 
-// layoutFor splits a w x h window (at least 80x24) into regions. The skew
-// banner is not a region: render takes one row from Main for it.
-func layoutFor(w, h int, d drawerState) layout {
+// layoutFor splits a w x h window (at least 80x24) into regions; lines is
+// how many activity lines an open drawer has to show. The skew banner is not
+// a region: render takes one row from Main for it.
+func layoutFor(w, h int, d drawerState, lines int) layout {
 	var l layout
 	l.Header = rect{0, 0, w, 1}
 	l.KPI = rect{0, 1, w, 1}
@@ -84,10 +86,10 @@ func layoutFor(w, h int, d drawerState) layout {
 	drawerH := 0
 	if l.DrawerOpen {
 		if h >= drawerTallRows {
-			drawerH = drawerBoxedRows
+			drawerH = 2 + min(max(lines, 1), drawerMaxLines)
 		} else {
 			l.DrawerCompact = true
-			drawerH = 1
+			drawerH = min(max(lines, 1), drawerCompactMax)
 		}
 	}
 	l.Hints = rect{0, h - 1, w, 1}

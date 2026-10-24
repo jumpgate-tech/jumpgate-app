@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -126,19 +127,84 @@ func TestDrawerSaveRefused(t *testing.T) {
 	}
 }
 
-// The open drawer has a line per box with jobs, then the status line.
-func TestDrawerViewLines(t *testing.T) {
-	a := dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "open")
-	a.sel = "box-a"
-	v := ansi.Strip(a.drawerView(rect{0, 0, 120, 5}, false))
-	for _, want := range []string{"+- Activity", "jobs  box-a  1 running | 1 needs decision", "box-a | gate | server live | updated 5s ago"} {
-		if !strings.Contains(v, want) {
-			t.Errorf("drawer lacks %q:\n%s", want, v)
+// jobsDashFleet is the dashboard fleet with box-b's exec catching up to a
+// known head, so it has a sync bar.
+func jobsDashFleet() api.Fleet {
+	f := dashFleet()
+	f.Rows[1].Status.Exec.Head = 21_100_000
+	f.Rows[1].Status.RefHead = 21_300_000
+	return f
+}
+
+// jobsDashApp is dashApp on the Jobs view with the sample inbox and the
+// jobs fleet.
+func jobsDashApp(t *testing.T, f *tuitest.Fake, w, h int, drawer string) *App {
+	t.Helper()
+	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: sampleInbox(), Has: true, State: apiclient.Live}
+	m, _ := tuitest.Send(dashApp(t, f, w, h, "ascii", drawer), fleetMsg{u: apiclient.Update[api.Fleet]{Value: jobsDashFleet(), Has: true, State: apiclient.Live}})
+	return press(t, m, "2").(*App)
+}
+
+// The open drawer draws bars in the U7 order, ASCII in the ascii set, and
+// no status line.
+func TestDrawerViewBars(t *testing.T) {
+	a := jobsDashApp(t, tuitest.NewFake(), 120, 40, "open")
+	v := ansi.Strip(a.drawerView(a.layout().Drawer, false))
+	requireASCII(t, v)
+	lines := strings.Split(v, "\n")
+	if len(lines) != 5 || !strings.HasPrefix(lines[0], "+- Activity") {
+		t.Fatalf("drawer:\n%s", v)
+	}
+	for i, want := range []string{"job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision",
+		"job  box-b      migrate-names  step 4/8     [########............]",
+		"sync box-b      exec           21.1M/21.3M  [####################] 99.1% ~ stale"} {
+		if !strings.Contains(lines[i+1], want) {
+			t.Errorf("line %d %q, want %q", i+1, lines[i+1], want)
 		}
 	}
-	c := ansi.Strip(a.drawerView(rect{0, 0, 80, 1}, true))
-	if strings.Contains(c, "Activity") || !strings.Contains(c, "jobs  box-a") || strings.Count(c, "\n") != 0 {
-		t.Fatalf("compact %q", c)
+	if strings.Contains(v, "server live") {
+		t.Errorf("the status line is still there:\n%s", v)
+	}
+}
+
+func TestDrawerViewCapsAndMore(t *testing.T) {
+	f := dashFleet()
+	for i := range 5 {
+		r := pctRow(fmt.Sprintf("box-%d", i), float64(86+i))
+		f.Rows = append(f.Rows, r)
+	}
+	for _, c := range []struct {
+		w, h  int
+		shown int
+		more  string
+	}{{80, 24, 3, "+2 more"}, {120, 40, 5, ""}} {
+		a := dashApp(t, tuitest.NewFake(), c.w, c.h, "ascii", "open")
+		m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: f, Has: true, State: apiclient.Live}})
+		a = m.(*App)
+		l := a.layout()
+		v := ansi.Strip(a.drawerView(l.Drawer, l.DrawerCompact))
+		if n := strings.Count(v, "disk "); n != c.shown || (c.more != "" && !strings.Contains(v, c.more)) || (c.more == "" && strings.Contains(v, "more")) {
+			t.Errorf("%dx%d: %d bars:\n%s", c.w, c.h, n, v)
+		}
+		if !strings.Contains(v, "disk box-4") || strings.Index(v, "box-4") > strings.Index(v, "box-3") {
+			t.Errorf("%dx%d: fullest not first:\n%s", c.w, c.h, v)
+		}
+	}
+	for i := range 4 {
+		f.Rows = append(f.Rows, pctRow(fmt.Sprintf("box-x%d", i), 90))
+	}
+	a := dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "open")
+	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: f, Has: true, State: apiclient.Live}})
+	if v := ansi.Strip(tuitest.Frame(m)); strings.Count(v, "| disk ") != 6 || !strings.Contains(v, "+3 more") {
+		t.Errorf("120x40 with 9 bars:\n%s", v)
+	}
+}
+
+func TestDrawerViewEmpty(t *testing.T) {
+	a := dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "open")
+	v := ansi.Strip(a.drawerView(a.layout().Drawer, false))
+	if !strings.Contains(v, "no progress to show | jobs 1 running  [! 1 needs decision]  (2 Jobs: steps)") || strings.Contains(v, "[#") {
+		t.Fatalf("drawer:\n%s", v)
 	}
 }
 
@@ -155,6 +221,21 @@ var dashCases = []struct {
 	{"dash_unicode_120x40", 120, 40, "unicode", "auto"},
 	{"dash_140x40", 140, 40, "ascii", "auto"},
 	{"dash_160x48", 160, 48, "ascii", "auto"},
+}
+
+func TestDashJobsGolden(t *testing.T) {
+	fr := tuitest.Frame(jobsDashApp(t, tuitest.NewFake(), 120, 40, "auto"))
+	requireASCII(t, fr)
+	lines := strings.Split(fr, "\n")
+	if len(lines) != 40 {
+		t.Fatalf("%d lines", len(lines))
+	}
+	for _, l := range lines {
+		if ansi.StringWidth(l) > 120 {
+			t.Fatalf("line wider than 120: %q", l)
+		}
+	}
+	tuitest.Golden(t, "dash_jobs_120x40", fr)
 }
 
 // degradedFleet has every section missing, stale or failed: nothing in it

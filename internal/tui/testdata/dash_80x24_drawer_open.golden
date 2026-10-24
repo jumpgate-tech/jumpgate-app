@@ -20,5 +20,5 @@
 
 
  3 boxes | sort: host | ~ stale  * this machine
- jobs  box-a  1 running | 1 needs decision
+ no progress to show | jobs 1 running  [! 1 needs decision]  (2 Jobs: steps)
  . drawer  ? help  : command  1-5 views  [ ] panels  q quit

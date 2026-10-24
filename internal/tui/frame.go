@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/apiclient"
 )
 
@@ -59,7 +60,7 @@ func (a *App) boxed(title string, focused bool, body string, w, h int) string {
 
 // frame is the whole dashboard at a window of at least 80×24.
 func (a *App) frame() string {
-	l := layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer))
+	l := a.layout()
 	parts := []string{a.header(a.w), a.kpiView(l.KPI)}
 	body := a.mainView(l.Main)
 	switch {
@@ -200,7 +201,7 @@ func (a *App) mainView(r rect) string {
 
 // drawerOpen is the drawer's resolved state at this window size.
 func (a *App) drawerOpen() bool {
-	return layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer)).DrawerOpen
+	return a.layout().DrawerOpen
 }
 
 // toggleDrawer stores the opposite of what shows now, explicitly.
@@ -280,44 +281,111 @@ func (a *App) statusLine() string {
 	return s
 }
 
-// activity is the open drawer's lines: a line per box with jobs, then the
-// flash or the status line.
-func (a *App) activity() []string {
-	var out []string
-	for _, r := range a.fleet.Rows {
-		if r.Jobs == nil {
-			continue
-		}
-		l := fmt.Sprintf("jobs  %s  %d running", sanitizeLine(r.ID), r.Jobs.Running)
-		if r.Jobs.NeedsDecision > 0 {
-			l += " " + a.gl.Sep + " " + a.th.Warn.Render(fmt.Sprintf("%d needs decision", r.Jobs.NeedsDecision))
-		}
-		out = append(out, l)
+// barInput is what the drawer's bars read: the fleet stream, and the jobs
+// inbox only while the Jobs view watches it (off it the inbox is old, and
+// watching it from here would have the server ask every box).
+func (a *App) barInput() barInput {
+	in := barInput{Fleet: a.fleet, FleetStale: a.conn != apiclient.Live}
+	if !a.fleetHas {
+		in.Fleet = api.Fleet{}
 	}
-	last := a.statusLine()
-	if a.flash != "" {
-		last = a.flash
+	if js, ok := a.screens[scrJobs].(*jobsScreen); ok && js.has && a.active == scrJobs {
+		in.Jobs, in.JobsHas, in.JobsStale = js.in.Jobs, true, js.conn != apiclient.Live
 	}
-	return append(out, last)
+	return in
 }
 
-// drawerView is the open drawer in r: boxed with the title Activity, or one
-// unboxed line when compact (the flash, else the first job, else status).
-func (a *App) drawerView(r rect, compact bool) string {
-	lines := a.activity()
-	if compact {
-		l := lines[0]
-		if a.flash != "" {
-			l = a.flash
-		}
-		return truncate(" "+l, r.W, a.gl.Ellipsis)
+// barCap is how many bars the drawer shows: 3 compact, 6 boxed.
+func (a *App) barCap() int {
+	if a.h >= drawerTallRows {
+		return 6
 	}
-	room := max(r.H-2, 1)
-	if len(lines) > room { // keep the last (status) line
-		lines = append(lines[:room-1:room-1], lines[len(lines)-1])
+	return 3
+}
+
+// drawerLines is the open drawer's lines: its bars past the cap folded
+// into "+N more", or the one line that says there are none.
+func (a *App) drawerLines() int {
+	bs, more := capBars(drawerBars(a.barInput()), a.barCap())
+	if more > 0 {
+		return len(bs) + 1
+	}
+	return max(len(bs), 1)
+}
+
+// barLine is one bar, w cells: what, where, how far, then its marks.
+func (a *App) barLine(b progressBar, w int) string {
+	word := map[barKind]string{barDecision: "job", barJob: "job", barSync: "sync", barDisk: "disk"}[b.Kind]
+	what := b.What
+	if b.Kind == barDisk {
+		what = ""
+	}
+	cells := 20
+	if w < 100 {
+		cells = 10
+	}
+	l := fmt.Sprintf("%-4s %-10s %-14s %-12s [%s]", word, truncate(b.Box, 10, a.gl.Ellipsis), truncate(what, 14, a.gl.Ellipsis),
+		truncate(b.Note, 12, a.gl.Ellipsis), bar(b.Done, 0, b.Total, cells, a.gl))
+	if b.Kind == barSync {
+		l += fmt.Sprintf(" %.1f%%", float64(b.Done)*100/float64(b.Total))
+	}
+	if b.Kind == barDecision {
+		l += " " + a.th.Warn.Render(a.gl.Flag+" needs decision")
+	}
+	if b.Stale {
+		l += " " + a.th.Warn.Render("~ stale")
+	}
+	return truncate(l, w, a.gl.Ellipsis)
+}
+
+// activity is the open drawer's lines, w cells each: the bars, "+N more"
+// past the cap, or a line that says there are none.
+func (a *App) activity(w int) []string {
+	bs, more := capBars(drawerBars(a.barInput()), a.barCap())
+	var out []string
+	for _, b := range bs {
+		out = append(out, a.barLine(b, w))
+	}
+	if more > 0 {
+		out = append(out, a.th.Dim.Render(fmt.Sprintf("+%d more", more)))
+	}
+	if len(out) == 0 {
+		l := "no progress to show " + a.gl.Sep + " " + a.jobsRunning()
+		if n := a.needCount(); n > 0 {
+			l += "  " + a.th.Warn.Render(fmt.Sprintf("[%s %d needs decision]", a.gl.Flag, n))
+		}
+		if a.active != scrJobs && a.jobsRunning() != "jobs n/a" && a.jobsRunning() != "jobs 0 running" {
+			l += "  " + a.th.Dim.Render("(2 Jobs: steps)")
+		}
+		out = append(out, truncate(l, w, a.gl.Ellipsis))
+	}
+	return out
+}
+
+// drawerView is the open drawer in r: boxed with the title Activity, or
+// unboxed lines when compact. The flash, when there is one, takes the first
+// line.
+func (a *App) drawerView(r rect, compact bool) string {
+	iw := r.W - 1
+	if !compact {
+		iw = r.W - 3
+	}
+	lines := a.activity(iw)
+	if a.flash != "" {
+		lines = append([]string{truncate(a.flash, iw, a.gl.Ellipsis)}, lines...)
+	}
+	room := r.H
+	if !compact {
+		room = max(r.H-2, 1)
+	}
+	if len(lines) > room {
+		lines = lines[:room]
 	}
 	for i := range lines {
 		lines[i] = " " + lines[i]
+	}
+	if compact {
+		return fit(strings.Join(lines, "\n"), r.W, r.H, a.gl.Ellipsis)
 	}
 	return a.boxed("Activity", false, strings.Join(lines, "\n"), r.W, r.H)
 }

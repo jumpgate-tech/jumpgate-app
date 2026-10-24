@@ -26,7 +26,9 @@ func (f focusRegion) String() string { return [...]string{"main", "tree", "log"}
 // overlayWidth is how wide the tree and log are when drawn over main.
 const overlayWidth = 34
 
-func (a *App) layout() layout { return layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer)) }
+func (a *App) layout() layout {
+	return layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer), a.drawerLines())
+}
 
 // regions are the focusable regions showing now, in tab order.
 func (a *App) regions() []focusRegion {
