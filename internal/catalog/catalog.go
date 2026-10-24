@@ -127,8 +127,11 @@ func ExpectedBytes(chainID int, archive bool) (uint64, error) {
 // Client describes one execution or beacon client jumpgate knows how to
 // obtain and wire up.
 type Client struct {
-	ID   string // "reth" "go-pulse" "erigon-pulse" "geth" "lighthouse-pulse" "prysm-pulse" "lighthouse"
-	Kind string // "exec" | "beacon"
+	ID string // "reth" "go-pulse" "erigon-pulse" "geth" "lighthouse-pulse" "prysm-pulse" "lighthouse"
+	// Kind is "exec" | "beacon" | "service". A service (checkpointz) is a
+	// box module's own binary: setup.Plan never takes it as a node's exec
+	// or beacon client.
+	Kind string
 	Repo string // canonical source URL
 
 	// ReleaseURL returns a prebuilt-binary URL for goos/goarch, "" if the
@@ -140,7 +143,10 @@ type Client struct {
 	// working dir, that ends with the binary installed executable at
 	// /usr/local/bin/<ID> (matching what setup's install-step Verify checks).
 	Toolchain string // "go" | "rust" — the build toolchain BuildCmd needs
-	LearnURL  string
+	// VersionArg is the argument install's check runs the binary with to
+	// see that it starts; "" is "--version" (see VersionFlag).
+	VersionArg string
+	LearnURL   string
 
 	// DataSubdirs lists the path(s), relative to a WireConfig's DataDir,
 	// that this client owns exclusively — the data a "clear & resync"
@@ -192,6 +198,15 @@ func NetworkByChainID(id int) (Network, bool) {
 		}
 	}
 	return Network{}, false
+}
+
+// VersionFlag is the argument that makes c's binary print and exit 0:
+// VersionArg, or "--version".
+func (c Client) VersionFlag() string {
+	if c.VersionArg == "" {
+		return "--version"
+	}
+	return c.VersionArg
 }
 
 // ClientByID looks up a client by its id.

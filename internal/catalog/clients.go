@@ -182,7 +182,34 @@ var clients = map[string]Client{
 		LearnURL:    learnBaseURL,
 		DataSubdirs: []string{"beacon"},
 	},
+	// checkpointz is the Checkpointz box module's service, not a node
+	// client. It is the first client whose BuildCmd honours PinVersion:
+	// it clones the pinned tag, not the default branch. v0.32.0 has no
+	// --version flag, so install's check runs --help (cobra, exit 0). Its
+	// go.mod asks for go 1.26.1; an older go from apt fetches that
+	// toolchain itself (GOTOOLCHAIN=auto). web/build holds only a
+	// .gitkeep in the source, which is enough for its go:embed: the
+	// frontend stays off in the config jumpgate writes.
+	"checkpointz": {
+		ID:         "checkpointz",
+		Kind:       "service",
+		Repo:       "https://github.com/ethpandaops/checkpointz",
+		ReleaseURL: noReleaseURL,
+		PinVersion: checkpointzVersion,
+		Toolchain:  "go",
+		VersionArg: "--help",
+		BuildCmd: `rm -rf /tmp/build-checkpointz && ` +
+			`git clone --branch ` + checkpointzVersion + ` --depth 1 https://github.com/ethpandaops/checkpointz.git /tmp/build-checkpointz && ` +
+			`cd /tmp/build-checkpointz && ` +
+			`CGO_ENABLED=0 go build -o /usr/local/bin/checkpointz . && ` +
+			`/usr/local/bin/checkpointz --help >/dev/null`,
+		LearnURL: learnBaseURL,
+	},
 }
+
+// checkpointzVersion is the checkpointz release jumpgate builds, whose
+// config keys testdata/checkpointz-keys-v0.32.0.txt records.
+const checkpointzVersion = "v0.32.0"
 
 // noReleaseURL is the shared ReleaseURL for every client in the catalog.
 func noReleaseURL(goos, goarch, version string) string {

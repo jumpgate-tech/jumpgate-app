@@ -73,11 +73,12 @@ type BoxSidecar struct {
 	Port    int    `json:"port,omitempty"`
 	Proto   string `json:"proto,omitempty"`
 	Public  bool   `json:"public,omitempty"` // the port is meant to be reachable from the internet
+	Bind    string `json:"bind,omitempty"`   // the address it listens on, when not the module's default
 }
 
 // Module is the record the sidecar names, for validation and probing.
 func (s BoxSidecar) Module() BoxModule {
-	return BoxModule{ID: s.ID, ChainID: s.ChainID, Port: s.Port}
+	return BoxModule{ID: s.ID, ChainID: s.ChainID, Port: s.Port, BindAddr: s.Bind}
 }
 
 // DataDir is the module's service-owned state under the current account's
@@ -145,7 +146,7 @@ func RenderBoxModule(b BoxModule) (BoxUnit, error) {
 	if err != nil {
 		return BoxUnit{}, err
 	}
-	pub := BoxSidecar{ID: b.ID, ChainID: b.ChainID, Unit: b.UnitName(), Port: b.Port}
+	pub := BoxSidecar{ID: b.ID, ChainID: b.ChainID, Unit: b.UnitName(), Port: b.Port, Bind: b.BindAddr}
 	if len(u.Ports) > 0 {
 		pub.Port, pub.Proto, pub.Public = u.Ports[0].Port, u.Ports[0].Proto, u.Ports[0].Public
 	}

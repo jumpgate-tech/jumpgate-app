@@ -357,7 +357,7 @@ func installStep(stepID, title string, client catalog.Client, helpFlags ...modul
 			return checkHelpAfterInstall(ctx, e, client, dest, helpFlags)
 		},
 		Verify: func(ctx context.Context, e executor.Executor, st *State) error {
-			cmd := fmt.Sprintf("test -x %s && %s --version", shQuote(dest), shQuote(dest))
+			cmd := fmt.Sprintf("test -x %s && %s %s", shQuote(dest), shQuote(dest), client.VersionFlag())
 			res, err := e.Run(ctx, cmd, nil)
 			if err != nil {
 				return fmt.Errorf("install: verify %s: %w", client.ID, err)
