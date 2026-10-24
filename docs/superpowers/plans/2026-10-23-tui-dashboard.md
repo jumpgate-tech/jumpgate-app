@@ -288,7 +288,145 @@ func TestDrawerPrefRoundTrip(t *testing.T) // pref() of drawerFromPref(x)==x for
 
 ## Phase 3: Tree + activity-log sidebar, Hosts into Fleet (U3, U6)
 
-Files: `tree.go`, `actlog.go` (+ tests). Tree from fleet + gateways (`RoutesTo`) + `ListModules` on expand (60 s), reusing `moduleCards`/`moduleStatus` read-only from `host_modules.go`. Right sidebar at ≥ 120 (27 %, 32–40), overlays `[`/`]` below; focus regions + `tab`. The right sidebar is the activity log (spec U6): `type logEvent struct{At time.Time; Sev string; Box, Node, Text string}`, a ring of 200 on `App`, `func diffEvents(prev, next snapshot, now time.Time) []logEvent` pure over fleet/jobs/gateways/signers/modules snapshots already held (gate up/down, sync state change incl. stalled, job step/decision requested/answered, alert raised/cleared from `alerts()` incl. disk ≥85/≥95 %, peers 0, head lag over threshold, gate unreachable, setup/module change, signer approval); view newest first, relative age, severity glyph, filtered to the selection (fleet → all). Hosts actions (`a`,`p`,`d`,`L`, table mode `v`) move onto Fleet; views renumber to Fleet, Jobs, Signers, Gateways, Settings (`1-5`). Tests: `diffEvents` table test per event kind; ring cap 200; scoping. Goldens `dash_120x40` (log panel), `dash_80x24_tree_overlay`, `dash_80x24_ctx_overlay`, `dash_box_detail_120x40`.
+**Files:** Create `internal/tui/actlog.go`, `actlog_test.go`, `tree.go`, `tree_test.go`, `dash_test.go` (phase-3 flows); modify `layout.go`, `layout_test.go`, `alerts.go`, `alerts_test.go`, `frame.go`, `frame_test.go`, `app.go`, `keys.go`, `fleet.go`, `hosts.go`, `host.go` (the `[` host list goes: the tree replaces it), `palette.go`, `theme.go` (tree and severity glyphs), the tests that open screens by number; goldens. `host_modules.go` is not touched: the tree builds a throwaway `hostScreen{modCat, modTarget, modView}` and calls `moduleCards`/`moduleStatus` on it, read-only.
+
+### Review Focus (phase 3)
+
+6. `tab`/`shift+tab` now cycle focus regions, so they leave `navKeys.Left/Right`; box-detail tabs stay on `← → h l`, and a screen with a text field (host-add form, filters) still gets `tab` while it captures. Test in Task 15 (`TestTabCyclesFocus`, `TestHostTabsStillOnArrows`).
+7. The log is built only from snapshots the App already holds; nothing is added to any tick except the tree's 60 s module refresh, which asks only for *expanded* boxes. Test in Task 13 (`TestTreeModulesOnlyWhenExpanded`).
+8. The first reading of each kind logs nothing (no flood of "synced" at start-up); an alert whose text carries an age (`down 4m` → `down 5m`) is the same alert, not a clear and a raise. Test in Task 12 (`TestDiffEventsFirstReadingSilent`, `TestDiffEventsAlertAgeIsStable`).
+9. Every Hosts test still passes, now opened from Fleet with `v`; `d`/`p` from the plain table act on the table selection. Test in Task 14.
+10. Main keeps ≥ 50×8 with the right sidebar; overlays never change the layout, they only draw over main. Test in Task 11 and `TestFrameLinesFitWindow` with overlays.
+
+### Task 11: The right region in `layoutFor`
+
+**Files:** Modify `layout.go`, `layout_test.go`.
+
+**Interfaces:** Produces `layout.Right rect` — at `w >= 120` (`rightMinWidth`), `W = clamp(w*27/100, 32, 40)`, `X = w - W`, same Y/H as Main; else zero. Main is `w - Left.W - Right.W`; if that would drop below 50 the Right region folds.
+
+- [ ] **Step 1: Failing tests**
+  - `TestLayoutForMainFloor`: `Left.W+Main.W+Right.W == w`; Right in the overlap check.
+  - `TestLayoutForRight`: (119,40) Right.W 0; (120,40) Right {88,5,32,30}, Main.W 64; (148,40) 39; (160,40) 40; (200,60) 40; (100,30) 0.
+- [ ] **Step 2:** `go test ./internal/tui -run TestLayoutFor` — FAIL.
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** PASS.
+- [ ] **Step 5:** Commit `feat(tui): a right region in layoutFor, 27% of the width from 120 columns`.
+
+### Task 12: The activity log (U6)
+
+**Files:** Create `actlog.go`, `actlog_test.go`; modify `alerts.go`, `alerts_test.go`, `theme.go`.
+
+**Interfaces:**
+- Produces:
+  ```go
+  type logSev int // logInfo, logOK, logWarn, logFail
+  type logEvent struct{ At time.Time; Sev logSev; Box, Node, Text string } // Text sanitized + masked
+  type snapshot struct {
+      Fleet api.Fleet; FleetHas bool
+      Jobs []api.JobView; JobsHas bool       // the inbox, while the Jobs view watches it
+      Gateways []api.GatewaySummary; GatewaysHas bool
+      Targets []api.TargetView; TargetsHas bool
+      Modules map[string]api.ModulesView     // expanded boxes only (Task 13)
+      Now time.Time
+  }
+  func diffEvents(prev, next snapshot) []logEvent // pure; At = next.Now
+  type actLog struct{ ev []logEvent }             // newest last, at most logKeep = 200
+  func (l *actLog) add(evs ...logEvent)
+  func (l *actLog) scoped(box, node string) []logEvent // newest first; box "" = fleet
+  func alertKey(x alert) string // box + text with numbers folded: "down 4m" == "down 5m"
+  ```
+- Kinds (one event each): gate/box up and down (`Reachable` flips); box added/removed (fleet rows); paired (`Agent` nil → set in the targets: the signer approval this data shows); exec/beacon sync state change (`exec synced (was syncing)`), `exec stalled at N` (syncing, head unchanged, reading newer); job started, step k/n, needs decision, decision answered (the inbox when held, else the fleet `Jobs.NeedsDecision` count); alert raised (its own Sev) / cleared (ok), keyed by `alertKey`; gateway state change; module on/off/error and `gate stale` per expanded box.
+- `alerts()` gains: disk used ≥ 95 % FAIL / ≥ 85 % warn (`disk 96% used`), exec peers 0 with a reading (warn `exec peers 0`), head lag > 64 blk (warn `head lag N blk`). The sample fleet gives no new alert.
+- Glyphs: `Glyphs.Info/OK/Warn/Fail` severity marks (`·`/`-`, `✓`/`+`, `▲`/`!`, `✗`/`x`), `Open/Closed` tree marks (`▾`/`-`, `▸`/`+`).
+
+- [ ] **Step 1: Failing tests**
+  - `TestDiffEventsKinds`: table, one prev/next pair per kind above → exactly the listed event (Sev, Box, Node, Text).
+  - `TestDiffEventsFirstReadingSilent`: `diffEvents(snapshot{}, next)` with every kind present → none.
+  - `TestDiffEventsAlertAgeIsStable`: box-b down at 4 m then 5 m → no event.
+  - `TestDiffEventsMasked`: a gateway state carrying `https://u:p@h/key` → no `u:p`.
+  - `TestActLogRingCap200`: 250 adds → 200 kept, the oldest 50 gone.
+  - `TestActLogScope`: events on box-a/exec, box-a, box-b → `scoped("", "")` all three newest first; `scoped("box-a","")` two; `scoped("box-a","exec")` one.
+  - `TestAlertsDiskPeersLag`: 84 % none, 85 % warn, 95 % FAIL; peers 0 warn; lag 65 warn, 64 none.
+- [ ] **Step 2:** Run — FAIL.
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** PASS.
+- [ ] **Step 5:** Commit `feat(tui): the activity log, from diffs of the snapshots the TUI holds`.
+
+### Task 13: The fleet tree
+
+**Files:** Create `tree.go`, `tree_test.go`; modify `app.go`.
+
+**Interfaces:**
+- Produces:
+  ```go
+  type treeNode struct{ Kind, Box, Node, Label, State string } // Kind: fleet|box|exec|beacon|gw|mod|note
+  func (a *App) treeNodes() []treeNode   // fleet root, then each fleet row (table order); children when expanded
+  func (a *App) treeView(w, h int) string
+  func (a *App) toggleExpand(box string) tea.Cmd // space: expands, and fetches modules the first time
+  type treeModsMsg struct{ box string; cat []api.CatalogModule; target *api.TargetView; view api.ModulesView; err error }
+  type treeTickMsg struct{} // every 60 s: re-reads the modules of expanded boxes only
+  ```
+- App: `expanded map[string]bool`, `mods map[string]treeMods`, `treeCur int`, `selNode string`; `a.sel` stays the one selection (tree and table).
+- Children of an expanded box: `exec <state> <peers>p`, `beacon <state> <peers>p` (n/a without Status), `gw <label> <live|state>` for each gateway with `RoutesTo(box)`, `mod <name> <on|off>` from `moduleCards` (`gate stale` when `GateStale`), `modules loading…` before the first reply, `modules n/a` on error.
+
+- [ ] **Step 1: Failing tests**
+  - `TestTreeNodesFromFleet`: dash fleet → fleet, box-a, box-b, laptop; collapsed.
+  - `TestTreeExpandShowsNodesGatewaysModules`: expand box-a with a gateway routing to it and one routing elsewhere, Fake `ModulesV`/`CatalogV` → exec, beacon, `gw rpc-main live`, `mod msgboard on`; the other gateway absent.
+  - `TestTreeModulesOnlyWhenExpanded`: no `ListModules` call before space; one after; `treeTickMsg` re-reads box-a only, and returns the next tick.
+  - `TestTreeGateStale`: `GateStale` → the module line says `gate stale`.
+  - `TestTreeViewASCII`: the tree view under ascii passes `requireASCII`, names truncated with `~` at width 22.
+- [ ] **Step 2:** Run — FAIL.
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** PASS.
+- [ ] **Step 5:** Commit `feat(tui): the fleet tree: boxes, nodes, gateways and modules`.
+
+### Task 14: Hosts folds into Fleet; views renumber
+
+**Files:** Modify `app.go` (`screenNames` = Fleet, Jobs, Signers, Gateways, Settings), `keys.go` (`1-5`), `fleet.go` (owns a `hostsScreen`; `v` toggles table mode; `a p d L` act on `a.sel`), `hosts.go` (keys reach it through Fleet), `palette.go` (`hosts` opens Fleet in host mode, `add` starts the flow there), `frame.go` hints, tests (`hostsApp` presses `v`; `5`→`2`, `6`→`5`).
+
+**Interfaces:** `fleetScreen.hosts *hostsScreen`, `fleetScreen.hostMode bool`; `func (s *fleetScreen) selectID(a *App, id string)`; `func hostsOf(a *App) *hostsScreen`. `Init` reads the targets once (the server's store; no box is polled).
+
+- [ ] **Step 1: Failing tests**
+  - `TestViewsRenumbered`: `2` Jobs, `3` Signers, `4` Gateways, `5` Settings; `6` does nothing.
+  - `TestFleetHostModeV`: `v` shows the address/pairing table (`root@10.0.0.5:22`, `not paired`), `v` again the fleet table.
+  - `TestFleetRemoveActsOnSelection`: plain table, `j` (box-b), `d` → the confirmation names box-b.
+  - `TestFleetPairActsOnSelection`: `p` on box-b starts the re-pair flow for box-b.
+  - Every `hosts_test.go` test, now through `hostsApp` = Fleet + `v`.
+- [ ] **Step 2:** Run — FAIL.
+- [ ] **Step 3:** Implement; regenerate `hosts.golden`.
+- [ ] **Step 4:** PASS.
+- [ ] **Step 5:** Commit `feat(tui): Hosts folds into Fleet; views are 1-5`.
+
+### Task 15: Sidebars, overlays and focus in the frame
+
+**Files:** Modify `frame.go`, `app.go`, `keys.go`, `host.go`; create `dash_test.go`; goldens.
+
+**Interfaces:**
+- `type focusRegion int // focusMain, focusTree, focusLog`; `App.focus`, `App.treeOver`, `App.logOver`.
+- `globalKeys.Focus` (`tab`, `shift+tab` back), `globalKeys.Tree` (`[`), `globalKeys.Log` (`]`), `navKeys.Expand` (`space`).
+- `func (a *App) logView(w, h int) string` — boxed `Log: fleet` / `Log: box-a` / `Log: box-a exec`, lines `<glyph> <age> <box> <text>`, newest first; `no activity yet` when empty.
+- `func overlay(base, panel string, x int) string` — splices panel lines over base from column x (ANSI-aware `ansi.Cut`).
+- Left (≥ 100): Views, then the tree. Right (≥ 120): the log. Below 120 `]` draws the log over main's right 34 columns; below 100 `[` the tree over its left 34; `esc` closes an overlay first; where a region shows, `[`/`]` focus it.
+- Focused box: info colour, and in ASCII a `=` top border and `>` before the title.
+- Focus on the tree: `↑↓ j k` move it (and the table cursor), `space` expands, `enter` opens the box; on the log: `↑↓` scroll.
+
+- [ ] **Step 1: Failing tests**
+  - `TestTabCyclesFocus`: 120×40 main → tree → log → main; `shift+tab` back; at 80×24 with no overlay `tab` stays on main.
+  - `TestHostTabsStillOnArrows`: box detail, `right` moves the tab, `tab` moves focus, not the tab.
+  - `TestTreeEnterOpensBoxAndLogFollows`: focus tree, `j` (box-a), `enter` → detail box-a, log title `Log: box-a`; `j` in the tree → the table cursor follows.
+  - `TestResizeFoldsSidebarsKeepsSelection`: 120×40 select box-b, resize 80×24 → no `Views`, no `Log:`, `>box-b` still selected, focus back on main.
+  - `TestLogOverlayToggles`: 80×24 `]` → `Log:` in the frame, `esc` → gone; at 120 `]` focuses the log.
+  - `TestTreeOverlayToggles`: 80×24 `[` → the tree drawn; `esc` closes.
+  - Goldens: `dash_*` regenerated; add `dash_80x24_tree_overlay`, `dash_80x24_ctx_overlay`, `dash_box_detail_120x40`; all ascii through `requireASCII`; `TestFrameLinesFitWindow` covers the overlay cases.
+  - `TestNarrowFramesKeepTheirLastRows` still passes (help and settings at 80×24).
+- [ ] **Step 2:** Run — FAIL.
+- [ ] **Step 3:** Implement; drop `App.sidebar`, `sidebarView`, `hostList`.
+- [ ] **Step 4:** `go test ./internal/tui/... -update`, review every golden; `go test ./...` PASS.
+- [ ] **Step 5:** Commit `feat(tui): tree and activity-log sidebars, overlays and focus regions`.
+
+### Task 16: Phase-3 verification
+
+- [ ] `gofmt -l .` empty; `go vet ./...` and `go vet -tags notui ./...` clean; `go test ./...` PASS; `go list -tags notui -deps ./cmd/jumpgate | grep -E 'charm|charmbracelet'` empty.
 
 ## Phase 4: Activity drawer bars (U7)
 
