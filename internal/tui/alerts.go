@@ -60,6 +60,13 @@ func (derivedAlerts) alerts(in alertInput) ([]alert, bool) {
 	return alerts(in), true
 }
 
+// Thresholds for the alerts read from a status (spec U6).
+const (
+	diskWarnPct = 85
+	diskFailPct = 95
+	headLagWarn = 64 // blocks behind the public head
+)
+
 func alertText(s string) string { return maskText(sanitizeLine(s)) }
 
 // alerts is the derived list, FAIL first, then by box and text. Pure: the
@@ -115,6 +122,21 @@ func alerts(in alertInput) []alert {
 				add(sevFail, r.ID, "disk short")
 			case api.FitTight:
 				add(sevWarn, r.ID, "disk tight")
+			}
+		}
+		if st := r.Status; st != nil {
+			if p := st.DiskUsedPct; p != nil && *p >= diskWarnPct {
+				sev := sevWarn
+				if *p >= diskFailPct {
+					sev = sevFail
+				}
+				add(sev, r.ID, fmt.Sprintf("disk %.0f%% used", *p))
+			}
+			if st.Exec.State != "" && st.Exec.State != api.SyncUnavailable && st.Exec.Peers == 0 {
+				add(sevWarn, r.ID, "exec peers 0")
+			}
+			if st.HeadLag != nil && *st.HeadLag > headLagWarn {
+				add(sevWarn, r.ID, fmt.Sprintf("head lag %d blk", *st.HeadLag))
 			}
 		}
 		if r.Jobs != nil && r.Jobs.NeedsDecision > 0 {
