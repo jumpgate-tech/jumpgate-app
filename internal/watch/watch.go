@@ -81,10 +81,6 @@ func interval(cfg Config) time.Duration {
 	return DefaultInterval
 }
 
-// deliver is where alert changes leave the box (Task 16: the webhook). It
-// must never log cfg.Webhook.
-var deliver = func(ctx context.Context, cfg Config, prev, next State) {}
-
 // Run polls until ctx ends: the node (when the box has one) and every
 // endpoint, then Evaluate, then the state file, then delivery.
 func Run(ctx context.Context, cfg Config) error {
@@ -101,6 +97,11 @@ func Run(ctx context.Context, cfg Config) error {
 		chainID = cfg.Wire.ChainID
 	}
 	hc := &http.Client{Timeout: 5 * time.Second}
+	var hook *webhook // off unless the operator gave a webhook
+	if cfg.Webhook != "" {
+		box, _ := os.Hostname()
+		hook = startWebhook(ctx, cfg.Webhook, box)
+	}
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -119,7 +120,9 @@ func Run(ctx context.Context, cfg Config) error {
 		if err := WriteState(cfg.StatePath, next); err != nil {
 			log.Printf("watch: writing state: %v", err)
 		}
-		deliver(ctx, cfg, prev, next)
+		if hook != nil {
+			hook.send(prev, next)
+		}
 		prev = next
 		select {
 		case <-ctx.Done():
