@@ -25,9 +25,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	webview "github.com/webview/webview_go"
+
+	"github.com/valve-tech/jumpgate/internal/api"
 )
 
 const trayBuilt = true
@@ -90,14 +93,14 @@ func pollHealth(ctx context.Context, w webview.WebView, browserURL string) {
 	token := u.Query().Get("token")
 	client := &http.Client{Timeout: 3 * time.Second}
 
-	last := healthKind(-1)
+	last := trayHealth{Kind: -1}
 	check := func() {
-		k := fetchHealth(ctx, client, apiURL, token)
-		if k == last {
+		h := fetchHealth(ctx, client, apiURL, token)
+		if h == last {
 			return
 		}
-		last = k
-		w.Dispatch(func() { setHealth(k) })
+		last = h
+		w.Dispatch(func() { setHealth(h) })
 	}
 
 	check()
@@ -113,26 +116,39 @@ func pollHealth(ctx context.Context, w webview.WebView, browserURL string) {
 	}
 }
 
-// fetchHealth reads /api/gateways once and folds it to a dot state. Any failure
-// to reach or parse our own server reads as "off" (grey) — the honest signal
-// when the control plane isn't answering.
-func fetchHealth(ctx context.Context, client *http.Client, apiURL, token string) healthKind {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+// fetchHealth reads /api/gateways and /api/fleet once and folds them to a dot
+// state. Any failure to reach or parse the gateways reads as "off" (grey) —
+// the honest signal when the control plane isn't answering; a fleet that
+// cannot be read adds no warnings.
+func fetchHealth(ctx context.Context, client *http.Client, apiURL, token string) trayHealth {
+	off := trayHealth{Kind: healthOff, Tip: healthTooltip(healthOff)}
+	var r gwListResp
+	if !getJSON(ctx, client, apiURL, token, &r) {
+		return off
+	}
+	var f api.Fleet
+	var s fleetSummary
+	if getJSON(ctx, client, strings.TrimSuffix(apiURL, "/gateways")+"/fleet", token, &f) {
+		s = summarizeFleet(f)
+	}
+	k := overallHealth(r.Gateways, s.warnings())
+	return trayHealth{Kind: k, Tip: healthTip(k, s)}
+}
+
+// getJSON GETs url with the session token and decodes a 200 into v.
+func getJSON(ctx context.Context, client *http.Client, url, token string, v any) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return healthOff
+		return false
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := client.Do(req)
 	if err != nil {
-		return healthOff
+		return false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return healthOff
+		return false
 	}
-	var r gwListResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return healthOff
-	}
-	return overallHealth(r.Gateways)
+	return json.NewDecoder(resp.Body).Decode(v) == nil
 }

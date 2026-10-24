@@ -20,7 +20,7 @@ func TestOverallHealth(t *testing.T) {
 		{"mixed running and stopped is serving", []gwHealth{stopped, run}, healthOK},
 	}
 	for _, tc := range cases {
-		if got := overallHealth(tc.gws); got != tc.want {
+		if got := overallHealth(tc.gws, 0); got != tc.want {
 			t.Errorf("%s: overallHealth = %d, want %d", tc.name, got, tc.want)
 		}
 	}

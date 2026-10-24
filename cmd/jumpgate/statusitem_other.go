@@ -10,6 +10,6 @@ import "unsafe"
 func installStatusItem(unsafe.Pointer) {}
 
 // setHealth is a no-op on Linux (no status dot to paint).
-func setHealth(healthKind) {}
+func setHealth(trayHealth) {}
 
 func removeStatusItem() {}
