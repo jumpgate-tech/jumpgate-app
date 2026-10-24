@@ -1,0 +1,5 @@
+id: checkpointz
+title: Checkpoint-sync from your own boxes
+audience: operator
+after: [first-box]
+steps: [modules-what, box-modules, checkpointz-run, checkpointz-use]
