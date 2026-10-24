@@ -18,8 +18,11 @@ export function TargetCard({
   canRunNode,
   hostOS,
   onRemove,
+  fleetRow,
 }: {
   target: api.Target;
+  // fleetRow is this box's /api/fleet row, when the fleet has been read.
+  fleetRow?: api.FleetRow;
   catalog: api.Catalog;
   canRunNode: boolean;
   hostOS: string;
@@ -53,6 +56,17 @@ export function TargetCard({
           </>
         )}
       </p>
+      {fleetRow && fleetRow.alertCount > 0 && (
+        // docs:covers watch-alerts
+        <p className="small">
+          <Badge
+            text={fleetRow.alertCount === 1 ? "1 alert" : `${fleetRow.alertCount} alerts`}
+            kind="warn"
+            title="From this box's health watch"
+          />{" "}
+          {fleetRow.alertMessage ?? fleetRow.alerts?.[0]?.message}
+        </p>
+      )}
       <div className="card-actions">
         <a className="btn" href={`#/machine/${encodeURIComponent(target.id)}`}>
           Open

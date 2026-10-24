@@ -45,6 +45,19 @@ type FleetRow struct {
 	DiskError     *ProbeError `json:"diskError"`
 	FirewallError *ProbeError `json:"firewallError"`
 	Stale         Stale       `json:"stale"`
+	// The box's health-watch alerts, when it runs the watch: how many are
+	// open, the worst one's message, and each one. A failed read keeps the
+	// last ones.
+	AlertCount   int          `json:"alertCount"`
+	AlertMessage string       `json:"alertMessage,omitempty"`
+	Alerts       []FleetAlert `json:"alerts,omitempty"`
+}
+
+// FleetAlert is one open health-watch alert on a box.
+type FleetAlert struct {
+	Key     string    `json:"key"`
+	Message string    `json:"message"`
+	Since   time.Time `json:"since"`
 }
 
 // ProbeError is one probe's failure and when it happened.

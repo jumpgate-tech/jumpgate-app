@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
 	"sort"
 	"strconv"
@@ -223,6 +224,19 @@ func PlanBoxModule(b catalog.BoxModule, w *catalog.WireConfig, enable bool) ([]S
 	}
 	if err := validateBoxModules([]catalog.BoxModule{b}, w); err != nil {
 		return nil, fmt.Errorf("setup: %w", err)
+	}
+	if b.ID == "watch" && w != nil {
+		// The watch reads the box's node beside its own config: the
+		// gate's node.json is in a root-only dir. Copy the map so the
+		// rendered unit stays the renderer's.
+		nb, err := json.Marshal(catalog.PublicWire(*w))
+		if err != nil {
+			return nil, fmt.Errorf("setup: %w", err)
+		}
+		files := make(map[string]string, len(u.Files)+1)
+		maps.Copy(files, u.Files)
+		files[b.NodePath()] = string(nb)
+		u.Files = files
 	}
 	p.m, p.u = m, u
 

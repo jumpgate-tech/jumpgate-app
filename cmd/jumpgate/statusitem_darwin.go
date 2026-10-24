@@ -225,15 +225,15 @@ import "unsafe"
 // installStatusItem adds the menubar status item bound to the webview window.
 func installStatusItem(nswindow unsafe.Pointer) {
 	C.valveInstallStatusItem(nswindow)
-	setHealth(healthOff) // neutral dot until the first health poll lands
+	setHealth(trayHealth{Kind: healthOff, Tip: healthTooltip(healthOff)}) // neutral dot until the first health poll lands
 }
 
 // setHealth repaints the menubar status dot. Must be called on the main thread
 // (the poller marshals via webview.Dispatch).
-func setHealth(k healthKind) {
-	tip := C.CString(healthTooltip(k)) // the strings are shared with Windows
+func setHealth(h trayHealth) {
+	tip := C.CString(h.Tip) // the strings are shared with Windows
 	defer C.free(unsafe.Pointer(tip))
-	C.valveSetHealth(C.int(k), tip)
+	C.valveSetHealth(C.int(h.Kind), tip)
 }
 
 // removeStatusItem is a no-op on macOS: the status item goes away with NSApp.

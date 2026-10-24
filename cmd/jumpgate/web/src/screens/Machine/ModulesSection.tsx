@@ -26,6 +26,7 @@ import {
   publicOptions,
   type ModuleCard,
 } from "./modulesModel";
+import { chainAgnostic, WEBHOOK_HELP, WEBHOOK_PLACEHOLDER, watchRequest } from "./watchModel";
 
 // boxName is how the operator knows the box: its SSH host, or "this machine"
 // for the local target (the same words the Machine header uses).
@@ -205,6 +206,7 @@ export function ModulesSection({ targetId }: { targetId: string }) {
   }
 
   function boxChain(id: string): number | undefined {
+    if (chainAgnostic(catalog.modules?.find((m) => m.id === id))) return undefined;
     return boxEnabled.find((m) => m.id === id)?.chainId ?? wire?.ChainID;
   }
 
@@ -276,6 +278,14 @@ export function ModulesSection({ targetId }: { targetId: string }) {
                   </button>
                 )}
                 {bootnode && !usable && <p className="small muted">{SET_PUBLIC_IP_HINT}</p>}
+                {c.id === "watch" && c.state === "on" && (
+                  <WatchSettings
+                    saved={boxEnabled.find((m) => m.id === "watch")?.upstreams ?? []}
+                    webhookSet={!!target.watchWebhookSet}
+                    busy={busy}
+                    onSave={(body) => submit("watch", body, false)}
+                  />
+                )}
                 {listedOn && (
                   <button
                     type="button"
@@ -312,8 +322,10 @@ export function ModulesSection({ targetId }: { targetId: string }) {
           onConfirm={(fields) => {
             if (confirm.place === "node") {
               void submit(confirm.card.id, { enabled: true, public: "" }, true);
+            } else if (confirm.card.id === "watch") {
+              void submit("watch", fields.watch ?? { enabled: true }, false);
             } else {
-              const body: api.SetModuleRequest = { enabled: true, chainId: wire?.ChainID };
+              const body: api.SetModuleRequest = { enabled: true, chainId: boxChain(confirm.card.id) };
               if (body.chainId === undefined) delete body.chainId;
               if (fields.port) body.port = fields.port;
               if (fields.extIp) body.extIp = fields.extIp;
@@ -434,11 +446,23 @@ function ConfirmDialog({
   busy: boolean;
   error: string | null;
   onCancel: () => void;
-  onConfirm: (fields: { port?: number; extIp?: string }) => void;
+  onConfirm: (fields: { port?: number; extIp?: string; watch?: api.SetModuleRequest }) => void;
 }) {
   const fields = place === "box" ? boxFields(card.id) : [];
   const [port, setPort] = useState("");
   const [extIp, setExtIp] = useState("");
+  const [endpoints, setEndpoints] = useState("");
+  const [webhook, setWebhook] = useState("");
+  const isWatch = place === "box" && card.id === "watch";
+  let watchBody: api.SetModuleRequest | undefined;
+  let watchErr: string | null = null;
+  if (isWatch) {
+    try {
+      watchBody = watchRequest(endpoints, webhook, false);
+    } catch (e) {
+      watchErr = (e as Error).message;
+    }
+  }
   const parsedPort = port.trim() === "" ? undefined : Number(port);
   const portBad = parsedPort !== undefined && !(Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort < 65536);
   return (
@@ -468,6 +492,10 @@ function ConfirmDialog({
           />
         </label>
       )}
+      {isWatch && (
+        <WatchFields endpoints={endpoints} setEndpoints={setEndpoints} webhook={webhook} setWebhook={setWebhook} />
+      )}
+      {watchErr && <p className="error small">{watchErr}</p>}
       {error && <p className="error">{error}</p>}
       <div className="wizard-actions">
         <button className="btn btn-ghost" type="button" onClick={onCancel}>
@@ -476,13 +504,109 @@ function ConfirmDialog({
         <button
           className="btn btn-primary"
           type="button"
-          disabled={busy || portBad}
-          onClick={() => onConfirm({ port: parsedPort, extIp: extIp || undefined })}
+          disabled={busy || portBad || !!watchErr}
+          onClick={() => onConfirm({ port: parsedPort, extIp: extIp || undefined, watch: watchBody })}
         >
           Turn on
         </button>
       </div>
     </Modal>
+  );
+}
+
+// WatchFields are the health watch's settings: its endpoints, one
+// name=url per line, and an optional webhook.
+function WatchFields({
+  endpoints,
+  setEndpoints,
+  webhook,
+  setWebhook,
+  webhookSet,
+}: {
+  endpoints: string;
+  setEndpoints: (v: string) => void;
+  webhook: string;
+  setWebhook: (v: string) => void;
+  webhookSet?: boolean;
+}) {
+  return (
+    <>
+      <label className="field">
+        <span>Endpoints to watch</span>
+        <textarea
+          aria-label="Endpoints to watch"
+          rows={3}
+          value={endpoints}
+          placeholder={"gw-eu=https://rpc.example.com\ncl=beacon+http://10.0.0.2:5052"}
+          onChange={(e) => setEndpoints(e.target.value)}
+        />
+      </label>
+      <p className="small muted">One per line, as name=url. The watch always covers this box's own node.</p>
+      <label className="field">
+        <span>Webhook (optional)</span>
+        <input
+          aria-label="Webhook"
+          type="password"
+          autoComplete="off"
+          value={webhook}
+          placeholder={webhookSet ? "saved; leave blank to keep it" : WEBHOOK_PLACEHOLDER}
+          onChange={(e) => setWebhook(e.target.value)}
+        />
+      </label>
+      <p className="small muted">{WEBHOOK_HELP}</p>
+    </>
+  );
+}
+
+// WatchSettings edits a running watch. The saved webhook is never shown:
+// a blank field keeps it, and removing it is its own checkbox.
+function WatchSettings({
+  saved,
+  webhookSet,
+  busy,
+  onSave,
+}: {
+  saved: string[];
+  webhookSet: boolean;
+  busy: boolean;
+  onSave: (body: api.SetModuleRequest) => void;
+}) {
+  const [endpoints, setEndpoints] = useState(saved.join("\n"));
+  const [webhook, setWebhook] = useState("");
+  const [clear, setClear] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  return (
+    <div className="watch-settings">
+      <WatchFields
+        endpoints={endpoints}
+        setEndpoints={setEndpoints}
+        webhook={webhook}
+        setWebhook={setWebhook}
+        webhookSet={webhookSet && !clear}
+      />
+      {webhookSet && (
+        <label className="small">
+          <input type="checkbox" checked={clear} onChange={(e) => setClear(e.target.checked)} /> Remove the saved webhook
+        </label>
+      )}
+      {err && <p className="error small">{err}</p>}
+      <button
+        type="button"
+        className="btn btn-ghost small"
+        disabled={busy}
+        onClick={() => {
+          try {
+            setErr(null);
+            onSave(watchRequest(endpoints, webhook, clear));
+            setWebhook("");
+          } catch (e) {
+            setErr((e as Error).message);
+          }
+        }}
+      >
+        Save watch settings
+      </button>
+    </div>
   );
 }
 

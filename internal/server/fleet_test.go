@@ -46,6 +46,8 @@ type fakeProber struct {
 	diskEntered chan struct{}
 	fwCalls     int
 	calls       map[string]int
+	// modules is what the modules probe returns, per box.
+	mods map[string][]monitor.ModuleStatus
 
 	inFlight, maxInFlight atomic.Int32
 }
@@ -128,6 +130,12 @@ func (f *fakeProber) firewall(context.Context, config.Config, config.Target) ([]
 		return nil, errors.New("ss: not found")
 	}
 	return []ops.CheckItem{{Status: "pass"}, {Status: "warn"}}, nil
+}
+
+func (f *fakeProber) modules(_ context.Context, _ config.Config, t config.Target) ([]monitor.ModuleStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mods[t.ID], nil
 }
 
 func (f *fakeProber) chainID(_ context.Context, _ config.Config, t config.Target) (int, error) {
@@ -807,5 +815,37 @@ func TestFleetSSHOnlyBoxRecoversAfterTheConnectionDrops(t *testing.T) {
 	row, _ := s.fleet.snapshot().Row("a")
 	if !row.Reachable || row.Status == nil || opened != 2 {
 		t.Fatalf("after the connection came back: opened %d, row %+v", opened, row)
+	}
+}
+
+func TestFleetRowCarriesAlerts(t *testing.T) {
+	watchOn := []catalog.BoxModule{{ID: "watch", Webhook: "https://ntfy.example/s3cret"}}
+	s, fp, _, _ := fleetServer(t,
+		config.Target{ID: "a", Mode: "ssh", Agent: paired, Modules: watchOn},
+		config.Target{ID: "b", Mode: "ssh", Agent: paired},
+	)
+	since := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	alerts := []monitor.Alert{
+		{Key: "disk-90", Message: "Disk is 93% full.", Since: since},
+		{Key: "no-peers", Message: "The node has no peers.", Since: since},
+	}
+	fp.mu.Lock()
+	fp.mods = map[string][]monitor.ModuleStatus{
+		"a": {{ID: "watch", Instance: "watch", Served: true, Alerts: alerts}},
+		"b": {{ID: "watch", Alerts: alerts}}, // no watch recorded: never asked
+	}
+	fp.mu.Unlock()
+	s.fleet.round(context.Background())
+	a, _ := s.fleet.snapshot().Row("a")
+	if a.AlertCount != 2 || len(a.Alerts) != 2 || a.Alerts[0].Message != "Disk is 93% full." || a.AlertMessage != "Disk is 93% full." {
+		t.Fatalf("row a alerts: count %d %+v %q", a.AlertCount, a.Alerts, a.AlertMessage)
+	}
+	b, _ := s.fleet.snapshot().Row("b")
+	if b.AlertCount != 0 || b.Alerts != nil {
+		t.Fatalf("row b alerts %+v", b.Alerts)
+	}
+	raw, _ := json.Marshal(a)
+	if !strings.Contains(string(raw), `"alerts":[{"key":"disk-90"`) || !strings.Contains(string(raw), `"alertCount":2`) {
+		t.Fatalf("row json %s", raw)
 	}
 }

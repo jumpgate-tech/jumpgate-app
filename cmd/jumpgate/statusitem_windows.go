@@ -248,10 +248,10 @@ func addTrayIcon(hwnd uintptr) {
 
 // setHealth updates the tooltip. Shell_NotifyIconW may be called from any
 // thread.
-func setHealth(k healthKind) {
+func setHealth(h trayHealth) {
 	trayIcon.mu.Lock()
 	defer trayIcon.mu.Unlock()
-	setTip(&trayIcon.data, healthTooltip(k))
+	setTip(&trayIcon.data, h.Tip)
 	if trayIcon.added {
 		procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&trayIcon.data)))
 	}

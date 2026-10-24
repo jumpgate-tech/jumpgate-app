@@ -23,7 +23,7 @@ func TestTrayIconLifecycle(t *testing.T) {
 		removeStatusItem()
 		t.Skip("Shell_NotifyIconW refused: no notification area in this session")
 	}
-	setHealth(healthOK)
+	setHealth(trayHealth{Kind: healthOK, Tip: healthTooltip(healthOK)})
 	trayIcon.mu.Lock()
 	tip := windows.UTF16ToString(trayIcon.data.SzTip[:])
 	trayIcon.mu.Unlock()

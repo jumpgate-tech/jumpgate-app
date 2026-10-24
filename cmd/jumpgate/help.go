@@ -31,6 +31,7 @@ var commandHelp = []struct{ name, text string }{
 	{"serve", "run the server in the foreground"},
 	{"relay", "run only the metered RPC data plane, in the foreground"},
 	{"stop", "stop the background server"},
+	{"agent watch --config FILE", "the box's health watch (its gate's watch module runs it)"},
 	{"help", "this list"},
 }
 

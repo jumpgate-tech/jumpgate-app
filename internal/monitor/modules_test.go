@@ -141,13 +141,13 @@ func TestProbeBoxModulesRejectsHostileSidecar(t *testing.T) {
 
 // ProbeBoxModule validates its record too, and quotes the unit it asks for.
 func TestProbeBoxModuleValidatesAndQuotes(t *testing.T) {
-	acceptBoxModules(t, "watch")
+	acceptBoxModules(t, "plain")
 	ex := newFakeExecutor()
 	if st := ProbeBoxModule(context.Background(), ex, catalog.BoxModule{ID: "x; touch /tmp/pwned"}); st.Error == "" || len(ex.calls) != 0 {
 		t.Fatalf("status %+v, calls %v", st, ex.calls)
 	}
-	ProbeBoxModule(context.Background(), ex, catalog.BoxModule{ID: "watch"})
-	if len(ex.calls) != 1 || ex.calls[0] != "systemctl is-active 'jumpgate-mod-watch.service'" {
+	ProbeBoxModule(context.Background(), ex, catalog.BoxModule{ID: "plain"})
+	if len(ex.calls) != 1 || ex.calls[0] != "systemctl is-active 'jumpgate-mod-plain.service'" {
 		t.Fatalf("calls %v", ex.calls)
 	}
 }
