@@ -44,7 +44,7 @@ func newTestApp(t *testing.T, f *tuitest.Fake, w, h int, glyphs string) *App {
 
 func TestShellFrame(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
-	m, _ := tuitest.Send(a, tuitest.Key("5"))
+	m, _ := tuitest.Send(a, tuitest.Key("2"))
 	frame := tuitest.Frame(m)
 	if n := strings.Count(frame, "\n") + 1; n != 24 {
 		t.Fatalf("frame has %d lines, want 24", n)
@@ -55,7 +55,7 @@ func TestShellFrame(t *testing.T) {
 // Review Focus 5: an ascii frame contains nothing but ASCII.
 func TestASCIIFrameHasOnlyASCII(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "ascii")
-	m, _ := tuitest.Send(a, tuitest.Key("5"))
+	m, _ := tuitest.Send(a, tuitest.Key("2"))
 	frame := tuitest.Frame(m)
 	requireASCII(t, frame)
 	tuitest.Golden(t, "shell_jobs_ascii", frame)
@@ -73,7 +73,7 @@ func requireASCII(t *testing.T, frame string) {
 // Review Focus 3: too small says so, keeps state, and comes back.
 func TestTooSmallTerminalKeepsState(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
-	m, _ := tuitest.Send(a, tuitest.Key("5"), tea.WindowSizeMsg{Width: 60, Height: 20})
+	m, _ := tuitest.Send(a, tuitest.Key("2"), tea.WindowSizeMsg{Width: 60, Height: 20})
 	if f := tuitest.Frame(m); !strings.Contains(f, "terminal too small (60x20); jumpgate needs 80x24") {
 		t.Fatalf("frame:\n%s", f)
 	}
@@ -141,9 +141,9 @@ func TestHelpListsGlobalKeys(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
 	// From the jobs screen: the frame lists its own keys (d, a, r) under
 	// "keys here" after the global ones.
-	m, _ := tuitest.Send(a, tuitest.Key("5"), tuitest.Key("?"))
+	m, _ := tuitest.Send(a, tuitest.Key("2"), tuitest.Key("?"))
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"help", "quit", "screens", "command"} {
+	for _, want := range []string{"help", "quit", "views", "command"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("help lacks %q:\n%s", want, fr)
 		}
@@ -178,7 +178,7 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" },
 		Restart: func(context.Context) (Backend, error) { return f, nil }})
 	t.Cleanup(func() { a.cancel() }) // a restart replaces a.cancel: read it at cleanup time
-	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: 80, Height: 24}, prefsMsg{p: api.UIPrefs{Glyphs: "unicode"}}, tuitest.Key("5"), tuitest.Key("?"))
+	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: 80, Height: 24}, prefsMsg{p: api.UIPrefs{Glyphs: "unicode"}}, tuitest.Key("2"), tuitest.Key("?"))
 	fr := tuitest.Frame(m)
 	all := bindings(globalKeys)
 	for n, b := range bindings(navKeys) {
@@ -197,7 +197,7 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 
 	// Without a way to restart, R does nothing, so neither help nor the
 	// banner offers it.
-	m, _ = tuitest.Send(newTestApp(t, f, 80, 24, "unicode"), tuitest.Key("5"), tuitest.Key("?"))
+	m, _ = tuitest.Send(newTestApp(t, f, 80, 24, "unicode"), tuitest.Key("2"), tuitest.Key("?"))
 	fr = tuitest.Frame(m)
 	if regexp.MustCompile(`(?m)^\s*R\s`).MatchString(fr) || strings.Contains(fr, "press R") {
 		t.Errorf("R is offered with no way to restart:\n%s", fr)
@@ -208,7 +208,7 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 // words.
 func TestHelpASCII(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "ascii")
-	m, _ := tuitest.Send(a, tuitest.Key("5"), tuitest.Key("?"))
+	m, _ := tuitest.Send(a, tuitest.Key("2"), tuitest.Key("?"))
 	fr := tuitest.Frame(m)
 	requireASCII(t, fr)
 	if !strings.Contains(fr, "up/k") {

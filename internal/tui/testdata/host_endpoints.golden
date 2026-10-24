@@ -1,4 +1,4 @@
- jumpgate  Fleet Hosts Signers Gateways Jobs Settings                connecting
+ jumpgate  Fleet Jobs Signers Gateways Settings                      connecting
  boxes n/a  synced n/a  lag n/a  peers n/a  disk n/a  gw 2/2 live  ! alerts n/a
  box
  Overview  Storage  [Endpoints]  Security  Logs  Services
@@ -21,4 +21,4 @@
 
 
 
- jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-6 views  esc back
+ jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-5 views  esc back

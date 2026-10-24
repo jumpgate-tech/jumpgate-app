@@ -32,7 +32,7 @@ func newPalette() *paletteModal {
 }
 
 var paletteScreens = map[string]screenID{
-	"fleet": scrFleet, "hosts": scrHosts, "signers": scrSigners, "gateways": scrGateways, "jobs": scrJobs, "settings": scrSettings,
+	"fleet": scrFleet, "signers": scrSigners, "gateways": scrGateways, "jobs": scrJobs, "settings": scrSettings,
 }
 
 const paletteHelp = "fleet hosts signers gateways jobs settings | host NAME | logs NAME | measure NAME | ssh NAME | start|stop|restart exec|beacon NAME | remove NAME | migrate-names NAME | add | help | quit"
@@ -109,6 +109,12 @@ func (m *paletteModal) run(a *App) (stay bool, cmd tea.Cmd) {
 	if id, ok := paletteScreens[f[0]]; ok && len(f) == 1 {
 		return false, a.openScreen(id)
 	}
+	if f[0] == "hosts" && len(f) == 1 { // the box table mode of Fleet
+		cmd := a.openScreen(scrFleet)
+		fs := a.screens[scrFleet].(*fleetScreen)
+		fs.hostMode = true
+		return false, cmd
+	}
 	boxCmd := func(name string) bool { return len(f) == 2 && f[0] == name }
 	if len(f) == 2 && (f[0] == "host" || f[0] == "logs" || f[0] == "measure" || f[0] == "ssh" || f[0] == "remove" || f[0] == "migrate-names") && !known(a, f[1]) {
 		return bad("no box named %q", truncate(sanitizeLine(f[1]), 32, a.gl.Ellipsis))
@@ -121,9 +127,9 @@ func (m *paletteModal) run(a *App) (stay bool, cmd tea.Cmd) {
 		a.cancel()
 		return false, tea.Quit
 	case f[0] == "add" && len(f) == 1:
-		cmd := a.openScreen(scrHosts)
+		cmd := a.openScreen(scrFleet)
 		fl := newAddFlow()
-		a.screens[scrHosts].(*hostsScreen).startFlow(a, fl)
+		a.screens[scrFleet].(*fleetScreen).hosts.startFlow(a, fl)
 		return false, tea.Batch(cmd, fl.focusCmd())
 	case boxCmd("host"):
 		return false, a.openHost(f[1])

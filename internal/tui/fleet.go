@@ -16,7 +16,8 @@ import (
 	"github.com/valve-tech/jumpgate/internal/apiclient"
 )
 
-var fleetKeys = struct{ Sort, Columns, Refresh key.Binding }{
+var fleetKeys = struct{ Sort, Columns, Refresh, Mode key.Binding }{
+	Mode:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "table: fleet / addresses and pairing")),
 	Sort:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort: host, sync, disk, lag")),
 	Columns: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "choose columns (Settings)")),
 	Refresh: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh now")),
@@ -24,11 +25,15 @@ var fleetKeys = struct{ Sort, Columns, Refresh key.Binding }{
 
 var fleetSorts = []string{"host", "sync", "disk", "lag"}
 
-// fleetScreen is every box at once (spec screen 1).
+// fleetScreen is every box at once (spec screen 1). Hosts folds into it
+// (spec U3): v switches the table to the boxes' addresses and pairing, and
+// a, p, d and L act on the selection in either mode.
 type fleetScreen struct {
 	cursor, sortBy, offset int
 	filter                 textinput.Model
 	editing                bool
+	hosts                  *hostsScreen
+	hostMode               bool
 }
 
 func newFleetScreen() *fleetScreen {
@@ -38,13 +43,72 @@ func newFleetScreen() *fleetScreen {
 	// ctrl+v would read the clipboard through a command; a bracketed paste
 	// arrives as a PasteMsg and still works.
 	in.KeyMap.Paste.SetEnabled(false)
-	return &fleetScreen{filter: in}
+	return &fleetScreen{filter: in, hosts: &hostsScreen{}}
 }
 
-func (s *fleetScreen) capturing() bool { return s.editing }
+func (s *fleetScreen) capturing() bool { return s.editing || s.hosts.capturing() }
 
 func (s *fleetScreen) keys() []key.Binding {
-	return []key.Binding{navKeys.Up, navKeys.Down, navKeys.Enter, navKeys.Filter, fleetKeys.Sort, fleetKeys.Columns, fleetKeys.Refresh}
+	if s.hostMode {
+		return append(s.hosts.keys(), fleetKeys.Mode)
+	}
+	return []key.Binding{navKeys.Up, navKeys.Down, navKeys.Enter, navKeys.Filter, fleetKeys.Sort, fleetKeys.Columns, fleetKeys.Refresh, fleetKeys.Mode,
+		hostsKeys.Add, hostsKeys.Pair, hostsKeys.Local, hostsKeys.Remove}
+}
+
+// selectID moves the table's cursor to the box id, when it is listed.
+func (s *fleetScreen) selectID(a *App, id string) {
+	rows, _ := s.rows(a)
+	for i, r := range rows {
+		if r.ID == id {
+			s.cursor = i
+		}
+	}
+	for i, t := range s.hosts.ts {
+		if t.ID == id {
+			s.hosts.cursor = i
+		}
+	}
+	s.clamp(a)
+}
+
+// hostsKey hands a key to the box list: in its mode, everything; in the
+// table, a p d L, with the list's cursor on the table's selection.
+func (s *fleetScreen) hostsKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
+	if s.hostMode {
+		cmd := s.hosts.update(a, k)
+		if s.hosts.cursor < len(s.hosts.ts) && s.hosts.flow == nil {
+			a.sel = s.hosts.ts[s.hosts.cursor].ID
+			rows, _ := s.rows(a)
+			for i, r := range rows {
+				if r.ID == a.sel {
+					s.cursor = i
+				}
+			}
+		}
+		return cmd, true
+	}
+	switch {
+	case key.Matches(k, hostsKeys.Add), key.Matches(k, hostsKeys.Local):
+		return s.hosts.update(a, k), true
+	case key.Matches(k, hostsKeys.Pair), key.Matches(k, hostsKeys.Remove):
+		if a.sel == "" {
+			return nil, true
+		}
+		for i, t := range s.hosts.ts {
+			if t.ID == a.sel {
+				s.hosts.cursor = i
+				return s.hosts.update(a, k), true
+			}
+		}
+		if key.Matches(k, hostsKeys.Remove) {
+			confirmRemove(a, a.sel) // the name is all a removal needs
+			return nil, true
+		}
+		a.flash = "reading the box list; press p again"
+		return loadTargets(a), true
+	}
+	return nil, false
 }
 
 // rows are the fleet after the chain preference and the text filter, sorted.
@@ -294,6 +358,24 @@ func (s *fleetScreen) columns(a *App, w int) ([]api.ColumnSpec, bool) {
 }
 
 func (s *fleetScreen) update(a *App, msg tea.Msg) tea.Cmd {
+	switch msg.(type) {
+	case tea.KeyPressMsg:
+		if s.hosts.flow != nil { // the add or pair flow owns the keyboard
+			return s.hosts.update(a, msg)
+		}
+	case tea.PasteMsg:
+		if s.hosts.flow != nil {
+			return s.hosts.update(a, msg)
+		}
+	default:
+		// The box list's own replies and flow messages, and enter/leave.
+		hcmd := s.hosts.update(a, msg)
+		return tea.Batch(hcmd, s.fleetUpdate(a, msg))
+	}
+	return s.fleetUpdate(a, msg)
+}
+
+func (s *fleetScreen) fleetUpdate(a *App, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case fleetMsg, enterMsg, prefsMsg:
 		s.clamp(a)
@@ -340,6 +422,18 @@ func (s *fleetScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			s.clamp(a)
 			return nil
 		}
+		if key.Matches(msg, fleetKeys.Mode) {
+			s.hostMode = !s.hostMode
+			if s.hostMode {
+				s.selectID(a, a.sel)
+				return loadTargets(a)
+			}
+			s.clamp(a)
+			return nil
+		}
+		if cmd, ok := s.hostsKey(a, msg); ok {
+			return cmd
+		}
 		rows, _ := s.rows(a)
 		switch {
 		case key.Matches(msg, navKeys.Up):
@@ -378,6 +472,9 @@ func (s *fleetScreen) clamp(a *App) {
 }
 
 func (s *fleetScreen) view(a *App, w, h int) string {
+	if s.hostMode || s.hosts.flow != nil {
+		return s.hosts.view(a, w, h)
+	}
 	cols, cut := s.columns(a, w)
 	titles := make([]string, len(cols))
 	for i, c := range cols {

@@ -12,7 +12,7 @@ import (
 var globalKeys = struct {
 	Screens, Help, Palette, Drawer, Back, Quit, ForceQuit, Restart key.Binding
 }{
-	Screens:   key.NewBinding(key.WithKeys("1", "2", "3", "4", "5", "6"), key.WithHelp("1-6", "screens")),
+	Screens:   key.NewBinding(key.WithKeys("1", "2", "3", "4", "5"), key.WithHelp("1-5", "views")),
 	Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	Palette:   key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "command")),
 	Drawer:    key.NewBinding(key.WithKeys("."), key.WithHelp(".", "activity drawer")),

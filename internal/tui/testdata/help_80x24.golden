@@ -1,7 +1,7 @@
- jumpgate  Fleet Hosts Signers Gateways [Jobs] Settings              connecting
+ jumpgate  Fleet [Jobs] Signers Gateways Settings                    connecting
  boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
  Help: keys everywhere  (esc to close)
-  1-6          screens
+  1-5          views
   ?            help
   :            command
   .            activity drawer
@@ -21,4 +21,4 @@ keys here
   d            answer the selected job's question
   a            adopt a job whose controller went silent
   r            reload
- jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-6 views  q quit
+ jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-5 views  q quit

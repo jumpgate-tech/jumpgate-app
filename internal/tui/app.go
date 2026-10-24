@@ -20,15 +20,14 @@ import (
 type screenID int
 
 const (
-	scrFleet screenID = iota
-	scrHosts
+	scrFleet screenID = iota // the table, and the box list (Hosts folded in, spec U3)
+	scrJobs
 	scrSigners
 	scrGateways
-	scrJobs
 	scrSettings
 )
 
-var screenNames = [...]string{"Fleet", "Hosts", "Signers", "Gateways", "Jobs", "Settings"}
+var screenNames = [...]string{"Fleet", "Jobs", "Signers", "Gateways", "Settings"}
 
 // screen is one view in the main area.
 type screen interface {
@@ -119,7 +118,7 @@ type App struct {
 	connErr  error
 
 	active  screenID
-	screens [6]screen
+	screens [len(screenNames)]screen
 	detail  screen // the open host, if any
 	hostGen uint64 // counts openHost calls; see hostScreen.gen
 	modal   modal
@@ -159,7 +158,6 @@ func New(o Options) *App {
 	a.screens[scrFleet] = newFleetScreen()
 	a.screens[scrJobs] = &jobsScreen{}
 	a.screens[scrGateways] = &gatewaysScreen{}
-	a.screens[scrHosts] = &hostsScreen{}
 	a.screens[scrSigners] = &signersScreen{}
 	a.screens[scrSettings] = &settingsScreen{}
 	if server, mine, differs := a.be.Skew(); differs {
@@ -178,7 +176,7 @@ func New(o Options) *App {
 // Init starts the fleet watch, the clock and a prefs fetch. The fetch does
 // not block the first frame: the TUI shows the defaults until prefsMsg lands.
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs(), loadGateways(a), gwTick(), treeTick())
+	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs(), loadGateways(a), gwTick(), treeTick(), loadTargets(a))
 }
 
 // gatewaysEvery is how often the KPI strip re-reads the gateways: the

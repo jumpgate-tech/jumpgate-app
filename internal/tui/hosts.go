@@ -38,7 +38,9 @@ func loadTargets(a *App) tea.Cmd {
 	})
 }
 
-// hostsScreen lists every box and adds, pairs and removes them (spec screen 3).
+// hostsScreen lists every box and adds, pairs and removes them (spec screen
+// 3). It is not a view of its own: the Fleet view owns it, shows it as its
+// address/pairing table mode (v) and hands it a, p, d and L.
 type hostsScreen struct {
 	ts     []api.TargetView
 	has    bool
@@ -127,7 +129,8 @@ func (s *hostsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 		return loadTargets(a)
 	case tea.KeyPressMsg:
-		if a.active != scrHosts || a.detail != nil {
+		// Fleet hands keys on: this list is its box table mode (spec U3).
+		if a.active != scrFleet || a.detail != nil {
 			return nil
 		}
 		return s.key(a, msg)

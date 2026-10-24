@@ -20,7 +20,7 @@ func settingsApp(t *testing.T, f *tuitest.Fake) *App {
 	f.SettingsV = api.Settings{AIProvider: "gemini", AIKeySet: true, AIDisclosure: "Explain sends the selected log lines to Gemini after removing IP addresses."}
 	a := newTestApp(t, f, 80, 24, "unicode")
 	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: sampleFleet(), Has: true, State: apiclient.Live}})
-	return press(t, m, "6").(*App)
+	return press(t, m, "5").(*App)
 }
 
 func pick(t *testing.T, a *App, label string) *App {

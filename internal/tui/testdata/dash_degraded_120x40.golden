@@ -5,11 +5,11 @@
 +-------------++-------------++-------------++-------------++-------------++-------------------------++----------------+
 +- Views --------------++- Fleet --------------------------------------------------------------------------------------+
 |> Fleet          [1]  || HOST         LINK       NET       SYNC      LAG    PEERS   DISK            FW                |
-|  Hosts          [2]  ||>box-a        gate       PulseCha~ n/a       n/a    n/a     n/a             n/a               |
+|  Jobs           [2]  ||>box-a        gate       PulseCha~ n/a       n/a    n/a     n/a             n/a               |
 |  Signers        [3]  || box-b        down 9m    ?         n/a       n/a    n/a     n/a             n/a               |
 |  Gateways       [4]  || box-c        gate       ?         ~         n/a    n/a     n/a             n/a               |
-|  Jobs           [5]  ||                                                                                              |
-|  Settings       [6]  ||                                                                                              |
+|  Settings       [5]  ||                                                                                              |
+|                      ||                                                                                              |
 |                      ||                                                                                              |
 |                      ||                                                                                              |
 |                      ||                                                                                              |
@@ -37,4 +37,4 @@
 |                                                                                                                      |
 |                                                                                                                      |
 +----------------------------------------------------------------------------------------------------------------------+
- . drawer  ? help  : command  1-6 views  q quit
+ . drawer  ? help  : command  1-5 views  q quit

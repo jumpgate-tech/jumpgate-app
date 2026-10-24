@@ -232,7 +232,7 @@ func (a *App) drawerLine(w int) string {
 
 // hints are the keys worth showing on one line, the drawer's first.
 func (a *App) hints() string {
-	hs := []string{". drawer", "? help", ": command", "1-6 views"}
+	hs := []string{". drawer", "? help", ": command", "1-5 views"}
 	if a.detail != nil {
 		hs = append(hs, "esc back")
 	} else {
