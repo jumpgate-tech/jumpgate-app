@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -168,4 +169,87 @@ func TestPhase3Goldens(t *testing.T) {
 			tuitest.Golden(t, c.name, fr)
 		})
 	}
+}
+
+// stepInbox is the sample inbox with box-b's running job at step (0-based).
+func stepInbox(step int) api.JobsInbox {
+	in := sampleInbox()
+	in.Jobs[1].Step = step
+	return in
+}
+
+// The real program loop: the fake's job advances a step and its bar moves.
+func TestDrawerJobBarAdvances(t *testing.T) {
+	f := tuitest.NewFake()
+	f.FleetCh <- apiclient.Update[api.Fleet]{Value: dashFleet(), Has: true, State: apiclient.Live}
+	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: stepInbox(3), Has: true, State: apiclient.Live}
+	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" }, Now: func() time.Time { return testNow }})
+	tm := teatest.NewTestModel(t, a, teatest.WithInitialTermSize(120, 40), teatest.WithProgramOptions(tea.WithColorProfile(colorprofile.ASCII)))
+	teatest.WaitFor(t, tm.Output(), func(b []byte) bool { return strings.Contains(string(b), "Fleet") }, teatest.WithDuration(3*time.Second))
+	tm.Send(tuitest.Key("2"))
+	before := "job  box-b      migrate-names  step 4/8     ["
+	teatest.WaitFor(t, tm.Output(), func(b []byte) bool { return strings.Contains(string(b), before) }, teatest.WithDuration(3*time.Second))
+	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: stepInbox(4), Has: true, State: apiclient.Live}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(f.JobsCh) > 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond) // the relay hands it on; the program draws it
+	tm.Send(tuitest.Key("q"))
+	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
+	fr := tuitest.Frame(tm.FinalModel(t))
+	line := ""
+	for _, l := range strings.Split(fr, "\n") {
+		if strings.Contains(l, "job  box-b") {
+			line = l
+		}
+	}
+	if !strings.Contains(line, "step 5/8     [") || strings.Count(line, unicodeGlyphs.Full) != 10 {
+		t.Fatalf("the bar did not move (4/8 had 8 cells): %q\n%s", line, fr)
+	}
+}
+
+// jobsUpdate is the inbox stream's next message for the Jobs view now.
+func jobsUpdate(a *App, u apiclient.Update[api.JobsInbox]) jobsMsg {
+	return jobsMsg{gen: a.screens[scrJobs].(*jobsScreen).gen, u: u}
+}
+
+// A dropped stream marks its bars stale; the next live reading clears it.
+func TestDrawerBarsStaleThenRecover(t *testing.T) {
+	fl := jobsDashFleet()
+	fl.Rows[1].Stale = api.Stale{}
+	a := jobsDashApp(t, tuitest.NewFake(), 120, 40, "auto")
+	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fl, Has: true, State: apiclient.Live}})
+	jobLine, syncLine := "step 4/8     [########............]", "21.1M/21.3M  [####################] 99.1%"
+	check := func(name string, m tea.Model, jobStale, syncStale bool) {
+		t.Helper()
+		fr := tuitest.Frame(m)
+		requireASCII(t, fr)
+		for _, c := range []struct {
+			line  string
+			stale bool
+		}{{jobLine, jobStale}, {syncLine, syncStale}} {
+			found := false
+			for _, l := range strings.Split(fr, "\n") {
+				if strings.Contains(l, c.line) {
+					found = true
+					if strings.Contains(l, "~ stale") != c.stale {
+						t.Errorf("%s: %q stale %v", name, l, !c.stale)
+					}
+				}
+			}
+			if !found {
+				t.Errorf("%s: no %q:\n%s", name, c.line, fr)
+			}
+		}
+	}
+	check("live", m, false, false)
+	m, _ = tuitest.Send(m, jobsUpdate(m.(*App), apiclient.Update[api.JobsInbox]{State: apiclient.Retrying, Err: errors.New("stream dropped")}))
+	check("jobs dropped", m, true, false)
+	m, _ = tuitest.Send(m, jobsUpdate(m.(*App), apiclient.Update[api.JobsInbox]{Value: sampleInbox(), Has: true, State: apiclient.Live}))
+	check("jobs back", m, false, false)
+	m, _ = tuitest.Send(m, fleetMsg{u: apiclient.Update[api.Fleet]{State: apiclient.Retrying, Err: errors.New("dial: refused")}})
+	check("fleet dropped", m, false, true)
+	m, _ = tuitest.Send(m, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fl, Has: true, State: apiclient.Live}})
+	check("fleet back", m, false, false)
 }
