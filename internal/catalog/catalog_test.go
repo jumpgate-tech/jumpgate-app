@@ -417,8 +417,13 @@ func TestClients_BuildCmdMatchesRepo(t *testing.T) {
 		id, c := id, c
 		t.Run(id, func(t *testing.T) {
 			// Extract the git clone URL from BuildCmd
-			// The pattern is: `git clone --depth 1 <URL> <target>`
+			// The pattern is: `git clone --depth 1 <URL> <target>`, or, for a
+			// client that builds its PinVersion tag, `git clone --branch
+			// <PinVersion> --depth 1 <URL> <target>`.
 			clonePrefix := "git clone --depth 1 "
+			if pinned := "git clone --branch " + c.PinVersion + " --depth 1 "; strings.Contains(c.BuildCmd, pinned) {
+				clonePrefix = pinned
+			}
 			idx := strings.Index(c.BuildCmd, clonePrefix)
 			if idx == -1 {
 				t.Fatalf("client %q BuildCmd does not contain 'git clone --depth 1'", id)

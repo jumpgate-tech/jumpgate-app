@@ -1,0 +1,36 @@
+# Every config key checkpointz v0.32.0 reads, from the yaml tags of its
+# config structs: pkg/checkpointz/config.go (global, beacon),
+# pkg/beacon/config.go (checkpointz), pkg/beacon/node/config.go (upstreams)
+# and pkg/beacon/store/config.go (max_items). metricsAddr is parsed but
+# never used: v0.32.0 opens no metrics listener. Keys marked "unused:"
+# appear in example_config.yaml but no struct reads them; jumpgate never
+# renders them.
+global
+global.listenAddr
+global.logging
+unused: global.metricsAddr
+checkpointz
+checkpointz.mode
+checkpointz.custom_preset
+checkpointz.caches
+checkpointz.caches.blocks
+checkpointz.caches.blocks.max_items
+checkpointz.caches.states
+checkpointz.caches.states.max_items
+checkpointz.caches.deposit_snapshots
+checkpointz.caches.deposit_snapshots.max_items
+checkpointz.caches.blob_sidecars
+checkpointz.caches.blob_sidecars.max_items
+checkpointz.historical_epoch_count
+checkpointz.frontend
+checkpointz.frontend.enabled
+checkpointz.frontend.public_url
+checkpointz.frontend.brand_name
+checkpointz.frontend.brand_image_url
+beacon
+beacon.upstreams
+beacon.upstreams[].name
+beacon.upstreams[].address
+unused: beacon.upstreams[].timeoutSeconds
+beacon.upstreams[].dataProvider
+beacon.upstreams[].headers

@@ -353,6 +353,10 @@ func (s *Server) setBoxModule(w http.ResponseWriter, r *http.Request, cfg config
 			return
 		}
 	}
+	if m.ID == "checkpointz" && req.Enabled && len(b.Upstreams) == 0 {
+		// No upstream given: the box's own beacon, when it runs one on this chain.
+		b.Upstreams = catalog.CheckpointzDefaultUpstreams(target.Wire, b.ChainID)
+	}
 	if b.Webhook == "" && !req.ClearWebhook {
 		for _, o := range target.Modules {
 			if o.Instance() == b.Instance() {

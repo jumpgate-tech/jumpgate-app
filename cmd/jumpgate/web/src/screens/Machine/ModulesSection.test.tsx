@@ -415,3 +415,73 @@ describe("ModulesSection", () => {
     );
   });
 });
+
+describe("Checkpointz", () => {
+  const PULSE: Catalog = {
+    ...CATALOG,
+    networks: [{ ChainID: 369, Name: "PulseChain", CheckpointURL: "", ExecClients: [], BeaconClients: [], LearnURL: "", SnapshotSizeTB: 0, SyncLabel: "", GenesisSyncLabel: "" }],
+  };
+  const SERVING: api.ModuleStatus = {
+    id: "checkpointz", instance: "checkpointz-369", served: true, active: true, accepting: false, count: 0, size: 0, headBlock: 4123,
+  };
+  const URL = "http://10.0.0.5:5555";
+
+  function fleet(bindAddr?: string): Target[] {
+    const wire = (exec: string, extra: Partial<api.WireConfig> = {}): api.WireConfig => ({
+      ChainID: 369, ExecID: exec, BeaconID: "lighthouse-pulse", DataDir: "/d", JWTPath: "/d/jwt", Archive: false, ...extra,
+    });
+    return [
+      {
+        id: "t1", mode: "ssh", ssh: { Host: "cp.example", User: "root", KeyPath: "/k" }, wire: wire("reth"),
+        modules: [{ id: "checkpointz", chainId: 369, bindAddr, upstreams: ["http://127.0.0.1:5052"] }],
+      },
+      { id: "a", mode: "ssh", ssh: { Host: "a.example", User: "root", KeyPath: "/k" }, wire: wire("reth") },
+      { id: "b", mode: "ssh", ssh: { Host: "b.example", User: "root", KeyPath: "/k" }, wire: wire("go-pulse", { CheckpointURL: URL }) },
+      { id: "c", mode: "ssh", ssh: { Host: "c.example", User: "root", KeyPath: "/k" }, wire: { ...wire("reth"), ChainID: 943 } },
+    ];
+  }
+
+  it("sends a listen address when one is given", async () => {
+    setup(target());
+    await screen.findByText("Services on this box");
+    fireEvent.click(card("checkpointz").querySelector("button.module-toggle")!);
+    fireEvent.change(await screen.findByLabelText("Listen address"), { target: { value: "10.0.0.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
+    await waitFor(() =>
+      expect(api.setModule).toHaveBeenCalledWith("t1", "checkpointz", { enabled: true, chainId: 369, bindAddr: "10.0.0.5" }),
+    );
+  });
+
+  it("sets the checkpoint URL on the fleet's other nodes on its chain, after a confirm", async () => {
+    const f = fleet("10.0.0.5");
+    vi.mocked(api.startSetup).mockResolvedValue({ status: "started" });
+    setup(f[0], { fleet: f, statuses: [SERVING], catalog: PULSE });
+    expect(await screen.findByText("Serving · finalized epoch 4123")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Use as checkpoint for my other PulseChain nodes" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain(URL);
+    expect(dialog.textContent).toContain("Restarts lighthouse-pulse on a.example.");
+    expect(dialog.textContent).toContain("b.example: already uses this checkpoint.");
+    expect(dialog.textContent).not.toContain("c.example");
+    expect(api.startSetup).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Use checkpoint" }));
+    await waitFor(() => expect(api.startSetup).toHaveBeenCalledTimes(1));
+    expect(api.startSetup).toHaveBeenCalledWith("a", { ...f[1].wire, CheckpointURL: URL });
+    await waitFor(() => expect(dialog.textContent).toContain("a.example: setup started, lighthouse-pulse restarts."));
+  });
+
+  it("offers nothing to other boxes from a loopback Checkpointz", async () => {
+    const f = fleet();
+    setup(f[0], { fleet: f, statuses: [SERVING], catalog: PULSE });
+    await screen.findByText("Serving · finalized epoch 4123");
+    expect(screen.queryByRole("button", { name: /Use as checkpoint/ })).toBeNull();
+    expect(screen.getByText("This Checkpointz serves only this box. Turn it off and on with a private listen address to let your other boxes use it.")).toBeTruthy();
+  });
+
+  it("offers nothing until it serves a finalized checkpoint", async () => {
+    const f = fleet("10.0.0.5");
+    setup(f[0], { fleet: f, statuses: [{ ...SERVING, served: false }], catalog: PULSE });
+    await screen.findByText("Running");
+    expect(screen.queryByRole("button", { name: /Use as checkpoint/ })).toBeNull();
+  });
+});

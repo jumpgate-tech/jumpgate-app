@@ -130,7 +130,7 @@ export function statusLine(m: CatalogModule, s: ModuleStatus | undefined, ctx: M
   if (m.placement === "box") {
     if (!on && !s) return "";
     if (s?.error) return s.error;
-    if (s?.active) return "Running";
+    if (s?.active) return m.id === "checkpointz" && s.served ? `Serving · finalized epoch ${s.headBlock}` : "Running";
     return "Stopped";
   }
   if (m.placement !== "node") return "";
@@ -195,11 +195,11 @@ export function droppedOnClientChange(
 
 // BOX_FIELDS is which settings a box module asks for when it is turned on.
 // Modules not listed ask for none.
-export type BoxField = "port" | "extIp";
+export type BoxField = "port" | "extIp" | "bindAddr";
 const BOX_FIELDS: Record<string, BoxField[]> = {
   "el-bootnode": ["port", "extIp"],
   "cl-bootnode": ["port", "extIp"],
-  checkpointz: ["port"],
+  checkpointz: ["port", "bindAddr"],
 };
 
 export const BOX_FIELD_DEFAULTS: Record<string, { port?: number }> = {
@@ -236,4 +236,18 @@ export function publicOptions(m: CatalogModule): typeof PUBLIC_OPTIONS {
   const offered = m.public ?? [];
   if (offered.length === 0) return [];
   return PUBLIC_OPTIONS.filter((o) => o.value === "" || offered.includes(o.value));
+}
+
+// CHECKPOINTZ_PORT is the catalog's default Checkpointz port.
+const CHECKPOINTZ_PORT = 5555;
+
+// checkpointzURL is the checkpoint-sync URL the fleet's other boxes use for
+// a Checkpointz record, or "" when it listens on loopback (the default)
+// and only its own box can reach it. The catalog has already refused any
+// address that is not loopback or private.
+export function checkpointzURL(rec: { bindAddr?: string; port?: number }): string {
+  const host = (rec.bindAddr ?? "").trim();
+  if (host === "" || host === "::1" || host.startsWith("127.")) return "";
+  const port = rec.port || CHECKPOINTZ_PORT;
+  return `http://${host.includes(":") ? `[${host}]` : host}:${port}`;
 }

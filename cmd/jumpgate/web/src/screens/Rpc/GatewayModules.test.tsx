@@ -40,7 +40,7 @@ function withReasons(): Catalog {
     ...CATALOG,
     modules: [
       {
-        ...CATALOG.modules[0],
+        ...CATALOG.modules![0],
         applies: [
           { chainId: 1, client: "", ok: true, beta: false },
           { chainId: 369, client: "", ok: false, beta: false, reason: PLS_REASON },

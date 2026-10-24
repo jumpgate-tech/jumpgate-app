@@ -28,6 +28,18 @@ RUN printf '%s\n' '#!/bin/sh' \
       'if [ "$1" = --version ]; then echo "lighthouse-pulse stub"; else exec sleep infinity; fi' \
       > /usr/local/bin/lighthouse-pulse \
     && chmod 0755 /usr/local/bin/reth /usr/local/bin/lighthouse-pulse
+# A stub checkpointz: install's Verify passes on `--help` (v0.32.0 has no
+# --version), and running it serves a fixed finalized status on 5555 from
+# the unit's private /tmp. curl is what the module's probe runs.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && printf '%s\n' '#!/bin/sh' \
+      'if [ "$1" = --help ]; then echo "Checkpoint sync provider for Ethereum beacon nodes"; exit 0; fi' \
+      'mkdir -p /tmp/www/checkpointz/v1' \
+      'echo '"'"'{"finality":{"finalized":{"epoch":"77","root":"0x00"}},"operating_mode":"full"}'"'"' > /tmp/www/checkpointz/v1/status' \
+      'exec python3 -m http.server 5555 --bind 127.0.0.1 --directory /tmp/www' \
+      > /usr/local/bin/checkpointz \
+    && chmod 0755 /usr/local/bin/checkpointz
 STOPSIGNAL SIGRTMIN+3
 # systemd marks / rshared at boot only on a real host; inside a container it
 # leaves Docker's rprivate root alone. Credential setup (LoadCredential=) mounts
