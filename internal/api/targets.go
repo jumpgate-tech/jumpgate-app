@@ -56,15 +56,18 @@ type AgentView struct {
 // TargetView is GET /api/targets' element: the stored target with today's
 // field names, plus how it is reached.
 type TargetView struct {
-	ID          string                `json:"id"`
-	Mode        string                `json:"mode"` // "local" | "ssh"
-	SSH         *SSHView              `json:"ssh,omitempty"`
-	Wire        *catalog.WireConfig   `json:"wire,omitempty"`
-	Devnet      *catalog.DevnetConfig `json:"devnet,omitempty"`
-	Modules     []catalog.BoxModule   `json:"modules,omitempty"` // the box modules recorded on it
-	Agent       *AgentView            `json:"agent"`
-	Link        Link                  `json:"link"`
-	ThisMachine bool                  `json:"thisMachine"`
+	ID      string                `json:"id"`
+	Mode    string                `json:"mode"` // "local" | "ssh"
+	SSH     *SSHView              `json:"ssh,omitempty"`
+	Wire    *catalog.WireConfig   `json:"wire,omitempty"`
+	Devnet  *catalog.DevnetConfig `json:"devnet,omitempty"`
+	Modules []catalog.BoxModule   `json:"modules,omitempty"` // the box modules recorded on it, webhooks blanked
+	// WatchWebhookSet says the health watch has a saved webhook. The URL
+	// itself is a secret and never leaves the controller.
+	WatchWebhookSet bool       `json:"watchWebhookSet,omitempty"`
+	Agent           *AgentView `json:"agent"`
+	Link            Link       `json:"link"`
+	ThisMachine     bool       `json:"thisMachine"`
 }
 
 // AddTarget is POST /api/targets' body.

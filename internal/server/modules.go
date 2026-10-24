@@ -123,7 +123,10 @@ type moduleRequest struct {
 	BindAddr  string   `json:"bindAddr"`
 	ExtIP     string   `json:"extIp"`
 	Upstreams []string `json:"upstreams"`
-	Webhook   string   `json:"webhook"`
+	// Webhook "" keeps the saved webhook (clients are never sent it);
+	// ClearWebhook removes it.
+	Webhook      string `json:"webhook"`
+	ClearWebhook bool   `json:"clearWebhook"`
 }
 
 // moduleChangeResponse answers a module change: "started" with a setup run
@@ -154,14 +157,32 @@ func validateBoxModuleFields(b catalog.BoxModule) error {
 	if b.ExtIP != "" && net.ParseIP(b.ExtIP) == nil {
 		return fmt.Errorf("extIp %q is not an IP address", b.ExtIP)
 	}
-	for _, u := range b.Upstreams {
-		if err := plainURL(u, "http", "https", "ws", "wss"); err != nil {
-			return fmt.Errorf("upstream %q: %w", u, err)
+	// Upstream and webhook URLs can carry keys: refusals name the entry's
+	// position or host, never the URL.
+	for i, u := range b.Upstreams {
+		raw := u
+		if b.ID == "watch" {
+			e, err := catalog.ParseWatchEndpoint(u)
+			if err != nil {
+				return fmt.Errorf("endpoint %d: %w", i+1, err)
+			}
+			raw = e.URL
+		}
+		if err := plainURL(raw, "http", "https", "ws", "wss"); err != nil {
+			return fmt.Errorf("upstream %d (%s): %w", i+1, catalog.RedactURL(raw), err)
+		}
+	}
+	if b.ID == "watch" {
+		if _, err := catalog.WatchEndpoints(b); err != nil {
+			return err
+		}
+		if err := catalog.ValidateWatchWebhook(b.Webhook); err != nil {
+			return err
 		}
 	}
 	if b.Webhook != "" {
 		if err := plainURL(b.Webhook, "http", "https"); err != nil {
-			return fmt.Errorf("webhook %q: %w", b.Webhook, err)
+			return fmt.Errorf("the webhook: %w", err)
 		}
 	}
 	return nil
@@ -330,6 +351,13 @@ func (s *Server) setBoxModule(w http.ResponseWriter, r *http.Request, cfg config
 		if _, ok := catalog.NetworkByChainID(b.ChainID); !ok {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("chain %d is not a known network", b.ChainID))
 			return
+		}
+	}
+	if b.Webhook == "" && !req.ClearWebhook {
+		for _, o := range target.Modules {
+			if o.Instance() == b.Instance() {
+				b.Webhook = o.Webhook
+			}
 		}
 	}
 	if err := validateBoxModuleFields(b); err != nil {

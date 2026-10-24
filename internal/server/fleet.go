@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -50,6 +51,7 @@ type fleetProber interface {
 	disk(ctx context.Context, cfg config.Config, t config.Target) (ops.DU, error)
 	firewall(ctx context.Context, cfg config.Config, t config.Target) ([]ops.CheckItem, error)
 	chainID(ctx context.Context, cfg config.Config, t config.Target) (int, error)
+	modules(ctx context.Context, cfg config.Config, t config.Target) ([]monitor.ModuleStatus, error)
 }
 
 // serverProber reads a box through the node operations: signed intents for
@@ -101,6 +103,20 @@ func (p serverProber) firewall(ctx context.Context, cfg config.Config, t config.
 	return items, err
 }
 
+// modules reads the box's module status the way the modules route does:
+// the gate's modules.read when paired, the same probe over the shell
+// otherwise.
+func (p serverProber) modules(ctx context.Context, cfg config.Config, t config.Target) ([]monitor.ModuleStatus, error) {
+	if t.Agent != nil {
+		return readGateModules(p.s, ctx, cfg, t)
+	}
+	ex, err := p.s.getShellExecutor(t)
+	if err != nil {
+		return nil, err
+	}
+	return monitor.ProbeBoxModules(ctx, ex), nil
+}
+
 // chainID is the controller's wire when it has one; a paired box set up by
 // other means tells its own chain in agent.info.
 func (p serverProber) chainID(ctx context.Context, cfg config.Config, t config.Target) (int, error) {
@@ -150,6 +166,12 @@ type fleetReading struct {
 	fwTried bool
 	items   []ops.CheckItem
 	fwErr   error
+
+	// alertsTried is set when the box runs the health watch and its
+	// module status was read; alerts are the watch's open alerts.
+	alertsTried bool
+	alerts      []monitor.Alert
+	alertsErr   error
 }
 
 // fleetPoller keeps the fleet's rows fresh while anyone is watching: a
@@ -556,7 +578,57 @@ func (p *fleetPoller) read(ctx context.Context, cfg config.Config, t config.Targ
 		r.fwTried = true
 		r.items, r.fwErr = p.probe.firewall(ctx, cfg, t)
 	}
+	if runsWatch(t) {
+		r.alertsTried = true
+		var mods []monitor.ModuleStatus
+		mods, r.alertsErr = p.probe.modules(ctx, cfg, t)
+		for _, m := range mods {
+			if m.ID == "watch" {
+				r.alerts = append(r.alerts, m.Alerts...)
+			}
+		}
+	}
 	return r
+}
+
+// runsWatch says the controller recorded the health watch on t.
+func runsWatch(t config.Target) bool {
+	for _, m := range t.Modules {
+		if m.ID == "watch" {
+			return true
+		}
+	}
+	return false
+}
+
+// alertRank orders alerts worst first: a stopped client before a full
+// disk before a lagging or lonely node before an endpoint.
+func alertRank(key string) int {
+	switch key {
+	case "exec-down", "beacon-down":
+		return 0
+	case "disk-90":
+		return 1
+	case "exec-behind", "no-peers":
+		return 2
+	}
+	return 3
+}
+
+// setAlerts puts the watch's open alerts on the row, worst first.
+//
+// docs:covers watch-alerts
+func (st *fleetState) setAlerts(alerts []monitor.Alert) {
+	st.row.AlertCount, st.row.AlertMessage, st.row.Alerts = len(alerts), "", nil
+	if len(alerts) == 0 {
+		return
+	}
+	out := make([]api.FleetAlert, 0, len(alerts))
+	for _, a := range alerts {
+		out = append(out, api.FleetAlert{Key: a.Key, Message: a.Message, Since: a.Since})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return alertRank(out[i].Key) < alertRank(out[j].Key) })
+	st.row.Alerts, st.row.AlertMessage = out, out[0].Message
 }
 
 // boxAnswered says an error is still an answer from the box itself (a signed
@@ -610,6 +682,9 @@ func (p *fleetPoller) apply(st *fleetState, now time.Time, r fleetReading) {
 			_, e := apiErrorFor(r.diskErr)
 			st.row.DiskError = &api.ProbeError{Error: e, At: now}
 		}
+	}
+	if r.alertsTried && r.alertsErr == nil {
+		st.setAlerts(r.alerts)
 	}
 	if r.fwTried {
 		st.firewallTried = now

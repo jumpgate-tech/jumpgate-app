@@ -4,13 +4,24 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/valve-tech/jumpgate/internal/api"
+	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 // targetView is how a stored target is shown to clients.
 func targetView(t config.Target) api.TargetView {
-	v := api.TargetView{ID: t.ID, Mode: t.Mode, SSH: sshView(t.SSH), Wire: t.Wire, Devnet: t.Devnet, Modules: t.Modules, ThisMachine: t.Mode == "local"}
+	v := api.TargetView{ID: t.ID, Mode: t.Mode, SSH: sshView(t.SSH), Wire: t.Wire, Devnet: t.Devnet, ThisMachine: t.Mode == "local"}
+	if len(t.Modules) > 0 {
+		v.Modules = make([]catalog.BoxModule, len(t.Modules))
+		for i, m := range t.Modules {
+			if m.Webhook != "" {
+				v.WatchWebhookSet = v.WatchWebhookSet || m.ID == "watch"
+				m.Webhook = ""
+			}
+			v.Modules[i] = m
+		}
+	}
 	switch {
 	case t.Agent != nil && t.Agent.Transport == "local":
 		v.Link = api.LinkAgentLocal
