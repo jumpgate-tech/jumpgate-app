@@ -186,6 +186,9 @@ func (a *App) mainView(r rect) string {
 	title := screenNames[a.active]
 	if hs, ok := a.detail.(*hostScreen); ok {
 		title = sanitizeLine(hs.id)
+		if hs.node != "" {
+			title += " / " + hs.node
+		}
 	}
 	var content string
 	switch {

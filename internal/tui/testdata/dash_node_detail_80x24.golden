@@ -1,0 +1,24 @@
+ jumpgate  Fleet Jobs Signers Gateways Settings             ! 3 alerts | 5s ago
+ boxes 1/3 up synced ~1/3 lag 2 peers ~51/81 disk 39% gw n/a ! 1 FAIL 2 warn
+ box-a | gate | PulseChain
+ node detail | was = the previous reading | esc box tabs
+
+ EXECUTION
+ state     synced (was syncing)
+ head      21,345,678 (was 21,345,600)
+ peers     48 (was 40)
+ head lag  2 blk (was 40)
+ ref head  21,345,680 (was 21,345,718)
+ overall   synced (was syncing)
+ disk      61% used (was 60%)
+
+ read 3s ago | previous 8s ago
+
+ MODULES
+ Message board  on | Accepting | 1,234 msgs | local only
+ EL bootnode    on | Running
+ Health watch   on | Running
+ Checkpointz    on | unit failed
+
+
+ jobs 1 running  [! 1 needs decision]  ! 3 alerts | . drawer  ? help  : command~
