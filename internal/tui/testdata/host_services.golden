@@ -1,4 +1,4 @@
- jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  5 Jobs  6 Settings    ? help
+ jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  5 Jobs  … server connecting
  box
  Overview  Storage  Endpoints  Security  Logs  [Services]
 
@@ -21,4 +21,4 @@
 
 
 
- box · server connecting · jobs ⚑ –
+ jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-6 views  esc back

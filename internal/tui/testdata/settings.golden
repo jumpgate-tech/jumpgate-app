@@ -1,4 +1,4 @@
- jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  5 Jobs  [6 Settings]  ? help
+ jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  5 Jobs  [6 Set… server live
  FLEET COLUMNS
 ▸ [x] HOST
   [x] LINK
@@ -21,4 +21,4 @@
   [x] Security
  ↑↓ move  space toggle  enter change  (saved at once)
 
- box-a · gate · server live · jobs ⚑ –                                   5s ago
+ jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-6 views  q quit

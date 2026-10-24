@@ -1,4 +1,4 @@
- jumpgate  1 Fleet  [2 Hosts]  3 Signers  4 Gateways  5 Jobs  6 Settings  ? help
+ jumpgate  1 Fleet  [2 Hosts]  3 Signers  4 Gateways  5 Jobs… server connecting
  HOSTS
 
 ▸ box-a          root@10.0.0.5:22                       gate 0x1234…5678
@@ -21,4 +21,4 @@
 
 
  a add  p pair  L pair this machine  d remove  enter open
- no box selected · server connecting · jobs ⚑ –
+ jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-6 views  q quit

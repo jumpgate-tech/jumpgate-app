@@ -1,4 +1,4 @@
- jumpgate  [1 Fleet]  2 Hosts  3 Signers  4 Gateways  5 Jobs  6 Settings  ? help
+ jumpgate  [1 Fleet]  2 Hosts  3 Signers  4 Gateways  5 Jobs  6 Se~ server live
  HOST         LINK       NET       SYNC      LAG    PEERS   DISK            FW
 >box-a        gate       PulseCha~ synced    2      48/72   [####|...] 61%  warn
  box-b        down 4m    Ethereum  syncing~  n/a    3/9~    n/a             n/a
@@ -21,4 +21,4 @@
 
 
  3 boxes | sort: host | ~ stale  * this machine
- box-a | gate | server live | jobs ! -                                   5s ago
+ jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-6 views  q quit

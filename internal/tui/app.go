@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -346,6 +345,8 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(k, globalKeys.Palette):
 		a.modal = newPalette()
 		return nil
+	case key.Matches(k, globalKeys.Drawer):
+		return a.toggleDrawer()
 	case key.Matches(k, globalKeys.Screens):
 		return a.openScreen(screenID(k.Code - '1'))
 	case key.Matches(k, globalKeys.Quit) && a.detail == nil:
@@ -413,7 +414,8 @@ func (a *App) render() string {
 	if a.w < minW || a.h < minH {
 		return a.tooSmall()
 	}
-	bodyH := a.h - 2
+	l := layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer))
+	bodyH := a.h - 2 - l.Drawer.H
 	var body string
 	if a.skew != "" {
 		body = a.th.Warn.Render(truncate(a.skew, a.w, a.gl.Ellipsis)) + "\n"
@@ -427,7 +429,13 @@ func (a *App) render() string {
 	} else {
 		body += fit(a.current().view(a, a.w, bodyH), a.w, bodyH, a.gl.Ellipsis)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, a.topBar(), body, a.statusBar())
+	parts := []string{a.topBar(), body}
+	last := a.drawerLine(a.w)
+	if l.DrawerOpen {
+		parts = append(parts, a.drawerView(l.Drawer, l.DrawerCompact))
+		last = truncate(" "+a.hints(), a.w, a.gl.Ellipsis)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, append(parts, last)...)
 }
 
 // tooSmall is the whole frame below 80×24 (spec "Layout"): the size message,
@@ -451,7 +459,8 @@ func (a *App) topBar() string {
 		parts = append(parts, label)
 	}
 	left := " " + strings.Join(parts, "  ")
-	right := "? help"
+	right := "server " + a.conn.String() + " "
+	left = truncate(left, a.w-lipgloss.Width(right)-1, a.gl.Ellipsis)
 	gap := a.w - lipgloss.Width(left) - lipgloss.Width(right)
 	return truncate(left+strings.Repeat(" ", max(gap, 1))+right, a.w, a.gl.Ellipsis)
 }
@@ -465,46 +474,6 @@ func (a *App) needCount() int {
 		}
 	}
 	return n
-}
-
-// jobsFlag is the fleet-wide count of jobs that need a decision, or the dash
-// until some box has reported its jobs (honest data: unknown is not 0).
-func (a *App) jobsFlag() string {
-	for _, r := range a.fleet.Rows {
-		if r.Jobs != nil {
-			return strconv.Itoa(a.needCount())
-		}
-	}
-	return a.gl.Dash
-}
-
-// statusBar: the selected box and its link, the server connection, the
-// fleet-wide ⚑ count, and the age of the fleet data.
-func (a *App) statusBar() string {
-	if a.flash != "" {
-		return truncate(" "+a.flash, a.w, a.gl.Ellipsis)
-	}
-	box := "no box selected"
-	if a.sel != "" {
-		box = sanitizeLine(a.sel)
-		if row, ok := a.fleet.Row(a.sel); ok {
-			box += " " + a.gl.Sep + " " + linkWord(row)
-		}
-	}
-	server := "server " + a.conn.String()
-	if a.conn == apiclient.Retrying && a.connErr != nil {
-		server += " (" + a.errText(a.connErr) + ")"
-	}
-	left := fmt.Sprintf(" %s %s %s %s jobs %s %s", box, a.gl.Sep, server, a.gl.Sep, a.gl.Flag, a.jobsFlag())
-	right := ""
-	if a.fleetHas {
-		right = formatAge(a.now().Sub(a.fleet.At)) + " ago "
-	}
-	gap := a.w - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		return truncate(left, a.w, a.gl.Ellipsis)
-	}
-	return left + strings.Repeat(" ", gap) + right
 }
 
 // linkWord is a row's link in one word: HOSTKEY when its host key is the

@@ -1,4 +1,4 @@
- jumpgate  1 Fleet  2 Hosts  [3 Signers]  4 Gateways  5 Jobs  6 Settings  ? help
+ jumpgate  1 Fleet  2 Hosts  [3 Signers]  4 Gateways  5 Jobs… server connecting
  THIS CONTROLLER
  address  0xc0ff…00aa   store keychain   ok
 
@@ -21,4 +21,4 @@
 
 
  t test signing  K create a key  r reload
- no box selected · server connecting · jobs ⚑ –
+ jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-6 views  q quit

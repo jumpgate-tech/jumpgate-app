@@ -1,9 +1,10 @@
- jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  [5 Jobs]  6 Settings  ? help
+ jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  [5 Jobs]… server connecting
  Help  (esc to close)
 keys everywhere
   1-6          screens
   ?            help
   :            command
+  .            activity drawer
   esc          back
   q            quit
   ctrl+c       quit now
@@ -20,5 +21,4 @@ keys here
   d            answer the selected job's question
   a            adopt a job whose controller went silent
   r            reload
-
- no box selected · server connecting · jobs ⚑ –
+ jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-6 views  q quit

@@ -128,13 +128,12 @@ func TestStatusBarShowsTheConnection(t *testing.T) {
 }
 
 // The fleet's age comes from the injected clock, never the wall clock.
-func TestStatusBarShowsTheDataAge(t *testing.T) {
+func TestStatusLineShowsTheDataAge(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
 	fl := api.Fleet{At: testNow.Add(-5 * time.Second)}
 	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{State: apiclient.Live, Value: fl, Has: true}})
-	lines := strings.Split(tuitest.Frame(m), "\n")
-	if last := lines[len(lines)-1]; !strings.Contains(last, "server live") || !strings.HasSuffix(last, "5s ago") {
-		t.Fatalf("status bar %q", last)
+	if s := m.(*App).statusLine(); !strings.Contains(s, "server live") || !strings.HasSuffix(s, "updated 5s ago") {
+		t.Fatalf("status line %q", s)
 	}
 }
 
@@ -353,14 +352,14 @@ func fleetWithJobs(needs ...int) api.Fleet {
 	return f
 }
 
-func TestStatusBarCountsJobsThatNeedYou(t *testing.T) {
+func TestDrawerLineCountsJobsThatNeedYou(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
-	if !strings.Contains(a.statusBar(), "jobs ⚑ –") {
-		t.Fatalf("before any box reports jobs: %q", a.statusBar())
+	if l := ansi.Strip(a.drawerLine(80)); !strings.Contains(l, "jobs n/a") || strings.Contains(l, "needs decision") {
+		t.Fatalf("before any box reports jobs: %q", l)
 	}
 	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fleetWithJobs(1, 2), Has: true, State: apiclient.Live}})
-	if bar := m.(*App).statusBar(); !strings.Contains(bar, "jobs ⚑ 3") {
-		t.Fatalf("status bar %q", bar)
+	if l := ansi.Strip(m.(*App).drawerLine(80)); !strings.Contains(l, "[! 3 needs decision]") {
+		t.Fatalf("drawer line %q", l)
 	}
 }
 
