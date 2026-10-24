@@ -190,6 +190,22 @@ func TestAgentRunWithoutAKeyFails(t *testing.T) {
 	}
 }
 
+// The watch reads its whole configuration from the file its unit names.
+func TestAgentWatchRequiresConfig(t *testing.T) {
+	stderr := captureStderr(t)
+	old := hostGOOS
+	t.Cleanup(func() { hostGOOS = old })
+	hostGOOS = "linux"
+	if code := cmdAgent([]string{"watch"}); code != exitCode("usage") || !strings.Contains(stderr(), "--config") {
+		t.Fatalf("agent watch: exit %d, stderr %q", code, stderr())
+	}
+	var b strings.Builder
+	printHelp(&b)
+	if !strings.Contains(b.String(), "agent watch --config FILE") {
+		t.Error("help does not list agent watch")
+	}
+}
+
 // Unknown subcommands and job-abandon without a well-formed id are usage
 // errors, and an agent on Windows is refused outright.
 func TestAgentRefusesWhatItCannotRun(t *testing.T) {

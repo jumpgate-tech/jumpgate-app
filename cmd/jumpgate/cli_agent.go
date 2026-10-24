@@ -20,6 +20,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/jobs"
 	"github.com/valve-tech/jumpgate/internal/signer"
+	"github.com/valve-tech/jumpgate/internal/watch"
 )
 
 const (
@@ -33,7 +34,7 @@ func cmdAgent(args []string) int {
 		return failed("`jumpgate agent` runs on the Linux boxes jumpgate manages, not on Windows")
 	}
 	if len(args) == 0 {
-		return usage("usage: jumpgate agent init|enroll|run|reset-replay|job-step|job-abandon")
+		return usage("usage: jumpgate agent init|enroll|run|watch|reset-replay|job-step|job-abandon")
 	}
 	fset := flag.NewFlagSet("agent "+args[0], flag.ContinueOnError)
 	state := fset.String("state-dir", defaultStateDir, "agent state directory")
@@ -49,6 +50,7 @@ func cmdAgent(args []string) int {
 	fset.String("job", "", "job id (job-step)")
 	fset.String("step", "", "step id (job-step)")
 	fset.String("attempt", "", "attempt (job-step)")
+	watchConfig := fset.String("config", "", "watch: the health watch's config.json")
 	if err := fset.Parse(args[1:]); err != nil {
 		return exitCode("usage")
 	}
@@ -68,6 +70,11 @@ func cmdAgent(args []string) int {
 		err = agentEnroll(*conf, agentclient.DefaultSocket, *address, *tier, *label, *localUID)
 	case "run":
 		err = agentRun(*state, *conf)
+	case "watch":
+		if *watchConfig == "" {
+			return usage("usage: jumpgate agent watch --config FILE (the health watch's config.json)")
+		}
+		err = agentWatch(*watchConfig, *conf)
 	case "job-step":
 		var a jobs.StepArgs
 		if a, err = jobs.ParseStepArgs(args[1:]); err == nil {
@@ -170,6 +177,17 @@ func agentResetReplay(stateDir string) error {
 		return err
 	}
 	return agent.InitReplay(path)
+}
+
+// agentWatch runs the on-box health watch until SIGTERM.
+func agentWatch(configPath, configDir string) error {
+	cfg, err := watch.LoadConfig(configPath, filepath.Join(configDir, "node.json"), filepath.Join(configDir, "names.json"))
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return watch.Run(ctx, cfg)
 }
 
 // agentJobStep is the body of a job step's transient unit. It holds no key
