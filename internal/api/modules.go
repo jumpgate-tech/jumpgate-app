@@ -54,6 +54,7 @@ type ModuleStatus struct {
 	Size      uint64 `json:"size"`
 	HeadBlock uint64 `json:"headBlock"`
 	Identity  string `json:"identity,omitempty"`
+	Note      string `json:"note,omitempty"`
 	Error     string `json:"error,omitempty"`
 }
 

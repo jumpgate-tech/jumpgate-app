@@ -349,8 +349,30 @@ func newModulesModal(a *App, h *hostScreen) *modulesModal {
 	return &modulesModal{h: h, pub: map[string]string{}}
 }
 
-var modKeys = struct{ Public key.Binding }{
+var modKeys = struct{ Public, Copy key.Binding }{
 	Public: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "change who can reach a node module")),
+	Copy:   key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy a bootnode's enode or ENR")),
+}
+
+// boxIdentity is a running box module's enode/ENR and the probe's note
+// about it, both sanitized; "" when the module reports none.
+func (h *hostScreen) boxIdentity(c modCard) (identity, note string) {
+	if c.m.Placement != "box" || h.modView.GateStale {
+		return "", ""
+	}
+	for _, s := range h.modView.Modules {
+		if s.ID == c.m.ID && s.Active {
+			return sanitizeLine(s.Identity), sanitizeLine(s.Note)
+		}
+	}
+	return "", ""
+}
+
+func identityKind(identity string) string {
+	if strings.HasPrefix(identity, "enr:") {
+		return "ENR"
+	}
+	return "enode"
 }
 
 func (m *modulesModal) cards(a *App) []modCard {
@@ -405,6 +427,13 @@ func (m *modulesModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	case key.Matches(k, navKeys.Enter):
 		if m.cursor < len(cards) && !m.busy {
 			return false, m.toggle(a, cards[m.cursor])
+		}
+	case key.Matches(k, modKeys.Copy):
+		if m.cursor < len(cards) {
+			if id, _ := m.h.boxIdentity(cards[m.cursor]); id != "" {
+				m.note, m.errText = "Sent the "+identityKind(id)+" to the terminal clipboard.", ""
+				return false, tea.SetClipboard(id)
+			}
 		}
 	case key.Matches(k, modKeys.Public):
 		if m.cursor < len(cards) && !m.busy {
@@ -672,6 +701,15 @@ func (m *modulesModal) view(a *App, w, _ int) string {
 		name := sanitizeLine(c.m.Name)
 		name += strings.Repeat(" ", pad-len([]rune(name))+2)
 		out += truncate(fmt.Sprintf(" %s %s%s", mark, name, m.h.moduleLine(a, c, sep)), w, a.gl.Ellipsis) + "\n"
+		if id, note := m.h.boxIdentity(c); i == m.cursor && id != "" {
+			// The full record, unwrapped so a terminal selection copies it
+			// whole; c copies it through the terminal (OSC 52).
+			out += "     " + id + "\n"
+			out += "     " + a.th.Dim.Render("c to copy the "+identityKind(id)) + "\n"
+			if note != "" {
+				out += "     " + a.th.Warn.Render(note) + "\n"
+			}
+		}
 		if i == m.cursor && len(m.h.publicOptions(c)) > 0 {
 			asking := m.askPost == c.m.ID
 			line := "reachable: " + publicLabel(c.public) + " (p to change)"

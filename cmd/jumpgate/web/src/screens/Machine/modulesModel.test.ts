@@ -167,7 +167,7 @@ describe("statusLine", () => {
 
   test("box module status", () => {
     const c = ctx({ enabled: ["checkpointz"] });
-    expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", active: true, identity: "enode://x" }), c)).toBe("Running · enode://x");
+    expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", active: true, identity: "enode://x" }), c)).toBe("Running");
     expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", active: true }), c)).toBe("Running");
     expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", active: false }), c)).toBe("Stopped");
     expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", error: "unit failed" }), c)).toBe("unit failed");

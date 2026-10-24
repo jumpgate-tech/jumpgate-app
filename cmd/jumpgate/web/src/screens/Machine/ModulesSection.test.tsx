@@ -14,6 +14,7 @@ vi.mock("../../api", async () => {
     getCatalog: vi.fn(),
     listModules: vi.fn(),
     setModule: vi.fn(),
+    startSetup: vi.fn(),
     streamMonitor: vi.fn(),
     streamSetup: vi.fn(),
     getGateways: vi.fn(),
@@ -76,11 +77,14 @@ function gateway(acme: boolean): GatewayView {
   } as unknown as GatewayView;
 }
 
-function setup(t: Target, opts: { gateways?: GatewayView[]; gateStale?: boolean } = {}) {
-  vi.mocked(api.listTargets).mockResolvedValue([t]);
-  vi.mocked(api.getCatalog).mockResolvedValue(CATALOG);
+function setup(
+  t: Target,
+  opts: { gateways?: GatewayView[]; gateStale?: boolean; fleet?: Target[]; catalog?: Catalog; statuses?: api.ModuleStatus[] } = {},
+) {
+  vi.mocked(api.listTargets).mockResolvedValue(opts.fleet ?? [t]);
+  vi.mocked(api.getCatalog).mockResolvedValue(opts.catalog ?? CATALOG);
   vi.mocked(api.listModules).mockResolvedValue({
-    modules: [],
+    modules: opts.statuses ?? [],
     gateStale: !!opts.gateStale,
     message: opts.gateStale ? "Status needs a newer gate on this box" : "",
   });
@@ -101,10 +105,161 @@ function card(id: string): HTMLElement {
 
 beforeEach(() => {
   vi.mocked(api.setModule).mockReset();
+  vi.mocked(api.startSetup).mockReset();
 });
 afterEach(cleanup);
 
+const ENODE = "enode://" + "ab12".repeat(32) + "@203.0.113.7:30303";
+
+function bootnodeFleet(): Target[] {
+  const box: Target = {
+    id: "t1",
+    mode: "ssh",
+    ssh: { Host: "boot.example", User: "root", KeyPath: "/k" },
+    modules: [{ id: "el-bootnode", chainId: 369 }],
+  };
+  const nodeA: Target = {
+    id: "a",
+    mode: "ssh",
+    ssh: { Host: "a.example", User: "root", KeyPath: "/k" },
+    wire: { ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/d", JWTPath: "/d/jwt", Archive: false },
+  };
+  const nodeB: Target = {
+    id: "b",
+    mode: "ssh",
+    ssh: { Host: "b.example", User: "root", KeyPath: "/k" },
+    wire: {
+      ChainID: 369,
+      ExecID: "go-pulse",
+      BeaconID: "prysm-pulse",
+      DataDir: "/d",
+      JWTPath: "/d/jwt",
+      Archive: false,
+      Bootnodes: ["enr:-abc"],
+    },
+  };
+  const otherChain: Target = {
+    id: "c",
+    mode: "ssh",
+    ssh: { Host: "c.example", User: "root", KeyPath: "/k" },
+    wire: { ChainID: 1, ExecID: "reth", BeaconID: "lighthouse", DataDir: "/d", JWTPath: "/d/jwt", Archive: false },
+  };
+  return [box, nodeA, nodeB, otherChain];
+}
+
+const BOOT_STATUS: api.ModuleStatus = {
+  id: "el-bootnode",
+  served: false,
+  active: true,
+  accepting: false,
+  count: 0,
+  size: 0,
+  headBlock: 0,
+  identity: ENODE,
+};
+
 describe("ModulesSection", () => {
+  it("shows a running bootnode's enode with a copy action and its note", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    setup(bootnodeFleet()[0], {
+      statuses: [{ ...BOOT_STATUS, note: "Set the box's public IP (ExtIP) on the bootnode." }],
+    });
+    await waitFor(() => expect(card("el-bootnode").querySelector("code.module-identity")?.textContent).toBe(ENODE));
+    expect(card("el-bootnode").textContent).toContain("Set the box's public IP (ExtIP) on the bootnode.");
+    fireEvent.click(screen.getByRole("button", { name: "Copy enode" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(ENODE));
+    expect(screen.queryByRole("button", { name: /Use on my other/ })).toBeNull();
+    expect(card("el-bootnode").textContent).toContain("Set the box's public IP before your other nodes can use this bootnode.");
+  });
+
+  it("puts a failed copy's hint on its own line", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    setup(bootnodeFleet()[0], { statuses: [BOOT_STATUS] });
+    const btn = await screen.findByRole("button", { name: "Copy enode" });
+    fireEvent.click(btn);
+    await waitFor(() => expect(card("el-bootnode").querySelector(".module-copy-failed")?.textContent).toBe("Copy failed; select the text instead."));
+    expect(btn.textContent).toBe("Copy");
+  });
+
+  it("offers no fleet action for an enode that advertises 0.0.0.0", async () => {
+    const fleet = bootnodeFleet();
+    setup(fleet[0], { fleet, statuses: [{ ...BOOT_STATUS, identity: ENODE.replace("203.0.113.7", "0.0.0.0") }] });
+    await waitFor(() => expect(card("el-bootnode").querySelector("code.module-identity")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: /Use on my other/ })).toBeNull();
+    expect(card("el-bootnode").textContent).toContain("Set the box's public IP before your other nodes can use this bootnode.");
+  });
+
+  it("lists a node's saved bootnodes and removes one, whatever runs them", async () => {
+    const node = bootnodeFleet()[2];
+    node.id = "t1";
+    node.wire!.Bootnodes = ["enr:-abc", ENODE];
+    vi.mocked(api.startSetup).mockResolvedValue({ status: "started" });
+    setup(node);
+    const list = await screen.findByRole("list", { name: "Bootnodes" });
+    expect(list.textContent).toContain("enr:-abc");
+    expect(list.textContent).toContain(ENODE);
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${ENODE}` }));
+    // It restarts a client, so it asks first.
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("This restarts go-pulse on b.example.");
+    expect(api.startSetup).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove bootnode" }));
+    await waitFor(() => expect(api.startSetup).toHaveBeenCalledWith("t1", { ...node.wire, Bootnodes: ["enr:-abc"] }));
+    expect(await screen.findByText("b.example: setup started, go-pulse restarts.")).toBeTruthy();
+    // The removed entry is gone from the list at once, and a second
+    // removal before the targets refetch does not send it back.
+    await waitFor(() => expect(list.textContent).not.toContain(ENODE));
+    vi.mocked(api.startSetup).mockRejectedValueOnce(new Error("busy"));
+    fireEvent.click(screen.getByRole("button", { name: "Remove enr:-abc" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove bootnode" }));
+    expect(await screen.findByText("b.example: busy")).toBeTruthy();
+    expect(api.startSetup).toHaveBeenLastCalledWith("t1", { ...node.wire, Bootnodes: [] });
+    // A failed removal keeps the entry listed.
+    expect(list.textContent).toContain("enr:-abc");
+  });
+
+  it("stops using a bootnode on the nodes that list it", async () => {
+    const fleet = bootnodeFleet();
+    fleet[2].wire!.Bootnodes = ["enr:-abc", ENODE];
+    vi.mocked(api.startSetup).mockResolvedValue({ status: "started" });
+    setup(fleet[0], { fleet, statuses: [BOOT_STATUS] });
+    fireEvent.click(await screen.findByRole("button", { name: "Stop using on my chain 369 nodes" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("a.example: does not use this bootnode.");
+    expect(dialog.textContent).toContain("Restarts go-pulse on b.example.");
+    fireEvent.click(screen.getByRole("button", { name: "Stop using bootnode" }));
+    await waitFor(() => expect(api.startSetup).toHaveBeenCalledTimes(1));
+    expect(api.startSetup).toHaveBeenCalledWith("b", { ...fleet[2].wire, Bootnodes: ["enr:-abc"] });
+    await waitFor(() => expect(dialog.textContent).toContain("b.example: setup started, go-pulse restarts."));
+  });
+
+  it("offers a running bootnode to the fleet's other nodes on its chain", async () => {
+    const fleet = bootnodeFleet();
+    vi.mocked(api.startSetup).mockResolvedValue({ status: "started" });
+    setup(fleet[0], {
+      fleet,
+      statuses: [BOOT_STATUS],
+      catalog: {
+        ...CATALOG,
+        networks: [{ ChainID: 369, Name: "PulseChain", CheckpointURL: "", ExecClients: [], BeaconClients: [], LearnURL: "", SnapshotSizeTB: 0, SyncLabel: "", GenesisSyncLabel: "" }],
+      },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Use on my other PulseChain nodes" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("a.example");
+    expect(dialog.textContent).toContain("b.example");
+    expect(dialog.textContent).not.toContain("c.example");
+    expect(dialog.textContent).toContain("Restarts reth on a.example.");
+    fireEvent.click(screen.getByRole("button", { name: "Use bootnode" }));
+    await waitFor(() => expect(api.startSetup).toHaveBeenCalledTimes(2));
+    expect(api.startSetup).toHaveBeenCalledWith("a", { ...fleet[1].wire, Bootnodes: [ENODE] });
+    expect(api.startSetup).toHaveBeenCalledWith("b", { ...fleet[2].wire, Bootnodes: ["enr:-abc", ENODE] });
+    await waitFor(() => expect(dialog.textContent).toContain("a.example: setup started, reth restarts."));
+    expect(dialog.textContent).toContain("b.example: setup started, go-pulse restarts.");
+  });
+
   it("shows the restart line before setModule is called", async () => {
     setup(target());
     await screen.findByText("Message board");

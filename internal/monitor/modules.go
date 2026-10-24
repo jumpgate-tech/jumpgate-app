@@ -24,6 +24,7 @@ type ModuleStatus struct {
 	Size      uint64  `json:"size"`
 	HeadBlock uint64  `json:"headBlock"`
 	Identity  string  `json:"identity,omitempty"` // enode:// or enr:-
+	Note      string  `json:"note,omitempty"`     // advice about a reading that works but may not help (an undialable identity)
 	Alerts    []Alert `json:"alerts,omitempty"`   // watch only
 	Error     string  `json:"error,omitempty"`
 }

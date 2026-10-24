@@ -19,6 +19,10 @@ export interface ModuleCard {
   docsStep: string;
   resources: string;
   restartLine?: string;
+  // identity is a running box module's enode:// or enr:- record; note is
+  // the probe's advice about it.
+  identity?: string;
+  note?: string;
 }
 
 export interface ModuleCtx {
@@ -87,8 +91,13 @@ export function moduleCards(cat: Catalog, place: ModulePlacement, ctx: ModuleCtx
         card.restartLine = `This restarts ${ctx.client} on ${ctx.box ?? "this box"}. The beacon keeps running.`;
       }
       if (state === "on" || state === "off") {
-        const status = statusLine(m, ctx.statuses.find((s) => s.id === m.id), ctx);
+        const s = ctx.statuses.find((x) => x.id === m.id);
+        const status = statusLine(m, s, ctx);
         if (status) card.status = status;
+        if (m.placement === "box" && s?.active && !ctx.gateStale) {
+          if (s.identity) card.identity = s.identity;
+          if (s.note) card.note = s.note;
+        }
       }
       return card;
     });
@@ -121,7 +130,7 @@ export function statusLine(m: CatalogModule, s: ModuleStatus | undefined, ctx: M
   if (m.placement === "box") {
     if (!on && !s) return "";
     if (s?.error) return s.error;
-    if (s?.active) return s.identity ? `Running · ${s.identity}` : "Running";
+    if (s?.active) return "Running";
     return "Stopped";
   }
   if (m.placement !== "node") return "";

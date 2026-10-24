@@ -21,6 +21,7 @@ RUN printf '%s\n' '#!/bin/sh' \
       'case "$1" in' \
       '  --version) echo "reth stub" ;;' \
       '  node) if [ "$2" = --help ]; then echo "      --msgboard.block-range <BLOCKS>"; else exec sleep infinity; fi ;;' \
+      '  p2p) if [ "$2" = bootnode ]; then echo "INFO (Discv5) enode: enode://$(printf "%0128d" 0 | tr 0 a)@0.0.0.0:30301"; fi; exec sleep infinity ;;' \
       '  *) exec sleep infinity ;;' \
       'esac' > /usr/local/bin/reth \
     && printf '%s\n' '#!/bin/sh' \
