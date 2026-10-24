@@ -20,6 +20,16 @@ export function useCatalog(): UseQueryResult<api.Catalog> {
   });
 }
 
+// useFleet is GET /api/fleet: each box's latest reading, here for its
+// health-watch alerts. Reading it keeps the server's fleet poller running.
+export function useFleet(): UseQueryResult<api.Fleet> {
+  return useQuery({
+    queryKey: ["fleet"],
+    queryFn: () => api.getFleet(),
+    refetchInterval: 15000,
+  });
+}
+
 // useHost reports the OS/arch jumpgate itself runs on — the Targets
 // screen's third leg of its Promise.all(listTargets, getCatalog, getHost),
 // used to decide whether local node setup is viable on THIS server.

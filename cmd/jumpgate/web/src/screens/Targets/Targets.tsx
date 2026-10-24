@@ -11,7 +11,7 @@
 import { useState } from "react";
 import type * as api from "../../api";
 import { Footer } from "../../components/Footer";
-import { useAddTarget, useCatalog, useDeleteTarget, useHost, useTargets } from "../../hooks/target";
+import { useAddTarget, useCatalog, useDeleteTarget, useFleet, useHost, useTargets } from "../../hooks/target";
 import { ConfirmDialog } from "../Panel/Dialogs";
 import { AddOptions } from "./AddOptions";
 import { FleetVerdict } from "./FleetVerdict";
@@ -34,6 +34,7 @@ export function Targets() {
   const targetsQuery = useTargets();
   const catalogQuery = useCatalog();
   const hostQuery = useHost();
+  const fleetQuery = useFleet();
   const addTarget = useAddTarget();
   const deleteTarget = useDeleteTarget();
 
@@ -140,6 +141,7 @@ export function Targets() {
                       canRunNode={t.mode !== "local" || localViable}
                       hostOS={hostOS}
                       onRemove={setPendingRemoveId}
+                      fleetRow={fleetQuery.data?.rows.find((r) => r.id === t.id)}
                     />
                   ))}
                 </div>

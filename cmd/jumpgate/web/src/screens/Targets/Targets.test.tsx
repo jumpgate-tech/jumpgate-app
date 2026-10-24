@@ -13,6 +13,7 @@ vi.mock("../../api", async () => {
     listTargets: vi.fn(),
     getCatalog: vi.fn(),
     getHost: vi.fn(),
+    getFleet: vi.fn(() => Promise.resolve({ at: "", intervalSeconds: 15, rows: [] })),
     addTarget: vi.fn(),
     deleteTarget: vi.fn(),
   };

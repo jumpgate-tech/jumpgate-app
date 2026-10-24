@@ -369,4 +369,49 @@ describe("ModulesSection", () => {
     await waitFor(() => expect(card("msgboard").textContent).toContain("Status needs a newer gate on this box"));
     expect((card("msgboard").querySelector("button.module-toggle") as HTMLButtonElement).disabled).toBe(false);
   });
+
+  it("turns the watch on with its endpoints and webhook, and no chain", async () => {
+    setup(target());
+    await screen.findByText("Services on this box");
+    fireEvent.click(card("watch").querySelector("button.module-toggle")!);
+    fireEvent.change(await screen.findByLabelText("Endpoints to watch"), { target: { value: "gw=https://rpc.example\n" } });
+    fireEvent.change(screen.getByLabelText("Webhook"), { target: { value: "http://ntfy.sh/t" } });
+    expect(screen.getByText("The webhook must be an https:// URL.")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Webhook"), { target: { value: "https://ntfy.sh/t" } });
+    expect(screen.getByText(/Off by default\. HTTPS only\./)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
+    await waitFor(() =>
+      expect(api.setModule).toHaveBeenCalledWith("t1", "watch", {
+        enabled: true,
+        upstreams: ["gw=https://rpc.example"],
+        webhook: "https://ntfy.sh/t",
+      }),
+    );
+  });
+
+  it("edits a running watch without ever showing or resending the saved webhook", async () => {
+    const t = { ...target(), modules: [{ id: "watch", upstreams: ["gw=https://rpc.example"] }], watchWebhookSet: true };
+    setup(t);
+    await screen.findByText("Services on this box");
+    const area = (await screen.findByLabelText("Endpoints to watch")) as HTMLTextAreaElement;
+    expect(area.value).toBe("gw=https://rpc.example");
+    expect((screen.getByLabelText("Webhook") as HTMLInputElement).value).toBe("");
+    fireEvent.change(area, { target: { value: "gw=https://rpc.example\nb=https://b.example" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save watch settings" }));
+    await waitFor(() =>
+      expect(api.setModule).toHaveBeenCalledWith("t1", "watch", {
+        enabled: true,
+        upstreams: ["gw=https://rpc.example", "b=https://b.example"],
+      }),
+    );
+    fireEvent.click(screen.getByLabelText(/Remove the saved webhook/));
+    fireEvent.click(screen.getByRole("button", { name: "Save watch settings" }));
+    await waitFor(() =>
+      expect(api.setModule).toHaveBeenLastCalledWith("t1", "watch", {
+        enabled: true,
+        upstreams: ["gw=https://rpc.example", "b=https://b.example"],
+        clearWebhook: true,
+      }),
+    );
+  });
 });

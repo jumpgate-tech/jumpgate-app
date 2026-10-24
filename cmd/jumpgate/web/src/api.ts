@@ -145,7 +145,10 @@ export interface SetModuleRequest {
   bindAddr?: string;
   extIp?: string;
   upstreams?: string[];
+  // webhook: the health watch's; "" (or omitted) keeps the saved one, which
+  // the server never sends back. clearWebhook removes it.
   webhook?: string;
+  clearWebhook?: boolean;
 }
 
 // SetModuleResult: "started" (202, follow the setup stream), "saved" (200, a
@@ -254,8 +257,37 @@ export interface Target {
   mode: TargetMode;
   ssh?: SSHConfig;
   wire?: WireConfig;
-  // modules are the box modules on this target (config.Target.Modules).
+  // modules are the box modules on this target (config.Target.Modules),
+  // their webhooks blanked.
   modules?: BoxModule[];
+  // watchWebhookSet: the health watch has a saved webhook.
+  watchWebhookSet?: boolean;
+}
+
+// FleetAlert is one open health-watch alert on a box (api.FleetAlert).
+export interface FleetAlert {
+  key: string;
+  message: string;
+  since: string;
+}
+
+// FleetRow is the part of a GET /api/fleet row the machine cards read.
+export interface FleetRow {
+  id: string;
+  reachable: boolean;
+  alertCount: number;
+  alertMessage?: string;
+  alerts?: FleetAlert[];
+}
+
+export interface Fleet {
+  at: string;
+  intervalSeconds: number;
+  rows: FleetRow[];
+}
+
+export function getFleet(): Promise<Fleet> {
+  return request<Fleet>("/api/fleet");
 }
 
 export function listTargets(): Promise<Target[]> {
