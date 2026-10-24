@@ -55,7 +55,7 @@ func ValidateModules(w WireConfig) error {
 // enabledNodeModules returns w's node modules in catalog order.
 func enabledNodeModules(w WireConfig) []Module {
 	var out []Module
-	for _, m := range modules {
+	for _, m := range mods() {
 		if m.Placement == PlaceNode && w.HasModule(m.ID) {
 			out = append(out, m)
 		}

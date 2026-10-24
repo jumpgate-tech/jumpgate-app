@@ -11,7 +11,7 @@ func SwapModulesForTest(ms []Module) (restore func()) {
 	if err := checkModules(ms); err != nil {
 		panic(err)
 	}
-	old := modules
-	modules = ms
-	return func() { modules = old }
+	old := registry.Load()
+	registry.Store(&ms)
+	return func() { registry.Store(old) }
 }

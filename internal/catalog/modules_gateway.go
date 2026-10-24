@@ -90,7 +90,7 @@ func methodsOf(m Module, classes ...MethodClass) []string {
 // docs:covers msgboard-expose
 func moduleIgnoreMethods(tier Tier, u GatewayUpstream, w *WireConfig) []string {
 	var out []string
-	for _, m := range modules {
+	for _, m := range mods() {
 		if m.Placement != PlaceNode {
 			continue
 		}
@@ -146,7 +146,7 @@ func ApplyModuleIgnores(tier Tier, n GatewayNetwork, wires []*WireConfig, anyMod
 	}
 	// The methods of modules no upstream serves, which are dropped again.
 	unserved := map[string]bool{}
-	for _, m := range modules {
+	for _, m := range mods() {
 		if !anyModules && m.Placement == PlaceNode && !served[m.ID] {
 			for _, x := range nsWildcards(m) {
 				unserved[x] = true

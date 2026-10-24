@@ -3,6 +3,7 @@ package catalog
 import (
 	"fmt"
 	"slices"
+	"sync/atomic"
 )
 
 // Placement says where a module lives, and so where it is recorded and
@@ -77,12 +78,19 @@ var moduleOrder = []string{"msgboard", "el-bootnode", "cl-bootnode", "watch", "p
 // modules is the registry. Empty until the module tasks add their entries.
 var modules []Module
 
+// registry is what readers see. It is published once at init and swapped
+// atomically by SwapModulesForTest, so a swap never races a running reader.
+var registry atomic.Pointer[[]Module]
+
+func mods() []Module { return *registry.Load() }
+
 // init runs after the module_*.go inits, which sort before modules.go.
 func init() {
 	sortModules(modules)
 	if err := checkModules(modules); err != nil {
 		panic(err)
 	}
+	registry.Store(&modules)
 }
 
 func sortModules(ms []Module) {
@@ -94,11 +102,11 @@ func sortModules(ms []Module) {
 // Modules returns every module, in moduleOrder. The slice is a copy.
 //
 // docs:covers modules-what
-func Modules() []Module { return slices.Clone(modules) }
+func Modules() []Module { return slices.Clone(mods()) }
 
 // ModuleByID returns the module with that id.
 func ModuleByID(id string) (Module, bool) {
-	for _, m := range modules {
+	for _, m := range mods() {
 		if m.ID == id {
 			return m, true
 		}
@@ -134,7 +142,7 @@ func (m Module) IsBeta(chainID int) bool { return slices.Contains(m.BetaChains, 
 // The relay refuses these unless a key grants them explicitly.
 func ModuleWriteMethods() map[string]string {
 	out := map[string]string{}
-	for _, m := range modules {
+	for _, m := range mods() {
 		if m.Placement != PlaceNode {
 			continue
 		}
@@ -151,7 +159,7 @@ func ModuleWriteMethods() map[string]string {
 // hint the relay appends to its refusal ("poll msgboard_contentPage").
 func ModuleStreamMethods() map[string]string {
 	out := map[string]string{}
-	for _, m := range modules {
+	for _, m := range mods() {
 		if m.Placement != PlaceNode {
 			continue
 		}
