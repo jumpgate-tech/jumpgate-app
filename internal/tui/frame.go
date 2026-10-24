@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -47,6 +48,124 @@ func (a *App) boxed(title string, focused bool, body string, w, h int) string {
 	}
 	lines = append(lines, st.Render(b.BL+strings.Repeat(b.H, w-2)+b.BR))
 	return strings.Join(lines, "\n")
+}
+
+// frame is the whole dashboard at a window of at least 80×24.
+func (a *App) frame() string {
+	l := layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer))
+	parts := []string{a.header(a.w)}
+	if l.Tabs.H > 0 {
+		parts = append(parts, a.tabRow(a.w))
+	}
+	body := a.mainView(l.Main)
+	if l.Left.W > 0 {
+		body = lipgloss.JoinHorizontal(lipgloss.Top, a.viewsList(l.Left), body)
+	}
+	parts = append(parts, body)
+	last := a.drawerLine(a.w)
+	if l.DrawerOpen {
+		parts = append(parts, a.drawerView(l.Drawer, l.DrawerCompact))
+		last = truncate(" "+a.hints(), a.w, a.gl.Ellipsis)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, append(parts, last)...)
+}
+
+// header is the top line: the server link and version on the left, the age
+// of the fleet data on the right.
+func (a *App) header(w int) string {
+	left := " " + a.th.Title.Render("jumpgate") + "  server " + a.conn.String()
+	if a.conn == apiclient.Retrying && a.connErr != nil {
+		left += " (" + a.errText(a.connErr) + ")"
+	}
+	if a.srvVer != "" {
+		left += " " + a.gl.Sep + " " + a.srvVer
+	}
+	right := a.th.Dim.Render("connecting")
+	if a.fleetHas {
+		age := a.now().Sub(a.fleet.At)
+		every := time.Duration(a.fleet.IntervalSeconds) * time.Second
+		if every <= 0 {
+			every = statusStaleAfter
+		}
+		text := "updated " + formatAge(age) + " ago"
+		switch {
+		case age > 4*every || a.conn == apiclient.Retrying:
+			right = a.th.Bad.Render("stale, " + text)
+		case age > 2*every:
+			right = a.th.Warn.Render(text + " ~")
+		default:
+			right = text
+		}
+	}
+	right += " "
+	left = truncate(left, max(w-lipgloss.Width(right)-1, 1), a.gl.Ellipsis)
+	return left + strings.Repeat(" ", max(w-lipgloss.Width(left)-lipgloss.Width(right), 1)) + right
+}
+
+// tabRow is the views in one line, below 100 columns; the active one is
+// bracketed, so it reads without colour too.
+func (a *App) tabRow(w int) string {
+	var parts []string
+	for i, n := range screenNames {
+		if screenID(i) == a.active && a.detail == nil {
+			n = a.th.Sel.Render("[" + n + "]")
+		}
+		parts = append(parts, n)
+	}
+	return truncate(" "+strings.Join(parts, " "), w, a.gl.Ellipsis)
+}
+
+// viewsList is the left sidebar: the views with their number keys, and the
+// host list once a host is open.
+func (a *App) viewsList(r rect) string {
+	var lines []string
+	for i, n := range screenNames {
+		l := fmt.Sprintf("  %-14s [%d]", n, i+1)
+		if screenID(i) == a.active && a.detail == nil {
+			l = a.th.Sel.Render(fmt.Sprintf("%s %-14s [%d]", a.gl.Sel, n, i+1))
+		}
+		lines = append(lines, l)
+	}
+	if a.detail != nil {
+		lines = append(lines, a.th.Dim.Render(strings.Repeat(a.border().H, r.W-2)), a.hostList(max(r.H-3-len(lines), 1)))
+	}
+	return a.boxed("Views", false, strings.Join(lines, "\n"), r.W, r.H)
+}
+
+// mainView is the boxed main region: the skew banner above it, then the
+// screen (or the modal over it) inside.
+func (a *App) mainView(r rect) string {
+	h := r.H
+	banner := ""
+	if a.skew != "" {
+		banner = a.th.Warn.Render(pad(truncate(" "+a.skew, r.W, a.gl.Ellipsis), r.W)) + "\n"
+		h--
+	}
+	// Below 100 columns main is unboxed, as in the spec's 80x24 frame: the
+	// table keeps the columns it had before the dashboard.
+	boxedMain := a.w >= leftMinWidth
+	iw, ih := r.W, h
+	if boxedMain {
+		iw, ih = r.W-2, h-2
+	}
+	title := screenNames[a.active]
+	if hs, ok := a.detail.(*hostScreen); ok {
+		title = sanitizeLine(hs.id)
+	}
+	var content string
+	switch {
+	case a.modal != nil:
+		content = a.modal.view(a, iw, ih)
+	case a.detail != nil && a.w < leftMinWidth && a.sidebar:
+		main := fit(a.current().view(a, iw-19, ih), iw-19, ih, a.gl.Ellipsis)
+		content = lipgloss.JoinHorizontal(lipgloss.Top, a.sidebarView(ih), " ", main)
+	default:
+		content = a.current().view(a, iw, ih)
+	}
+	if !boxedMain {
+		return banner + fit(content, r.W, h, a.gl.Ellipsis)
+	}
+	return banner + a.boxed(title, true, content, r.W, h)
 }
 
 // drawerOpen is the drawer's resolved state at this window size.

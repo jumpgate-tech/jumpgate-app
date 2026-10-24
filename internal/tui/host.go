@@ -467,6 +467,11 @@ func (a *App) statusErrText(err error) string {
 
 // sidebarView lists the fleet beside an open host (spec D10).
 func (a *App) sidebarView(h int) string {
+	return lipgloss.NewStyle().Width(18).Render(fit(a.hostList(h), 18, h, a.gl.Ellipsis))
+}
+
+// hostList is the fleet's ids, the open one marked, at most h lines.
+func (a *App) hostList(h int) string {
 	var lines []string
 	for _, r := range a.fleet.Rows {
 		name := truncate(sanitizeLine(r.ID), 16, a.gl.Ellipsis)
@@ -477,5 +482,5 @@ func (a *App) sidebarView(h int) string {
 		}
 		lines = append(lines, name)
 	}
-	return lipgloss.NewStyle().Width(18).Render(fit(strings.Join(lines, "\n"), 18, h, a.gl.Ellipsis))
+	return strings.Join(lines[:min(h, len(lines))], "\n")
 }

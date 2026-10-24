@@ -1,4 +1,5 @@
- jumpgate  1 Fleet  [2 Hosts]  3 Signers  4 Gateways  5 Jobs… server connecting
+ jumpgate  server connecting                                         connecting
+ Fleet [Hosts] Signers Gateways Jobs Settings
  ADD A BOX
 
  unconfirmed host key
@@ -12,7 +13,6 @@
 
  Type yes to trust it, esc to stop:
  >
-
 
 
 

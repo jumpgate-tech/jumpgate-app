@@ -1,4 +1,5 @@
- jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  5 Jobs  [6 Set… server live
+ jumpgate  server live                                           updated 5s ago
+ Fleet Hosts Signers Gateways Jobs [Settings]
  FLEET COLUMNS
 ▸ [x] HOST
   [x] LINK
@@ -18,7 +19,6 @@
   [x] Overview
   [x] Storage
   [x] Endpoints
-  [x] Security
  ↑↓ move  space toggle  enter change  (saved at once)
 
  jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-6 views  q quit

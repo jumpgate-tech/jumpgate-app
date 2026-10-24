@@ -7,12 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/valve-tech/jumpgate/internal/api"
@@ -113,6 +111,7 @@ type App struct {
 	modal   modal
 	flash   string
 	skew    string
+	srvVer  string // the server's version, when Skew reported one
 	sel     string // the box the status bar names
 	sidebar bool   // the host list beside an open host, below the width that shows it anyway
 	// restarting: a restart is under way. A second one would race the first
@@ -151,6 +150,7 @@ func New(o Options) *App {
 	a.screens[scrSettings] = &settingsScreen{}
 	if server, mine, differs := a.be.Skew(); differs {
 		server, mine = sanitizeLine(server), sanitizeLine(mine)
+		a.srvVer = server
 		// Offer R only where it works; otherwise the banner still says why
 		// some requests may fail.
 		a.skew = fmt.Sprintf("server %s, this jumpgate %s: the versions differ", server, mine)
@@ -297,7 +297,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.cancel()
 		a.ctx, a.cancel = context.WithCancel(context.Background())
-		a.be, a.skew, a.flash = msg.be, "", "the server restarted"
+		a.be, a.skew, a.srvVer, a.flash = msg.be, "", "", "the server restarted"
 		return a, tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), a.openScreen(a.active))
 	case tea.KeyPressMsg:
 		a.flash = ""
@@ -414,28 +414,7 @@ func (a *App) render() string {
 	if a.w < minW || a.h < minH {
 		return a.tooSmall()
 	}
-	l := layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer))
-	bodyH := a.h - 2 - l.Drawer.H
-	var body string
-	if a.skew != "" {
-		body = a.th.Warn.Render(truncate(a.skew, a.w, a.gl.Ellipsis)) + "\n"
-		bodyH--
-	}
-	if a.modal != nil {
-		body += fit(a.modal.view(a, a.w, bodyH), a.w, bodyH, a.gl.Ellipsis)
-	} else if a.detail != nil && (a.w >= 100 || a.sidebar) {
-		main := fit(a.current().view(a, a.w-19, bodyH), a.w-19, bodyH, a.gl.Ellipsis)
-		body += lipgloss.JoinHorizontal(lipgloss.Top, a.sidebarView(bodyH), " ", main)
-	} else {
-		body += fit(a.current().view(a, a.w, bodyH), a.w, bodyH, a.gl.Ellipsis)
-	}
-	parts := []string{a.topBar(), body}
-	last := a.drawerLine(a.w)
-	if l.DrawerOpen {
-		parts = append(parts, a.drawerView(l.Drawer, l.DrawerCompact))
-		last = truncate(" "+a.hints(), a.w, a.gl.Ellipsis)
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, append(parts, last)...)
+	return a.frame()
 }
 
 // tooSmall is the whole frame below 80×24 (spec "Layout"): the size message,
@@ -445,24 +424,6 @@ func (a *App) render() string {
 func (a *App) tooSmall() string {
 	msg := fmt.Sprintf("terminal too small (%dx%d); jumpgate needs %dx%d", a.w, a.h, minW, minH)
 	return fit(ansi.Wrap(msg, a.w, ""), a.w, a.h, "")
-}
-
-// topBar names the screens; the active one is bracketed, so it reads without
-// colour too.
-func (a *App) topBar() string {
-	parts := []string{a.th.Title.Render("jumpgate")}
-	for i, n := range screenNames {
-		label := fmt.Sprintf("%d %s", i+1, n)
-		if screenID(i) == a.active && a.detail == nil {
-			label = a.th.Sel.Render("[" + label + "]")
-		}
-		parts = append(parts, label)
-	}
-	left := " " + strings.Join(parts, "  ")
-	right := "server " + a.conn.String() + " "
-	left = truncate(left, a.w-lipgloss.Width(right)-1, a.gl.Ellipsis)
-	gap := a.w - lipgloss.Width(left) - lipgloss.Width(right)
-	return truncate(left+strings.Repeat(" ", max(gap, 1))+right, a.w, a.gl.Ellipsis)
 }
 
 // needCount is the fleet-wide number of jobs that need a decision.

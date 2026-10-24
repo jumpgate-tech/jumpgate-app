@@ -1,4 +1,5 @@
- jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  [5 Jobs]… server connecting
+ jumpgate  server connecting                                         connecting
+ Fleet Hosts Signers Gateways [Jobs] Settings
  Jobs inbox · 1 needs you
 ▸ ⚑ box-a    needs-decision step 2/3 driven here
       Rename the node's account, units and data to jumpgate-node
@@ -7,7 +8,6 @@
       2 Stop them
       3 Stop the migration here
     box-b    running      step 4/8 silent 10m · a: adopt
-
 
 
 

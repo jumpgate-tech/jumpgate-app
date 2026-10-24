@@ -1,4 +1,5 @@
- jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  5 Jobs  … server connecting
+ jumpgate  server connecting                                         connecting
+ Fleet Hosts Signers Gateways Jobs Settings
  box
  Overview  Storage  Endpoints  Security  [Logs]  Services
  LOGS live 4 lines · all levels · follow on
@@ -6,7 +7,6 @@
  12:00:02 beacon WARN  Low peer count peers=3
  12:00:03 exec   ERROR peer 203.0.113.7 disconnected: too many peers
  12:00:04 beacon CRIT  Database corrupted
-
 
 
 

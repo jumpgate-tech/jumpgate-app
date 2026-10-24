@@ -1,0 +1,40 @@
+ jumpgate  server live                                                                                   updated 5s ago
++- Views --------------++- Fleet --------------------------------------------------------------------------------------+
+|> Fleet          [1]  || HOST         LINK       NET       SYNC      LAG    PEERS   DISK            FW                |
+|  Hosts          [2]  ||>box-a        gate       PulseCha~ synced    2      48/72   [####|...] 61%  warn              |
+|  Signers        [3]  || box-b        down 4m    Ethereum  syncing~  n/a    3/9~    n/a             n/a               |
+|  Gateways       [4]  || laptop*      local*     ?         n/a       n/a    n/a     n/a             n/a               |
+|  Jobs           [5]  ||                                                                                              |
+|  Settings       [6]  ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      ||                                                                                              |
+|                      || 3 boxes | sort: host | ~ stale  * this machine                                               |
++----------------------++----------------------------------------------------------------------------------------------+
+ jobs 1 running  [! 1 needs decision]  ! alerts n/a | . drawer  ? help  : command  1-6 views  q quit
