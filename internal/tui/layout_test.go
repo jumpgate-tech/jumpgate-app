@@ -13,10 +13,10 @@ func TestLayoutForMainFloor(t *testing.T) {
 				if l.Left.W+l.Main.W != w {
 					t.Fatalf("%dx%d %v: left %d + main %d != %d", w, h, d, l.Left.W, l.Main.W, w)
 				}
-				if got := l.Header.H + l.Tabs.H + l.Main.H + l.Drawer.H + l.Hints.H; got != h {
+				if got := l.Header.H + l.Main.H + l.Drawer.H + l.Hints.H; got != h {
 					t.Fatalf("%dx%d %v: rows %d != %d", w, h, d, got, h)
 				}
-				rs := []rect{l.Header, l.Tabs, l.Left, l.Main, l.Drawer, l.Hints}
+				rs := []rect{l.Header, l.Left, l.Main, l.Drawer, l.Hints}
 				for i := range rs {
 					for j := i + 1; j < len(rs); j++ {
 						if overlaps(rs[i], rs[j]) {
@@ -38,7 +38,7 @@ func overlaps(a, b rect) bool {
 
 func TestLayoutForBreakpoints(t *testing.T) {
 	l := layoutFor(80, 24, drawerAuto)
-	if l.Left.W != 0 || l.Tabs.H != 1 || l.DrawerOpen || l.Drawer.H != 0 || l.Hints.H != 1 {
+	if l.Left.W != 0 || l.Main.Y != 1 || l.DrawerOpen || l.Drawer.H != 0 || l.Hints.H != 1 {
 		t.Errorf("80x24 auto: %+v", l)
 	}
 	l = layoutFor(80, 24, drawerOpen)
@@ -46,7 +46,7 @@ func TestLayoutForBreakpoints(t *testing.T) {
 		t.Errorf("80x24 open: %+v", l)
 	}
 	l = layoutFor(100, 30, drawerAuto)
-	if l.Left.W != 24 || l.Tabs.H != 0 || l.DrawerOpen {
+	if l.Left.W != 24 || l.Main.Y != 1 || l.DrawerOpen {
 		t.Errorf("100x30 auto: %+v", l)
 	}
 	l = layoutFor(120, 40, drawerAuto)

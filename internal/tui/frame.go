@@ -54,9 +54,6 @@ func (a *App) boxed(title string, focused bool, body string, w, h int) string {
 func (a *App) frame() string {
 	l := layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer))
 	parts := []string{a.header(a.w)}
-	if l.Tabs.H > 0 {
-		parts = append(parts, a.tabRow(a.w))
-	}
 	body := a.mainView(l.Main)
 	if l.Left.W > 0 {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, a.viewsList(l.Left), body)
@@ -71,14 +68,26 @@ func (a *App) frame() string {
 }
 
 // header is the top line: the server link and version on the left, the age
-// of the fleet data on the right.
+// of the fleet data on the right. Below 100 columns the view tabs take the
+// server's place, so the body keeps the row a tab row would cost; a
+// retrying link still shows first, and "connecting" shows on the right.
 func (a *App) header(w int) string {
-	left := " " + a.th.Title.Render("jumpgate") + "  server " + a.conn.String()
+	narrow := w < leftMinWidth
+	server := "server " + a.conn.String()
 	if a.conn == apiclient.Retrying && a.connErr != nil {
-		left += " (" + a.errText(a.connErr) + ")"
+		server += " (" + a.errText(a.connErr) + ")"
 	}
-	if a.srvVer != "" {
-		left += " " + a.gl.Sep + " " + a.srvVer
+	left := " " + a.th.Title.Render("jumpgate") + "  "
+	switch {
+	case narrow && a.conn == apiclient.Retrying:
+		left += server + "  " + a.tabs()
+	case narrow:
+		left += a.tabs()
+	default:
+		left += server
+		if a.srvVer != "" {
+			left += " " + a.gl.Sep + " " + a.srvVer
+		}
 	}
 	right := a.th.Dim.Render("connecting")
 	if a.fleetHas {
@@ -88,6 +97,9 @@ func (a *App) header(w int) string {
 			every = statusStaleAfter
 		}
 		text := "updated " + formatAge(age) + " ago"
+		if narrow {
+			text = formatAge(age) + " ago"
+		}
 		switch {
 		case age > 4*every || a.conn == apiclient.Retrying:
 			right = a.th.Bad.Render("stale, " + text)
@@ -102,9 +114,9 @@ func (a *App) header(w int) string {
 	return left + strings.Repeat(" ", max(w-lipgloss.Width(left)-lipgloss.Width(right), 1)) + right
 }
 
-// tabRow is the views in one line, below 100 columns; the active one is
-// bracketed, so it reads without colour too.
-func (a *App) tabRow(w int) string {
+// tabs is the views in one line, for the header below 100 columns; the
+// active one is bracketed, so it reads without colour too.
+func (a *App) tabs() string {
 	var parts []string
 	for i, n := range screenNames {
 		if screenID(i) == a.active && a.detail == nil {
@@ -112,7 +124,7 @@ func (a *App) tabRow(w int) string {
 		}
 		parts = append(parts, n)
 	}
-	return truncate(" "+strings.Join(parts, " "), w, a.gl.Ellipsis)
+	return strings.Join(parts, " ")
 }
 
 // viewsList is the left sidebar: the views with their number keys, and the

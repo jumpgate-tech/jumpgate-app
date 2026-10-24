@@ -212,7 +212,7 @@ func TestHeaderAge(t *testing.T) {
 		fl := sampleFleet()
 		fl.At = testNow.Add(-c.age)
 		m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fl, Has: true, State: c.state}})
-		if h := strings.TrimRight(ansi.Strip(m.(*App).header(80)), " "); !strings.HasSuffix(h, c.want) {
+		if h := strings.TrimRight(ansi.Strip(m.(*App).header(120)), " "); !strings.HasSuffix(h, c.want) {
 			t.Errorf("%v %v: header %q, want suffix %q", c.age, c.state, h, c.want)
 		}
 	}
@@ -222,8 +222,8 @@ func TestHeaderAge(t *testing.T) {
 // with the host list under it once a host is open.
 func TestViewsSidebarAndTabs(t *testing.T) {
 	fr := tuitest.Frame(dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto"))
-	if l := strings.Split(fr, "\n")[1]; !strings.Contains(l, "[Fleet] Hosts Signers Gateways Jobs Settings") {
-		t.Fatalf("tab row %q", l)
+	if l := strings.Split(fr, "\n")[0]; !strings.HasPrefix(l, " jumpgate  [Fleet] Hosts Signers Gateways Jobs Settings") || !strings.HasSuffix(strings.TrimRight(l, " "), "5s ago") {
+		t.Fatalf("header with tabs %q", l)
 	}
 	m := press(t, dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "auto"), "enter")
 	fr = tuitest.Frame(m)
@@ -237,5 +237,35 @@ func TestStatusLineShowsTheConnection(t *testing.T) {
 	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{State: apiclient.Retrying, Err: errors.New("dial: refused")}})
 	if s := m.(*App).statusLine(); !strings.Contains(s, "server retrying (dial: refused)") {
 		t.Fatalf("status %q", s)
+	}
+}
+
+// Below 100 columns the view tabs share the header line, so the body keeps
+// the row a separate tab row would cost.
+func TestNarrowHeaderFoldsTabs(t *testing.T) {
+	for _, w := range []int{80, 90, 99} {
+		a := dashApp(t, tuitest.NewFake(), w, 24, "ascii", "auto")
+		h := ansi.Strip(a.header(w))
+		if ansi.StringWidth(h) > w || !strings.Contains(h, "[Fleet] Hosts") {
+			t.Errorf("%d: header %q", w, h)
+		}
+		if l := strings.Split(tuitest.Frame(a), "\n")[1]; strings.Contains(l, "Signers") {
+			t.Errorf("%d: a tab row is back: %q", w, l)
+		}
+	}
+	a := newTestApp(t, tuitest.NewFake(), 80, 24, "ascii")
+	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: sampleFleet(), Has: true, State: apiclient.Retrying, Err: errors.New("dial: refused")}})
+	if h := ansi.Strip(m.(*App).header(80)); ansi.StringWidth(h) > 80 || !strings.Contains(h, "stale") {
+		t.Errorf("retrying: header %q", h)
+	}
+}
+
+func TestNarrowFramesKeepTheirLastRows(t *testing.T) {
+	m, _ := tuitest.Send(newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), tuitest.Key("5"), tuitest.Key("?"))
+	if fr := tuitest.Frame(m); !strings.Contains(fr, "r            reload") || strings.Contains(fr, "more (") {
+		t.Errorf("help at 80x24 cut short:\n%s", fr)
+	}
+	if fr := tuitest.Frame(settingsApp(t, tuitest.NewFake())); !strings.Contains(fr, "[x] Security") {
+		t.Errorf("settings at 80x24 lost its last row:\n%s", fr)
 	}
 }

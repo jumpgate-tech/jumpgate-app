@@ -1,5 +1,4 @@
- jumpgate  server connecting                                         connecting
- Fleet Hosts Signers Gateways [Jobs] Settings
+ jumpgate  Fleet Hosts Signers Gateways [Jobs] Settings              connecting
  Help  (esc to close)
 keys everywhere
   1-6          screens
@@ -20,5 +19,6 @@ keys here
   ↓/j          down
   enter        open
   d            answer the selected job's question
-  … more (↑↓)
+  a            adopt a job whose controller went silent
+  r            reload
  jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-6 views  q quit

@@ -1,5 +1,4 @@
- jumpgate  server connecting                                         connecting
- Fleet Hosts Signers Gateways Jobs Settings
+ jumpgate  Fleet Hosts Signers Gateways Jobs Settings                connecting
  box
  Overview  [Storage]  Endpoints  Security  Logs  Services
 
@@ -11,6 +10,7 @@
  expected  2.00 TB exec + 250 GB beacon (estimate)
  fit       ok: room for the estimate with 10% headroom
  trend     ▁▂▄█  +12.3 GB/day (estimate), full in about 160 days (estimate)
+
 
 
 

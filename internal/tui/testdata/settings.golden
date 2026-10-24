@@ -1,5 +1,4 @@
- jumpgate  server live                                           updated 5s ago
- Fleet Hosts Signers Gateways Jobs [Settings]
+ jumpgate  Fleet Hosts Signers Gateways Jobs [Settings]                  5s ago
  FLEET COLUMNS
 ▸ [x] HOST
   [x] LINK
@@ -19,6 +18,7 @@
   [x] Overview
   [x] Storage
   [x] Endpoints
+  [x] Security
  ↑↓ move  space toggle  enter change  (saved at once)
 
  jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-6 views  q quit

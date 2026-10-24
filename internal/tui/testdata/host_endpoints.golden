@@ -1,5 +1,4 @@
- jumpgate  server connecting                                         connecting
- Fleet Hosts Signers Gateways Jobs Settings
+ jumpgate  Fleet Hosts Signers Gateways Jobs Settings                connecting
  box
  Overview  Storage  [Endpoints]  Security  Logs  Services
 
@@ -12,6 +11,7 @@
  GATEWAYS ON THIS BOX (read-only; change them in the web app)
  rpc-main       on box          running   https://rpc.example.org/
    PulseChain (369)  https://rpc.example.org/369
+
 
 
 

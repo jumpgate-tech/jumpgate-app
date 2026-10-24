@@ -1,5 +1,4 @@
- jumpgate  server connecting                                         connecting
- Fleet [Hosts] Signers Gateways Jobs Settings
+ jumpgate  Fleet [Hosts] Signers Gateways Jobs Settings              connecting
  ADD A BOX
 
  unconfirmed host key
@@ -13,6 +12,7 @@
 
  Type yes to trust it, esc to stop:
  >
+
 
 
 

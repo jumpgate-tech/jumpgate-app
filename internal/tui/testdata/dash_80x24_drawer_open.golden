@@ -1,9 +1,9 @@
- jumpgate  server live                                           updated 5s ago
- [Fleet] Hosts Signers Gateways Jobs Settings
+ jumpgate  [Fleet] Hosts Signers Gateways Jobs Settings                  5s ago
  HOST         LINK       NET       SYNC      LAG    PEERS   DISK            FW
 >box-a        gate       PulseCha~ synced    2      48/72   [####|...] 61%  warn
  box-b        down 4m    Ethereum  syncing~  n/a    3/9~    n/a             n/a
  laptop*      local*     ?         n/a       n/a    n/a     n/a             n/a
+
 
 
 

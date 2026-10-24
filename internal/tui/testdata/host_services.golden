@@ -1,5 +1,4 @@
- jumpgate  server connecting                                         connecting
- Fleet Hosts Signers Gateways Jobs Settings
+ jumpgate  Fleet Hosts Signers Gateways Jobs Settings                connecting
  box
  Overview  Storage  Endpoints  Security  Logs  [Services]
 
@@ -9,6 +8,7 @@
 
  S  open an SSH shell on this box (system ssh, confirmed host keys only)
  x  every action for this box
+
 
 
 

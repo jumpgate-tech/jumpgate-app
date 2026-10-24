@@ -1,5 +1,4 @@
- jumpgate  server connecting                                         connecting
- Fleet Hosts Signers Gateways Jobs Settings
+ jumpgate  Fleet Hosts Signers Gateways Jobs Settings                connecting
  box
  [Overview]  Storage  Endpoints  Security  Logs  Services
 
@@ -15,6 +14,7 @@
  Message board  on · Accepting · 1,234 msgs · local only
  EL bootnode    off
  Checkpointz    unavailable: Checkpointz needs a beacon on this box.
+
 
 
 
