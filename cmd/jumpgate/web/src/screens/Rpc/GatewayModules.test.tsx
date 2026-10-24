@@ -32,6 +32,26 @@ const CATALOG: Catalog = {
   ],
 };
 
+const PLS_REASON = "No private send route exists on PulseChain.";
+
+// withReasons is CATALOG with the Applies rows the real entry produces.
+function withReasons(): Catalog {
+  return {
+    ...CATALOG,
+    modules: [
+      {
+        ...CATALOG.modules[0],
+        applies: [
+          { chainId: 1, client: "", ok: true, beta: false },
+          { chainId: 369, client: "", ok: false, beta: false, reason: PLS_REASON },
+          { chainId: 943, client: "", ok: false, beta: false, reason: PLS_REASON },
+          { chainId: 560048, client: "", ok: false, beta: false, reason: "No private send route exists on Hoodi." },
+        ],
+      },
+    ],
+  };
+}
+
 function gw(chains: number[], modules: string[] = []): GatewayView {
   return {
     id: "gw1",
@@ -65,6 +85,22 @@ describe("GatewayModules", () => {
     const { container } = renderIt(gw([369]));
     await waitFor(() => expect(api.getCatalog).toHaveBeenCalled());
     expect(container.querySelector("[data-module]")).toBeNull();
+  });
+
+  it("shows private send enabled on a gateway serving chain 1", async () => {
+    vi.mocked(api.getCatalog).mockResolvedValue(withReasons());
+    renderIt(gw([1]));
+    const btn = await screen.findByRole("button", { name: "Turn on Private send" });
+    expect(btn).not.toBeDisabled();
+    expect(screen.queryByText(PLS_REASON)).toBeNull();
+  });
+
+  it("shows private send disabled with the PulseChain reason on a 369-only gateway", async () => {
+    vi.mocked(api.getCatalog).mockResolvedValue(withReasons());
+    renderIt(gw([369]));
+    const btn = await screen.findByRole("button", { name: "Turn on Private send" });
+    expect(btn).toBeDisabled();
+    expect(screen.getByText(PLS_REASON)).toBeInTheDocument();
   });
 
   it("turns an enabled module off", async () => {

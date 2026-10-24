@@ -106,6 +106,11 @@ func gatewayLines(a *App, g api.GatewaySummary) []string {
 		}
 		lines = append(lines, "   "+sanitizeLine(n.Name)+" ("+strconv.Itoa(n.ChainID)+")  "+maskURL(sanitizeLine(url)))
 	}
+	for _, gm := range g.Config.Modules {
+		if gm.ID == "private-send" {
+			lines = append(lines, "   "+a.th.OK.Render("private send")+": transactions go only to Flashbots Protect and MEV Blocker")
+		}
+	}
 	for _, warn := range g.Warnings {
 		lines = append(lines, "   "+a.th.Warn.Render(maskText(sanitizeLine(warn))))
 	}
