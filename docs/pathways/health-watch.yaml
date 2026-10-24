@@ -1,0 +1,5 @@
+id: health-watch
+title: Watch your boxes' health
+audience: operator
+after: [first-box]
+steps: [modules-what, box-modules, watch-run, watch-alerts]
