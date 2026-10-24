@@ -86,12 +86,13 @@ const (
 
 // App is the root model.
 type App struct {
-	o      Options
-	be     Backend
-	ctx    context.Context
-	cancel context.CancelFunc
-	now    func() time.Time
-	loc    *time.Location // the zone log times are shown in
+	mainRect rect // the main region as last drawn, for mouse hits
+	o        Options
+	be       Backend
+	ctx      context.Context
+	cancel   context.CancelFunc
+	now      func() time.Time
+	loc      *time.Location // the zone log times are shown in
 
 	w, h     int
 	th       Theme

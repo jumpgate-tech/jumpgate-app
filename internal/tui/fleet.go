@@ -392,13 +392,8 @@ func (s *fleetScreen) fleetUpdate(a *App, msg tea.Msg) tea.Cmd {
 		return cmd
 	case tea.MouseClickMsg:
 		if a.prefs.Mouse && a.detail == nil && a.modal == nil && a.active == scrFleet && msg.Button == tea.MouseLeft {
-			top := 2 // the top bar and the header
-			if a.skew != "" {
-				top++
-			}
-			rows, _ := s.rows(a)
-			if i := s.offset + msg.Y - top; i >= 0 && i < len(rows) {
-				s.cursor = i
+			if row, ok := s.clickRow(a, msg.X, msg.Y); ok {
+				s.cursor = row
 				s.clamp(a)
 			}
 		}
@@ -471,6 +466,40 @@ func (s *fleetScreen) clamp(a *App) {
 	if a.detail == nil && a.active == scrFleet && len(rows) > 0 {
 		a.sel = rows[s.cursor].ID
 	}
+}
+
+// clickRow is the table row under the cell (x, y), from the main region as
+// last drawn: the skew banner, the box border when main is boxed (100
+// columns and up) and the table header sit above the first row. Clicks
+// outside main, on an overlay, or off the drawn rows hit nothing.
+func (s *fleetScreen) clickRow(a *App, x, y int) (int, bool) {
+	r := a.mainRect
+	if s.hostMode || s.hosts.flow != nil || a.treeOver || a.logOver ||
+		x < r.X || x >= r.X+r.W || y < r.Y || y >= r.Y+r.H {
+		return 0, false
+	}
+	top, h := r.Y, r.H
+	if a.skew != "" {
+		top++
+		h--
+	}
+	if a.w >= leftMinWidth { // boxed main
+		if x == r.X || x == r.X+r.W-1 {
+			return 0, false
+		}
+		top++
+		h -= 2
+	}
+	top++ // the table header
+	rows, _ := s.rows(a)
+	k := y - top
+	if k < 0 || k >= max(h-3, 1) {
+		return 0, false
+	}
+	if i := s.offset + k; i < len(rows) {
+		return i, true
+	}
+	return 0, false
 }
 
 func (s *fleetScreen) view(a *App, w, h int) string {

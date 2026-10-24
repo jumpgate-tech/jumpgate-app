@@ -61,6 +61,7 @@ func (a *App) boxed(title string, focused bool, body string, w, h int) string {
 // frame is the whole dashboard at a window of at least 80×24.
 func (a *App) frame() string {
 	l := a.layout()
+	a.mainRect = l.Main
 	parts := []string{a.header(a.w), a.kpiView(l.KPI)}
 	body := a.mainView(l.Main)
 	switch {
