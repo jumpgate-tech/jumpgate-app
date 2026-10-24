@@ -263,7 +263,11 @@ func (s *Server) nodeFirewall(ctx context.Context, cfg config.Config, t config.T
 		return nil, viaSSH, err
 	}
 	items, err := ops.FirewallChecklist(ctx, ex, *t.Wire, ops.ParseOverlayCIDRs(cfg.TrustedOverlayCIDRs())...)
-	return items, viaSSH, err
+	if err != nil {
+		return items, viaSSH, err
+	}
+	mods, err := ops.ModuleFirewallItems(ctx, ex, t.Modules)
+	return append(items, mods...), viaSSH, err
 }
 
 // firewallPayload is firewall.read's payload: the trusted overlays live in
