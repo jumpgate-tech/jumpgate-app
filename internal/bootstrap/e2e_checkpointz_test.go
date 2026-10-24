@@ -31,6 +31,22 @@ func TestE2ECheckpointzUnit(t *testing.T) {
 	}
 	defer ex.Close()
 
+	// The tests share one container. Enabling the module creates the
+	// jumpgate-node account (and its home), which the migrate-names e2e
+	// reads as "both accounts exist", so take back what this test made.
+	if r, _ := ex.Run(ctx, "id -u jumpgate-node", nil); r.ExitCode != 0 {
+		homeExisted := false
+		if r, _ := ex.Run(ctx, "test -e /var/lib/jumpgate-node", nil); r.ExitCode == 0 {
+			homeExisted = true
+		}
+		defer func() {
+			ex.Run(context.Background(), "userdel jumpgate-node; getent group jumpgate-node >/dev/null && groupdel jumpgate-node; true", nil)
+			if !homeExisted {
+				ex.Run(context.Background(), "rm -rf /var/lib/jumpgate-node", nil)
+			}
+		}()
+	}
+
 	b := catalog.BoxModule{ID: "checkpointz", ChainID: 560048, Upstreams: []string{"http://127.0.0.1:5052"}}
 	run := func(enable bool) {
 		t.Helper()
