@@ -233,6 +233,9 @@ export interface WireConfig {
   // Bootnodes are extra peers: enode:// entries go to the exec client, enr:-
   // entries to the beacon client. Omitted when none are set.
   Bootnodes?: string[];
+  // CheckpointURL overrides the network's checkpoint-sync URL for the
+  // beacon: your own Checkpointz, for one.
+  CheckpointURL?: string;
 }
 
 export interface NodeModule {

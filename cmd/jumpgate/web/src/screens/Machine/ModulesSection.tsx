@@ -19,6 +19,7 @@ import { copyToClipboard } from "../../ui";
 import {
   BOX_FIELD_DEFAULTS,
   boxFields,
+  checkpointzURL,
   moduleCards,
   POST_WARNING,
   PUBLIC_OPTIONS,
@@ -75,6 +76,9 @@ export function dialable(identity: string): boolean {
   return !(host.includes(":") && /^[0:]+$/.test(host));
 }
 
+export const CHECKPOINTZ_LOOPBACK_HINT =
+  "This Checkpointz serves only this box. Turn it off and on with a private listen address to let your other boxes use it.";
+
 export const SET_PUBLIC_IP_HINT = "Set the box's public IP before your other nodes can use this bootnode.";
 
 // withBootnode is a node's wire with entry appended (once) to Bootnodes.
@@ -111,6 +115,7 @@ export function ModulesSection({ targetId }: { targetId: string }) {
   const [note, setNote] = useState<string | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const [useBoot, setUseBoot] = useState<{ card: ModuleCard; chainId: number; mode: "use" | "stop" } | null>(null);
+  const [useCheckpoint, setUseCheckpoint] = useState<{ url: string; chainId: number } | null>(null);
   const [restartedAt, setRestartedAt] = useState<number | undefined>(undefined);
   const streamRef = useRef<(() => void) | null>(null);
 
@@ -262,6 +267,9 @@ export function ModulesSection({ targetId }: { targetId: string }) {
             const chainName = catalog.networks?.find((n) => n.ChainID === chainId)?.Name ?? `chain ${chainId}`;
             const bootnode = c.state === "on" && !!c.identity && BOOTNODE_MODULES.has(c.id) && chainId !== undefined;
             const usable = bootnode && !c.note && dialable(c.identity!);
+            const cpRec = c.id === "checkpointz" ? boxEnabled.find((m) => m.id === "checkpointz") : undefined;
+            const cpServing = !!cpRec && c.state === "on" && chainId !== undefined && !!statuses.find((s) => s.id === "checkpointz" && s.served);
+            const cpURL = cpRec ? checkpointzURL(cpRec) : "";
             const listedOn = bootnode
               ? fleetNodesOn(targetsQuery.data ?? [], chainId!, targetId).some((t) => (t.wire!.Bootnodes ?? []).includes(c.identity!))
               : false;
@@ -278,6 +286,17 @@ export function ModulesSection({ targetId }: { targetId: string }) {
                   </button>
                 )}
                 {bootnode && !usable && <p className="small muted">{SET_PUBLIC_IP_HINT}</p>}
+                {cpServing && cpURL !== "" && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost small"
+                    disabled={busy}
+                    onClick={() => setUseCheckpoint({ url: cpURL, chainId: chainId! })}
+                  >
+                    Use as checkpoint for my other {chainName} nodes
+                  </button>
+                )}
+                {cpServing && cpURL === "" && <p className="small muted">{CHECKPOINTZ_LOOPBACK_HINT}</p>}
                 {c.id === "watch" && c.state === "on" && (
                   <WatchSettings
                     saved={boxEnabled.find((m) => m.id === "watch")?.upstreams ?? []}
@@ -312,6 +331,16 @@ export function ModulesSection({ targetId }: { targetId: string }) {
           }}
         />
       )}
+      {useCheckpoint && (
+        <CheckpointDialog
+          url={useCheckpoint.url}
+          nodes={fleetNodesOn(targetsQuery.data ?? [], useCheckpoint.chainId, targetId)}
+          onClose={() => {
+            setUseCheckpoint(null);
+            void qc.invalidateQueries({ queryKey: ["targets"] });
+          }}
+        />
+      )}
       {confirm && (
         <ConfirmDialog
           card={confirm.card}
@@ -329,6 +358,7 @@ export function ModulesSection({ targetId }: { targetId: string }) {
               if (body.chainId === undefined) delete body.chainId;
               if (fields.port) body.port = fields.port;
               if (fields.extIp) body.extIp = fields.extIp;
+              if (fields.bindAddr) body.bindAddr = fields.bindAddr;
               void submit(confirm.card.id, body, false);
             }
           }}
@@ -446,11 +476,12 @@ function ConfirmDialog({
   busy: boolean;
   error: string | null;
   onCancel: () => void;
-  onConfirm: (fields: { port?: number; extIp?: string; watch?: api.SetModuleRequest }) => void;
+  onConfirm: (fields: { port?: number; extIp?: string; bindAddr?: string; watch?: api.SetModuleRequest }) => void;
 }) {
   const fields = place === "box" ? boxFields(card.id) : [];
   const [port, setPort] = useState("");
   const [extIp, setExtIp] = useState("");
+  const [bindAddr, setBindAddr] = useState("");
   const [endpoints, setEndpoints] = useState("");
   const [webhook, setWebhook] = useState("");
   const isWatch = place === "box" && card.id === "watch";
@@ -492,6 +523,23 @@ function ConfirmDialog({
           />
         </label>
       )}
+      {fields.includes("bindAddr") && (
+        <>
+          <label className="field">
+            <span>Listen address</span>
+            <input
+              aria-label="Listen address"
+              value={bindAddr}
+              placeholder="127.0.0.1"
+              onChange={(e) => setBindAddr(e.target.value.trim())}
+            />
+          </label>
+          <p className="small muted">
+            Leave it empty to serve this box only. A private address your other boxes reach (10.x, 192.168.x, a
+            Tailscale 100.x) lets them checkpoint-sync from it. It never serves the internet.
+          </p>
+        </>
+      )}
       {isWatch && (
         <WatchFields endpoints={endpoints} setEndpoints={setEndpoints} webhook={webhook} setWebhook={setWebhook} />
       )}
@@ -505,7 +553,7 @@ function ConfirmDialog({
           className="btn btn-primary"
           type="button"
           disabled={busy || portBad || !!watchErr}
-          onClick={() => onConfirm({ port: parsedPort, extIp: extIp || undefined, watch: watchBody })}
+          onClick={() => onConfirm({ port: parsedPort, extIp: extIp || undefined, bindAddr: bindAddr || undefined, watch: watchBody })}
         >
           Turn on
         </button>
@@ -779,6 +827,66 @@ function BootnodeDialog({
             onClick={() => void apply()}
           >
             {mode === "use" ? "Use bootnode" : "Stop using bootnode"}
+          </button>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// CheckpointDialog sets a serving Checkpointz as the checkpoint-sync URL
+// of each of the fleet's other nodes on its chain: each node's saved wire,
+// with CheckpointURL set, goes through POST /api/targets/{id}/setup, which
+// re-renders the units and restarts only the beacon. The dialog says so
+// per node before anything runs.
+//
+// docs:covers checkpointz-use
+function CheckpointDialog({ url, nodes, onClose }: { url: string; nodes: api.Target[]; onClose: () => void }) {
+  const [results, setResults] = useState<Record<string, string>>({});
+  const [running, setRunning] = useState(false);
+  const has = (t: api.Target) => t.wire!.CheckpointURL === url;
+  const todo = nodes.filter((t) => !has(t));
+
+  async function apply(): Promise<void> {
+    setRunning(true);
+    for (const t of todo) {
+      const name = boxName(t);
+      try {
+        await api.startSetup(t.id, { ...t.wire!, CheckpointURL: url });
+        setResults((r) => ({ ...r, [t.id]: `${name}: setup started, ${t.wire!.BeaconID} restarts.` }));
+      } catch (err) {
+        setResults((r) => ({ ...r, [t.id]: `${name}: ${formatError(err)}` }));
+      }
+    }
+    setRunning(false);
+  }
+
+  const done = Object.keys(results).length > 0;
+  return (
+    <Modal onClose={onClose} label="Use this checkpoint">
+      <h3>Use this checkpoint</h3>
+      <p className="small">
+        These nodes will checkpoint-sync from <code>{url}</code> the next time their beacon syncs from scratch.
+      </p>
+      {nodes.length === 0 ? (
+        <p className="muted">No other nodes on this chain.</p>
+      ) : (
+        <ul className="small">
+          {nodes.map((t) => (
+            <li key={t.id}>
+              {results[t.id] ??
+                (has(t) ? `${boxName(t)}: already uses this checkpoint.` : `Restarts ${t.wire!.BeaconID} on ${boxName(t)}.`)}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="wizard-actions">
+        <button className="btn btn-ghost" type="button" onClick={onClose}>
+          {done ? "Close" : "Cancel"}
+        </button>
+        {!done && (
+          <button className="btn btn-primary" type="button" disabled={running || todo.length === 0} onClick={() => void apply()}>
+            Use checkpoint
           </button>
         )}
       </div>

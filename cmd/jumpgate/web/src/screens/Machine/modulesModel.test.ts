@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { Catalog, CatalogModule, ModuleStatus, Snapshot } from "../../api";
 import {
   boxFields,
+  checkpointzURL,
   droppedOnClientChange,
   gatewayModuleCards,
   moduleCards,
@@ -167,8 +168,8 @@ describe("statusLine", () => {
 
   test("box module status", () => {
     const c = ctx({ enabled: ["checkpointz"] });
-    expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", active: true, identity: "enode://x" }), c)).toBe("Running");
-    expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", active: true }), c)).toBe("Running");
+    expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", active: true, served: false, identity: "enode://x" }), c)).toBe("Running");
+    expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", active: true, served: false }), c)).toBe("Running");
     expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", active: false }), c)).toBe("Stopped");
     expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", error: "unit failed" }), c)).toBe("unit failed");
     expect(statusLine(CHECKPOINTZ, undefined, c)).toBe("Stopped");
@@ -225,7 +226,7 @@ describe("helpers", () => {
 
   test("box fields only where declared", () => {
     expect(boxFields("el-bootnode")).toEqual(["port", "extIp"]);
-    expect(boxFields("checkpointz")).toEqual(["port"]);
+    expect(boxFields("checkpointz")).toEqual(["port", "bindAddr"]);
     expect(boxFields("watch")).toEqual([]);
   });
 
@@ -269,5 +270,27 @@ describe("fix round 1", () => {
   test("restart line names the box", () => {
     const [c] = moduleCards(CAT, "node", ctx({ box: "203.0.113.9" }));
     expect(c.restartLine).toBe("This restarts reth on 203.0.113.9. The beacon keeps running.");
+  });
+});
+
+describe("checkpointz", () => {
+  test("asks for a port and a listen address", () => {
+    expect(boxFields("checkpointz")).toEqual(["port", "bindAddr"]);
+  });
+
+  test("a loopback Checkpointz has no URL for other boxes", () => {
+    expect(checkpointzURL({})).toBe("");
+    expect(checkpointzURL({ bindAddr: "127.0.0.1" })).toBe("");
+    expect(checkpointzURL({ bindAddr: "::1" })).toBe("");
+    expect(checkpointzURL({ bindAddr: "10.0.0.5" })).toBe("http://10.0.0.5:5555");
+    expect(checkpointzURL({ bindAddr: "fd00::5", port: 5600 })).toBe("http://[fd00::5]:5600");
+  });
+
+  test("a serving Checkpointz shows its finalized epoch", () => {
+    const c = ctx({ enabled: ["checkpointz"] });
+    expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", active: true, served: true, headBlock: 412345 }), c)).toBe(
+      "Serving · finalized epoch 412345",
+    );
+    expect(statusLine(CHECKPOINTZ, st({ id: "checkpointz", active: true, served: false }), c)).toBe("Running");
   });
 });
