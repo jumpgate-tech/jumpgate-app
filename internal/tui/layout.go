@@ -15,6 +15,8 @@ const (
 	leftWidth       = 24
 	drawerTallRows  = 34 // auto opens, and an open drawer is boxed, at or above
 	drawerBoxedRows = 5  // 2 borders + 3 activity lines
+	kpiBoxedMinRows = 30 // at or above, the KPI strip is boxed tiles
+	kpiBoxedRows    = 4  // 2 borders + 2 lines
 )
 
 // drawerFromPref reads a stored pref; anything unknown is auto.
@@ -47,6 +49,7 @@ type rect struct{ X, Y, W, H int }
 // layout is the dashboard's regions for one window size.
 type layout struct {
 	Header        rect // always 1 row at Y=0; below 100 columns it carries the view tabs
+	KPI           rect // at Y=1: 1 row when h < 30, boxed tiles (4 rows) at h >= 30
 	Left          rect // views list + host list, W=24 when w >= 100, else zero
 	Main          rect
 	Drawer        rect // activity rows; H=0 when minimized
@@ -60,7 +63,11 @@ type layout struct {
 func layoutFor(w, h int, d drawerState) layout {
 	var l layout
 	l.Header = rect{0, 0, w, 1}
-	y := 1
+	l.KPI = rect{0, 1, w, 1}
+	if h >= kpiBoxedMinRows {
+		l.KPI.H = kpiBoxedRows
+	}
+	y := 1 + l.KPI.H
 	switch d {
 	case drawerOpen:
 		l.DrawerOpen = true

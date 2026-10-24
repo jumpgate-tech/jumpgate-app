@@ -231,7 +231,7 @@ func TestDrawerPrefRoundTrip(t *testing.T) // pref() of drawerFromPref(x)==x for
       Short string    // the compact strip's cell, e.g. "synced ~1/3"
   }
   func kpis(a *App, in alertInput, al []alert, alertsKnown bool) []tile // 7 tiles, fixed order
-  func (a *App) kpiView(r rect) string // 1 row: Shorts joined by " | " (two spaces if that does not fit); 4 rows: boxed tiles side by side, Gateways 27 wide so its hint fits, the rest sharing what is left
+  func (a *App) kpiView(r rect) string // 1 row: Shorts joined by " | " (then two spaces, then one, before anything is cut); 4 rows: boxed tiles side by side, Gateways 27 wide so its hint fits and Alerts 18, the rest sharing what is left
   ```
 - Values: a value, `n/a` (no data), `~value` (some input stale: `Stale.*` or the stream retrying), `FAIL <code>` (no value and the section errored). Never 0 for unknown; aggregates name unknowns (`1/3 synced · 1 n/a`).
   - Boxes: `N up M down`, loading (`CheckedAt == nil`, never seen) counted as `n/a`; `n/a` before the first fleet.
@@ -248,7 +248,7 @@ func TestDrawerPrefRoundTrip(t *testing.T) // pref() of drawerFromPref(x)==x for
     Synced `synced ~1/3` / `~1/3 synced`, `1 sync 1 n/a`;
     Head lag `lag 2` / `max 2 blk`, `2 n/a`;
     Peers `peers ~51/81` / `~51 exec`, `~81 bcn 1 n/a`;
-    Disk `disk 39%` / `min 39% free`, `box-a 61% used`;
+    Disk `disk 39%` / `min 39% free`, `on box-a`;
     Gateways `gw 1/1 live` / `1 live 0 failing`, `n/a no request counts yet`;
     Alerts `! 1 FAIL 2 warn` / `1 FAIL 2 warn`, `box-b down 4m`.
     Without a gateways reply: `gw n/a` / `n/a`, `n/a no request counts yet`.

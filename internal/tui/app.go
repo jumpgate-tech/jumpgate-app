@@ -59,8 +59,9 @@ type (
 		what string
 		err  error
 	}
-	tickMsg  time.Time
-	prefsMsg struct {
+	tickMsg   time.Time
+	gwTickMsg struct{} // time to re-read the gateways
+	prefsMsg  struct {
 		p   api.UIPrefs
 		err error
 		// seq, with checked, marks the reply to a save (or to the re-read
@@ -101,8 +102,13 @@ type App struct {
 	// reading, and needsKnown says there was one: the bell compares against it.
 	needs      int
 	needsKnown bool
-	conn       apiclient.ConnState
-	connErr    error
+	// gws is the last gateways list (gwsHas: one arrived), for the KPI strip
+	// and the alerts; read on start and every 30 s from the server's store.
+	gws      []api.GatewaySummary
+	gwsHas   bool
+	alertSrc alertSource // nil: derivedAlerts
+	conn     apiclient.ConnState
+	connErr  error
 
 	active  screenID
 	screens [6]screen
@@ -164,8 +170,14 @@ func New(o Options) *App {
 // Init starts the fleet watch, the clock and a prefs fetch. The fetch does
 // not block the first frame: the TUI shows the defaults until prefsMsg lands.
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs())
+	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs(), loadGateways(a), gwTick())
 }
+
+// gatewaysEvery is how often the KPI strip re-reads the gateways: the
+// server's own store, so no box is polled for it.
+const gatewaysEvery = 30 * time.Second
+
+func gwTick() tea.Cmd { return tea.Tick(gatewaysEvery, func(time.Time) tea.Msg { return gwTickMsg{} }) }
 
 func (a *App) fetchPrefs() tea.Cmd {
 	return a.do("prefs", func(ctx context.Context, be Backend) tea.Msg {
@@ -246,6 +258,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case tickMsg:
 		return a, tick()
+	case gwTickMsg:
+		return a, tea.Batch(loadGateways(a), gwTick())
+	case gatewaysMsg:
+		if msg.err == nil { // an error keeps the last list
+			a.gws, a.gwsHas = msg.gws, true
+		}
+		return a, a.broadcast(msg)
 	case fleetMsg:
 		a.conn, a.connErr = msg.u.State, msg.u.Err
 		var ring tea.Cmd
@@ -298,7 +317,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.cancel()
 		a.ctx, a.cancel = context.WithCancel(context.Background())
 		a.be, a.skew, a.srvVer, a.flash = msg.be, "", "", "the server restarted"
-		return a, tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), a.openScreen(a.active))
+		return a, tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), a.openScreen(a.active), loadGateways(a))
 	case tea.KeyPressMsg:
 		a.flash = ""
 		return a, a.key(msg)

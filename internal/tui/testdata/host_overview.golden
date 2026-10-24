@@ -1,4 +1,5 @@
  jumpgate  Fleet Hosts Signers Gateways Jobs Settings                connecting
+ boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
  box
  [Overview]  Storage  Endpoints  Security  Logs  Services
 
@@ -9,7 +10,6 @@
  lag     0 blocks                     distance  0
 
  overall synced · read 3s ago · disk 61% used
-
 
 
 

@@ -13,10 +13,10 @@ func TestLayoutForMainFloor(t *testing.T) {
 				if l.Left.W+l.Main.W != w {
 					t.Fatalf("%dx%d %v: left %d + main %d != %d", w, h, d, l.Left.W, l.Main.W, w)
 				}
-				if got := l.Header.H + l.Main.H + l.Drawer.H + l.Hints.H; got != h {
+				if got := l.Header.H + l.KPI.H + l.Main.H + l.Drawer.H + l.Hints.H; got != h {
 					t.Fatalf("%dx%d %v: rows %d != %d", w, h, d, got, h)
 				}
-				rs := []rect{l.Header, l.Left, l.Main, l.Drawer, l.Hints}
+				rs := []rect{l.Header, l.KPI, l.Left, l.Main, l.Drawer, l.Hints}
 				for i := range rs {
 					for j := i + 1; j < len(rs); j++ {
 						if overlaps(rs[i], rs[j]) {
@@ -38,7 +38,7 @@ func overlaps(a, b rect) bool {
 
 func TestLayoutForBreakpoints(t *testing.T) {
 	l := layoutFor(80, 24, drawerAuto)
-	if l.Left.W != 0 || l.Main.Y != 1 || l.DrawerOpen || l.Drawer.H != 0 || l.Hints.H != 1 {
+	if l.Left.W != 0 || l.Main.Y != 2 || l.DrawerOpen || l.Drawer.H != 0 || l.Hints.H != 1 {
 		t.Errorf("80x24 auto: %+v", l)
 	}
 	l = layoutFor(80, 24, drawerOpen)
@@ -46,7 +46,7 @@ func TestLayoutForBreakpoints(t *testing.T) {
 		t.Errorf("80x24 open: %+v", l)
 	}
 	l = layoutFor(100, 30, drawerAuto)
-	if l.Left.W != 24 || l.Main.Y != 1 || l.DrawerOpen {
+	if l.Left.W != 24 || l.Main.Y != 5 || l.DrawerOpen {
 		t.Errorf("100x30 auto: %+v", l)
 	}
 	l = layoutFor(120, 40, drawerAuto)
@@ -68,6 +68,15 @@ func TestDrawerPrefRoundTrip(t *testing.T) {
 	for _, s := range []string{"", "bogus"} {
 		if got := drawerFromPref(s); got != drawerAuto {
 			t.Errorf("drawerFromPref(%q) = %v, want auto", s, got)
+		}
+	}
+}
+
+func TestLayoutForKPI(t *testing.T) {
+	for _, c := range []struct{ w, h, kpiH, mainY int }{{80, 24, 1, 2}, {80, 29, 1, 2}, {100, 30, 4, 5}, {120, 40, 4, 5}} {
+		l := layoutFor(c.w, c.h, drawerAuto)
+		if l.KPI != (rect{0, 1, c.w, c.kpiH}) || l.Main.Y != c.mainY || l.Left.Y != map[bool]int{true: c.mainY, false: 0}[l.Left.W > 0] {
+			t.Errorf("%dx%d: %+v", c.w, c.h, l)
 		}
 	}
 }

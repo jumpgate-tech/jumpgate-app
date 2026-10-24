@@ -1,10 +1,10 @@
  jumpgate  Fleet Hosts Signers [Gateways] Jobs Settings              connecting
+ boxes n/a  synced n/a  lag n/a  peers n/a  disk n/a  gw 1/1 live  ! alerts n/a
  GATEWAYS (read-only; change them in the web app)
 
  rpc-main       on box          running   https://rpc.example.org/
    PulseChain (369)  https://rpc.example.org/369
    the certificate expires in 6 days
-
 
 
 

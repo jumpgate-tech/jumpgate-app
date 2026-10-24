@@ -78,7 +78,7 @@ func TestDrawerLineFailsClosed(t *testing.T) {
 func TestDrawerHighlightsDecisionNoOpen(t *testing.T) {
 	a := dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto")
 	fr := tuitest.Frame(a)
-	if last := lastLine(fr); !strings.Contains(last, "jobs 1 running  [! 1 needs decision]  ! alerts n/a | ") {
+	if last := lastLine(fr); !strings.Contains(last, "jobs 1 running  [! 1 needs decision]  ! 3 alerts | ") {
 		t.Fatalf("last line %q", last)
 	}
 	if strings.Contains(fr, "Activity") || a.drawerOpen() {
@@ -140,6 +140,78 @@ var dashCases = []struct {
 	{"dash_80x24", 80, 24, "ascii", "auto"},
 	{"dash_80x24_drawer_open", 80, 24, "ascii", "open"},
 	{"dash_unicode_120x40", 120, 40, "unicode", "auto"},
+}
+
+// degradedFleet has every section missing, stale or failed: nothing in it
+// may read as 0.
+func degradedFleet() api.Fleet {
+	old := testNow.Add(-9 * time.Minute)
+	checked := testNow.Add(-3 * time.Second)
+	return api.Fleet{At: testNow.Add(-5 * time.Second), IntervalSeconds: 15, Rows: []api.FleetRow{
+		{ID: "box-a", Link: api.LinkAgent, Reachable: true, LastSeen: &checked, CheckedAt: &checked, Network: "PulseChain",
+			StatusError: &api.ProbeError{Error: api.Error{Code: "rpc_timeout", Message: "rpc timed out"}},
+			DiskError:   &api.ProbeError{Error: api.Error{Code: "disk_probe", Message: "du failed"}},
+			Stale:       api.Stale{Status: true, Disk: true, Firewall: true}},
+		{ID: "box-b", Link: api.LinkSSHOnly, LastSeen: &old, CheckedAt: &checked, Stale: api.Stale{Status: true},
+			Error: &api.Error{Code: api.CodeUnreachable, Message: "dial tcp: connection refused"}},
+		{ID: "box-c", Link: api.LinkAgent},
+	}}
+}
+
+func TestDegradedGolden(t *testing.T) {
+	a := newTestApp(t, tuitest.NewFake(), 120, 40, "ascii")
+	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: degradedFleet(), Has: true, State: apiclient.Live}})
+	fr := tuitest.Frame(m)
+	requireASCII(t, fr)
+	kpi := strings.Join(strings.Split(fr, "\n")[1:5], "\n")
+	for _, title := range []string{"Boxes", "Synced", "Head lag", "Peers", "Disk", "Gateways"} {
+		if !strings.Contains(kpi, title) {
+			t.Errorf("no %s tile:\n%s", title, kpi)
+		}
+	}
+	if strings.Count(kpi, "n/a")+strings.Count(kpi, "FAIL") < 6 || bareZero.MatchString(kpi) {
+		t.Errorf("an unknown reads as 0 or a tile has no n/a:\n%s", kpi)
+	}
+	tuitest.Golden(t, "dash_degraded_120x40", fr)
+}
+
+func TestHeaderAlertCount(t *testing.T) {
+	for _, w := range []int{80, 120} {
+		a := dashApp(t, tuitest.NewFake(), w, 40, "ascii", "auto")
+		if h := ansi.Strip(a.header(w)); !strings.Contains(h, "! 3 alerts") || ansi.StringWidth(h) > w {
+			t.Errorf("%d: header %q", w, h)
+		}
+	}
+	if h := ansi.Strip(newTestApp(t, tuitest.NewFake(), 80, 24, "ascii").header(80)); strings.Contains(h, "alerts") || !strings.Contains(h, "connecting") {
+		t.Errorf("before the fleet: %q", h)
+	}
+}
+
+func TestDrawerLineAlertCount(t *testing.T) {
+	if last := lastLine(tuitest.Frame(dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto"))); !strings.Contains(last, "! 3 alerts") {
+		t.Fatalf("last line %q", last)
+	}
+}
+
+func TestGatewaysFeed(t *testing.T) {
+	f := tuitest.NewFake()
+	f.GatewaysV = []api.GatewaySummary{gw("rpc-main", "running")}
+	a := newTestApp(t, f, 120, 40, "ascii")
+	tuitest.Run(a.Init())
+	if !f.Called("Gateways") {
+		t.Fatal("Init does not read the gateways")
+	}
+	m, _ := tuitest.Send(a, gatewaysMsg{gws: f.GatewaysV})
+	if a := m.(*App); !a.gwsHas || len(a.gws) != 1 {
+		t.Fatalf("gws %v %+v", a.gwsHas, a.gws)
+	}
+	m, _ = tuitest.Send(m, gatewaysMsg{err: errors.New("boom")})
+	if a := m.(*App); !a.gwsHas || len(a.gws) != 1 {
+		t.Fatalf("an error dropped the list: %v %+v", a.gwsHas, a.gws)
+	}
+	if _, cmds := tuitest.Send(m, gwTickMsg{}); len(cmds) == 0 {
+		t.Fatal("the 30 s tick does not reload")
+	}
 }
 
 func TestDashboardGoldens(t *testing.T) {

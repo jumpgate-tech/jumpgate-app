@@ -474,7 +474,7 @@ func (s *settingsScreen) view(a *App, w, h int) string {
 			}
 		}
 	}
-	room := max(h-2, 1)
+	room := max(h-1, 1) // the rest is the foot line
 	if cursorLine < s.offset {
 		s.offset = cursorLine
 	}

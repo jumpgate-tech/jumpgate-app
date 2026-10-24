@@ -1,10 +1,10 @@
  jumpgate  Fleet [Hosts] Signers Gateways Jobs Settings              connecting
+ boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
  HOSTS
 
 ▸ box-a          root@10.0.0.5:22                       gate 0x1234…5678
   box-b          ops@10.0.0.6:2222 via ops@bastion:22   not paired
   laptop         this machine                           not paired
-
 
 
 

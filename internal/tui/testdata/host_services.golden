@@ -1,4 +1,5 @@
  jumpgate  Fleet Hosts Signers Gateways Jobs Settings                connecting
+ boxes n/a  synced n/a  lag n/a  peers n/a  disk n/a  gw 0/0 live  ! alerts n/a
  box
  Overview  Storage  Endpoints  Security  Logs  [Services]
 
@@ -8,7 +9,6 @@
 
  S  open an SSH shell on this box (system ssh, confirmed host keys only)
  x  every action for this box
-
 
 
 

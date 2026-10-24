@@ -1,11 +1,11 @@
  jumpgate  Fleet Hosts Signers Gateways Jobs Settings                connecting
+ boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
  MODULES for box (enter to turn on or off, esc to close)
 
  ▸ Message board  on · Accepting · 1,234 msgs · local only
      reachable: local only (p to change)
    EL bootnode    off
    Checkpointz    unavailable: Checkpointz needs a beacon on this box.
-
 
 
 

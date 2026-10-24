@@ -53,7 +53,7 @@ func (a *App) boxed(title string, focused bool, body string, w, h int) string {
 // frame is the whole dashboard at a window of at least 80×24.
 func (a *App) frame() string {
 	l := layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer))
-	parts := []string{a.header(a.w)}
+	parts := []string{a.header(a.w), a.kpiView(l.KPI)}
 	body := a.mainView(l.Main)
 	if l.Left.W > 0 {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, a.viewsList(l.Left), body)
@@ -108,6 +108,9 @@ func (a *App) header(w int) string {
 		default:
 			right = text
 		}
+	}
+	if a.fleetHas {
+		right = a.alertCount() + " " + a.gl.Sep + " " + right
 	}
 	right += " "
 	left = truncate(left, max(w-lipgloss.Width(right)-1, 1), a.gl.Ellipsis)
@@ -219,7 +222,7 @@ func (a *App) drawerLine(w int) string {
 		if n := a.needCount(); n > 0 {
 			parts = append(parts, a.th.Warn.Render(fmt.Sprintf("[! %d needs decision]", n)))
 		}
-		parts = append(parts, "! alerts n/a")
+		parts = append(parts, a.alertCount())
 		left = strings.Join(parts, "  ")
 	}
 	return truncate(" "+left+" | "+a.hints(), w, a.gl.Ellipsis)
