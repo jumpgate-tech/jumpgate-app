@@ -1,0 +1,30 @@
+ jumpgate  server live                                                  ! 3 alerts | updated 5s ago
++- Boxes --++- Synced -++- Head ~ -++- Peers --++- Disk --++- Gateways ------------++- Alerts -----+
+|1 up 1 do~||~1/3 sync~||max 2 blk ||~51 exec  ||min 39% ~||n/a                    ||1 FAIL 2 warn |
+|1 n/a of 3||1 sync 1 ~||2 n/a     ||~81 bcn 1~||on box-a ||n/a no request counts ~||box-b down 4m |
++----------++----------++----------++----------++---------++-----------------------++--------------+
++- Views --------++= > Fleet ======================================================================+
+|> Fleet      [1]|| HOST         LINK       NET       SYNC      LAG    PEERS   DISK            FW  |
+|  Jobs       [2]||>box-a        gate       PulseCha~ synced    2      48/72   [####|...] 61%  warn|
+|  Signers    [3]|| box-b        down 4m    Ethereum  syncing~  n/a    3/9~    n/a             n/a |
+|  Gateways   [4]|| laptop*      local*     ?         n/a       n/a    n/a     n/a             n/a |
+|  Settings   [5]||                                                                                |
+|----------------||                                                                                |
+|   fleet 3 boxes||                                                                                |
+|>+ box-a  synced||                                                                                |
+| + box-b down 4m||                                                                                |
+| + lapto~ local*||                                                                                |
+|                ||                                                                                |
+|                ||                                                                                |
+|                ||                                                                                |
+|                ||                                                                                |
+|                ||                                                                                |
+|                ||                                                                                |
+|                ||                                                                                |
+|                ||                                                                                |
+|                ||                                                                                |
+|                ||                                                                                |
+|                ||                                                                                |
+|                || 3 boxes | sort: host | ~ stale  * this machine                                 |
++----------------++--------------------------------------------------------------------------------+
+ jobs 1 running  [! 1 needs decision]  ! 3 alerts | . drawer  ? help  : command  1-5 views  tab foc~

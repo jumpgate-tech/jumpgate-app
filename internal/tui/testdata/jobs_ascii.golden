@@ -1,4 +1,5 @@
- jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  [5 Jobs]  6 Settings  ? help
+ jumpgate  Fleet [Jobs] Signers Gateways Settings                    connecting
+ boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
  Jobs inbox | 1 needs you
 > ! box-a    needs-decision step 2/3 driven here
       Rename the node's account, units and data to jumpgate-node
@@ -20,5 +21,4 @@
 
 
 
-
- no box selected | server connecting | jobs ! -
+ jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-5 views  [ ] panels  q~

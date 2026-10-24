@@ -20,16 +20,22 @@ func newHelp(a *App) *helpModal {
 		return fmt.Sprintf("  %-12s %s", keyLabel(b.Help().Key, a.gl), b.Help().Desc)
 	}
 	lines := []string{"keys everywhere"}
+	listed := map[key.Help]bool{}
 	for _, b := range append(keyList(globalKeys), keyList(navKeys)...) {
 		if a.offers(b) {
 			lines = append(lines, row(b))
+			listed[b.Help()] = true
 		}
 	}
-	if ks := a.current().keys(); len(ks) > 0 {
-		lines = append(lines, "", "keys here")
-		for _, b := range ks {
-			lines = append(lines, row(b))
+	// A screen's own keys, less the ones already listed above.
+	var here []string
+	for _, b := range a.current().keys() {
+		if !listed[b.Help()] {
+			here = append(here, row(b))
 		}
+	}
+	if len(here) > 0 {
+		lines = append(append(lines, "", "keys here"), here...)
 	}
 	return &helpModal{lines: lines}
 }
@@ -56,8 +62,9 @@ func (h *helpModal) key(_ *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
-// view drops its blank lines before it scrolls: at 80x24 the jobs screen's
-// keys only just fit once the spacing goes, and a help that hides a key is
+// view drops its blank lines, then puts the first heading on the title's
+// line, before it scrolls: at 80x24 the jobs screen's keys only just fit
+// once the spacing goes, and a help that hides a key is
 // worse than a cramped one. When even that is too tall the keys scroll, and
 // a last line says there is more.
 func (h *helpModal) view(a *App, w, height int) string {
@@ -69,6 +76,11 @@ func (h *helpModal) view(a *App, w, height int) string {
 			if l != "" {
 				lines = append(lines, l)
 			}
+		}
+		// Still too tall: the first heading shares the title's line.
+		if len(lines)+1 > height && len(lines) > 0 && lines[0] == "keys everywhere" {
+			head = a.th.Title.Render(" Help") + ": keys everywhere" + a.th.Dim.Render("  (esc to close)")
+			lines = lines[1:]
 		}
 	} else {
 		head += "\n"

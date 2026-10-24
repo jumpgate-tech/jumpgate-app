@@ -112,3 +112,23 @@ type JobStart struct {
 	Kind   string          `json:"kind"`
 	Inputs json.RawMessage `json:"inputs,omitempty"`
 }
+
+// RunningJob is one unfinished job's place in its plan: Step of Total steps
+// done (Step is 0-based, the one running or asking).
+type RunningJob struct {
+	Target        string `json:"target"`
+	ID            string `json:"id"`
+	Kind          string `json:"kind"`
+	State         string `json:"state"`
+	Step          int    `json:"step"`
+	Total         int    `json:"total"`
+	NeedsDecision bool   `json:"needsDecision"`
+}
+
+// RunningJobs is GET /api/jobs/running: every unfinished job the server
+// already knows of, from its own cache. It never asks a box, so it is as
+// fresh as the last listing (the fleet poll's, or a driver's read).
+type RunningJobs struct {
+	At   time.Time    `json:"at"`
+	Jobs []RunningJob `json:"jobs"`
+}

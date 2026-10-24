@@ -447,7 +447,7 @@ func (f *addFlow) view(a *App, w, h int) string {
 		}
 		switch f.step {
 		case stepDone:
-			b.WriteString("\n " + a.th.OK.Render("paired: agent "+f.agent) + "\n")
+			b.WriteString("\n " + a.th.OK.Render("paired: gate "+f.agent) + "\n")
 			b.WriteString(" Recommended now: disable root SSH login on the box (PermitRootLogin no).\n Keep console access as the way back in. (enter to close)\n")
 		case stepPairing:
 			b.WriteString(" " + a.th.Dim.Render("pairing"+a.gl.Ellipsis) + "\n")

@@ -38,7 +38,9 @@ func loadTargets(a *App) tea.Cmd {
 	})
 }
 
-// hostsScreen lists every box and adds, pairs and removes them (spec screen 3).
+// hostsScreen lists every box and adds, pairs and removes them (spec screen
+// 3). It is not a view of its own: the Fleet view owns it, shows it as its
+// address/pairing table mode (v) and hands it a, p, d and L.
 type hostsScreen struct {
 	ts     []api.TargetView
 	has    bool
@@ -127,7 +129,8 @@ func (s *hostsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 		return loadTargets(a)
 	case tea.KeyPressMsg:
-		if a.active != scrHosts || a.detail != nil {
+		// Fleet hands keys on: this list is its box table mode (spec U3).
+		if a.active != scrFleet || a.detail != nil {
 			return nil
 		}
 		return s.key(a, msg)
@@ -219,7 +222,7 @@ func localName(host string) string {
 // argv, never a shell line, and name is already a checked target name.
 func (s *hostsScreen) pairThisMachine(a *App, name string) tea.Cmd {
 	if a.o.GOOS != "linux" {
-		a.flash = "pairing this machine needs Linux: the jumpgate agent runs only on Linux. Pair a Linux box with a."
+		a.flash = "pairing this machine needs Linux: a gate runs only on Linux. Pair a Linux box with a."
 		return nil
 	}
 	if a.o.Self == "" {
@@ -258,7 +261,7 @@ func (s *hostsScreen) view(a *App, w, h int) string {
 		}
 		pairing := a.th.Warn.Render("not paired")
 		if t.Agent != nil {
-			pairing = a.th.OK.Render("agent " + shortAddr(sanitizeLine(t.Agent.Address), a.gl)) // the date is on Signers
+			pairing = a.th.OK.Render("gate " + shortAddr(sanitizeLine(t.Agent.Address), a.gl)) // the date is on Signers
 		}
 		id, addr := sanitizeLine(t.ID), sanitizeLine(describe(t))
 		lines = append(lines, fmt.Sprintf("%s %-14s %-38s %s", mark, truncate(id, 14, a.gl.Ellipsis), truncate(addr, 38, a.gl.Ellipsis), pairing))

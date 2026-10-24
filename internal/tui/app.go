@@ -7,13 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strconv"
-	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/valve-tech/jumpgate/internal/api"
@@ -23,15 +20,14 @@ import (
 type screenID int
 
 const (
-	scrFleet screenID = iota
-	scrHosts
+	scrFleet screenID = iota // the table, and the box list (Hosts folded in, spec U3)
+	scrJobs
 	scrSigners
 	scrGateways
-	scrJobs
 	scrSettings
 )
 
-var screenNames = [...]string{"Fleet", "Hosts", "Signers", "Gateways", "Jobs", "Settings"}
+var screenNames = [...]string{"Fleet", "Jobs", "Signers", "Gateways", "Settings"}
 
 // screen is one view in the main area.
 type screen interface {
@@ -62,8 +58,9 @@ type (
 		what string
 		err  error
 	}
-	tickMsg  time.Time
-	prefsMsg struct {
+	tickMsg   time.Time
+	gwTickMsg struct{} // time to re-read the gateways
+	prefsMsg  struct {
 		p   api.UIPrefs
 		err error
 		// seq, with checked, marks the reply to a save (or to the re-read
@@ -76,6 +73,10 @@ type (
 		u  apiclient.Update[api.Fleet]
 		ch <-chan apiclient.Update[api.Fleet]
 	}
+	runningMsg struct {
+		v   api.RunningJobs
+		err error
+	}
 )
 
 const (
@@ -85,12 +86,13 @@ const (
 
 // App is the root model.
 type App struct {
-	o      Options
-	be     Backend
-	ctx    context.Context
-	cancel context.CancelFunc
-	now    func() time.Time
-	loc    *time.Location // the zone log times are shown in
+	mainRect rect // the main region as last drawn, for mouse hits
+	o        Options
+	be       Backend
+	ctx      context.Context
+	cancel   context.CancelFunc
+	now      func() time.Time
+	loc      *time.Location // the zone log times are shown in
 
 	w, h     int
 	th       Theme
@@ -100,22 +102,51 @@ type App struct {
 
 	fleet    api.Fleet
 	fleetHas bool
+	// running is the last GET /api/jobs/running (runningHas: one arrived;
+	// runningErr: the latest read failed, so its bars are stale), read after
+	// each fleet reading for the drawer's job bars on every view. It is the
+	// server's cache: reading it asks no box. runningBusy: a read is out.
+	running     api.RunningJobs
+	runningHas  bool
+	runningErr  error
+	runningBusy bool
 	// needs is the fleet-wide count of jobs that need a decision at the last
 	// reading, and needsKnown says there was one: the bell compares against it.
 	needs      int
 	needsKnown bool
-	conn       apiclient.ConnState
-	connErr    error
+	// gws is the last gateways list (gwsHas: one arrived), for the KPI strip
+	// and the alerts; read on start and every 30 s from the server's store.
+	gws      []api.GatewaySummary
+	gwsHas   bool
+	alertSrc alertSource // nil: derivedAlerts
+	// The fleet tree: which boxes are expanded, their modules readings, and
+	// the tree's cursor. a.sel is the one selection the tree and the table
+	// share; selNode narrows it to one client, selAll widens it to the fleet.
+	expanded map[string]bool
+	mods     map[string]treeMods
+	treeCur  int
+	selNode  string
+	selAll   bool
+	conn     apiclient.ConnState
+	connErr  error
 
 	active  screenID
-	screens [6]screen
+	screens [len(screenNames)]screen
 	detail  screen // the open host, if any
 	hostGen uint64 // counts openHost calls; see hostScreen.gen
 	modal   modal
 	flash   string
 	skew    string
+	srvVer  string // the server's version, when Skew reported one
 	sel     string // the box the status bar names
-	sidebar bool   // the host list beside an open host, below the width that shows it anyway
+	// focus is the region with the keyboard; treeOver and logOver are the
+	// tree and the log drawn over main where the window has no room for them.
+	focus    focusRegion
+	treeOver bool
+	logOver  bool
+	logOff   int      // lines the log is scrolled down
+	log      actLog   // the activity log (spec U6), this session only
+	prev     snapshot // what the log last compared against
 	// restarting: a restart is under way. A second one would race the first
 	// over which server is current, so R does nothing until it lands.
 	restarting bool
@@ -147,11 +178,11 @@ func New(o Options) *App {
 	a.screens[scrFleet] = newFleetScreen()
 	a.screens[scrJobs] = &jobsScreen{}
 	a.screens[scrGateways] = &gatewaysScreen{}
-	a.screens[scrHosts] = &hostsScreen{}
 	a.screens[scrSigners] = &signersScreen{}
 	a.screens[scrSettings] = &settingsScreen{}
 	if server, mine, differs := a.be.Skew(); differs {
 		server, mine = sanitizeLine(server), sanitizeLine(mine)
+		a.srvVer = server
 		// Offer R only where it works; otherwise the banner still says why
 		// some requests may fail.
 		a.skew = fmt.Sprintf("server %s, this jumpgate %s: the versions differ", server, mine)
@@ -165,8 +196,14 @@ func New(o Options) *App {
 // Init starts the fleet watch, the clock and a prefs fetch. The fetch does
 // not block the first frame: the TUI shows the defaults until prefsMsg lands.
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs())
+	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs(), loadGateways(a), gwTick(), treeTick(), loadTargets(a))
 }
+
+// gatewaysEvery is how often the KPI strip re-reads the gateways: the
+// server's own store, so no box is polled for it.
+const gatewaysEvery = 30 * time.Second
+
+func gwTick() tea.Cmd { return tea.Tick(gatewaysEvery, func(time.Time) tea.Msg { return gwTickMsg{} }) }
 
 func (a *App) fetchPrefs() tea.Cmd {
 	return a.do("prefs", func(ctx context.Context, be Backend) tea.Msg {
@@ -195,6 +232,18 @@ func (a *App) watchFleet(ch <-chan apiclient.Update[api.Fleet]) tea.Cmd {
 		}
 		return fleetMsg{u: u, ch: ch}
 	}
+}
+
+// readRunning reads the running jobs once, unless a read is already out.
+func (a *App) readRunning() tea.Cmd {
+	if a.runningBusy {
+		return nil
+	}
+	a.runningBusy = true
+	return a.do("running", func(ctx context.Context, be Backend) tea.Msg {
+		v, err := be.RunningJobs(ctx)
+		return runningMsg{v: v, err: err}
+	})
 }
 
 // do runs f off the update loop with the app's context and backend as they
@@ -241,12 +290,38 @@ func (a *App) openScreen(id screenID) tea.Cmd {
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := a.update(msg)
+	switch msg := msg.(type) {
+	case fleetMsg, gatewaysMsg, targetsMsg, treeModsMsg:
+		a.record()
+	case jobsMsg:
+		if msg.u.Has {
+			a.record()
+		}
+	}
+	return m, cmd
+}
+
+func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.w, a.h = msg.Width, msg.Height
+		a.fitFocus()
 		return a, nil
 	case tickMsg:
 		return a, tick()
+	case gwTickMsg:
+		return a, tea.Batch(loadGateways(a), gwTick())
+	case treeModsMsg:
+		a.gotTreeMods(msg)
+		return a, nil
+	case treeTickMsg:
+		return a, tea.Batch(a.treeRefresh(), treeTick())
+	case gatewaysMsg:
+		if msg.err == nil { // an error keeps the last list
+			a.gws, a.gwsHas = msg.gws, true
+		}
+		return a, a.broadcast(msg)
 	case fleetMsg:
 		a.conn, a.connErr = msg.u.State, msg.u.Err
 		var ring tea.Cmd
@@ -261,7 +336,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.needs, a.needsKnown = n, true
 		}
-		return a, tea.Batch(a.watchFleet(msg.ch), a.broadcast(msg), ring)
+		return a, tea.Batch(a.watchFleet(msg.ch), a.broadcast(msg), ring, a.readRunning())
+	case runningMsg:
+		a.runningBusy, a.runningErr = false, msg.err
+		if msg.err == nil {
+			a.running, a.runningHas = msg.v, true
+		}
+		return a, nil
 	case openJobsMsg:
 		a.flash = sanitizeLine(msg.flash)
 		return a, a.openScreen(scrJobs)
@@ -298,8 +379,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.cancel()
 		a.ctx, a.cancel = context.WithCancel(context.Background())
-		a.be, a.skew, a.flash = msg.be, "", "the server restarted"
-		return a, tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), a.openScreen(a.active))
+		a.be, a.skew, a.srvVer, a.flash = msg.be, "", "", "the server restarted"
+		return a, tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), a.openScreen(a.active), loadGateways(a))
 	case tea.KeyPressMsg:
 		a.flash = ""
 		return a, a.key(msg)
@@ -339,6 +420,9 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 	if cur.capturing() {
 		return cur.update(a, k)
 	}
+	if cmd, ok := a.regionKey(k); ok {
+		return cmd
+	}
 	switch {
 	case key.Matches(k, globalKeys.Help):
 		a.modal = newHelp(a)
@@ -346,6 +430,8 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(k, globalKeys.Palette):
 		a.modal = newPalette()
 		return nil
+	case key.Matches(k, globalKeys.Drawer):
+		return a.toggleDrawer()
 	case key.Matches(k, globalKeys.Screens):
 		return a.openScreen(screenID(k.Code - '1'))
 	case key.Matches(k, globalKeys.Quit) && a.detail == nil:
@@ -413,21 +499,7 @@ func (a *App) render() string {
 	if a.w < minW || a.h < minH {
 		return a.tooSmall()
 	}
-	bodyH := a.h - 2
-	var body string
-	if a.skew != "" {
-		body = a.th.Warn.Render(truncate(a.skew, a.w, a.gl.Ellipsis)) + "\n"
-		bodyH--
-	}
-	if a.modal != nil {
-		body += fit(a.modal.view(a, a.w, bodyH), a.w, bodyH, a.gl.Ellipsis)
-	} else if a.detail != nil && (a.w >= 100 || a.sidebar) {
-		main := fit(a.current().view(a, a.w-19, bodyH), a.w-19, bodyH, a.gl.Ellipsis)
-		body += lipgloss.JoinHorizontal(lipgloss.Top, a.sidebarView(bodyH), " ", main)
-	} else {
-		body += fit(a.current().view(a, a.w, bodyH), a.w, bodyH, a.gl.Ellipsis)
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, a.topBar(), body, a.statusBar())
+	return a.frame()
 }
 
 // tooSmall is the whole frame below 80×24 (spec "Layout"): the size message,
@@ -437,23 +509,6 @@ func (a *App) render() string {
 func (a *App) tooSmall() string {
 	msg := fmt.Sprintf("terminal too small (%dx%d); jumpgate needs %dx%d", a.w, a.h, minW, minH)
 	return fit(ansi.Wrap(msg, a.w, ""), a.w, a.h, "")
-}
-
-// topBar names the screens; the active one is bracketed, so it reads without
-// colour too.
-func (a *App) topBar() string {
-	parts := []string{a.th.Title.Render("jumpgate")}
-	for i, n := range screenNames {
-		label := fmt.Sprintf("%d %s", i+1, n)
-		if screenID(i) == a.active && a.detail == nil {
-			label = a.th.Sel.Render("[" + label + "]")
-		}
-		parts = append(parts, label)
-	}
-	left := " " + strings.Join(parts, "  ")
-	right := "? help"
-	gap := a.w - lipgloss.Width(left) - lipgloss.Width(right)
-	return truncate(left+strings.Repeat(" ", max(gap, 1))+right, a.w, a.gl.Ellipsis)
 }
 
 // needCount is the fleet-wide number of jobs that need a decision.
@@ -467,50 +522,10 @@ func (a *App) needCount() int {
 	return n
 }
 
-// jobsFlag is the fleet-wide count of jobs that need a decision, or the dash
-// until some box has reported its jobs (honest data: unknown is not 0).
-func (a *App) jobsFlag() string {
-	for _, r := range a.fleet.Rows {
-		if r.Jobs != nil {
-			return strconv.Itoa(a.needCount())
-		}
-	}
-	return a.gl.Dash
-}
-
-// statusBar: the selected box and its link, the server connection, the
-// fleet-wide ⚑ count, and the age of the fleet data.
-func (a *App) statusBar() string {
-	if a.flash != "" {
-		return truncate(" "+a.flash, a.w, a.gl.Ellipsis)
-	}
-	box := "no box selected"
-	if a.sel != "" {
-		box = sanitizeLine(a.sel)
-		if row, ok := a.fleet.Row(a.sel); ok {
-			box += " " + a.gl.Sep + " " + linkWord(row)
-		}
-	}
-	server := "server " + a.conn.String()
-	if a.conn == apiclient.Retrying && a.connErr != nil {
-		server += " (" + a.errText(a.connErr) + ")"
-	}
-	left := fmt.Sprintf(" %s %s %s %s jobs %s %s", box, a.gl.Sep, server, a.gl.Sep, a.gl.Flag, a.jobsFlag())
-	right := ""
-	if a.fleetHas {
-		right = formatAge(a.now().Sub(a.fleet.At)) + " ago "
-	}
-	gap := a.w - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		return truncate(left, a.w, a.gl.Ellipsis)
-	}
-	return left + strings.Repeat(" ", gap) + right
-}
-
 // linkWord is a row's link in one word: HOSTKEY when its host key is the
 // problem, down when it answered once and does not now.
 func linkWord(r api.FleetRow) string {
-	word := map[api.Link]string{api.LinkAgent: "agent", api.LinkAgentLocal: "local", api.LinkSSHOnly: "ssh", api.LinkLocalOnly: "local*"}[r.Link]
+	word := map[api.Link]string{api.LinkAgent: "gate", api.LinkAgentLocal: "local", api.LinkSSHOnly: "ssh", api.LinkLocalOnly: "local*"}[r.Link]
 	if r.Error != nil && (r.Error.Code == api.CodeHostKey || r.Error.Code == api.CodeUnknownHost) {
 		return "HOSTKEY"
 	}

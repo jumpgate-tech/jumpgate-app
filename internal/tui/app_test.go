@@ -44,7 +44,7 @@ func newTestApp(t *testing.T, f *tuitest.Fake, w, h int, glyphs string) *App {
 
 func TestShellFrame(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
-	m, _ := tuitest.Send(a, tuitest.Key("5"))
+	m, _ := tuitest.Send(a, tuitest.Key("2"))
 	frame := tuitest.Frame(m)
 	if n := strings.Count(frame, "\n") + 1; n != 24 {
 		t.Fatalf("frame has %d lines, want 24", n)
@@ -55,7 +55,7 @@ func TestShellFrame(t *testing.T) {
 // Review Focus 5: an ascii frame contains nothing but ASCII.
 func TestASCIIFrameHasOnlyASCII(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "ascii")
-	m, _ := tuitest.Send(a, tuitest.Key("5"))
+	m, _ := tuitest.Send(a, tuitest.Key("2"))
 	frame := tuitest.Frame(m)
 	requireASCII(t, frame)
 	tuitest.Golden(t, "shell_jobs_ascii", frame)
@@ -73,7 +73,7 @@ func requireASCII(t *testing.T, frame string) {
 // Review Focus 3: too small says so, keeps state, and comes back.
 func TestTooSmallTerminalKeepsState(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
-	m, _ := tuitest.Send(a, tuitest.Key("5"), tea.WindowSizeMsg{Width: 60, Height: 20})
+	m, _ := tuitest.Send(a, tuitest.Key("2"), tea.WindowSizeMsg{Width: 60, Height: 20})
 	if f := tuitest.Frame(m); !strings.Contains(f, "terminal too small (60x20); jumpgate needs 80x24") {
 		t.Fatalf("frame:\n%s", f)
 	}
@@ -128,13 +128,12 @@ func TestStatusBarShowsTheConnection(t *testing.T) {
 }
 
 // The fleet's age comes from the injected clock, never the wall clock.
-func TestStatusBarShowsTheDataAge(t *testing.T) {
+func TestStatusLineShowsTheDataAge(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
 	fl := api.Fleet{At: testNow.Add(-5 * time.Second)}
 	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{State: apiclient.Live, Value: fl, Has: true}})
-	lines := strings.Split(tuitest.Frame(m), "\n")
-	if last := lines[len(lines)-1]; !strings.Contains(last, "server live") || !strings.HasSuffix(last, "5s ago") {
-		t.Fatalf("status bar %q", last)
+	if s := m.(*App).statusLine(); !strings.Contains(s, "server live") || !strings.HasSuffix(s, "updated 5s ago") {
+		t.Fatalf("status line %q", s)
 	}
 }
 
@@ -142,9 +141,9 @@ func TestHelpListsGlobalKeys(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
 	// From the jobs screen: the frame lists its own keys (d, a, r) under
 	// "keys here" after the global ones.
-	m, _ := tuitest.Send(a, tuitest.Key("5"), tuitest.Key("?"))
+	m, _ := tuitest.Send(a, tuitest.Key("2"), tuitest.Key("?"))
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"help", "quit", "screens", "command"} {
+	for _, want := range []string{"help", "quit", "views", "command"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("help lacks %q:\n%s", want, fr)
 		}
@@ -179,7 +178,7 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" },
 		Restart: func(context.Context) (Backend, error) { return f, nil }})
 	t.Cleanup(func() { a.cancel() }) // a restart replaces a.cancel: read it at cleanup time
-	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: 80, Height: 24}, prefsMsg{p: api.UIPrefs{Glyphs: "unicode"}}, tuitest.Key("5"), tuitest.Key("?"))
+	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: 80, Height: 24}, prefsMsg{p: api.UIPrefs{Glyphs: "unicode"}}, tuitest.Key("2"), tuitest.Key("?"))
 	fr := tuitest.Frame(m)
 	all := bindings(globalKeys)
 	for n, b := range bindings(navKeys) {
@@ -198,7 +197,7 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 
 	// Without a way to restart, R does nothing, so neither help nor the
 	// banner offers it.
-	m, _ = tuitest.Send(newTestApp(t, f, 80, 24, "unicode"), tuitest.Key("5"), tuitest.Key("?"))
+	m, _ = tuitest.Send(newTestApp(t, f, 80, 24, "unicode"), tuitest.Key("2"), tuitest.Key("?"))
 	fr = tuitest.Frame(m)
 	if regexp.MustCompile(`(?m)^\s*R\s`).MatchString(fr) || strings.Contains(fr, "press R") {
 		t.Errorf("R is offered with no way to restart:\n%s", fr)
@@ -209,7 +208,7 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 // words.
 func TestHelpASCII(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "ascii")
-	m, _ := tuitest.Send(a, tuitest.Key("5"), tuitest.Key("?"))
+	m, _ := tuitest.Send(a, tuitest.Key("2"), tuitest.Key("?"))
 	fr := tuitest.Frame(m)
 	requireASCII(t, fr)
 	if !strings.Contains(fr, "up/k") {
@@ -353,14 +352,14 @@ func fleetWithJobs(needs ...int) api.Fleet {
 	return f
 }
 
-func TestStatusBarCountsJobsThatNeedYou(t *testing.T) {
+func TestDrawerLineCountsJobsThatNeedYou(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
-	if !strings.Contains(a.statusBar(), "jobs ⚑ –") {
-		t.Fatalf("before any box reports jobs: %q", a.statusBar())
+	if l := ansi.Strip(a.drawerLine(80)); !strings.Contains(l, "jobs n/a") || strings.Contains(l, "needs decision") {
+		t.Fatalf("before any box reports jobs: %q", l)
 	}
 	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fleetWithJobs(1, 2), Has: true, State: apiclient.Live}})
-	if bar := m.(*App).statusBar(); !strings.Contains(bar, "jobs ⚑ 3") {
-		t.Fatalf("status bar %q", bar)
+	if l := ansi.Strip(m.(*App).drawerLine(80)); !strings.Contains(l, "[! 3 needs decision]") {
+		t.Fatalf("drawer line %q", l)
 	}
 }
 

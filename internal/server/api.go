@@ -722,6 +722,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// TestJobRoutesAndATargetNamedStream holds both.
 	mux.HandleFunc("GET /api/jobs", s.handleJobs)
 	mux.HandleFunc("GET /api/jobs/stream", s.handleJobsStream)
+	mux.HandleFunc("GET /api/jobs/running", s.handleJobsRunning) // the cache only: asks no box
 	mux.HandleFunc("GET /api/jobs/{target}/{job}", s.handleJobDetail)
 	mux.HandleFunc("GET /api/jobs/{target}/{job}/output/stream", s.handleJobOutput)
 	mux.HandleFunc("POST /api/jobs/{target}", s.handleJobStart)

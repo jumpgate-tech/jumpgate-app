@@ -33,7 +33,7 @@ func sampleInbox() api.JobsInbox {
 func jobsApp(t *testing.T, f *tuitest.Fake, glyphs string) *App {
 	t.Helper()
 	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: sampleInbox(), Has: true, State: apiclient.Live}
-	return press(t, newTestApp(t, f, 80, 24, glyphs), "5").(*App)
+	return press(t, newTestApp(t, f, 80, 24, glyphs), "2").(*App)
 }
 
 func TestInboxShowsWhatNeedsYouFirst(t *testing.T) {
@@ -76,7 +76,7 @@ func TestApprovalQuestionsSayWhyTheyCannotBeAnswered(t *testing.T) {
 	in := sampleInbox()
 	in.Jobs[0].Question.Tier, in.Jobs[0].Question.Signable = "approval", false
 	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: in, Has: true, State: apiclient.Live}
-	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "5", "d")
+	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "2", "d")
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "approval") || f.Called("Decide") {
 		t.Fatalf("frame:\n%s\ncalls %v", fr, f.Calls)
 	}
@@ -89,7 +89,7 @@ func TestAJobHeldElsewhereIsWatchedOnly(t *testing.T) {
 	in := sampleInbox()
 	in.Jobs[0].Lease = api.JobLease{Owner: "0xbbbb000000000000000000000000000000000bbb", Fresh: true}
 	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: in, Has: true, State: apiclient.Live}
-	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "5", "d").(*App)
+	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "2", "d").(*App)
 	if f.Called("Decide") || !strings.Contains(m.flash, "holds this job") {
 		t.Fatalf("flash %q calls %v", m.flash, f.Calls)
 	}
@@ -128,7 +128,7 @@ func TestInboxStripsControlSequencesFromJobText(t *testing.T) {
 	in.Jobs[0].Question.Prompt = "ask\x1b[31m red"
 	in.Jobs[0].Question.Options[0].Label = "ok\x1b]8;;http://x\x07"
 	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: in, Has: true, State: apiclient.Live}
-	fr := tuitest.Frame(press(t, newTestApp(t, f, 80, 24, "unicode"), "5"))
+	fr := tuitest.Frame(press(t, newTestApp(t, f, 80, 24, "unicode"), "2"))
 	if strings.Contains(fr, "\x1b") {
 		t.Fatalf("an escape reached the frame:\n%q", fr)
 	}
@@ -186,7 +186,7 @@ func TestADecisionOutlivesTheScreen(t *testing.T) {
 	t.Cleanup(func() { a.cancel() })
 	var m tea.Model = a
 	m, _ = tuitest.Send(m, tea.WindowSizeMsg{Width: 80, Height: 24}, prefsMsg{p: api.UIPrefs{Glyphs: "unicode"}})
-	m = press(t, m, "5")
+	m = press(t, m, "2")
 	m = press(t, m, "d", "1")
 	m = typed(t, m, "retry")
 	m, cmds := tuitest.Send(m, tuitest.Key("enter"))
@@ -226,7 +226,7 @@ func TestReloadRestartsTheStreamAndStopsTheOldReader(t *testing.T) {
 	t.Cleanup(func() { a.cancel() })
 	var m tea.Model = a
 	m, _ = tuitest.Send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
-	press(t, m, "5", "r")
+	press(t, m, "2", "r")
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.chs) != 2 {
@@ -250,7 +250,7 @@ func TestTheChoiceListShowsTheQuestionAndEscSendsNothing(t *testing.T) {
 	in.Jobs[0].Question.Prompt = "1 process\x1b[2J still runs\nas valve-node-app"
 	in.Jobs[0].Question.Options[1].Detail = "SIGTERM\x1b]52;c;AAAA\x07 first"
 	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: in, Has: true, State: apiclient.Live}
-	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "5", "d").(*App)
+	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "2", "d").(*App)
 	fr := tuitest.Frame(m)
 	for _, want := range []string{"box-a asks", "1 process still runs", "as valve-node-app", "1 Check again", "2 Stop them", "SIGTERM first", "3 Stop the migration here", "press a number, or esc"} {
 		if !strings.Contains(fr, want) {
@@ -282,7 +282,7 @@ func TestDecideSaysWhyItCannotAsk(t *testing.T) {
 	in := sampleInbox()
 	in.Jobs[0].Lease = api.JobLease{} // released: nobody drives it
 	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: in, Has: true, State: apiclient.Live}
-	m = press(t, newTestApp(t, f, 80, 24, "unicode"), "5").(*App)
+	m = press(t, newTestApp(t, f, 80, 24, "unicode"), "2").(*App)
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "nobody drives it") {
 		t.Fatalf("frame:\n%s", fr)
 	}
@@ -299,7 +299,7 @@ func TestAdoptRefusesALiveController(t *testing.T) {
 	in := sampleInbox()
 	in.Jobs[0].Lease = api.JobLease{Owner: "0xbbbb000000000000000000000000000000000bbb", Fresh: true}
 	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: in, Has: true, State: apiclient.Live}
-	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "5").(*App)
+	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "2").(*App)
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "watching 0xbbbb") {
 		t.Fatalf("frame:\n%s", fr)
 	}
@@ -339,7 +339,7 @@ func TestALogThatCannotBeReadSaysWhy(t *testing.T) {
 func TestAnEmptyInboxSaysHowToStartAndNamesSilentBoxes(t *testing.T) {
 	f := tuitest.NewFake()
 	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: api.JobsInbox{Errors: []api.JobsError{{Target: "box-c", Error: api.Error{Message: "could not reach the agent"}}}}, Has: true, State: apiclient.Live}
-	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "5", "d", "a").(*App)
+	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "2", "d", "a").(*App)
 	fr := tuitest.Frame(m)
 	if !strings.Contains(fr, "No durable jobs on any paired box") || !strings.Contains(fr, "box-c: could not reach the agent") {
 		t.Fatalf("frame:\n%s", fr)

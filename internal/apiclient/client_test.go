@@ -490,3 +490,18 @@ func TestJobMethodsUseTheJobRoutes(t *testing.T) {
 		t.Fatalf("routes %v", seen)
 	}
 }
+
+func TestRunningJobsUsesTheCacheRoute(t *testing.T) {
+	var seen string
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Method + " " + r.URL.Path
+		fmt.Fprint(w, `{"at":"2026-10-23T00:00:00Z","jobs":[{"target":"box","id":"0123456789abcdef","kind":"node.x","state":"running","step":1,"total":4,"needsDecision":false}]}`)
+	})
+	got, err := c.RunningJobs(context.Background())
+	if err != nil || len(got.Jobs) != 1 || got.Jobs[0].Total != 4 || got.Jobs[0].Step != 1 {
+		t.Fatalf("RunningJobs = %+v, %v", got, err)
+	}
+	if seen != "GET /api/jobs/running" {
+		t.Fatalf("route %q", seen)
+	}
+}

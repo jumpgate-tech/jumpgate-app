@@ -241,6 +241,14 @@ func (c *Client) Jobs(ctx context.Context) (api.JobsInbox, error) {
 	return in, err
 }
 
+// RunningJobs is every unfinished job's step, from the server's cache: it
+// asks no box, so it is cheap to read on the fleet's cadence.
+func (c *Client) RunningJobs(ctx context.Context) (api.RunningJobs, error) {
+	var out api.RunningJobs
+	err := c.Do(ctx, http.MethodGet, "/api/jobs/running", nil, &out)
+	return out, err
+}
+
 // WatchJobs streams the inbox whenever it changes.
 func (c *Client) WatchJobs(ctx context.Context) <-chan Update[api.JobsInbox] {
 	return watch(ctx, c, "/api/jobs/stream", decodeJSON[api.JobsInbox])

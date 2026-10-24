@@ -253,6 +253,7 @@ func (s *settingsScreen) items(a *App) []settingItem {
 			func(p *api.UIPrefs, v string) { fmt.Sscanf(v, "%ds", &p.RefreshSeconds) }, refresh),
 		cycle("Units", func(p api.UIPrefs) string { return p.Units }, func(p *api.UIPrefs, v string) { p.Units = v }, []string{"GB", "GiB"}),
 		cycle("Glyphs", func(p api.UIPrefs) string { return p.Glyphs }, func(p *api.UIPrefs, v string) { p.Glyphs = v }, []string{"auto", "unicode", "ascii"}),
+		cycle("Activity drawer", func(p api.UIPrefs) string { return p.Drawer }, func(p *api.UIPrefs, v string) { p.Drawer = v }, []string{"auto", "open", "min"}),
 		flag("Compact rows", func(p api.UIPrefs) bool { return p.Compact }, func(p *api.UIPrefs, v bool) { p.Compact = v }),
 		flag("Show estimates", func(p api.UIPrefs) bool { return p.ShowEstimates }, func(p *api.UIPrefs, v bool) { p.ShowEstimates = v }),
 		flag("Bell on jobs that need you", func(p api.UIPrefs) bool { return p.Bell }, func(p *api.UIPrefs, v bool) { p.Bell = v }),
@@ -473,7 +474,7 @@ func (s *settingsScreen) view(a *App, w, h int) string {
 			}
 		}
 	}
-	room := max(h-2, 1)
+	room := max(h-1, 1) // the rest is the foot line
 	if cursorLine < s.offset {
 		s.offset = cursorLine
 	}

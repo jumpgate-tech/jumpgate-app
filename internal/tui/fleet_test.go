@@ -50,7 +50,7 @@ func fleetApp(t *testing.T, f *tuitest.Fake, glyphs string, state apiclient.Conn
 func TestFleetFrame(t *testing.T) {
 	a := fleetApp(t, tuitest.NewFake(), "unicode", apiclient.Live)
 	fr := tuitest.Frame(a)
-	for _, want := range []string{"HOST", "LINK", "DISK", "box-a", "agent", "synced", "48/72", "61%", "warn", "box-b", "down 4m", "laptop*", "3 boxes"} {
+	for _, want := range []string{"HOST", "LINK", "DISK", "box-a", "gate", "synced", "48/72", "61%", "warn", "box-b", "down 4m", "laptop*", "3 boxes"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("fleet lacks %q:\n%s", want, fr)
 		}
@@ -121,7 +121,7 @@ func TestFleetColumnsFollowThePreferences(t *testing.T) {
 	f := tuitest.NewFake()
 	f.PrefsV.FleetColumns = []string{"host", "jobs", "agent"}
 	fr := tuitest.Frame(fleetApp(t, f, "unicode", apiclient.Live))
-	if !strings.Contains(fr, "JOBS") || !strings.Contains(fr, "AGENT") || strings.Contains(fr, "DISK") || !strings.Contains(fr, "0x1234…5678") {
+	if !strings.Contains(fr, "JOBS") || !strings.Contains(fr, "GATE") || strings.Contains(fr, "DISK") || !strings.Contains(fr, "0x1234…5678") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 }
@@ -146,13 +146,42 @@ func TestFleetCutsColumnsThatDoNotFit(t *testing.T) {
 	}
 }
 
+// A click picks the table row under it, wherever the dashboard put the
+// main region: at 80x24 main is unboxed under the header and the KPI line
+// (dash_80x24.golden: table header row 2, box-a row 3, box-b row 4); at
+// 120x40 it is boxed beside the views list under a 4-row KPI strip
+// (dash_120x40.golden: border row 5, table header row 6, box-b row 8).
+// Clicks outside main or off the rows change nothing.
 func TestFleetMouseClickSelects(t *testing.T) {
-	f := tuitest.NewFake()
-	f.PrefsV.Mouse = true
-	a := fleetApp(t, f, "unicode", apiclient.Live)
-	m, _ := tuitest.Send(a, tea.MouseClickMsg{X: 3, Y: 4, Button: tea.MouseLeft})
-	if c := m.(*App).screens[scrFleet].(*fleetScreen).cursor; c != 2 {
-		t.Fatalf("cursor %d after clicking the third row", c)
+	cases := []struct {
+		name       string
+		w, h, x, y int
+		want       int
+	}{
+		{"80x24 box-b", 80, 24, 3, 4, 1},
+		{"80x24 laptop", 80, 24, 3, 5, 2},
+		{"80x24 table header", 80, 24, 3, 2, 0},
+		{"80x24 kpi", 80, 24, 3, 1, 0},
+		{"80x24 past the rows", 80, 24, 3, 10, 0},
+		{"120x40 box-b", 120, 40, 30, 8, 1},
+		{"120x40 laptop", 120, 40, 30, 9, 2},
+		{"120x40 main border", 120, 40, 30, 5, 0},
+		{"120x40 table header", 120, 40, 30, 6, 0},
+		{"120x40 left sidebar", 120, 40, 5, 8, 0},
+		{"120x40 drawer", 120, 40, 30, 37, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := tuitest.NewFake()
+			f.PrefsV.Mouse = true
+			a := fleetApp(t, f, "ascii", apiclient.Live)
+			m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: c.w, Height: c.h})
+			tuitest.Frame(m) // a click follows a render
+			m, _ = tuitest.Send(m, tea.MouseClickMsg{X: c.x, Y: c.y, Button: tea.MouseLeft})
+			if got := m.(*App).screens[scrFleet].(*fleetScreen).cursor; got != c.want {
+				t.Fatalf("cursor %d, want %d:\n%s", got, c.want, tuitest.Frame(m))
+			}
+		})
 	}
 }
 
@@ -262,7 +291,7 @@ func TestFleetJobsColumn(t *testing.T) {
 	fl := sampleFleet()
 	fl.Rows[0].Jobs = &api.JobsSummary{Running: 1, NeedsDecision: 1}
 	fl.Rows[1].Jobs = &api.JobsSummary{Running: 2}
-	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: 140, Height: 24}, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fl, Has: true, State: apiclient.Live}})
+	m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: 180, Height: 24}, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fl, Has: true, State: apiclient.Live}})
 	fr := tuitest.Frame(m)
 	if !strings.Contains(fr, "⚑1") || !strings.Contains(fr, "JOBS") {
 		t.Fatalf("frame:\n%s", fr)

@@ -105,10 +105,16 @@ type dialError struct{ err error }
 func (e *dialError) Error() string { return e.err.Error() }
 func (e *dialError) Unwrap() error { return e.err }
 
+// onSendIntent, when set (tests only), sees every intent before it is sent.
+var onSendIntent func(target, kind string)
+
 // sendIntent signs one intent for a paired target and returns the verified
 // answer. It is the only way the server reaches an agent: one intent per
 // target at a time, because the sequence lives in config.
 func (s *Server) sendIntent(ctx context.Context, cfg config.Config, t config.Target, kind string, payload any) (agentclient.Response, error) {
+	if onSendIntent != nil {
+		onSendIntent(t.ID, kind)
+	}
 	if s.cfg.Signer == nil {
 		return agentclient.Response{}, &noControllerKey{s.cfg.SignerErr}
 	}

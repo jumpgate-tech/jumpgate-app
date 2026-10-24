@@ -1,6 +1,7 @@
 # TUI fleet dashboard: design
 
-Date: 2026-10-23. Status: draft for review.
+Date: 2026-10-23. Status: approved with the user decisions in "Decisions
+(2026-10-23)" below.
 Builds on: `2026-10-05-tui-design.md` (the TUI spec, decisions D1–D32) and
 `2026-10-02-controller-agent-architecture-design.md` (controller/gate protocol).
 
@@ -19,6 +20,56 @@ a one-line status bar (`testdata/fleet_80x24.golden`: three table rows, then 17
 blank lines). It reads as a list, not a console for a fleet. This spec turns it
 into a dashboard: a KPI strip, a fleet tree, a main view, a context sidebar and
 an activity footer, while keeping every v1 decision that still applies.
+
+## Decisions (2026-10-23)
+
+The user's answers to the open questions, plus one new requirement:
+
+- **U1 Gateway requests.** Keep the Gateways tile. Until the server exposes
+  request counts it shows `n/a` with the hint `no request counts yet`
+  beside `live/failing`. The API (per-gateway request/error counts and a rate
+  on `/api/gateways`) is a later phase (phase 6).
+- **U2 Alerts.** Client-derived by the TUI from data it already holds, until
+  the health-watch module provides a real feed; then the TUI reads that feed
+  and the derived list becomes its fallback.
+- **U3 Hosts merge.** Hosts folds into Fleet (no sixth view).
+- **U4 Activity drawer.** The footer is a bottom **drawer** that can be
+  minimized:
+  - *Expanded:* a boxed `Activity` region with job and sync progress bars and
+    the event ticker, then the key-hint line.
+  - *Minimized:* one status line: running-job count, alert count, and the key
+    hints.
+  - `.` toggles it (unused by every screen today; `ctrl+j` is a newline in
+    many terminals). Text fields keep `.` while they have the keyboard.
+  - The state persists in the TUI settings (`UIPrefs.Drawer`: `auto`, `open`,
+    `min`; the Settings screen cycles it). `auto` means minimized when the
+    height is below 34 (so 80×24 starts minimized) and open otherwise; `.`
+    stores an explicit `open`/`min`.
+  - When a job needs a decision, the minimized line highlights it
+    (`[! 1 needs decision]`, bracketed so it reads without colour, warn
+    colour when colour is on). The drawer never opens itself.
+
+- **U5 No trend graphs.** No sparklines or history graphs in the TUI. Node
+  detail shows current values and the delta from the previous reading, e.g.
+  `head lag 2 blk (was 40)`.
+- **U6 Right panel = activity log.** The right sidebar is the activity log,
+  scoped to the selection (the whole fleet, or the selected box/node): newest
+  first, relative time, a severity glyph. Events: gate up/down; sync state
+  changes (syncing → synced, stalled); job step transitions and decisions
+  requested/answered; derived alerts raised or cleared (disk ≥ 85 % / ≥ 95 %,
+  peers 0, head lag over threshold, gate unreachable); setup and module
+  changes; signer approvals. Built only from data the TUI already has (diffs
+  of successive snapshots), no new polling; a ring of about 200 entries in
+  memory, never persisted. The health checklist and quick actions it replaces
+  move to box detail (Overview) and the `x` menu.
+- **U7 Drawer = progress bars only, for things with a known end:** (1) a
+  running job, step k/n; (2) EL sync %, head vs highest block; (3) CL sync %;
+  (4) a snapshot download/extract, if exposed; (5) a fleet rollout (e.g. an
+  upgrade across boxes), n/m boxes done; (6) disk fill per box, only when
+  ≥ 85 %, as a capacity bar. Order: needs decision → running jobs → syncing →
+  disk. At most 3 bars at 80×24 and 6 at 120×40, then `+N more`. Anything
+  without a denominator gets no bar; it belongs in the log. The event ticker
+  moves from the drawer to the right-panel log.
 
 ## Decisions kept from the TUI spec
 
@@ -54,16 +105,16 @@ Five regions:
 | **KPI strip** (3 rows boxed, 1 row compact) | 7 tiles: boxes, synced, head lag, peers, disk headroom, gateways, alerts |
 | **Left sidebar** | Views list (Fleet, Jobs, Signers, Gateways, Settings) and the fleet tree: box → nodes (exec/beacon), gateways, modules |
 | **Main** | The selected view: fleet table, box detail (existing tabs), node detail, jobs inbox, signers, gateways, settings |
-| **Right sidebar** | Context for the selection: health checklist, recent alerts for it, quick actions with keys |
-| **Footer** (3–5 rows) | Running jobs as progress bars, syncing nodes as progress bars, event ticker, key hints |
+| **Right sidebar** | Activity log scoped to the selection (U6) |
+| **Activity drawer** (open: 3–5 rows + hints; minimized: 1 row) | Open: running jobs as progress bars, syncing nodes as progress bars, event ticker; then key hints. Minimized: counts + hints on one line (U4) |
 
 ### 120×40 (full dashboard)
 
 ```
  jumpgate  server live · v0.5.1                                                          ! 2 alerts · updated 3s ago
 +- Boxes ------+- Synced ------+- Head lag ----+- Peers -------+- Disk -------+- Gateways ----+- Alerts ------------+
-| 2 up 1 down  | 1/2 nodes     | max 2 blk     | 51 exec       | min 39% free | 2 live        | 1 FAIL  1 warn      |
-| ##.  of 3    | 1 syncing     | box-b n/a     | 72 beacon     | box-a 61%    | 0 failing     | box-b down 4m       |
+| 2 up 1 down  | 1/2 nodes     | max 2 blk     | 51 exec       | min 39% free | 2 live  n/a   | 1 FAIL  1 warn      |
+| ##.  of 3    | 1 syncing     | box-b n/a     | 72 beacon     | box-a 61%    | 0 fail no req | box-b down 4m       |
 +--------------+---------------+---------------+---------------+--------------+---------------+---------------------+
 +- Fleet ---------------+- Fleet ---------------------------------------------------+- box-a -----------------------+
 | > Fleet           [1] | HOST      LINK     NET        SYNC     LAG  PEERS  DISK   | health                        |
@@ -97,16 +148,30 @@ Five regions:
 | sync box-b  exec            21.1M/21.3M [##################..] 99.1%  ~ stale 4m                                 |
 | 12:04 box-b gate down · 12:03 box-a disk measured · 12:01 box-a firewall warn · 11:58 laptop paired              |
 +------------------------------------------------------------------------------------------------------------------+
- tab focus  1-5 views  / filter  : palette  x actions  enter open  esc back  ? help  q quit
+ tab focus  1-5 views  / filter  : palette  x actions  . drawer  enter open  ? help  q quit
 ```
 
-Widths at 120: left 25, right 33, main the rest (62). Heights at 40: header 1,
-KPI 4, footer 5 + hints 1, body 29.
+The same frame with the drawer minimized gives the four Activity rows back
+to the body and keeps one line:
+
+```
+ jobs 1 running  [! 1 needs decision]  ! 2 alerts | tab focus  1-5 views  . drawer  ? help  q quit
+```
+
+Widths (revised 2026-10-23 after the first frames lost DISK and FW): the
+boxed main always keeps 82 columns, room for every default fleet column (80
+cells) inside its border, so the table never has less than it had before the
+dashboard. Left 22 at w ≥ 100 (narrowing to 18 at 100–103); the log docks on
+the right only at w ≥ 140, 20 % of the width (28–40); below 140 `]` opens it
+as an overlay. So at 120: left 22, main 98, log overlay; at 140: 22 / 90 /
+28; at 160: 22 / 106 / 32. The 120-wide sketch above shows the arrangement
+of a 140+ window. Heights at 40: header 1, KPI 4, footer 5 + hints 1, body 29.
 
 ### 80×24
 
-Sidebars fold away; the KPI strip is one line; the footer is two lines (one
-activity line that rotates job → sync → events, plus hints).
+Sidebars fold away; the KPI strip is one line; the drawer starts minimized
+(U4: one status line). Opened with `.`, it is two lines: one activity line
+that rotates job → sync → events, plus hints.
 
 ```
  jumpgate  server live                                      ! 2 alerts · 3s ago
@@ -131,8 +196,7 @@ activity line that rotates job → sync → events, plus hints).
 
 
 
- job box-a migrate-names 2/3 [######....] ! needs decision      (1/3 activity)
- tab focus  1-5 views  x actions  enter open  ? help  q quit
+ jobs 1 running [! 1 needs decision] ! 2 alerts | tab focus  . drawer  ? help
 ```
 
 At 80×24 `[` toggles the tree and `]` the context panel as overlays over the
@@ -142,28 +206,30 @@ is lost, only folded.
 ### Narrow fallback (80–99 columns, any height ≥ 24; and heights 24–29)
 
 Same as 80×24 with more table rows. Extra height first grows the main view,
-then (≥ 30 rows) restores the 3-row KPI tiles, then (≥ 34 rows) the 4-line
-footer.
+then (≥ 30 rows) restores the 3-row KPI tiles, then (≥ 34 rows) an open
+drawer is full size and `auto` opens it.
 
 ## 2. Responsive rules
 
 Evaluated in this order on every `WindowSizeMsg`; one pure function
-`layoutFor(w, h) layout` returns region rectangles, unit-tested on its own.
+`layoutFor(w, h int, drawer drawerState) layout` returns region rectangles, unit-tested on its own.
 
 | Condition | Effect |
 |---|---|
 | `w < 80` or `h < 24` | size message (unchanged) |
-| `w ≥ 100` | left sidebar shown (width 24, tree truncates names with `..`) |
-| `w ≥ 120` | right sidebar shown (width 32–40, 27 % of width) |
+| `w ≥ 100` | left sidebar shown (width 22, 18 at 100–103 so main keeps 82; tree truncates names) |
+| `w ≥ 140` | right sidebar shown (width 28–40, 20 % of width) |
 | `w < 100` | both sidebars are overlays (`[` / `]`), views move to a one-line tab row |
-| `100 ≤ w < 120` | right sidebar is an overlay; left stays |
+| `100 ≤ w < 140` | right sidebar is an overlay (`]`); left stays |
 | `h ≥ 30` | KPI tiles boxed (4 rows) instead of one line |
-| `h ≥ 34` | footer at full size (job bars + sync bars + ticker + hints) |
-| `h < 34` | footer is 2 lines: one rotating activity line (every 5 s, pauses while focused) + hints |
-| `w ≥ 160` | KPI tiles gain a sparkline row (head-lag and peers history from the client's ring) |
+| drawer minimized | 1 line: counts + hints (U4) |
+| drawer open, `h ≥ 34` | full size: boxed job bars + sync bars + ticker, then hints |
+| drawer open, `h < 34` | 2 lines: one rotating activity line (every 5 s, pauses while focused) + hints |
+| drawer `auto` | minimized when `h < 34`, open otherwise |
 
-The main view always keeps at least 50 columns and 8 rows; if a rule would
-break that, the region that rule added folds instead. The fleet table drops
+The main view always keeps at least 50 columns and 8 rows, and from 100
+columns the 82 the default fleet columns need; if a rule would break that,
+the region that rule added folds instead. The fleet table drops
 columns right to left by priority (FW, PEERS, NET) as it does today.
 
 ## 3. Data and refresh
@@ -178,11 +244,11 @@ one new server aggregate in phase 4.
 | Head lag | max of `Status` lag fields | 15 s | lag unknown when public head unknown → `n/a`, never 0 |
 | Peers | sum of exec / beacon `Peers` | 15 s | partial sums marked `~` and `· 1 n/a` |
 | Disk headroom | min free from `Disk` / `DiskUsedPct` | poller 5 min | nil → `n/a`; names the worst box |
-| Gateways | `Gateways()` `Status.State`, `Warnings` | on enter and every 30 s | request counts: **no API yet** (open question 1); tile shows `live/failing` until then |
-| Alerts | derived client-side (below) | each fleet update | none → `0`, never hidden |
+| Gateways | `Gateways()` `Status.State`, `Warnings` | on enter and every 30 s | request counts: **no API yet** (U1); tile shows `live/failing` and `n/a` with the hint `no request counts yet` until phase 6 |
+| Alerts | derived client-side (below, U2) | each fleet update | none → `0`, never hidden |
 | Fleet tree | fleet rows + gateways (`RoutesTo`) + `ListModules` per expanded box | modules fetched on expand, then 60 s | `GateStale` → `gate stale` on the module line |
-| Right sidebar | selected row, plus `WatchStatus` (5 s) only while a box is selected for > 1 s | 5 s | each line carries its age |
-| Job bars | `WatchJobs` inbox: `Step`/`len(Steps)`, `NeedsDecision` | stream | `JobsSummary == nil` → no bar, footer says `jobs n/a` for that box |
+| Right sidebar (log, U6) | diffs of fleet/jobs/gateways/modules/signers snapshots already held | each update | ring of ~200, session-only; each line carries its age |
+| Job bars | on the Jobs view the `WatchJobs` inbox (`Step`/`len(Steps)`); on every other view `GET /api/jobs/running` (`step`, `total`, `needsDecision`), served from the server's jobs cache without asking any box | inbox: stream; running: after each fleet update | `JobsSummary == nil` → no bar, footer says `jobs n/a` for that box; a failed read → `~ stale` |
 | Sync bars | `Status` head vs reference head for syncing nodes | 15 s | no reference head → indeterminate bar `[<=>  ]`, no percent |
 | Event ticker | client-side diff of successive fleet/jobs/module snapshots | each update | ring of 200, session-only |
 
@@ -190,7 +256,8 @@ one new server aggregate in phase 4.
 gateways) []alert` with severity `FAIL` / `warn`: box down, status error,
 section stale > 2 intervals, firewall warn/fail, disk fit verdict bad, job
 needs decision, gateway warnings, module error. Same inputs give the same list,
-so it is golden-testable. A server-side alert feed is open question 2.
+so it is golden-testable. When the health-watch module provides alerts the TUI
+reads them instead and keeps `alerts()` as the fallback (U2).
 
 **Staleness.** Header shows `updated Ns ago` from `Fleet.At`; it turns
 yellow + `~` after 2 × `IntervalSeconds`, red + `stale` after 4 × or when the
@@ -216,6 +283,7 @@ top border, `>` in its title). Default focus: main.
 | `[` / `]` | toggle tree / context (overlay when narrow) |
 | `space` | expand/collapse a box in the tree |
 | `/` `:` `x` `?` `q` | unchanged |
+| `.` | open / minimize the activity drawer (U4), saved to settings |
 | context actions | single letters listed in the right sidebar, same bindings as today (`l`, `S`, `m`, `r`, `t`) |
 
 Tree selection and table selection are one selection: moving in either moves
@@ -248,14 +316,14 @@ both, and the right sidebar follows it.
   bold alone.
 - **Bars:** `[████│░░░]` / ASCII `[####|...]`; job bars `[##########....]`;
   indeterminate `[<=>   ]` animated by the 1 s tick only when focused (golden:
-  frame 0). Sparklines `▁▂▃▄▅▆▇█` / `_.-=#`. Alert glyph `⚑` / `!`.
+  frame 0). Alert glyph `⚑` / `!`.
 - **Vocabulary:** gate, box, node (exec/beacon), gateway, module, job.
 
 ## 6. Testing
 
 - **Goldens** (ASCII profile, ANSI stripped, fixed clock and fake backend):
   `dash_120x40`, `dash_100x30`, `dash_80x24`, `dash_80x24_tree_overlay`,
-  `dash_80x24_ctx_overlay`, `dash_160x48` (sparklines), `dash_box_detail_120x40`,
+  `dash_80x24_ctx_overlay`, `dash_120x40_drawer_min`, `dash_80x24_drawer_open`, `dash_box_detail_120x40`,
   `dash_node_detail_120x40`, `dash_jobs_120x40`, `dash_degraded_120x40`
   (every section nil/stale/error: proves `n/a`/`~`/`FAIL`, no zeros),
   `dash_unicode_120x40`. Existing screen goldens are renamed into the frame
@@ -263,7 +331,9 @@ both, and the right sidebar follows it.
 - **Unit:** `layoutFor` table test over widths 80..200 × heights 24..60
   (main ≥ 50×8, regions never overlap, sum = w); `alerts()`; KPI aggregation
   with nil sections; `gate` vocabulary test (no user-facing `agent`).
-- **teatest flows:** tab cycles focus; tree `enter` opens detail and context
+- **teatest flows:** `.` toggles the drawer and the saved prefs carry it; a
+  job needing a decision highlights the minimized line without opening it;
+  tab cycles focus; tree `enter` opens detail and context
   follows; resize 120→80 folds sidebars and keeps the selection; `]` overlay
   opens/closes; a job in the fake advances and the footer bar moves; stream
   drop shows stale then recovers.
@@ -272,19 +342,22 @@ both, and the right sidebar follows it.
 
 ## 7. Migration (each phase ships)
 
-1. **Frame.** `layoutFor`, header, footer hints, region borders; existing
+1. **Frame.** `layoutFor`, header, region borders, the activity drawer
+   (U4: toggle, minimized status line, persisted state; its open content is
+   the per-box job counts until phase 4 adds bars and the ticker); existing
    screens render inside main unchanged; tab bar becomes the views list in
    the left sidebar at ≥ 100. `agent` → `gate` in user text. Goldens updated.
 2. **KPI strip + alerts.** Pure aggregation over the fleet stream already held
    in `App`; `alerts()`; header staleness.
-3. **Tree + context sidebar.** Tree from fleet + gateways + modules
+3. **Tree + activity-log sidebar.** Tree from fleet + gateways + modules
    (reuse `moduleCards`/`moduleStatus` from `host_modules.go`); right sidebar
-   reuses `host_overview` cards, `host_security` checklist lines, and the `x`
-   actions menu bindings (`actions.go`). Hosts merges into Fleet.
-4. **Activity footer.** Job bars from `WatchJobs` (reuse `jobs.go` step
-   formatting), sync bars, event ticker from snapshot diffs.
-5. **Node detail view**, sparklines at ≥ 160, gateway request counts once the
-   server exposes them.
+   is the activity log (U6) from snapshot diffs. Hosts merges into Fleet.
+4. **Activity drawer bars (U7).** Job step bars from `WatchJobs` (reuse
+   `jobs.go` step formatting), EL/CL sync %, snapshot, rollout and disk ≥ 85 %
+   bars, ordered and capped as U7 says.
+5. **Node detail view** with current values and deltas (U5); no sparklines.
+6. **Gateway request counts (U1).** Server: per-gateway request/error
+   counters and a rate on `/api/gateways`; the tile drops its `n/a` hint.
 
 Reuse: `theme.go`/`palette.go` glyph sets and styles, `format.go` (ages,
 units, bars), `maskurl.go`, `sanitize.go`, `keys.go` bindings, `help.go`
@@ -293,13 +366,8 @@ backend in `backend.go`.
 
 ## 8. Open questions
 
-1. **Gateway requests.** `api.GatewaySummary` has no request counters. Add
-   per-gateway request/error counts (and a rate) to `/api/gateways`, or drop
-   the tile to `live/failing`?
-2. **Alerts source.** Keep alerts client-derived (session-only, no history),
-   or add a server alert feed with ack/mute so the web app and TUI agree?
-3. **Hosts merge.** Is folding Hosts into Fleet acceptable, or keep a sixth
-   view for address/pairing work?
+Questions 1–3 are answered (U1–U3 above).
+
 4. **Sync progress.** Needs a reference head per chain; when absent the bar is
    indeterminate. Should the server expose estimated time-to-sync?
 5. **Event history.** Ticker events are session-only; should the server keep

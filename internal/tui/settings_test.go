@@ -20,7 +20,7 @@ func settingsApp(t *testing.T, f *tuitest.Fake) *App {
 	f.SettingsV = api.Settings{AIProvider: "gemini", AIKeySet: true, AIDisclosure: "Explain sends the selected log lines to Gemini after removing IP addresses."}
 	a := newTestApp(t, f, 80, 24, "unicode")
 	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: sampleFleet(), Has: true, State: apiclient.Live}})
-	return press(t, m, "6").(*App)
+	return press(t, m, "5").(*App)
 }
 
 func pick(t *testing.T, a *App, label string) *App {
@@ -42,6 +42,22 @@ func TestSettingsFrame(t *testing.T) {
 		}
 	}
 	tuitest.Golden(t, "settings", fr)
+}
+
+func TestSettingsDrawerCycles(t *testing.T) {
+	f := tuitest.NewFake()
+	a := settingsApp(t, f)
+	s := a.screens[scrSettings].(*settingsScreen)
+	if i := s.find(a, "Activity drawer"); i < 0 || s.items(a)[i].label != "Activity drawer" || s.items(a)[i].value(a) != "auto" {
+		t.Fatalf("no Activity drawer item showing auto (%d)", i)
+	}
+	var m tea.Model = a
+	for _, want := range []string{"open", "min", "auto"} {
+		m = press(t, pick(t, m.(*App), "Activity drawer"), "space")
+		if f.LastPrefs.Drawer != want || m.(*App).prefs.Drawer != want {
+			t.Fatalf("saved %q shown %q, want %q", f.LastPrefs.Drawer, m.(*App).prefs.Drawer, want)
+		}
+	}
 }
 
 func TestSettingsToggleAColumnAndSaveIt(t *testing.T) {

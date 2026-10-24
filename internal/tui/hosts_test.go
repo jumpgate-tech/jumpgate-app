@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/valve-tech/jumpgate/internal/api"
+	"github.com/valve-tech/jumpgate/internal/apiclient"
 	"github.com/valve-tech/jumpgate/internal/tui/tuitest"
 )
 
@@ -29,12 +30,12 @@ func hostsApp(t *testing.T, f *tuitest.Fake, goos string) *App {
 	f.TargetsV = sampleTargets()
 	a := newTestApp(t, f, 80, 24, "unicode")
 	a.o.GOOS = goos
-	return press(t, a, "2").(*App)
+	return press(t, a, "v").(*App)
 }
 
 func TestHostsList(t *testing.T) {
 	fr := tuitest.Frame(hostsApp(t, tuitest.NewFake(), "linux"))
-	for _, want := range []string{"box-a", "root@10.0.0.5:22", "agent 0x1234…5678", "ops@10.0.0.6:2222 via ops@bastion:22", "not paired", "this machine", "a add", "L pair this machine"} {
+	for _, want := range []string{"box-a", "root@10.0.0.5:22", "gate 0x1234…5678", "ops@10.0.0.6:2222 via ops@bastion:22", "not paired", "this machine", "a add", "L pair this machine"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("hosts lack %q:\n%s", want, fr)
 		}
@@ -81,7 +82,7 @@ func TestAddFlowConfirmsEachHopThenPairs(t *testing.T) {
 			t.Errorf("missing call %q in %v", w, f.Calls)
 		}
 	}
-	if !strings.Contains(fr, "paired: agent 0xabc") || !strings.Contains(fr, "agent uploaded") || !strings.Contains(fr, "PermitRootLogin no") {
+	if !strings.Contains(fr, "paired: gate 0xabc") || !strings.Contains(fr, "agent uploaded") || !strings.Contains(fr, "PermitRootLogin no") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 }
@@ -257,7 +258,7 @@ func TestHostsSanitizesTargetText(t *testing.T) {
 	f := tuitest.NewFake()
 	f.TargetsV = []api.TargetView{{ID: "evil\x1b]52;c;AAAA\x07", Mode: "ssh", SSH: &api.SSHView{User: "r\x1b[2J", Host: "h"}, Link: api.LinkSSHOnly}}
 	a := newTestApp(t, f, 80, 24, "unicode")
-	m := press(t, a, "2")
+	m := press(t, a, "v")
 	if c := m.View().Content; strings.Contains(c, "\x1b]52") || strings.Contains(c, "\x1b[2J") || strings.Contains(c, "\x07") {
 		t.Fatalf("raw escape in frame: %q", c)
 	}
@@ -279,7 +280,7 @@ func TestPairEventsAreSanitizedAndStaleOnesDropped(t *testing.T) {
 		t.Fatalf("frame:\n%s", fr)
 	}
 	// Leave, start a new flow, then a late reply from the old one lands.
-	old := m.(*App).screens[scrHosts].(*hostsScreen).flow.gen
+	old := hostsOf(m.(*App)).flow.gen
 	m = press(t, m, "esc", "a")
 	m, _ = tuitest.Send(m, pairMsg{gen: old, ev: api.PairEvent{Done: true, Agent: "0xdead"}}, probeMsg{gen: old, p: api.HostKeyProbe{AllConfirmed: true}}, hostKeyConfirmedMsg{gen: old}, targetAddedMsg{gen: old})
 	if fr := tuitest.Frame(m); strings.Contains(fr, "0xdead") || !strings.Contains(fr, "ADD A BOX") || strings.Count(strings.Join(f.Calls, "\n"), "AddTarget") != 1 {
@@ -305,7 +306,7 @@ func TestWaitPairStopsWithItsContext(t *testing.T) {
 
 func TestLeavingTheFlowCancelsItsContext(t *testing.T) {
 	m := press(t, hostsApp(t, tuitest.NewFake(), "linux"), "a")
-	fl := m.(*App).screens[scrHosts].(*hostsScreen).flow
+	fl := hostsOf(m.(*App)).flow
 	press(t, m, "esc")
 	if fl.ctx.Err() == nil {
 		t.Fatal("the flow's context outlived the flow")
@@ -316,7 +317,7 @@ func TestRemoveRefusesAnUnshowableName(t *testing.T) {
 	f := tuitest.NewFake()
 	f.TargetsV = []api.TargetView{{ID: "bad\x1b[2Jname", Mode: "ssh", SSH: &api.SSHView{User: "r", Host: "h"}}}
 	a := newTestApp(t, f, 80, 24, "unicode")
-	m := press(t, a, "2", "d")
+	m := press(t, a, "v", "d")
 	m = press(t, m, "enter")
 	m = typed(t, m, "badname")
 	press(t, m, "enter")
@@ -343,7 +344,7 @@ func probingFlow(t *testing.T, m tea.Model, name string) (tea.Model, *addFlow) {
 	m, _ = tuitest.Send(m, tuitest.Key("enter"))
 	m = typed(t, m, "root@10.0.0.7")
 	m, _ = tuitest.Send(m, tuitest.Keys("enter", "enter", "enter", "enter")...)
-	return m, m.(*App).screens[scrHosts].(*hostsScreen).flow
+	return m, hostsOf(m.(*App)).flow
 }
 
 func unknownProbe(gen uint64) probeMsg {
@@ -499,7 +500,7 @@ func TestLeavingHostsEndsTheFlowAndSaysSo(t *testing.T) {
 		t.Run(how+"/probing", func(t *testing.T) {
 			m, fl := probingFlow(t, hostsApp(t, tuitest.NewFake(), "linux"), "box-c")
 			m = leave(t, m, how)
-			if fl.ctx.Err() == nil || m.(*App).screens[scrHosts].(*hostsScreen).flow != nil {
+			if fl.ctx.Err() == nil || hostsOf(m.(*App)).flow != nil {
 				t.Fatal("the flow outlived the screen")
 			}
 			if !strings.Contains(m.(*App).flash, "stopped; no pairing was started") {
@@ -522,7 +523,7 @@ func TestLeavingHostsEndsTheFlowAndSaysSo(t *testing.T) {
 			m = press(t, m, "enter")
 			m = typed(t, m, "root@10.0.0.7")
 			m = press(t, m, "enter", "enter", "enter", "enter")
-			fl := m.(*App).screens[scrHosts].(*hostsScreen).flow
+			fl := hostsOf(m.(*App)).flow
 			if fl == nil || fl.step != stepConfirm {
 				t.Fatalf("not at the host key: %s", tuitest.Frame(m))
 			}
@@ -534,18 +535,71 @@ func TestLeavingHostsEndsTheFlowAndSaysSo(t *testing.T) {
 			if got := m.(*App).flash; !strings.Contains(got, "host key was not trusted") {
 				t.Fatalf("flash %q", got)
 			}
-			m = press(t, m, "2")
+			m = press(t, m, "v")
 			if fr := tuitest.Frame(m); strings.Contains(fr, "SHA256:aaa") {
 				t.Fatalf("the confirmation came back:\n%s", fr)
 			}
 		})
 		t.Run(how+"/form", func(t *testing.T) {
 			m := typed(t, press(t, hostsApp(t, tuitest.NewFake(), "linux"), "a"), "box-c")
-			fl := m.(*App).screens[scrHosts].(*hostsScreen).flow
+			fl := hostsOf(m.(*App)).flow
 			m = leave(t, m, how)
 			if fl.ctx.Err() == nil || !strings.Contains(m.(*App).flash, "nothing was added") {
 				t.Fatalf("ctx %v flash %q", fl.ctx.Err(), m.(*App).flash)
 			}
 		})
+	}
+}
+
+func hostsOf(a *App) *hostsScreen { return a.screens[scrFleet].(*fleetScreen).hosts }
+
+func TestViewsRenumbered(t *testing.T) {
+	for k, want := range map[string]screenID{"1": scrFleet, "2": scrJobs, "3": scrSigners, "4": scrGateways, "5": scrSettings} {
+		if a := press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), k).(*App); a.active != want {
+			t.Errorf("%s opened %v, want %v", k, a.active, want)
+		}
+	}
+	if a := press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), "3", "6").(*App); a.active != scrSigners {
+		t.Errorf("6 moved to %v", a.active)
+	}
+	if len(screenNames) != 5 || screenNames[1] != "Jobs" || screenNames[4] != "Settings" {
+		t.Errorf("views %v", screenNames)
+	}
+}
+
+func TestFleetHostModeV(t *testing.T) {
+	f := tuitest.NewFake()
+	f.TargetsV = sampleTargets()
+	a := fleetApp(t, f, "ascii", apiclient.Live)
+	fr := tuitest.Frame(press(t, a, "v"))
+	if !strings.Contains(fr, "root@10.0.0.5:22") || !strings.Contains(fr, "not paired") {
+		t.Fatalf("v did not show the host table:\n%s", fr)
+	}
+	if fr := tuitest.Frame(press(t, a, "v")); strings.Contains(fr, "root@10.0.0.5:22") || !strings.Contains(fr, "SYNC") {
+		t.Fatalf("v again did not come back to the fleet table:\n%s", fr)
+	}
+}
+
+func TestFleetRemoveActsOnSelection(t *testing.T) {
+	f := tuitest.NewFake()
+	f.TargetsV = sampleTargets()
+	m := press(t, fleetApp(t, f, "ascii", apiclient.Live), "j", "d")
+	_, ok := m.(*App).modal.(*confirmModal)
+	if !ok || !strings.Contains(tuitest.Frame(m), "remove box-b") {
+		t.Fatalf("modal %T:\n%s", m.(*App).modal, tuitest.Frame(m))
+	}
+}
+
+func TestFleetPairActsOnSelection(t *testing.T) {
+	f := tuitest.NewFake()
+	f.TargetsV = sampleTargets()
+	a := fleetApp(t, f, "ascii", apiclient.Live)
+	tuitest.Settle(a, loadTargets(a))
+	m := press(t, a, "j", "p")
+	if fl := hostsOf(m.(*App)).flow; fl == nil || !f.Called("ProbeHostKeys") {
+		t.Fatalf("no re-pair flow for box-b: calls %v\n%s", f.Calls, tuitest.Frame(m))
+	}
+	if fr := tuitest.Frame(m); !strings.Contains(fr, "box-b") {
+		t.Fatalf("frame:\n%s", fr)
 	}
 }

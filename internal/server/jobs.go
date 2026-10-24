@@ -431,6 +431,29 @@ func (h *jobsHub) summary(target string) *api.JobsSummary {
 	return s
 }
 
+// running is every unfinished job in the cache, by target, in cache order. It
+// reads only what listings and drivers already stored: no box is asked.
+func (h *jobsHub) running() api.RunningJobs {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := api.RunningJobs{At: time.Now(), Jobs: []api.RunningJob{}}
+	targets := make([]string, 0, len(h.boxes))
+	for id := range h.boxes {
+		targets = append(targets, id)
+	}
+	sort.Strings(targets)
+	for _, id := range targets {
+		for _, r := range h.boxes[id].jobs {
+			if intent.JobTerminal(r.State) {
+				continue
+			}
+			out.Jobs = append(out.Jobs, api.RunningJob{Target: id, ID: r.ID, Kind: r.Kind, State: r.State, Step: r.Step,
+				Total: len(r.Steps), NeedsDecision: r.State == intent.JobNeedsDecision})
+		}
+	}
+	return out
+}
+
 func (h *jobsHub) view(target string, r intent.JobRecord, agentTime int64) api.JobView {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -662,6 +685,12 @@ func (h *jobsHub) stopWithin(d time.Duration) bool {
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	s.jobs.refresh(r.Context(), false)
 	writeJSON(w, http.StatusOK, s.jobs.inbox())
+}
+
+// handleJobsRunning serves the cache as it is: unlike GET /api/jobs it
+// never refreshes, so polling it costs no box anything.
+func (s *Server) handleJobsRunning(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.jobs.running())
 }
 
 func (s *Server) handleJobsStream(w http.ResponseWriter, r *http.Request) {

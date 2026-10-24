@@ -1,4 +1,5 @@
- jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  5 Jobs  [6 Settings]  ? help
+ jumpgate  Fleet Jobs Signers Gateways [Settings]           ! 2 alerts · 5s ago
+ boxes 1/3 up synced ~1/3 lag 2 peers ~51/81 disk 39% gw n/a ! 1 FAIL 1 warn
  FLEET COLUMNS
 ▸ [x] HOST
   [x] LINK
@@ -12,7 +13,7 @@
   [ ] CL
   [ ] JOBS
   [ ] AGE
-  [ ] AGENT
+  [ ] GATE
 
  HOST TABS
   [x] Overview
@@ -20,5 +21,4 @@
   [x] Endpoints
   [x] Security
  ↑↓ move  space toggle  enter change  (saved at once)
-
- box-a · agent · server live · jobs ⚑ –                                  5s ago
+ jobs n/a  ! 2 alerts | . drawer  ? help  : command  1-5 views  [ ] panels  q q…

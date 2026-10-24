@@ -1,9 +1,13 @@
- jumpgate  1 Fleet  2 Hosts  3 Signers  4 Gateways  [5 Jobs]  6 Settings  ? help
+ jumpgate  Fleet [Jobs] Signers Gateways Settings                    connecting
+ boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
  Help  (esc to close)
 keys everywhere
-  1-6          screens
+  1-5          views
+  tab          focus: tree, main, log (space expands a box)
+  [ ]          tree / activity log
   ?            help
   :            command
+  .            activity drawer
   esc          back
   q            quit
   ctrl+c       quit now
@@ -14,11 +18,7 @@ keys everywhere
   enter        open
   /            filter
 keys here
-  ↑/k          up
-  ↓/j          down
-  enter        open
   d            answer the selected job's question
   a            adopt a job whose controller went silent
   r            reload
-
- no box selected · server connecting · jobs ⚑ –
+ jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-5 views  [ ] panels  q…

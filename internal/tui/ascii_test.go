@@ -47,9 +47,9 @@ func TestEveryScreenIsASCIIUnderASCIIGlyphs(t *testing.T) {
 			f.PrefsV.FleetColumns = []string{"host", "link", "chain", "sync", "head", "peers", "disk", "firewall", "jobs", "agent"}
 			return fleetApp(t, f, "ascii", apiclient.Retrying)
 		},
-		"jobs": func(t *testing.T) tea.Model { return press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), "5") },
+		"jobs": func(t *testing.T) tea.Model { return press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), "2") },
 		"help": func(t *testing.T) tea.Model {
-			return press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), "5", "?")
+			return press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), "2", "?")
 		},
 		"palette": func(t *testing.T) tea.Model {
 			return typed(t, press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), ":"), "logs box-a")
@@ -74,7 +74,7 @@ func TestEveryScreenIsASCIIUnderASCIIGlyphs(t *testing.T) {
 		"hostadd mismatch": func(t *testing.T) tea.Model {
 			f := tuitest.NewFake()
 			m := addFlowAt(t, f)
-			fl := m.(*App).screens[scrHosts].(*hostsScreen).flow
+			fl := hostsOf(m.(*App)).flow
 			fl.step = stepProbing
 			m, _ = tuitest.Send(m, probeMsg{gen: fl.gen, p: api.HostKeyProbe{Hops: []api.HostKeyHop{{HostPort: "10.0.0.7:22", State: api.HostKeyMismatch}}}})
 			return m
@@ -82,7 +82,7 @@ func TestEveryScreenIsASCIIUnderASCIIGlyphs(t *testing.T) {
 		"hostadd pairing failed": func(t *testing.T) tea.Model {
 			f := tuitest.NewFake()
 			m := addFlowAt(t, f)
-			fl := m.(*App).screens[scrHosts].(*hostsScreen).flow
+			fl := hostsOf(m.(*App)).flow
 			fl.step = stepPairing
 			m, _ = tuitest.Send(m, pairMsg{gen: fl.gen, ev: api.PairEvent{Step: "upload", Line: "agent uploaded"}})
 			m, _ = tuitest.Send(m, pairMsg{gen: fl.gen, ev: api.PairEvent{Step: "start", Error: "boom", Code: api.CodeUpstream}})

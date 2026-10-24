@@ -120,7 +120,7 @@ func (s *signersScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		if msg.err != nil {
 			s.checks[msg.id] = a.th.Bad.Render("failed: ") + a.errText(msg.err)
 		} else {
-			s.checks[msg.id] = a.th.OK.Render(fmt.Sprintf("signed and verified in %dms", msg.c.ElapsedMs)) + fmt.Sprintf(", agent %s", sanitizeLine(msg.c.Version))
+			s.checks[msg.id] = a.th.OK.Render(fmt.Sprintf("signed and verified in %dms", msg.c.ElapsedMs)) + fmt.Sprintf(", gate %s", sanitizeLine(msg.c.Version))
 		}
 	case keysInitDoneMsg:
 		if msg.err != nil {
@@ -238,7 +238,7 @@ func (s *signersScreen) view(a *App, w, h int) string {
 		if i == s.cursor {
 			mark = a.gl.Sel
 		}
-		lines = append(lines, fmt.Sprintf("%s %-12s agent %s  %-5s  paired %s  routine", mark, truncate(sanitizeLine(t.ID), 12, a.gl.Ellipsis),
+		lines = append(lines, fmt.Sprintf("%s %-12s gate %s  %-5s  paired %s  routine", mark, truncate(sanitizeLine(t.ID), 12, a.gl.Ellipsis),
 			shortAddr(sanitizeLine(t.Agent.Address), a.gl), truncate(sanitizeLine(t.Agent.Transport), 5, a.gl.Ellipsis), t.Agent.PairedAt.In(a.loc).Format("2006-01-02")))
 		if c, ok := s.checks[t.ID]; ok {
 			lines = append(lines, "    "+c)

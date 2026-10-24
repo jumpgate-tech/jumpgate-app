@@ -106,8 +106,8 @@ func TestTUIAgainstARealServer(t *testing.T) {
 	// Wait on whole new lines: the renderer sends only what changed, so a
 	// word inside an updated line may not arrive in one piece.
 	wait("1 boxes") // the fleet footer, once /api/fleet/stream delivers the polled row
-	tm.Send(tuitest.Key("2"))
-	wait("10.0.0.5") // Hosts, from /api/targets
+	tm.Send(tuitest.Key("v"))
+	wait("10.0.0.5") // the host table mode, from /api/targets
 	tm.Send(tuitest.Key("q"))
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 }
