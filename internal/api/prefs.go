@@ -66,6 +66,7 @@ type UIPrefs struct {
 	Bell           bool     `json:"bell"`
 	Mouse          bool     `json:"mouse"`
 	Glyphs         string   `json:"glyphs"` // "auto" | "unicode" | "ascii"
+	Drawer         string   `json:"drawer"` // "auto" | "open" | "min"; auto minimizes a short window
 }
 
 // DefaultPrefs is what a new controller shows.
@@ -78,7 +79,7 @@ func DefaultPrefs() UIPrefs {
 	}
 	return UIPrefs{
 		FleetColumns: cols, HostTabs: slices.Clone(HostTabs), Chains: []int{},
-		RefreshSeconds: 15, Units: "GB", ShowEstimates: true, Glyphs: "auto",
+		RefreshSeconds: 15, Units: "GB", ShowEstimates: true, Glyphs: "auto", Drawer: "auto",
 	}
 }
 
@@ -103,6 +104,9 @@ func (p UIPrefs) WithDefaults() UIPrefs {
 	}
 	if p.Glyphs == "" {
 		p.Glyphs = d.Glyphs
+	}
+	if p.Drawer == "" {
+		p.Drawer = d.Drawer
 	}
 	return p
 }
@@ -156,6 +160,9 @@ func (p UIPrefs) Validate() error {
 	}
 	if p.Glyphs != "auto" && p.Glyphs != "unicode" && p.Glyphs != "ascii" {
 		return fmt.Errorf("glyphs %q (want auto, unicode or ascii)", p.Glyphs)
+	}
+	if p.Drawer != "auto" && p.Drawer != "open" && p.Drawer != "min" {
+		return fmt.Errorf("drawer %q (want auto, open or min)", p.Drawer)
 	}
 	return nil
 }

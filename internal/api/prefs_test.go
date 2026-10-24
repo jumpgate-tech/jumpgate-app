@@ -1,7 +1,38 @@
 // internal/api/prefs_test.go
 package api
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// An older stored block has no drawer: it reads as auto, and auto is valid.
+func TestPrefsDrawerDefault(t *testing.T) {
+	if got := (UIPrefs{}).WithDefaults().Drawer; got != "auto" {
+		t.Fatalf("drawer default %q, want auto", got)
+	}
+	if got := DefaultPrefs().Drawer; got != "auto" {
+		t.Fatalf("DefaultPrefs drawer %q, want auto", got)
+	}
+	if err := (UIPrefs{}).WithDefaults().Validate(); err != nil {
+		t.Fatalf("an older block with defaults filled: %v", err)
+	}
+}
+
+func TestPrefsDrawerValidate(t *testing.T) {
+	for _, d := range []string{"auto", "open", "min"} {
+		p := DefaultPrefs()
+		p.Drawer = d
+		if err := p.Validate(); err != nil {
+			t.Errorf("drawer %q: %v", d, err)
+		}
+	}
+	p := DefaultPrefs()
+	p.Drawer = "x"
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), `drawer "x"`) {
+		t.Fatalf("drawer x: %v", err)
+	}
+}
 
 // The default fleet columns fit an 80-column terminal: a one-cell selection
 // mark, then the columns with one space between them (spec D10).
