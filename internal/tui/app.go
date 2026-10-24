@@ -510,7 +510,7 @@ func (a *App) statusBar() string {
 // linkWord is a row's link in one word: HOSTKEY when its host key is the
 // problem, down when it answered once and does not now.
 func linkWord(r api.FleetRow) string {
-	word := map[api.Link]string{api.LinkAgent: "agent", api.LinkAgentLocal: "local", api.LinkSSHOnly: "ssh", api.LinkLocalOnly: "local*"}[r.Link]
+	word := map[api.Link]string{api.LinkAgent: "gate", api.LinkAgentLocal: "local", api.LinkSSHOnly: "ssh", api.LinkLocalOnly: "local*"}[r.Link]
 	if r.Error != nil && (r.Error.Code == api.CodeHostKey || r.Error.Code == api.CodeUnknownHost) {
 		return "HOSTKEY"
 	}

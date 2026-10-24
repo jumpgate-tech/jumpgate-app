@@ -34,7 +34,7 @@ func hostsApp(t *testing.T, f *tuitest.Fake, goos string) *App {
 
 func TestHostsList(t *testing.T) {
 	fr := tuitest.Frame(hostsApp(t, tuitest.NewFake(), "linux"))
-	for _, want := range []string{"box-a", "root@10.0.0.5:22", "agent 0x1234…5678", "ops@10.0.0.6:2222 via ops@bastion:22", "not paired", "this machine", "a add", "L pair this machine"} {
+	for _, want := range []string{"box-a", "root@10.0.0.5:22", "gate 0x1234…5678", "ops@10.0.0.6:2222 via ops@bastion:22", "not paired", "this machine", "a add", "L pair this machine"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("hosts lack %q:\n%s", want, fr)
 		}
@@ -81,7 +81,7 @@ func TestAddFlowConfirmsEachHopThenPairs(t *testing.T) {
 			t.Errorf("missing call %q in %v", w, f.Calls)
 		}
 	}
-	if !strings.Contains(fr, "paired: agent 0xabc") || !strings.Contains(fr, "agent uploaded") || !strings.Contains(fr, "PermitRootLogin no") {
+	if !strings.Contains(fr, "paired: gate 0xabc") || !strings.Contains(fr, "agent uploaded") || !strings.Contains(fr, "PermitRootLogin no") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 }

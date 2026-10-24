@@ -12,7 +12,7 @@
   [ ] CL
   [ ] JOBS
   [ ] AGE
-  [ ] AGENT
+  [ ] GATE
 
  HOST TABS
   [x] Overview
@@ -21,4 +21,4 @@
   [x] Security
  ↑↓ move  space toggle  enter change  (saved at once)
 
- box-a · agent · server live · jobs ⚑ –                                  5s ago
+ box-a · gate · server live · jobs ⚑ –                                   5s ago

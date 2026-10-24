@@ -3,7 +3,7 @@
  address  0xc0ff…00aa   store keychain   ok
 
  BOXES THIS KEY SIGNS FOR
-▸ box-a        agent 0x1234…5678  ssh    paired 2026-10-03  routine
+▸ box-a        gate 0x1234…5678  ssh    paired 2026-10-03  routine
 
  Approval keys (browser and hardware wallets) arrive with the approval tier.
 

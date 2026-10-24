@@ -34,7 +34,7 @@ var FleetColumns = []ColumnSpec{
 	{"cl", "CL", 9, false},
 	{"jobs", "JOBS", 5, false},
 	{"age", "AGE", 5, false},
-	{"agent", "AGENT", 12, false},
+	{"agent", "GATE", 12, false},
 }
 
 // HostTabs is every host-detail tab, in display order.

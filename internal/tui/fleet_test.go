@@ -50,7 +50,7 @@ func fleetApp(t *testing.T, f *tuitest.Fake, glyphs string, state apiclient.Conn
 func TestFleetFrame(t *testing.T) {
 	a := fleetApp(t, tuitest.NewFake(), "unicode", apiclient.Live)
 	fr := tuitest.Frame(a)
-	for _, want := range []string{"HOST", "LINK", "DISK", "box-a", "agent", "synced", "48/72", "61%", "warn", "box-b", "down 4m", "laptop*", "3 boxes"} {
+	for _, want := range []string{"HOST", "LINK", "DISK", "box-a", "gate", "synced", "48/72", "61%", "warn", "box-b", "down 4m", "laptop*", "3 boxes"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("fleet lacks %q:\n%s", want, fr)
 		}
@@ -121,7 +121,7 @@ func TestFleetColumnsFollowThePreferences(t *testing.T) {
 	f := tuitest.NewFake()
 	f.PrefsV.FleetColumns = []string{"host", "jobs", "agent"}
 	fr := tuitest.Frame(fleetApp(t, f, "unicode", apiclient.Live))
-	if !strings.Contains(fr, "JOBS") || !strings.Contains(fr, "AGENT") || strings.Contains(fr, "DISK") || !strings.Contains(fr, "0x1234…5678") {
+	if !strings.Contains(fr, "JOBS") || !strings.Contains(fr, "GATE") || strings.Contains(fr, "DISK") || !strings.Contains(fr, "0x1234…5678") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 }

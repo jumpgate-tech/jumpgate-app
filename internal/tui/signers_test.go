@@ -25,7 +25,7 @@ func signersApp(t *testing.T, f *tuitest.Fake) *App {
 
 func TestSignersShowsTheKeyAndBoxes(t *testing.T) {
 	fr := tuitest.Frame(signersApp(t, tuitest.NewFake()))
-	for _, want := range []string{"THIS CONTROLLER", "0xc0ff…00aa", "keychain", "ok", "box-a", "agent 0x1234…5678", "routine", "approval tier"} {
+	for _, want := range []string{"THIS CONTROLLER", "0xc0ff…00aa", "keychain", "ok", "box-a", "gate 0x1234…5678", "routine", "approval tier"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("signers lack %q:\n%s", want, fr)
 		}
