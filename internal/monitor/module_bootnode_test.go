@@ -37,6 +37,20 @@ func TestBootnodeIdentityFromJournal(t *testing.T) {
 	}
 }
 
+// An enode that advertises 0.0.0.0 cannot be dialled: the reading says to
+// set ExtIP.
+func TestELBootnodeWithoutExtIPNotes(t *testing.T) {
+	ex := newFakeExecutor().script("journalctl", executor.Result{Stdout: "enode://" + strings.Repeat("a", 128) + "@0.0.0.0:30301\n"})
+	st := ProbeBoxModule(context.Background(), ex, catalog.BoxModule{ID: "el-bootnode", ChainID: 943})
+	if !strings.Contains(st.Note, "ExtIP") || st.Error != "" {
+		t.Fatalf("status %+v", st)
+	}
+	ex = newFakeExecutor().script("journalctl", executor.Result{Stdout: enodeA + "\n"})
+	if st := ProbeBoxModule(context.Background(), ex, catalog.BoxModule{ID: "el-bootnode", ChainID: 943}); st.Note != "" {
+		t.Fatalf("note on a public enode: %+v", st)
+	}
+}
+
 func TestCLBootnodeIdentityFromJournal(t *testing.T) {
 	journal := `INFO Contact information enr="enr:-Jq4QBvJ-s6B3SDt_LCH7eZ1" x` + "\n" +
 		`INFO Contact information enr="enr:-Jq4QLAST_one-x9"` + "\n"

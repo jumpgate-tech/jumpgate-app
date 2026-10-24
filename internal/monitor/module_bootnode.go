@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -39,6 +40,9 @@ func journalIdentityProbe(re *regexp.Regexp) func(context.Context, executor.Exec
 		}
 		if all := re.FindAllString(res.Stdout, -1); len(all) > 0 {
 			st.Identity = all[len(all)-1]
+		}
+		if strings.Contains(st.Identity, "@0.0.0.0:") {
+			st.Note = "This enode advertises 0.0.0.0, so other nodes cannot dial it. Set the box's public IP (ExtIP) on the bootnode."
 		}
 		return st
 	}

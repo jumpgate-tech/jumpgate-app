@@ -194,8 +194,12 @@ func TestNodeKindsBeforeSetupAreNotSetUp(t *testing.T) {
 			t.Errorf("%s: code %s, want not_set_up", k, got)
 		}
 	}
-	if len(r.exec.cmds) != 0 {
-		t.Fatalf("probed an unset-up box: %v", r.exec.cmds)
+	// firewall.read may list the box modules' sidecars (a module-only box
+	// has a checklist), and reads nothing else.
+	for _, c := range r.exec.cmds {
+		if !strings.HasPrefix(c, "ls /var/lib/jumpgate/modules/") && !strings.HasPrefix(c, "cat '") {
+			t.Fatalf("probed an unset-up box: %v", r.exec.cmds)
+		}
 	}
 }
 

@@ -133,6 +133,19 @@ func TestBootnodeFlagsMatchHelp(t *testing.T) {
 	}
 }
 
+// The public sidecar says whether its port is public, so a gate can list
+// the box's open-port checks without the module's config.
+func TestBootnodeSidecarMarksPortPublic(t *testing.T) {
+	b := BoxModule{ID: "el-bootnode", ChainID: 943}
+	u, err := RenderBoxModule(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Files[b.SidecarPath()]; !strings.Contains(got, `"port":30301,"proto":"udp","public":true`) {
+		t.Fatalf("sidecar %s", got)
+	}
+}
+
 func TestBootnodesApplyToAllFourChains(t *testing.T) {
 	for _, id := range []string{"el-bootnode", "cl-bootnode"} {
 		m, ok := ModuleByID(id)

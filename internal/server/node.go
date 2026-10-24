@@ -258,15 +258,26 @@ func (s *Server) nodeFirewall(ctx context.Context, cfg config.Config, t config.T
 		items, err := decodeResult[[]ops.CheckItem](s.agentResult(ctx, cfg, t, intent.KindFirewallRead, firewallPayload(cfg)))
 		return items, viaAgent, err
 	}
-	ex, err := s.legacyExec(t)
+	// A box with only modules (no wire) still has their ports to check.
+	if t.Wire == nil && len(t.Modules) == 0 {
+		return nil, viaSSH, errNotSetUp
+	}
+	ports, err := ops.ModulePortsFromConfig(t.Modules)
 	if err != nil {
 		return nil, viaSSH, err
 	}
-	items, err := ops.FirewallChecklist(ctx, ex, *t.Wire, ops.ParseOverlayCIDRs(cfg.TrustedOverlayCIDRs())...)
+	ex, err := s.getShellExecutor(t)
 	if err != nil {
-		return items, viaSSH, err
+		return nil, viaSSH, &dialError{err}
 	}
-	mods, err := ops.ModuleFirewallItems(ctx, ex, t.Modules)
+	var items []ops.CheckItem
+	if t.Wire != nil {
+		items, err = ops.FirewallChecklist(ctx, ex, *t.Wire, ops.ParseOverlayCIDRs(cfg.TrustedOverlayCIDRs())...)
+		if err != nil {
+			return items, viaSSH, err
+		}
+	}
+	mods, err := ops.ModuleFirewallItems(ctx, ex, ports)
 	return append(items, mods...), viaSSH, err
 }
 

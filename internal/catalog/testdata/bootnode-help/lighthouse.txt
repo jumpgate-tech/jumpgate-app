@@ -6,18 +6,6 @@
 # Allocator: jemalloc (4K)
 # Profile: maxperf
 # Specs: mainnet (true), minimal (true), gnosis (true)
-Unable to find image 'sigp/lighthouse:latest' locally
-latest: Pulling from sigp/lighthouse
-b8dca4de2075: Pulling fs layer
-08a2d0f2c479: Pulling fs layer
-44136fa355b3: Download complete
-6f8dbdfc6c30: Download complete
-b8dca4de2075: Download complete
-08a2d0f2c479: Download complete
-08a2d0f2c479: Pull complete
-b8dca4de2075: Pull complete
-Digest: sha256:6b83ea5d5b5b183536d7dd45d1db1b6d4c8aa038eb7bbd0f336a2e175e9fe28a
-Status: Downloaded newer image for sigp/lighthouse:latest
 Start a special Lighthouse process that only serves as a discv5 boot-node. This
 process will *not* import blocks or perform most typical beacon node functions.
 Instead, it will simply run the discv5 service and assist nodes on the network

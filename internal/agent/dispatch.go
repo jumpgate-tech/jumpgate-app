@@ -94,6 +94,11 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, env intent.Envelo
 		}
 		return mustJSON(mods), intent.StatusOK, nil
 	}
+	// firewall.read covers the box modules too, so a module-only box (no
+	// node.json) still has a checklist: its modules' ports.
+	if i.Kind == intent.KindFirewallRead {
+		return a.firewallRead(ctx, payload)
+	}
 	// A job kind needs no node set up: node.migrate-names reports a missing
 	// node.json itself, in its preflight.
 	if isJobKind(i.Kind) {
@@ -132,17 +137,6 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, env intent.Envelo
 			return failed(err)
 		}
 		return mustJSON(info), intent.StatusOK, nil
-
-	case intent.KindFirewallRead:
-		pl, rej := decode[FirewallReadPayload](payload)
-		if rej != nil {
-			return nil, 0, rej
-		}
-		items, err := ops.FirewallChecklist(ctx, ex, w, ops.ParseOverlayCIDRs(pl.OverlayCIDRs)...)
-		if err != nil {
-			return failed(err)
-		}
-		return mustJSON(items), intent.StatusOK, nil
 
 	case intent.KindLogsRead:
 		pl, rej := decode[intent.LogsReadPayload](payload)
@@ -217,6 +211,37 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, env intent.Envelo
 		}{active}), intent.StatusOK, nil
 	}
 	return nil, 0, reject(intent.ReasonUnknownKind, i.Kind)
+}
+
+// firewallRead is the node checklist, when the box has a node, plus an
+// item per public box-module port. A box with neither is not set up.
+func (a *Agent) firewallRead(ctx context.Context, payload []byte) ([]byte, uint8, *Reject) {
+	pl, rej := decode[FirewallReadPayload](payload)
+	if rej != nil {
+		return nil, 0, rej
+	}
+	ex := a.cfg.Exec
+	w, notSetUp := a.loadNode()
+	if notSetUp != nil && notSetUp.Code != intent.ReasonNotSetUp {
+		return nil, 0, notSetUp
+	}
+	var items []ops.CheckItem
+	if notSetUp == nil {
+		var err error
+		items, err = ops.FirewallChecklist(ctx, ex, w, ops.ParseOverlayCIDRs(pl.OverlayCIDRs)...)
+		if err != nil {
+			return failed(err)
+		}
+	}
+	ports := ops.ModulePortsOnBox(ctx, ex)
+	if notSetUp != nil && len(ports) == 0 {
+		return nil, 0, notSetUp
+	}
+	mods, err := ops.ModuleFirewallItems(ctx, ex, ports)
+	if err != nil {
+		return failed(err)
+	}
+	return mustJSON(append(items, mods...)), intent.StatusOK, nil
 }
 
 func failed(err error) ([]byte, uint8, *Reject) {

@@ -91,7 +91,7 @@ func TestRenderBoxModuleWritesSidecar(t *testing.T) {
 	}
 	// The world-readable sidecar is for discovery only.
 	side := u.Files[b.SidecarPath()]
-	want := `{"id":"watch","unit":"jumpgate-mod-watch.service","port":7000,"proto":"tcp"}`
+	want := `{"id":"watch","unit":"jumpgate-mod-watch.service","port":7000,"proto":"tcp","public":true}`
 	if side != want {
 		t.Errorf("module.json = %q, want %q", side, want)
 	}

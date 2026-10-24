@@ -59,6 +59,7 @@ type BoxSidecar struct {
 	Unit    string `json:"unit"`
 	Port    int    `json:"port,omitempty"`
 	Proto   string `json:"proto,omitempty"`
+	Public  bool   `json:"public,omitempty"` // the port is meant to be reachable from the internet
 }
 
 // Module is the record the sidecar names, for validation and probing.
@@ -133,7 +134,7 @@ func RenderBoxModule(b BoxModule) (BoxUnit, error) {
 	}
 	pub := BoxSidecar{ID: b.ID, ChainID: b.ChainID, Unit: b.UnitName(), Port: b.Port}
 	if len(u.Ports) > 0 {
-		pub.Port, pub.Proto = u.Ports[0].Port, u.Ports[0].Proto
+		pub.Port, pub.Proto, pub.Public = u.Ports[0].Port, u.Ports[0].Proto, u.Ports[0].Public
 	}
 	side, err := json.Marshal(pub)
 	if err != nil {
