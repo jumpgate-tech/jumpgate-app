@@ -142,6 +142,9 @@ func (a *App) treeKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 		a.treeOver, a.focus = false, focusMain
 		cmd := a.openHost(n.Box)
 		a.selNode = n.Node
+		if h, ok := a.detail.(*hostScreen); ok && (n.Node == "exec" || n.Node == "beacon") {
+			h.node = n.Node
+		}
 		return cmd, true
 	default:
 		return nil, false

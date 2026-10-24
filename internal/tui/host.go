@@ -72,6 +72,11 @@ type hostScreen struct {
 	statusHas  bool
 	statusConn apiclient.ConnState
 	statusErr  error
+	// node is the client the node detail shows ("exec" or "beacon"; "" for
+	// the box's tabs); prev is the reading before status, for its deltas.
+	node    string
+	prev    api.NodeStatus
+	prevHas bool
 
 	disk      api.DiskView
 	diskHas   bool
@@ -208,6 +213,9 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		h.statusConn = msg.u.State
 		switch {
 		case msg.u.Has:
+			if h.statusHas && !msg.u.Value.At.Equal(h.status.At) {
+				h.prev, h.prevHas = h.status, true
+			}
 			h.status, h.statusHas, h.statusErr = msg.u.Value, true, nil
 		case msg.u.Err != nil:
 			h.statusErr = msg.u.Err
@@ -342,13 +350,17 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		case key.Matches(msg, hostKeys.Modules): // Storage took m first
 			a.modal = newModulesModal(a, h)
 			return nil
+		case key.Matches(msg, globalKeys.Back) && h.node != "":
+			h.node, a.selNode = "", ""
 		case key.Matches(msg, globalKeys.Back):
 			a.closeDetail()
 		case key.Matches(msg, navKeys.Left):
+			h.node = ""
 			h.tab--
 			h.scroll = 0
 			return h.load(a, h.tabName(a))
 		case key.Matches(msg, navKeys.Right):
+			h.node = ""
 			h.tab++
 			h.scroll = 0
 			return h.load(a, h.tabName(a))
@@ -411,6 +423,9 @@ func (h *hostScreen) view(a *App, w, hgt int) string {
 		if row.Network != "" {
 			head += " " + a.gl.Sep + " " + sanitizeLine(row.Network)
 		}
+	}
+	if h.node != "" {
+		return head + "\n" + h.viewNode(a, w)
 	}
 	var tabs []string
 	cur := h.tabName(a)
