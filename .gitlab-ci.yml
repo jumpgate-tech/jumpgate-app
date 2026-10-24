@@ -209,13 +209,18 @@ icons:
     - git diff --exit-code -- cmd/jumpgate/AppIcon.icns
 
 # Pairs against systemd containers, which needs Docker with systemd and so
-# cannot run on the shared docker runners. scripts/e2e-agent.sh is the local gate.
+# cannot run on the shared docker runners. It runs on the macOS host's shell
+# runner (scripts/macos-runner/), whose Docker is Colima. HOME stays the
+# runner user's so the docker CLI finds its Colima context.
 e2e:
   stage: test
-  image: golang:1.26-bookworm
+  tags: [macos]
   when: manual
   allow_failure: true
   script:
+    - export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
+    - export GOMODCACHE="$CI_BUILDS_DIR/.go-cache/mod" GOCACHE="$CI_BUILDS_DIR/.go-cache/build" GOFLAGS=-modcacherw
+    - docker info --format '{{.ServerVersion}}'
     - scripts/e2e-agent.sh
     - scripts/e2e-local.sh
 
