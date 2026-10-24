@@ -15,6 +15,7 @@ import { useGateways } from "../../hooks/gateway";
 import { useMonitorStream } from "../../hooks/dashboard";
 import { Badge } from "../../components/Badge";
 import { Modal } from "../Panel/Modal";
+import { copyToClipboard } from "../../ui";
 import {
   BOX_FIELD_DEFAULTS,
   boxFields,
@@ -44,6 +45,25 @@ export function docsUrl(step: string): string {
 
 type Confirm = { card: ModuleCard; place: "node" | "box" } | null;
 
+// BOOTNODE_MODULES are the box modules whose identity other nodes can dial.
+const BOOTNODE_MODULES = new Set(["el-bootnode", "cl-bootnode"]);
+
+// identityKind names a record for the copy button: an enode or an ENR.
+function identityKind(identity: string): string {
+  return identity.startsWith("enr:") ? "ENR" : "enode";
+}
+
+// fleetNodesOn are the other targets running a node on chainId.
+export function fleetNodesOn(targets: api.Target[], chainId: number, selfId: string): api.Target[] {
+  return targets.filter((t) => t.id !== selfId && t.wire && t.wire.ChainID === chainId);
+}
+
+// withBootnode is a node's wire with entry appended (once) to Bootnodes.
+export function withBootnode(wire: api.WireConfig, entry: string): api.WireConfig {
+  const list = wire.Bootnodes ?? [];
+  return { ...wire, Bootnodes: list.includes(entry) ? list : [...list, entry] };
+}
+
 interface Run {
   module: string;
   lines: string[];
@@ -71,6 +91,7 @@ export function ModulesSection({ targetId }: { targetId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [run, setRun] = useState<Run | null>(null);
+  const [useBoot, setUseBoot] = useState<{ card: ModuleCard; chainId: number } | null>(null);
   const [restartedAt, setRestartedAt] = useState<number | undefined>(undefined);
   const streamRef = useRef<(() => void) | null>(null);
 
@@ -210,10 +231,36 @@ export function ModulesSection({ targetId }: { targetId: string }) {
       {boxCards.length > 0 && (
         <>
           <h3>Services on this box</h3>
-          {boxCards.map((c) => (
-            <ModuleCardView key={c.id} card={c} busy={busy} onToggle={() => toggle(c, "box")} />
-          ))}
+          {boxCards.map((c) => {
+            const chainId = boxChain(c.id);
+            const chainName = catalog.networks?.find((n) => n.ChainID === chainId)?.Name ?? `chain ${chainId}`;
+            const offer = c.state === "on" && !!c.identity && BOOTNODE_MODULES.has(c.id) && chainId !== undefined;
+            return (
+              <ModuleCardView key={c.id} card={c} busy={busy} onToggle={() => toggle(c, "box")}>
+                {offer && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost small"
+                    disabled={busy}
+                    onClick={() => setUseBoot({ card: c, chainId: chainId! })}
+                  >
+                    Use on my other {chainName} nodes
+                  </button>
+                )}
+              </ModuleCardView>
+            );
+          })}
         </>
+      )}
+      {useBoot && (
+        <UseBootnodeDialog
+          entry={useBoot.card.identity!}
+          nodes={fleetNodesOn(targetsQuery.data ?? [], useBoot.chainId, targetId)}
+          onClose={() => {
+            setUseBoot(null);
+            void qc.invalidateQueries({ queryKey: ["targets"] });
+          }}
+        />
       )}
       {confirm && (
         <ConfirmDialog
@@ -269,6 +316,8 @@ export function ModuleCardView({
       <p className="muted small">{card.summary}</p>
       {card.reason && <p className="small">{card.reason}</p>}
       {card.status && <p className="small module-status">{card.status}</p>}
+      {card.identity && <IdentityLine identity={card.identity} />}
+      {card.note && <p className="small warn module-note">{card.note}</p>}
       {card.resources && <p className="muted small">{card.resources}</p>}
       <p className="small">
         {card.siteUrl && (
@@ -392,6 +441,96 @@ function ConfirmDialog({
         >
           Turn on
         </button>
+      </div>
+    </Modal>
+  );
+}
+
+// IdentityLine shows a running bootnode's enode/ENR with a copy button.
+function IdentityLine({ identity }: { identity: string }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const kind = identityKind(identity);
+  return (
+    <p className="small module-identity-line">
+      <code className="module-identity">{identity}</code>{" "}
+      <button
+        type="button"
+        className="btn btn-ghost small"
+        aria-label={`Copy ${kind}`}
+        onClick={() => {
+          void copyToClipboard(identity).then((ok) => setCopied(ok ? "Copied" : "Copy failed; select the text instead"));
+        }}
+      >
+        {copied ?? "Copy"}
+      </button>
+    </p>
+  );
+}
+
+// UseBootnodeDialog adds a running bootnode's identity to each of the
+// fleet's other nodes on its chain: each node's saved wire, with Bootnodes
+// appended, goes through POST /api/targets/{id}/setup, which re-renders the
+// units and restarts the one that changed. The dialog says so per node.
+function UseBootnodeDialog({
+  entry,
+  nodes,
+  onClose,
+}: {
+  entry: string;
+  nodes: api.Target[];
+  onClose: () => void;
+}) {
+  const el = !entry.startsWith("enr:");
+  const [results, setResults] = useState<Record<string, string>>({});
+  const [running, setRunning] = useState(false);
+  const clientOf = (t: api.Target) => (el ? t.wire!.ExecID : t.wire!.BeaconID);
+  const has = (t: api.Target) => (t.wire!.Bootnodes ?? []).includes(entry);
+  const todo = nodes.filter((t) => !has(t));
+
+  async function apply(): Promise<void> {
+    setRunning(true);
+    for (const t of todo) {
+      const name = boxName(t);
+      try {
+        await api.startSetup(t.id, withBootnode(t.wire!, entry));
+        setResults((r) => ({ ...r, [t.id]: `${name}: setup started, ${clientOf(t)} restarts.` }));
+      } catch (err) {
+        setResults((r) => ({ ...r, [t.id]: `${name}: ${formatError(err)}` }));
+      }
+    }
+    setRunning(false);
+  }
+
+  const done = Object.keys(results).length > 0;
+  return (
+    <Modal onClose={onClose} label="Use this bootnode">
+      <h3>Use this bootnode</h3>
+      {nodes.length === 0 ? (
+        <p className="muted">No other nodes on this chain.</p>
+      ) : (
+        <ul className="small">
+          {nodes.map((t) => (
+            <li key={t.id}>
+              {results[t.id] ??
+                (has(t) ? `${boxName(t)}: already uses this bootnode.` : `Restarts ${clientOf(t)} on ${boxName(t)}.`)}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="wizard-actions">
+        <button className="btn btn-ghost" type="button" onClick={onClose}>
+          {done ? "Close" : "Cancel"}
+        </button>
+        {!done && (
+          <button
+            className="btn btn-primary"
+            type="button"
+            disabled={running || todo.length === 0}
+            onClick={() => void apply()}
+          >
+            Use bootnode
+          </button>
+        )}
       </div>
     </Modal>
   );

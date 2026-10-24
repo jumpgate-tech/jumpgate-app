@@ -67,6 +67,11 @@ type WireConfig struct {
 	// Modules are the node modules on this node's exec client. Empty
 	// renders exactly the units a wire without modules always rendered.
 	Modules []NodeModule `json:"Modules,omitempty"`
+
+	// Bootnodes are extra peers to dial first: enode:// entries go to the
+	// exec client, enr:- entries to the beacon client. Empty renders
+	// exactly the units a wire without bootnodes always rendered.
+	Bootnodes []string `json:"Bootnodes,omitempty"`
 }
 
 // checkpointURL resolves the effective beacon checkpoint/genesis endpoint:
@@ -193,6 +198,9 @@ func RenderUnits(w WireConfig) (execUnit, beaconUnit string, err error) {
 	if err := ValidateModules(w); err != nil {
 		return "", "", err
 	}
+	if err := ValidateBootnodes(w); err != nil {
+		return "", "", err
+	}
 	net, ok := NetworkByChainID(w.ChainID)
 	if !ok {
 		return "", "", fmt.Errorf("catalog: unknown chain id %d", w.ChainID)
@@ -228,10 +236,12 @@ func RenderUnits(w WireConfig) (execUnit, beaconUnit string, err error) {
 	if err != nil {
 		return "", "", err
 	}
+	execCmd += execBootnodeFlag(w)
 	beaconCmd, err := beaconCommand(w, net)
 	if err != nil {
 		return "", "", err
 	}
+	beaconCmd += beaconBootnodeFlag(w)
 
 	execUnit, err = renderUnit("execution client ("+w.ExecID+")", execCmd, w,
 		w.ExecHTTP() < 1024 || w.ExecP2P() < 1024)

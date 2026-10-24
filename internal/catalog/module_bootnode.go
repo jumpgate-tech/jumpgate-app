@@ -78,6 +78,9 @@ func bootnodeUnit(b BoxModule, execStart string) (string, error) {
 	return strings.Replace(u, group, group+"UMask=0077\n", 1), nil
 }
 
+// elBootnodeUnit runs reth p2p bootnode on the box.
+//
+// docs:covers bootnode-run
 func elBootnodeUnit(b BoxModule) (BoxUnit, error) {
 	port, err := bootnodePort(b, elBootnodePort)
 	if err != nil {
@@ -107,6 +110,9 @@ func elBootnodeUnit(b BoxModule) (BoxUnit, error) {
 	return BoxUnit{Unit: u, Client: "reth", Ports: []PortUse{{Port: port, Proto: "udp", Public: true}}}, nil
 }
 
+// clBootnodeUnit runs the lighthouse-family boot_node on the box.
+//
+// docs:covers bootnode-run
 func clBootnodeUnit(b BoxModule) (BoxUnit, error) {
 	port, err := bootnodePort(b, clBootnodePort)
 	if err != nil {

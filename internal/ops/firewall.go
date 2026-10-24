@@ -74,6 +74,8 @@ func ModulePortsOnBox(ctx context.Context, e executor.Executor) []ModulePort {
 // whether the port is open in a host firewall or a cloud security group is
 // not something `ss` can see, so a pass says to check that too. Like
 // FirewallChecklist it only reads. With no ports it runs nothing.
+//
+// docs:covers bootnode-run
 func ModuleFirewallItems(ctx context.Context, e executor.Executor, ports []ModulePort) ([]CheckItem, error) {
 	if len(ports) == 0 {
 		return nil, nil

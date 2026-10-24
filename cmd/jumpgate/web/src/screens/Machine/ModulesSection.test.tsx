@@ -14,6 +14,7 @@ vi.mock("../../api", async () => {
     getCatalog: vi.fn(),
     listModules: vi.fn(),
     setModule: vi.fn(),
+    startSetup: vi.fn(),
     streamMonitor: vi.fn(),
     streamSetup: vi.fn(),
     getGateways: vi.fn(),
@@ -76,11 +77,14 @@ function gateway(acme: boolean): GatewayView {
   } as unknown as GatewayView;
 }
 
-function setup(t: Target, opts: { gateways?: GatewayView[]; gateStale?: boolean } = {}) {
-  vi.mocked(api.listTargets).mockResolvedValue([t]);
-  vi.mocked(api.getCatalog).mockResolvedValue(CATALOG);
+function setup(
+  t: Target,
+  opts: { gateways?: GatewayView[]; gateStale?: boolean; fleet?: Target[]; catalog?: Catalog; statuses?: api.ModuleStatus[] } = {},
+) {
+  vi.mocked(api.listTargets).mockResolvedValue(opts.fleet ?? [t]);
+  vi.mocked(api.getCatalog).mockResolvedValue(opts.catalog ?? CATALOG);
   vi.mocked(api.listModules).mockResolvedValue({
-    modules: [],
+    modules: opts.statuses ?? [],
     gateStale: !!opts.gateStale,
     message: opts.gateStale ? "Status needs a newer gate on this box" : "",
   });
@@ -104,7 +108,93 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+const ENODE = "enode://" + "ab12".repeat(32) + "@203.0.113.7:30303";
+
+function bootnodeFleet(): Target[] {
+  const box: Target = {
+    id: "t1",
+    mode: "ssh",
+    ssh: { Host: "boot.example", User: "root", KeyPath: "/k" },
+    modules: [{ id: "el-bootnode", chainId: 369 }],
+  };
+  const nodeA: Target = {
+    id: "a",
+    mode: "ssh",
+    ssh: { Host: "a.example", User: "root", KeyPath: "/k" },
+    wire: { ChainID: 369, ExecID: "reth", BeaconID: "lighthouse-pulse", DataDir: "/d", JWTPath: "/d/jwt", Archive: false },
+  };
+  const nodeB: Target = {
+    id: "b",
+    mode: "ssh",
+    ssh: { Host: "b.example", User: "root", KeyPath: "/k" },
+    wire: {
+      ChainID: 369,
+      ExecID: "go-pulse",
+      BeaconID: "prysm-pulse",
+      DataDir: "/d",
+      JWTPath: "/d/jwt",
+      Archive: false,
+      Bootnodes: ["enr:-abc"],
+    },
+  };
+  const otherChain: Target = {
+    id: "c",
+    mode: "ssh",
+    ssh: { Host: "c.example", User: "root", KeyPath: "/k" },
+    wire: { ChainID: 1, ExecID: "reth", BeaconID: "lighthouse", DataDir: "/d", JWTPath: "/d/jwt", Archive: false },
+  };
+  return [box, nodeA, nodeB, otherChain];
+}
+
+const BOOT_STATUS: api.ModuleStatus = {
+  id: "el-bootnode",
+  served: false,
+  active: true,
+  accepting: false,
+  count: 0,
+  size: 0,
+  headBlock: 0,
+  identity: ENODE,
+};
+
 describe("ModulesSection", () => {
+  it("shows a running bootnode's enode with a copy action and its note", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    setup(bootnodeFleet()[0], {
+      statuses: [{ ...BOOT_STATUS, note: "Set the box's public IP (ExtIP) on the bootnode." }],
+    });
+    await waitFor(() => expect(card("el-bootnode").querySelector("code.module-identity")?.textContent).toBe(ENODE));
+    expect(card("el-bootnode").textContent).toContain("Set the box's public IP (ExtIP) on the bootnode.");
+    fireEvent.click(screen.getByRole("button", { name: "Copy enode" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(ENODE));
+  });
+
+  it("offers a running bootnode to the fleet's other nodes on its chain", async () => {
+    const fleet = bootnodeFleet();
+    vi.mocked(api.startSetup).mockResolvedValue({ status: "started" });
+    setup(fleet[0], {
+      fleet,
+      statuses: [BOOT_STATUS],
+      catalog: {
+        ...CATALOG,
+        networks: [{ ChainID: 369, Name: "PulseChain", CheckpointURL: "", ExecClients: [], BeaconClients: [], LearnURL: "", SnapshotSizeTB: 0, SyncLabel: "", GenesisSyncLabel: "" }],
+      },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Use on my other PulseChain nodes" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("a.example");
+    expect(dialog.textContent).toContain("b.example");
+    expect(dialog.textContent).not.toContain("c.example");
+    expect(dialog.textContent).toContain("Restarts reth on a.example.");
+    fireEvent.click(screen.getByRole("button", { name: "Use bootnode" }));
+    await waitFor(() => expect(api.startSetup).toHaveBeenCalledTimes(2));
+    expect(api.startSetup).toHaveBeenCalledWith("a", { ...fleet[1].wire, Bootnodes: [ENODE] });
+    expect(api.startSetup).toHaveBeenCalledWith("b", { ...fleet[2].wire, Bootnodes: ["enr:-abc", ENODE] });
+    await waitFor(() => expect(dialog.textContent).toContain("a.example: setup started, reth restarts."));
+    expect(dialog.textContent).toContain("b.example: setup started, go-pulse restarts.");
+  });
+
   it("shows the restart line before setModule is called", async () => {
     setup(target());
     await screen.findByText("Message board");

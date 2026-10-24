@@ -1,0 +1,5 @@
+id: bootnodes
+title: Run your own bootnodes
+audience: operator
+after: [first-box]
+steps: [modules-what, box-modules, bootnode-run, bootnode-use]

@@ -115,6 +115,9 @@ export interface ModuleStatus {
   size: number;
   headBlock: number;
   identity?: string;
+  // note is advice about a reading that works but may not help (e.g. an
+  // enode that advertises 0.0.0.0).
+  note?: string;
   alerts?: ModuleAlert[];
   error?: string;
 }
@@ -224,6 +227,9 @@ export interface WireConfig {
   // Modules are the node modules on this node's execution client. Omitted
   // when none are on.
   Modules?: NodeModule[];
+  // Bootnodes are extra peers: enode:// entries go to the exec client, enr:-
+  // entries to the beacon client. Omitted when none are set.
+  Bootnodes?: string[];
 }
 
 export interface NodeModule {
@@ -307,6 +313,7 @@ export interface StartSetupRequest {
   // Node modules to turn on in this first setup, so a new box gets them with
   // no second restart.
   Modules?: NodeModule[];
+  Bootnodes?: string[];
 }
 
 export interface DiskFree {

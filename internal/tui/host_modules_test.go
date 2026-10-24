@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -112,6 +113,34 @@ func TestModulesModalTurnsABoxModuleOff(t *testing.T) {
 	}
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "stopping jumpgate-mod-el-bootnode-369") || !strings.Contains(fr, "Done.") {
 		t.Fatalf("no progress:\n%s", fr)
+	}
+}
+
+// A running bootnode shows its enode and the probe's note under the cursor,
+// and c copies the enode to the terminal clipboard (OSC 52).
+func TestModulesModalCopiesBootnodeIdentity(t *testing.T) {
+	enode := "enode://" + strings.Repeat("ab12", 32) + "@203.0.113.7:30303"
+	note := "Set the box's public IP (ExtIP) on the bootnode."
+	f := modulesFake()
+	f.TargetsV[0].Modules = []catalog.BoxModule{{ID: "el-bootnode", ChainID: 369}}
+	f.ModulesV["box"] = api.ModulesView{Modules: []api.ModuleStatus{{ID: "el-bootnode", Active: true, Identity: enode, Note: note}}}
+	m := press(t, openTestHost(t, f, "unicode"), "m", "down")
+	fr := tuitest.Frame(m)
+	for _, want := range []string{"enode://ab12ab12", note, "c to copy"} {
+		if !strings.Contains(fr, want) {
+			t.Errorf("modal lacks %q:\n%s", want, fr)
+		}
+	}
+	mm := m.(*App).modal.(*modulesModal)
+	_, cmd := mm.key(m.(*App), tuitest.Key("c"))
+	if cmd == nil {
+		t.Fatal("c sent no clipboard command")
+	}
+	if got, want := fmt.Sprint(cmd()), fmt.Sprint(tea.SetClipboard(enode)()); got != want {
+		t.Fatalf("clipboard msg %q, want %q", got, want)
+	}
+	if !strings.Contains(mm.note, "Copied the enode") {
+		t.Fatalf("note %q", mm.note)
 	}
 }
 
