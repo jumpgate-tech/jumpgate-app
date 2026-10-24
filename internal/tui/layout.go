@@ -12,15 +12,17 @@ const (
 // Layout breakpoints.
 const (
 	leftMinWidth    = 100 // at or above, a left sidebar replaces the header's view tabs
-	leftWidth       = 24
+	leftWidth       = 22  // narrower (down to leftMinW) when main needs the room
+	leftMinW        = 18
 	drawerTallRows  = 34  // auto opens, and an open drawer is boxed, at or above
 	drawerBoxedRows = 5   // 2 borders + 3 activity lines
 	kpiBoxedMinRows = 30  // at or above, the KPI strip is boxed tiles
 	kpiBoxedRows    = 4   // 2 borders + 2 lines
-	rightMinWidth   = 120 // at or above, the activity log is a right sidebar
-	rightMinW       = 32
+	rightMinWidth   = 140 // at or above, the activity log is a right sidebar; below, ] overlays it
+	rightMinW       = 28
 	rightMaxW       = 40
 	mainMinW        = 50 // main never gets narrower than this
+	mainFleetW      = 82 // boxed main that holds the default fleet columns (80 cells)
 )
 
 // drawerFromPref reads a stored pref; anything unknown is auto.
@@ -54,9 +56,9 @@ type rect struct{ X, Y, W, H int }
 type layout struct {
 	Header        rect // always 1 row at Y=0; below 100 columns it carries the view tabs
 	KPI           rect // at Y=1: 1 row when h < 30, boxed tiles (4 rows) at h >= 30
-	Left          rect // views list + host list, W=24 when w >= 100, else zero
+	Left          rect // views list + tree, W=22 (18-22) when w >= 100, else zero
 	Main          rect
-	Right         rect // the activity log, 27% of w (32-40) when w >= 120, else zero
+	Right         rect // the activity log, 20% of w (28-40) when w >= 140, else zero
 	Drawer        rect // activity rows; H=0 when minimized
 	Hints         rect // 1 row, last line (minimized: the status line)
 	DrawerOpen    bool // resolved: auto -> h >= 34
@@ -95,13 +97,13 @@ func layoutFor(w, h int, d drawerState) layout {
 	}
 	leftW := 0
 	if w >= leftMinWidth {
-		leftW = leftWidth
+		leftW = min(max(w-mainFleetW, leftMinW), leftWidth)
 		l.Left = rect{0, y, leftW, bodyH}
 	}
 	rightW := 0
 	if w >= rightMinWidth {
-		rightW = min(max(w*27/100, rightMinW), rightMaxW)
-		if w-leftW-rightW < mainMinW { // the region the rule added folds
+		rightW = min(max(w/5, rightMinW), rightMaxW)
+		if w-leftW-rightW < mainFleetW { // the region the rule added folds
 			rightW = 0
 		}
 	}

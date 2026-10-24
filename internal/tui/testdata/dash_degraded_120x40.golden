@@ -3,38 +3,38 @@
 |1 up 1 down  ||FAIL rpc_tim~||FAIL rpc_tim~||FAIL rpc_tim~||FAIL disk_pr~||n/a                      ||3 FAIL 3 warn   |
 |1 n/a of 3   ||3 n/a        ||3 n/a        ||3 n/a        ||3 n/a        ||n/a no request counts yet||box-a disk: du ~|
 +-------------++-------------++-------------++-------------++-------------++-------------------------++----------------+
-+- Views --------------++= > Fleet ====================================================++- Log: box-a -----------------+
-|> Fleet          [1]  || HOST         LINK       NET       SYNC      LAG    PEERS  >  || no activity yet              |
-|  Jobs           [2]  ||>box-a        gate       PulseCha~ n/a       n/a    n/a       ||                              |
-|  Signers        [3]  || box-b        down 9m    ?         n/a       n/a    n/a       ||                              |
-|  Gateways       [4]  || box-c        gate       ?         ~         n/a    n/a       ||                              |
-|  Settings       [5]  ||                                                              ||                              |
-|----------------------||                                                              ||                              |
-|   fleet       3 boxes||                                                              ||                              |
-|>+ box-a           n/a||                                                              ||                              |
-| + box-b       down 9m||                                                              ||                              |
-| + box-c           n/a||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      ||                                                              ||                              |
-|                      || 3 boxes | sort: host | ~ stale  * this machine               ||                              |
-+----------------------++--------------------------------------------------------------++------------------------------+
++- Views ------------++= > Fleet ======================================================================================+
+|> Fleet          [1]|| HOST         LINK       NET       SYNC      LAG    PEERS   DISK            FW                  |
+|  Jobs           [2]||>box-a        gate       PulseCha~ n/a       n/a    n/a     n/a             n/a                 |
+|  Signers        [3]|| box-b        down 9m    ?         n/a       n/a    n/a     n/a             n/a                 |
+|  Gateways       [4]|| box-c        gate       ?         ~         n/a    n/a     n/a             n/a                 |
+|  Settings       [5]||                                                                                                |
+|--------------------||                                                                                                |
+|   fleet     3 boxes||                                                                                                |
+|>+ box-a         n/a||                                                                                                |
+| + box-b     down 9m||                                                                                                |
+| + box-c         n/a||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    || 3 boxes | sort: host | ~ stale  * this machine                                                 |
++--------------------++------------------------------------------------------------------------------------------------+
 +- Activity -----------------------------------------------------------------------------------------------------------+
 | box-a | gate | server live | updated 5s ago                                                                          |
 |                                                                                                                      |
 |                                                                                                                      |
 +----------------------------------------------------------------------------------------------------------------------+
- . drawer  ? help  : command  1-5 views  tab focus  q quit
+ . drawer  ? help  : command  1-5 views  tab focus  ] log  q quit

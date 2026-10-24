@@ -17,7 +17,7 @@ import (
 // Phase-3 flows: focus regions, the tree, the activity log and overlays.
 
 func TestTabCyclesFocus(t *testing.T) {
-	a := dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "auto")
+	a := dashApp(t, tuitest.NewFake(), 140, 40, "ascii", "auto")
 	if a.focus != focusMain {
 		t.Fatalf("default focus %v", a.focus)
 	}
@@ -57,7 +57,7 @@ func TestHostTabsStillOnArrows(t *testing.T) {
 }
 
 func TestTreeEnterOpensBoxAndLogFollows(t *testing.T) {
-	a := dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "auto")
+	a := dashApp(t, tuitest.NewFake(), 140, 40, "ascii", "auto")
 	m := press(t, a, "tab", "k") // the tree; up to the fleet line
 	if fr := tuitest.Frame(m); !m.(*App).selAll || !strings.Contains(fr, "Log: fleet") {
 		t.Fatalf("fleet line: selAll %v\n%s", m.(*App).selAll, fr)
@@ -103,6 +103,9 @@ func TestResizeFoldsSidebarsKeepsSelection(t *testing.T) {
 }
 
 func TestLogOverlayToggles(t *testing.T) {
+	if w := press(t, dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "auto"), "]").(*App); !w.logOver || w.focus != focusLog || !strings.Contains(tuitest.Frame(w), "Log: box-a") {
+		t.Fatalf("] at 120 opens no overlay: %v focus %v", w.logOver, w.focus)
+	}
 	a := dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto")
 	m := press(t, a, "]")
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "Log: box-a") || m.(*App).focus != focusLog {
@@ -112,8 +115,8 @@ func TestLogOverlayToggles(t *testing.T) {
 	if fr := tuitest.Frame(m); strings.Contains(fr, "Log:") || m.(*App).focus != focusMain {
 		t.Fatalf("esc left the overlay:\n%s", fr)
 	}
-	if w := press(t, dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "auto"), "]").(*App); w.logOver || w.focus != focusLog {
-		t.Fatalf("] at 120: overlay %v focus %v", w.logOver, w.focus)
+	if w := press(t, dashApp(t, tuitest.NewFake(), 140, 40, "ascii", "auto"), "]").(*App); w.logOver || w.focus != focusLog {
+		t.Fatalf("] at 140: overlay %v focus %v", w.logOver, w.focus)
 	}
 }
 

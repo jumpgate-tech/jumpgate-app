@@ -153,6 +153,8 @@ var dashCases = []struct {
 	{"dash_80x24", 80, 24, "ascii", "auto"},
 	{"dash_80x24_drawer_open", 80, 24, "ascii", "open"},
 	{"dash_unicode_120x40", 120, 40, "unicode", "auto"},
+	{"dash_140x40", 140, 40, "ascii", "auto"},
+	{"dash_160x48", 160, 48, "ascii", "auto"},
 }
 
 // degradedFleet has every section missing, stale or failed: nothing in it
@@ -355,5 +357,25 @@ func TestNarrowFramesKeepTheirLastRows(t *testing.T) {
 	}
 	if fr := tuitest.Frame(settingsApp(t, tuitest.NewFake())); !strings.Contains(fr, "[x] Security") {
 		t.Errorf("settings at 80x24 lost its last row:\n%s", fr)
+	}
+}
+
+// The fleet table keeps every default column, DISK and FW too, beside the
+// sidebars at each dashboard size.
+func TestFleetFrameKeepsDefaultColumns(t *testing.T) {
+	for _, c := range []struct{ w, h int }{{100, 30}, {120, 40}, {140, 40}, {160, 48}} {
+		fr := tuitest.Frame(dashApp(t, tuitest.NewFake(), c.w, c.h, "ascii", "auto"))
+		var head, row string
+		for _, l := range strings.Split(fr, "\n") {
+			if strings.Contains(l, " HOST ") {
+				head = l
+			}
+			if strings.Contains(l, ">box-a ") {
+				row = l
+			}
+		}
+		if !strings.Contains(head, "DISK") || !strings.Contains(head, "FW") || !strings.Contains(row, "warn") {
+			t.Errorf("%dx%d: head %q row %q\n%s", c.w, c.h, head, row, fr)
+		}
 	}
 }

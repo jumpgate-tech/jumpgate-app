@@ -428,6 +428,10 @@ func TestDrawerPrefRoundTrip(t *testing.T) // pref() of drawerFromPref(x)==x for
 
 - [ ] `gofmt -l .` empty; `go vet ./...` and `go vet -tags notui ./...` clean; `go test ./...` PASS; `go list -tags notui -deps ./cmd/jumpgate | grep -E 'charm|charmbracelet'` empty.
 
+## Width fix (after phase 3)
+
+At 120×40 the fleet table lost DISK and FW (main was 62 inside its box). `layoutFor` now keeps a boxed main of `mainFleetW = 82` (the default columns' 80 cells + 2 borders) from 100 columns: left `clamp(w-82, 18, 22)`; right docked only at `w >= 140` (`rightMinWidth`), `clamp(w/5, 28, 40)`, folding if main would drop below 82; below 140 `]` overlays the log. The views list pads names to the sidebar width. Tests: `TestLayoutForRight` (120 → 0, 139 → 0, 140 → 28, 160 → 32, 200 → 40), `TestLayoutForMainFitsFleet` (w 100–200: main ≥ 82), `TestMainFleetWMatchesDefaultColumns`, `TestFleetFrameKeepsDefaultColumns` (100×30, 120×40, 140×40, 160×48: DISK, FW and `warn`); the phase-3 docked-log tests move to 140×40, plus `]` at 120 opens the overlay. Goldens: `dash_*` regenerated, new `dash_140x40`, `dash_160x48`.
+
 ## Phase 4: Activity drawer bars (U7)
 
 `func drawerBars(...) []bar` pure: running job step k/n (`WatchJobs`, reuse `jobs.go` step format), EL sync % (head vs highest), CL sync %, snapshot download/extract if exposed, fleet rollout n/m boxes, disk fill per box only when ≥ 85 %. No bar without a denominator. Order needs decision → running jobs → syncing → disk; cap 3 bars at h < 34 (80×24), 6 at ≥ 34 (120×40), then `+N more`. Tests: ordering, caps and `+N more`, no-denominator exclusion, disk 84 % vs 85 %. Goldens `dash_jobs_120x40`, `dash_80x24_drawer_open`; teatest: job advances, bar moves; stream drop → stale → recovers.

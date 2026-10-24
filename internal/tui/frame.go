@@ -154,9 +154,10 @@ func (a *App) tabs() string {
 func (a *App) viewsList(r rect) string {
 	var lines []string
 	for i, n := range screenNames {
-		l := fmt.Sprintf("  %-14s [%d]", n, i+1)
+		nw := max(r.W-2-6, 1) // "x " + name + " [n]"
+		l := fmt.Sprintf("  %-*s [%d]", nw, n, i+1)
 		if screenID(i) == a.active && a.detail == nil {
-			l = a.th.Sel.Render(fmt.Sprintf("%s %-14s [%d]", a.gl.Sel, n, i+1))
+			l = a.th.Sel.Render(fmt.Sprintf("%s %-*s [%d]", a.gl.Sel, nw, n, i+1))
 		}
 		lines = append(lines, l)
 	}
@@ -245,8 +246,10 @@ func (a *App) drawerLine(w int) string {
 // hints are the keys worth showing on one line, the drawer's first.
 func (a *App) hints() string {
 	hs := []string{". drawer", "? help", ": command", "1-5 views", "tab focus"}
-	if a.w < rightMinWidth {
+	if a.w < leftMinWidth {
 		hs[4] = "[ ] panels"
+	} else if a.w < rightMinWidth {
+		hs[4] = "tab focus  ] log"
 	}
 	if a.detail != nil {
 		hs = append(hs, "esc back")

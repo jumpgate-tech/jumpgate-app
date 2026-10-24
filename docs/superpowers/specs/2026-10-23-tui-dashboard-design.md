@@ -158,8 +158,14 @@ to the body and keeps one line:
  jobs 1 running  [! 1 needs decision]  ! 2 alerts | tab focus  1-5 views  . drawer  ? help  q quit
 ```
 
-Widths at 120: left 25, right 33, main the rest (62). Heights at 40: header 1,
-KPI 4, footer 5 + hints 1, body 29.
+Widths (revised 2026-10-23 after the first frames lost DISK and FW): the
+boxed main always keeps 82 columns, room for every default fleet column (80
+cells) inside its border, so the table never has less than it had before the
+dashboard. Left 22 at w ≥ 100 (narrowing to 18 at 100–103); the log docks on
+the right only at w ≥ 140, 20 % of the width (28–40); below 140 `]` opens it
+as an overlay. So at 120: left 22, main 98, log overlay; at 140: 22 / 90 /
+28; at 160: 22 / 106 / 32. The 120-wide sketch above shows the arrangement
+of a 140+ window. Heights at 40: header 1, KPI 4, footer 5 + hints 1, body 29.
 
 ### 80×24
 
@@ -211,18 +217,19 @@ Evaluated in this order on every `WindowSizeMsg`; one pure function
 | Condition | Effect |
 |---|---|
 | `w < 80` or `h < 24` | size message (unchanged) |
-| `w ≥ 100` | left sidebar shown (width 24, tree truncates names with `..`) |
-| `w ≥ 120` | right sidebar shown (width 32–40, 27 % of width) |
+| `w ≥ 100` | left sidebar shown (width 22, 18 at 100–103 so main keeps 82; tree truncates names) |
+| `w ≥ 140` | right sidebar shown (width 28–40, 20 % of width) |
 | `w < 100` | both sidebars are overlays (`[` / `]`), views move to a one-line tab row |
-| `100 ≤ w < 120` | right sidebar is an overlay; left stays |
+| `100 ≤ w < 140` | right sidebar is an overlay (`]`); left stays |
 | `h ≥ 30` | KPI tiles boxed (4 rows) instead of one line |
 | drawer minimized | 1 line: counts + hints (U4) |
 | drawer open, `h ≥ 34` | full size: boxed job bars + sync bars + ticker, then hints |
 | drawer open, `h < 34` | 2 lines: one rotating activity line (every 5 s, pauses while focused) + hints |
 | drawer `auto` | minimized when `h < 34`, open otherwise |
 
-The main view always keeps at least 50 columns and 8 rows; if a rule would
-break that, the region that rule added folds instead. The fleet table drops
+The main view always keeps at least 50 columns and 8 rows, and from 100
+columns the 82 the default fleet columns need; if a rule would break that,
+the region that rule added folds instead. The fleet table drops
 columns right to left by priority (FW, PEERS, NET) as it does today.
 
 ## 3. Data and refresh

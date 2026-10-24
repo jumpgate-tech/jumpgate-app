@@ -1,6 +1,10 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/valve-tech/jumpgate/internal/api"
+)
 
 func TestLayoutForMainFloor(t *testing.T) {
 	for w := 80; w <= 200; w++ {
@@ -46,7 +50,7 @@ func TestLayoutForBreakpoints(t *testing.T) {
 		t.Errorf("80x24 open: %+v", l)
 	}
 	l = layoutFor(100, 30, drawerAuto)
-	if l.Left.W != 24 || l.Main.Y != 5 || l.DrawerOpen {
+	if l.Left.W != 18 || l.Main.Y != 5 || l.DrawerOpen {
 		t.Errorf("100x30 auto: %+v", l)
 	}
 	l = layoutFor(120, 40, drawerAuto)
@@ -82,7 +86,7 @@ func TestLayoutForKPI(t *testing.T) {
 }
 
 func TestLayoutForRight(t *testing.T) {
-	for _, c := range []struct{ w, h, rightW int }{{119, 40, 0}, {120, 40, 32}, {148, 40, 39}, {160, 40, 40}, {200, 60, 40}, {100, 30, 0}} {
+	for _, c := range []struct{ w, h, rightW int }{{100, 30, 0}, {120, 40, 0}, {139, 40, 0}, {140, 40, 28}, {160, 48, 32}, {200, 60, 40}} {
 		l := layoutFor(c.w, c.h, drawerAuto)
 		if l.Right.W != c.rightW {
 			t.Errorf("%dx%d: right %+v, want width %d", c.w, c.h, l.Right, c.rightW)
@@ -91,7 +95,40 @@ func TestLayoutForRight(t *testing.T) {
 			t.Errorf("%dx%d: right %+v main %+v", c.w, c.h, l.Right, l.Main)
 		}
 	}
-	if l := layoutFor(120, 40, drawerAuto); l.Right != (rect{88, 5, 32, 29}) || l.Main.W != 64 {
-		t.Errorf("120x40: right %+v main %+v", l.Right, l.Main)
+	if l := layoutFor(140, 40, drawerAuto); l.Right != (rect{112, 5, 28, 29}) || l.Left.W != 22 || l.Main.W != 90 {
+		t.Errorf("140x40: left %+v right %+v main %+v", l.Left, l.Right, l.Main)
+	}
+}
+
+// The boxed main keeps the room the default fleet columns need (they fit
+// 80 cells): the sidebars give way first.
+func TestLayoutForMainFitsFleet(t *testing.T) {
+	for w := 100; w <= 200; w++ {
+		for _, h := range []int{24, 30, 40, 48} {
+			l := layoutFor(w, h, drawerAuto)
+			if l.Main.W < mainFleetW {
+				t.Fatalf("%dx%d: main %d < %d", w, h, l.Main.W, mainFleetW)
+			}
+			if l.Left.W == 0 || l.Left.W > leftWidth {
+				t.Fatalf("%dx%d: left %d", w, h, l.Left.W)
+			}
+		}
+	}
+	if l := layoutFor(120, 40, drawerAuto); l.Left.W != 22 || l.Right.W != 0 || l.Main.W != 98 {
+		t.Errorf("120x40: %+v", l)
+	}
+}
+
+func TestMainFleetWMatchesDefaultColumns(t *testing.T) {
+	need := 1 // the selection mark
+	for i, id := range api.DefaultPrefs().FleetColumns {
+		c, _ := api.Column(id)
+		need += c.Width
+		if i > 0 {
+			need++
+		}
+	}
+	if mainFleetW != need+2 {
+		t.Fatalf("mainFleetW %d, default columns need %d + 2 borders", mainFleetW, need)
 	}
 }
