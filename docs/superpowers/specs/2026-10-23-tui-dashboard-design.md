@@ -49,6 +49,28 @@ The user's answers to the open questions, plus one new requirement:
     (`[! 1 needs decision]`, bracketed so it reads without colour, warn
     colour when colour is on). The drawer never opens itself.
 
+- **U5 No trend graphs.** No sparklines or history graphs in the TUI. Node
+  detail shows current values and the delta from the previous reading, e.g.
+  `head lag 2 blk (was 40)`.
+- **U6 Right panel = activity log.** The right sidebar is the activity log,
+  scoped to the selection (the whole fleet, or the selected box/node): newest
+  first, relative time, a severity glyph. Events: gate up/down; sync state
+  changes (syncing → synced, stalled); job step transitions and decisions
+  requested/answered; derived alerts raised or cleared (disk ≥ 85 % / ≥ 95 %,
+  peers 0, head lag over threshold, gate unreachable); setup and module
+  changes; signer approvals. Built only from data the TUI already has (diffs
+  of successive snapshots), no new polling; a ring of about 200 entries in
+  memory, never persisted. The health checklist and quick actions it replaces
+  move to box detail (Overview) and the `x` menu.
+- **U7 Drawer = progress bars only, for things with a known end:** (1) a
+  running job, step k/n; (2) EL sync %, head vs highest block; (3) CL sync %;
+  (4) a snapshot download/extract, if exposed; (5) a fleet rollout (e.g. an
+  upgrade across boxes), n/m boxes done; (6) disk fill per box, only when
+  ≥ 85 %, as a capacity bar. Order: needs decision → running jobs → syncing →
+  disk. At most 3 bars at 80×24 and 6 at 120×40, then `+N more`. Anything
+  without a denominator gets no bar; it belongs in the log. The event ticker
+  moves from the drawer to the right-panel log.
+
 ## Decisions kept from the TUI spec
 
 - **Fail closed.** A nil section is "unavailable", never 0 (`api.FleetRow`
@@ -83,7 +105,7 @@ Five regions:
 | **KPI strip** (3 rows boxed, 1 row compact) | 7 tiles: boxes, synced, head lag, peers, disk headroom, gateways, alerts |
 | **Left sidebar** | Views list (Fleet, Jobs, Signers, Gateways, Settings) and the fleet tree: box → nodes (exec/beacon), gateways, modules |
 | **Main** | The selected view: fleet table, box detail (existing tabs), node detail, jobs inbox, signers, gateways, settings |
-| **Right sidebar** | Context for the selection: health checklist, recent alerts for it, quick actions with keys |
+| **Right sidebar** | Activity log scoped to the selection (U6) |
 | **Activity drawer** (open: 3–5 rows + hints; minimized: 1 row) | Open: running jobs as progress bars, syncing nodes as progress bars, event ticker; then key hints. Minimized: counts + hints on one line (U4) |
 
 ### 120×40 (full dashboard)
@@ -198,7 +220,6 @@ Evaluated in this order on every `WindowSizeMsg`; one pure function
 | drawer open, `h ≥ 34` | full size: boxed job bars + sync bars + ticker, then hints |
 | drawer open, `h < 34` | 2 lines: one rotating activity line (every 5 s, pauses while focused) + hints |
 | drawer `auto` | minimized when `h < 34`, open otherwise |
-| `w ≥ 160` | KPI tiles gain a sparkline row (head-lag and peers history from the client's ring) |
 
 The main view always keeps at least 50 columns and 8 rows; if a rule would
 break that, the region that rule added folds instead. The fleet table drops
@@ -219,7 +240,7 @@ one new server aggregate in phase 4.
 | Gateways | `Gateways()` `Status.State`, `Warnings` | on enter and every 30 s | request counts: **no API yet** (U1); tile shows `live/failing` and `n/a` with the hint `no request counts yet` until phase 6 |
 | Alerts | derived client-side (below, U2) | each fleet update | none → `0`, never hidden |
 | Fleet tree | fleet rows + gateways (`RoutesTo`) + `ListModules` per expanded box | modules fetched on expand, then 60 s | `GateStale` → `gate stale` on the module line |
-| Right sidebar | selected row, plus `WatchStatus` (5 s) only while a box is selected for > 1 s | 5 s | each line carries its age |
+| Right sidebar (log, U6) | diffs of fleet/jobs/gateways/modules/signers snapshots already held | each update | ring of ~200, session-only; each line carries its age |
 | Job bars | `WatchJobs` inbox: `Step`/`len(Steps)`, `NeedsDecision` | stream | `JobsSummary == nil` → no bar, footer says `jobs n/a` for that box |
 | Sync bars | `Status` head vs reference head for syncing nodes | 15 s | no reference head → indeterminate bar `[<=>  ]`, no percent |
 | Event ticker | client-side diff of successive fleet/jobs/module snapshots | each update | ring of 200, session-only |
@@ -288,14 +309,14 @@ both, and the right sidebar follows it.
   bold alone.
 - **Bars:** `[████│░░░]` / ASCII `[####|...]`; job bars `[##########....]`;
   indeterminate `[<=>   ]` animated by the 1 s tick only when focused (golden:
-  frame 0). Sparklines `▁▂▃▄▅▆▇█` / `_.-=#`. Alert glyph `⚑` / `!`.
+  frame 0). Alert glyph `⚑` / `!`.
 - **Vocabulary:** gate, box, node (exec/beacon), gateway, module, job.
 
 ## 6. Testing
 
 - **Goldens** (ASCII profile, ANSI stripped, fixed clock and fake backend):
   `dash_120x40`, `dash_100x30`, `dash_80x24`, `dash_80x24_tree_overlay`,
-  `dash_80x24_ctx_overlay`, `dash_120x40_drawer_min`, `dash_80x24_drawer_open`, `dash_160x48` (sparklines), `dash_box_detail_120x40`,
+  `dash_80x24_ctx_overlay`, `dash_120x40_drawer_min`, `dash_80x24_drawer_open`, `dash_box_detail_120x40`,
   `dash_node_detail_120x40`, `dash_jobs_120x40`, `dash_degraded_120x40`
   (every section nil/stale/error: proves `n/a`/`~`/`FAIL`, no zeros),
   `dash_unicode_120x40`. Existing screen goldens are renamed into the frame
@@ -321,13 +342,13 @@ both, and the right sidebar follows it.
    the left sidebar at ≥ 100. `agent` → `gate` in user text. Goldens updated.
 2. **KPI strip + alerts.** Pure aggregation over the fleet stream already held
    in `App`; `alerts()`; header staleness.
-3. **Tree + context sidebar.** Tree from fleet + gateways + modules
+3. **Tree + activity-log sidebar.** Tree from fleet + gateways + modules
    (reuse `moduleCards`/`moduleStatus` from `host_modules.go`); right sidebar
-   reuses `host_overview` cards, `host_security` checklist lines, and the `x`
-   actions menu bindings (`actions.go`). Hosts merges into Fleet.
-4. **Activity drawer content.** Job bars from `WatchJobs` (reuse `jobs.go` step
-   formatting), sync bars, event ticker from snapshot diffs.
-5. **Node detail view**, sparklines at ≥ 160.
+   is the activity log (U6) from snapshot diffs. Hosts merges into Fleet.
+4. **Activity drawer bars (U7).** Job step bars from `WatchJobs` (reuse
+   `jobs.go` step formatting), EL/CL sync %, snapshot, rollout and disk ≥ 85 %
+   bars, ordered and capped as U7 says.
+5. **Node detail view** with current values and deltas (U5); no sparklines.
 6. **Gateway request counts (U1).** Server: per-gateway request/error
    counters and a rate on `/api/gateways`; the tile drops its `n/a` hint.
 

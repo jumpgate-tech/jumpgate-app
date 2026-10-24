@@ -286,17 +286,17 @@ func TestDrawerPrefRoundTrip(t *testing.T) // pref() of drawerFromPref(x)==x for
 
 - [ ] `gofmt -l .` empty; `go vet ./...` and `go vet -tags notui ./...` clean; `go test ./...` PASS; `go list -tags notui -deps ./cmd/jumpgate | grep -E 'charm|charmbracelet'` empty.
 
-## Phase 3: Tree + context sidebar, Hosts into Fleet (U3)
+## Phase 3: Tree + activity-log sidebar, Hosts into Fleet (U3, U6)
 
-Files: `tree.go`, `context.go`. Tree from fleet + gateways (`RoutesTo`) + `ListModules` on expand (60 s), reusing `moduleCards`/`moduleStatus` read-only from `host_modules.go`. Right sidebar at ≥ 120 (27 %, 32–40), overlays `[`/`]` below; focus regions + `tab`. Hosts actions (`a`,`p`,`d`,`L`, table mode `v`) move onto Fleet; views renumber to Fleet, Jobs, Signers, Gateways, Settings (`1-5`). Goldens `dash_80x24_tree_overlay`, `dash_80x24_ctx_overlay`, `dash_box_detail_120x40`.
+Files: `tree.go`, `actlog.go` (+ tests). Tree from fleet + gateways (`RoutesTo`) + `ListModules` on expand (60 s), reusing `moduleCards`/`moduleStatus` read-only from `host_modules.go`. Right sidebar at ≥ 120 (27 %, 32–40), overlays `[`/`]` below; focus regions + `tab`. The right sidebar is the activity log (spec U6): `type logEvent struct{At time.Time; Sev string; Box, Node, Text string}`, a ring of 200 on `App`, `func diffEvents(prev, next snapshot, now time.Time) []logEvent` pure over fleet/jobs/gateways/signers/modules snapshots already held (gate up/down, sync state change incl. stalled, job step/decision requested/answered, alert raised/cleared from `alerts()` incl. disk ≥85/≥95 %, peers 0, head lag over threshold, gate unreachable, setup/module change, signer approval); view newest first, relative age, severity glyph, filtered to the selection (fleet → all). Hosts actions (`a`,`p`,`d`,`L`, table mode `v`) move onto Fleet; views renumber to Fleet, Jobs, Signers, Gateways, Settings (`1-5`). Tests: `diffEvents` table test per event kind; ring cap 200; scoping. Goldens `dash_120x40` (log panel), `dash_80x24_tree_overlay`, `dash_80x24_ctx_overlay`, `dash_box_detail_120x40`.
 
-## Phase 4: Activity drawer content
+## Phase 4: Activity drawer bars (U7)
 
-Job bars from `WatchJobs` (reuse `jobs.go` step format), sync bars (indeterminate without reference head), event ticker (ring 200, snapshot diffs); compact drawer rotates every 5 s. Goldens `dash_jobs_120x40`; teatest: job advances, bar moves; stream drop → stale → recovers.
+`func drawerBars(...) []bar` pure: running job step k/n (`WatchJobs`, reuse `jobs.go` step format), EL sync % (head vs highest), CL sync %, snapshot download/extract if exposed, fleet rollout n/m boxes, disk fill per box only when ≥ 85 %. No bar without a denominator. Order needs decision → running jobs → syncing → disk; cap 3 bars at h < 34 (80×24), 6 at ≥ 34 (120×40), then `+N more`. Tests: ordering, caps and `+N more`, no-denominator exclusion, disk 84 % vs 85 %. Goldens `dash_jobs_120x40`, `dash_80x24_drawer_open`; teatest: job advances, bar moves; stream drop → stale → recovers.
 
-## Phase 5: Node detail + sparklines
+## Phase 5: Node detail (U5)
 
-Node detail main view; sparklines at ≥ 160 from a client ring. Golden `dash_node_detail_120x40`, `dash_160x48`. Landing `docs-images.mjs` points at `dash_120x40` / `dash_80x24`.
+Node detail main view with current values and the delta from the previous reading (`head lag 2 blk (was 40)`); no sparklines or trend graphs. Golden `dash_node_detail_120x40`. Landing `docs-images.mjs` points at `dash_120x40` / `dash_80x24`.
 
 ## Phase 6: Gateway request counts (U1)
 
