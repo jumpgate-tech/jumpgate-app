@@ -13,10 +13,14 @@ const (
 const (
 	leftMinWidth    = 100 // at or above, a left sidebar replaces the header's view tabs
 	leftWidth       = 24
-	drawerTallRows  = 34 // auto opens, and an open drawer is boxed, at or above
-	drawerBoxedRows = 5  // 2 borders + 3 activity lines
-	kpiBoxedMinRows = 30 // at or above, the KPI strip is boxed tiles
-	kpiBoxedRows    = 4  // 2 borders + 2 lines
+	drawerTallRows  = 34  // auto opens, and an open drawer is boxed, at or above
+	drawerBoxedRows = 5   // 2 borders + 3 activity lines
+	kpiBoxedMinRows = 30  // at or above, the KPI strip is boxed tiles
+	kpiBoxedRows    = 4   // 2 borders + 2 lines
+	rightMinWidth   = 120 // at or above, the activity log is a right sidebar
+	rightMinW       = 32
+	rightMaxW       = 40
+	mainMinW        = 50 // main never gets narrower than this
 )
 
 // drawerFromPref reads a stored pref; anything unknown is auto.
@@ -52,6 +56,7 @@ type layout struct {
 	KPI           rect // at Y=1: 1 row when h < 30, boxed tiles (4 rows) at h >= 30
 	Left          rect // views list + host list, W=24 when w >= 100, else zero
 	Main          rect
+	Right         rect // the activity log, 27% of w (32-40) when w >= 120, else zero
 	Drawer        rect // activity rows; H=0 when minimized
 	Hints         rect // 1 row, last line (minimized: the status line)
 	DrawerOpen    bool // resolved: auto -> h >= 34
@@ -93,6 +98,16 @@ func layoutFor(w, h int, d drawerState) layout {
 		leftW = leftWidth
 		l.Left = rect{0, y, leftW, bodyH}
 	}
-	l.Main = rect{leftW, y, w - leftW, bodyH}
+	rightW := 0
+	if w >= rightMinWidth {
+		rightW = min(max(w*27/100, rightMinW), rightMaxW)
+		if w-leftW-rightW < mainMinW { // the region the rule added folds
+			rightW = 0
+		}
+	}
+	if rightW > 0 {
+		l.Right = rect{w - rightW, y, rightW, bodyH}
+	}
+	l.Main = rect{leftW, y, w - leftW - rightW, bodyH}
 	return l
 }

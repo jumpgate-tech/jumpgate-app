@@ -54,7 +54,9 @@ func (a *App) boxed(title string, focused bool, body string, w, h int) string {
 func (a *App) frame() string {
 	l := layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer))
 	parts := []string{a.header(a.w), a.kpiView(l.KPI)}
-	body := a.mainView(l.Main)
+	main := l.Main
+	main.W += l.Right.W // the activity log takes Right in a later task
+	body := a.mainView(main)
 	if l.Left.W > 0 {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, a.viewsList(l.Left), body)
 	}
