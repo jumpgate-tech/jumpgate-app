@@ -10,9 +10,11 @@ import (
 // help screen lists every field here (help.go), so a key added here is
 // documented by adding it.
 var globalKeys = struct {
-	Screens, Help, Palette, Drawer, Back, Quit, ForceQuit, Restart key.Binding
+	Screens, Focus, Panels, Help, Palette, Drawer, Back, Quit, ForceQuit, Restart key.Binding
 }{
 	Screens:   key.NewBinding(key.WithKeys("1", "2", "3", "4", "5"), key.WithHelp("1-5", "views")),
+	Focus:     key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "focus: tree, main, log (space expands a box)")),
+	Panels:    key.NewBinding(key.WithKeys("[", "]"), key.WithHelp("[ ]", "tree / activity log")),
 	Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	Palette:   key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "command")),
 	Drawer:    key.NewBinding(key.WithKeys("."), key.WithHelp(".", "activity drawer")),
@@ -28,8 +30,8 @@ var navKeys = struct {
 }{
 	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
 	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-	Left:   key.NewBinding(key.WithKeys("left", "h", "shift+tab"), key.WithHelp("←/h", "previous tab")),
-	Right:  key.NewBinding(key.WithKeys("right", "l", "tab"), key.WithHelp("→/l", "next tab")),
+	Left:   key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←/h", "previous tab")),
+	Right:  key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→/l", "next tab")),
 	Enter:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
 	Filter: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 }

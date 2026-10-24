@@ -20,16 +20,22 @@ func newHelp(a *App) *helpModal {
 		return fmt.Sprintf("  %-12s %s", keyLabel(b.Help().Key, a.gl), b.Help().Desc)
 	}
 	lines := []string{"keys everywhere"}
+	listed := map[key.Help]bool{}
 	for _, b := range append(keyList(globalKeys), keyList(navKeys)...) {
 		if a.offers(b) {
 			lines = append(lines, row(b))
+			listed[b.Help()] = true
 		}
 	}
-	if ks := a.current().keys(); len(ks) > 0 {
-		lines = append(lines, "", "keys here")
-		for _, b := range ks {
-			lines = append(lines, row(b))
+	// A screen's own keys, less the ones already listed above.
+	var here []string
+	for _, b := range a.current().keys() {
+		if !listed[b.Help()] {
+			here = append(here, row(b))
 		}
+	}
+	if len(here) > 0 {
+		lines = append(append(lines, "", "keys here"), here...)
 	}
 	return &helpModal{lines: lines}
 }

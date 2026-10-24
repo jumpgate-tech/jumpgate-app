@@ -21,4 +21,4 @@
 
 
  3 boxes | sort: host | ~ stale  * this machine
- jobs n/a  ! 2 alerts | . drawer  ? help  : command  1-5 views  q quit
+ jobs n/a  ! 2 alerts | . drawer  ? help  : command  1-5 views  [ ] panels  q q~

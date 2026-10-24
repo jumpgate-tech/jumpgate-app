@@ -1,7 +1,10 @@
  jumpgate  Fleet [Jobs] Signers Gateways Settings                    connecting
  boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
- Help: keys everywhere  (esc to close)
+ Help  (esc to close)
+keys everywhere
   1-5          views
+  tab          focus: tree, main, log (space expands a box)
+  [ ]          tree / activity log
   ?            help
   :            command
   .            activity drawer
@@ -15,10 +18,7 @@
   enter        open
   /            filter
 keys here
-  ↑/k          up
-  ↓/j          down
-  enter        open
   d            answer the selected job's question
   a            adopt a job whose controller went silent
   r            reload
- jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-5 views  q quit
+ jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-5 views  [ ] panels  q…

@@ -9,16 +9,14 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/apiclient"
 )
 
-var hostKeys = struct{ Measure, Modules, Sidebar key.Binding }{
+var hostKeys = struct{ Measure, Modules key.Binding }{
 	Measure: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "measure disk now (Storage)")),
 	Modules: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "modules (other tabs)")),
-	Sidebar: key.NewBinding(key.WithKeys("["), key.WithHelp("[", "host list")),
 }
 
 // statusStaleAfter: three missed 5 s readings.
@@ -198,7 +196,7 @@ func (h *hostScreen) load(a *App, tab string) tea.Cmd {
 func (h *hostScreen) capturing() bool { return h.logEditing }
 
 func (h *hostScreen) keys() []key.Binding {
-	return []key.Binding{navKeys.Left, navKeys.Right, globalKeys.Back, hostKeys.Measure, hostKeys.Modules, hostKeys.Sidebar, svcKeys.Shell, svcKeys.Actions}
+	return []key.Binding{navKeys.Left, navKeys.Right, globalKeys.Back, hostKeys.Measure, hostKeys.Modules, svcKeys.Shell, svcKeys.Actions}
 }
 
 func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
@@ -354,8 +352,6 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			h.tab++
 			h.scroll = 0
 			return h.load(a, h.tabName(a))
-		case key.Matches(msg, hostKeys.Sidebar):
-			a.sidebar = !a.sidebar
 		}
 	}
 	return h.tabUpdate(a, msg)
@@ -463,24 +459,4 @@ func (a *App) statusErrText(err error) string {
 		return "too many windows are watching this box; retrying slowly"
 	}
 	return a.errText(err)
-}
-
-// sidebarView lists the fleet beside an open host (spec D10).
-func (a *App) sidebarView(h int) string {
-	return lipgloss.NewStyle().Width(18).Render(fit(a.hostList(h), 18, h, a.gl.Ellipsis))
-}
-
-// hostList is the fleet's ids, the open one marked, at most h lines.
-func (a *App) hostList(h int) string {
-	var lines []string
-	for _, r := range a.fleet.Rows {
-		name := truncate(sanitizeLine(r.ID), 16, a.gl.Ellipsis)
-		if r.ID == a.sel {
-			name = a.th.Sel.Render(a.gl.Sel + name)
-		} else {
-			name = " " + name
-		}
-		lines = append(lines, name)
-	}
-	return strings.Join(lines[:min(h, len(lines))], "\n")
 }

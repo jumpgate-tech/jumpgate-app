@@ -26,8 +26,8 @@ func (a *App) border() border {
 }
 
 // boxed draws body in a w×h box with title in the top border. The focused
-// box's border is drawn in the info colour; colour is never the only sign
-// of focus (the title says which region it is).
+// box's border is drawn in the info colour, and colour is never the only
+// sign: its title starts with ">", and in ASCII its top border is "=".
 func (a *App) boxed(title string, focused bool, body string, w, h int) string {
 	if w < 2 || h < 2 {
 		return fit(body, max(w, 0), max(h, 0), a.gl.Ellipsis)
@@ -37,12 +37,19 @@ func (a *App) boxed(title string, focused bool, body string, w, h int) string {
 	if focused {
 		st = a.th.Info
 	}
+	top := b.H
+	if focused {
+		title = strings.TrimSpace(a.gl.Sel + " " + title)
+		if a.gl.ASCII {
+			top = "="
+		}
+	}
 	head := ""
 	if title != "" {
 		head = " " + truncate(title, max(w-6, 1), a.gl.Ellipsis) + " "
 	}
 	fill := max(w-3-lipgloss.Width(head), 0)
-	lines := []string{st.Render(b.TL+b.H) + head + st.Render(strings.Repeat(b.H, fill)+b.TR)}
+	lines := []string{st.Render(b.TL+top) + head + st.Render(strings.Repeat(top, fill)+b.TR)}
 	for _, l := range strings.Split(fit(body, w-2, h-2, a.gl.Ellipsis), "\n") {
 		lines = append(lines, st.Render(b.V)+l+st.Render(b.V))
 	}
@@ -54,12 +61,22 @@ func (a *App) boxed(title string, focused bool, body string, w, h int) string {
 func (a *App) frame() string {
 	l := layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer))
 	parts := []string{a.header(a.w), a.kpiView(l.KPI)}
-	main := l.Main
-	main.W += l.Right.W // the activity log takes Right in a later task
-	body := a.mainView(main)
-	if l.Left.W > 0 {
-		body = lipgloss.JoinHorizontal(lipgloss.Top, a.viewsList(l.Left), body)
+	body := a.mainView(l.Main)
+	switch {
+	case a.logOver:
+		body = overlay(body, a.logView(min(overlayWidth, l.Main.W), l.Main.H), l.Main.W-min(overlayWidth, l.Main.W), l.Main.W)
+	case a.treeOver:
+		body = overlay(body, a.boxed("Tree", a.focus == focusTree, a.treeView(overlayWidth-2, l.Main.H-2), min(overlayWidth, l.Main.W), l.Main.H), 0, l.Main.W)
 	}
+	cols := []string{}
+	if l.Left.W > 0 {
+		cols = append(cols, a.viewsList(l.Left))
+	}
+	cols = append(cols, body)
+	if l.Right.W > 0 {
+		cols = append(cols, a.logView(l.Right.W, l.Right.H))
+	}
+	body = lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 	parts = append(parts, body)
 	last := a.drawerLine(a.w)
 	if l.DrawerOpen {
@@ -132,8 +149,8 @@ func (a *App) tabs() string {
 	return strings.Join(parts, " ")
 }
 
-// viewsList is the left sidebar: the views with their number keys, and the
-// host list once a host is open.
+// viewsList is the left sidebar: the views with their number keys, then
+// the fleet tree.
 func (a *App) viewsList(r rect) string {
 	var lines []string
 	for i, n := range screenNames {
@@ -143,10 +160,8 @@ func (a *App) viewsList(r rect) string {
 		}
 		lines = append(lines, l)
 	}
-	if a.detail != nil {
-		lines = append(lines, a.th.Dim.Render(strings.Repeat(a.border().H, r.W-2)), a.hostList(max(r.H-3-len(lines), 1)))
-	}
-	return a.boxed("Views", false, strings.Join(lines, "\n"), r.W, r.H)
+	lines = append(lines, a.th.Dim.Render(strings.Repeat(a.border().H, r.W-2)), a.treeView(r.W-2, max(r.H-3-len(lines), 1)))
+	return a.boxed("Views", a.focus == focusTree, strings.Join(lines, "\n"), r.W, r.H)
 }
 
 // mainView is the boxed main region: the skew banner above it, then the
@@ -173,16 +188,13 @@ func (a *App) mainView(r rect) string {
 	switch {
 	case a.modal != nil:
 		content = a.modal.view(a, iw, ih)
-	case a.detail != nil && a.w < leftMinWidth && a.sidebar:
-		main := fit(a.current().view(a, iw-19, ih), iw-19, ih, a.gl.Ellipsis)
-		content = lipgloss.JoinHorizontal(lipgloss.Top, a.sidebarView(ih), " ", main)
 	default:
 		content = a.current().view(a, iw, ih)
 	}
 	if !boxedMain {
 		return banner + fit(content, r.W, h, a.gl.Ellipsis)
 	}
-	return banner + a.boxed(title, true, content, r.W, h)
+	return banner + a.boxed(title, a.focus == focusMain, content, r.W, h)
 }
 
 // drawerOpen is the drawer's resolved state at this window size.
@@ -232,7 +244,10 @@ func (a *App) drawerLine(w int) string {
 
 // hints are the keys worth showing on one line, the drawer's first.
 func (a *App) hints() string {
-	hs := []string{". drawer", "? help", ": command", "1-5 views"}
+	hs := []string{". drawer", "? help", ": command", "1-5 views", "tab focus"}
+	if a.w < rightMinWidth {
+		hs[4] = "[ ] panels"
+	}
 	if a.detail != nil {
 		hs = append(hs, "esc back")
 	} else {

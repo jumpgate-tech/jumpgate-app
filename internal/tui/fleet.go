@@ -438,8 +438,10 @@ func (s *fleetScreen) fleetUpdate(a *App, msg tea.Msg) tea.Cmd {
 		switch {
 		case key.Matches(msg, navKeys.Up):
 			s.cursor--
+			a.selAll, a.selNode = false, ""
 		case key.Matches(msg, navKeys.Down):
 			s.cursor++
+			a.selAll, a.selNode = false, ""
 		case key.Matches(msg, navKeys.Filter):
 			s.editing = true
 			return s.filter.Focus()

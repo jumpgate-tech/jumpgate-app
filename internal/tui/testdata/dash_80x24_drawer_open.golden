@@ -21,4 +21,4 @@
 
  3 boxes | sort: host | ~ stale  * this machine
  jobs  box-a  1 running | 1 needs decision
- . drawer  ? help  : command  1-5 views  q quit
+ . drawer  ? help  : command  1-5 views  [ ] panels  q quit

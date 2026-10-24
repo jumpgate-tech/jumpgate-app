@@ -49,7 +49,7 @@ type Glyphs struct {
 }
 
 var (
-	unicodeGlyphs = Glyphs{Flag: "⚑", Full: "█", Empty: "░", Tick: "│", Ellipsis: "…", Sel: "▸", Sep: "·", Dash: "–", UpDown: "↑↓", Info: "·", OK: "✓", Warn: "▲", Fail: "✗", Open: "▾", Closed: "▸", Spark: strings.Split("▁▂▃▄▅▆▇█", "")}
+	unicodeGlyphs = Glyphs{Flag: "⚑", Full: "█", Empty: "░", Tick: "│", Ellipsis: "…", Sel: "▸", Sep: "·", Dash: "–", UpDown: "↑↓", Info: "·", OK: "✓", Warn: "▲", Fail: "✗", Open: "▾", Closed: "▹", Spark: strings.Split("▁▂▃▄▅▆▇█", "")}
 	asciiGlyphs   = Glyphs{Flag: "!", Full: "#", Empty: ".", Tick: "|", Ellipsis: "~", Sel: ">", Sep: "|", Dash: "-", UpDown: "up/dn", Info: "-", OK: "+", Warn: "!", Fail: "x", Open: "-", Closed: "+", Spark: []string{"_", ".", "-", "=", "#"}, ASCII: true}
 )
 

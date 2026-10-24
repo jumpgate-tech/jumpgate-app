@@ -22,12 +22,25 @@ func dashFleet() api.Fleet {
 	return f
 }
 
+// dashFleetBefore is the reading before dashFleet, so the activity log has
+// something to say: box-b was up, box-a's exec was syncing, with no
+// firewall reading and no job waiting.
+func dashFleetBefore() api.Fleet {
+	f := sampleFleet()
+	f.Rows[1].Reachable = true
+	f.Rows[0].Firewall = nil
+	f.Rows[0].Status.Exec.State = api.SyncSyncing
+	f.Rows[0].Jobs = &api.JobsSummary{Running: 1}
+	return f
+}
+
 // dashApp is an App at w×h with the drawer pref set and the dashboard fleet
 // delivered.
 func dashApp(t *testing.T, f *tuitest.Fake, w, h int, glyphs, drawer string) *App {
 	t.Helper()
 	a := newTestApp(t, f, w, h, glyphs)
 	m, _ := tuitest.Send(a, prefsMsg{p: api.UIPrefs{Glyphs: glyphs, ShowEstimates: true, Drawer: drawer}},
+		fleetMsg{u: apiclient.Update[api.Fleet]{Value: dashFleetBefore(), Has: true, State: apiclient.Live}},
 		fleetMsg{u: apiclient.Update[api.Fleet]{Value: dashFleet(), Has: true, State: apiclient.Live}})
 	return m.(*App)
 }
@@ -230,14 +243,17 @@ func TestDashboardGoldens(t *testing.T) {
 // open and with the skew banner.
 func TestFrameLinesFitWindow(t *testing.T) {
 	for _, c := range dashCases {
-		for _, extra := range []string{"", "host", "skew"} {
+		for _, extra := range []string{"", "host", "skew", "[", "]"} {
 			f := tuitest.NewFake()
 			if extra == "skew" {
 				f.ServerVersion = "v0.8.0"
 			}
 			var m tea.Model = dashApp(t, f, c.w, c.h, c.glyphs, c.pref)
-			if extra == "host" {
+			switch extra {
+			case "host":
 				m = press(t, m, "enter")
+			case "[", "]":
+				m = press(t, m, extra)
 			}
 			fr := tuitest.Frame(m)
 			lines := strings.Split(fr, "\n")
@@ -299,7 +315,7 @@ func TestViewsSidebarAndTabs(t *testing.T) {
 	}
 	m := press(t, dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "auto"), "enter")
 	fr = tuitest.Frame(m)
-	if !strings.Contains(fr, "+- Views") || !strings.Contains(fr, "+- box-a") || !strings.Contains(fr, "|>box-a") {
+	if !strings.Contains(fr, "+- Views") || !strings.Contains(fr, "+= > box-a") || !strings.Contains(fr, "|>+ box-a") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 }

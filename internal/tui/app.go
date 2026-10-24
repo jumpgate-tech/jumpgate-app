@@ -126,7 +126,14 @@ type App struct {
 	skew    string
 	srvVer  string // the server's version, when Skew reported one
 	sel     string // the box the status bar names
-	sidebar bool   // the host list beside an open host, below the width that shows it anyway
+	// focus is the region with the keyboard; treeOver and logOver are the
+	// tree and the log drawn over main where the window has no room for them.
+	focus    focusRegion
+	treeOver bool
+	logOver  bool
+	logOff   int      // lines the log is scrolled down
+	log      actLog   // the activity log (spec U6), this session only
+	prev     snapshot // what the log last compared against
 	// restarting: a restart is under way. A second one would race the first
 	// over which server is current, so R does nothing until it lands.
 	restarting bool
@@ -258,9 +265,23 @@ func (a *App) openScreen(id screenID) tea.Cmd {
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := a.update(msg)
+	switch msg := msg.(type) {
+	case fleetMsg, gatewaysMsg, targetsMsg, treeModsMsg:
+		a.record()
+	case jobsMsg:
+		if msg.u.Has {
+			a.record()
+		}
+	}
+	return m, cmd
+}
+
+func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.w, a.h = msg.Width, msg.Height
+		a.fitFocus()
 		return a, nil
 	case tickMsg:
 		return a, tick()
@@ -367,6 +388,9 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 	cur := a.current()
 	if cur.capturing() {
 		return cur.update(a, k)
+	}
+	if cmd, ok := a.regionKey(k); ok {
+		return cmd
 	}
 	switch {
 	case key.Matches(k, globalKeys.Help):
