@@ -174,7 +174,117 @@ func TestDrawerPrefRoundTrip(t *testing.T) // pref() of drawerFromPref(x)==x for
 
 ## Phase 2: KPI strip + alerts (U2)
 
-Files: `internal/tui/kpi.go`, `internal/tui/alerts.go` (+ tests). `type alert struct{Sev string; Box, Text string; At time.Time}`; `func alerts(fl api.Fleet, gw []api.GatewaySummary, now time.Time) []alert` covering spec §3's list; `func kpis(fl api.Fleet, gw []api.GatewaySummary) []tile` with value/`n/a`/`~`/`FAIL`. Layout gains `KPI rect` (1 row < 30 h, 4 rows ≥ 30). Gateways tile: `live/failing` plus `n/a` and hint `no request counts yet` (U1). Header gains `! N alerts`; drawer's `! alerts n/a` becomes the count. Goldens: `dash_degraded_120x40` (no zeros for unknowns). An interface `alertSource` so phase 3+ can swap in the health-watch feed.
+**Files:** Create `internal/tui/alerts.go`, `internal/tui/alerts_test.go`, `internal/tui/kpi.go`, `internal/tui/kpi_test.go`; modify `layout.go`, `layout_test.go`, `frame.go`, `frame_test.go`, `app.go` (gateways feed); goldens. `host_modules.go` is not touched.
+
+### Task 7: `alerts()` behind `alertSource`
+
+**Files:** Create `internal/tui/alerts.go`, `internal/tui/alerts_test.go`.
+
+**Interfaces:**
+- Produces:
+  ```go
+  type alertSev int // sevWarn, sevFail; String() "warn" | "FAIL"
+  type alert struct{ Sev alertSev; Box, Text string } // Text sanitized, URLs masked
+  // alertInput is what the TUI holds; Has flags say a reading exists.
+  type alertInput struct {
+      Fleet    api.Fleet; FleetHas bool
+      Gateways []api.GatewaySummary; GatewaysHas bool
+      Now      time.Time
+  }
+  type alertSource interface{ alerts(in alertInput) (list []alert, known bool) }
+  type derivedAlerts struct{} // the v1 source: alerts(in), known == in.FleetHas
+  func alerts(in alertInput) []alert // pure; FAIL first, then box, then text
+  ```
+- Rules (spec §3), one alert each:
+  - box down (`!Reachable && LastSeen != nil`): FAIL `down <age>`; a down box gets no other alert (its error and stale sections are why it is down).
+  - row `Error` (not `target_not_set_up`, which is a state, not a failure): FAIL `<code>: <message>`; `StatusError`/`DiskError`/`FirewallError`: FAIL `<section>: <message>`.
+  - stale: `Stale.Status/Disk/Firewall`, or `Status.At` older than 2 × `IntervalSeconds`: warn `<section> stale`.
+  - firewall `Grade` `fail` → FAIL, `warn` → warn (`firewall fail|warn`).
+  - disk `Fit` `short` → FAIL `disk short`, `tight` → warn `disk tight`.
+  - `Jobs.NeedsDecision > 0`: warn `N needs decision`.
+  - gateway: each warning → warn (Box = label or id, `maskText`); a known state other than `running` → FAIL `gateway <state>`.
+  - module errors: the App holds no module readings in phase 2 (they live on the host screen); the rule lands with the tree in phase 3.
+- `App.alertSrc alertSource` defaults to `derivedAlerts{}`; the health-watch feed replaces it later and keeps this one as the fallback (U2).
+
+- [ ] **Step 1: Failing tests**
+  - `TestAlertsSampleFleet`: `alerts` of `dashFleet()` = `[FAIL box-b "down 4m", warn box-a "1 needs decision", warn box-a "firewall warn"]` (order FAIL first, box, text); the laptop (not set up) gives none.
+  - `TestAlertsEachRule`: table, one row per rule above → exactly one alert with the given Sev and Text.
+  - `TestAlertsStaleTwoIntervals`: `Status.At` at 31 s with interval 15 → warn `status stale`; at 29 s → none.
+  - `TestAlertsGatewayWarningMasked`: a warning containing `https://u:p@h/key` → text has no `u:p` and no `key`.
+  - `TestAlertsUnknownWithoutFleet`: `derivedAlerts{}.alerts(alertInput{})` → `known == false`.
+  - `TestAlertsDeterministic`: same input twice (rows shuffled) → equal lists.
+- [ ] **Step 2:** `go test ./internal/tui -run TestAlerts` — FAIL (undefined).
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** PASS.
+
+### Task 8: KPI tiles
+
+**Files:** Create `internal/tui/kpi.go`, `internal/tui/kpi_test.go`.
+
+**Interfaces:**
+- Consumes: `alertInput`, `alerts`.
+- Produces:
+  ```go
+  type tile struct {
+      Title string    // Boxes, Synced, Head lag, Peers, Disk, Gateways, Alerts
+      Lines [2]string // the boxed tile's two rows
+      Short string    // the compact strip's cell, e.g. "synced ~1/3"
+  }
+  func kpis(a *App, in alertInput, al []alert, alertsKnown bool) []tile // 7 tiles, fixed order
+  func (a *App) kpiView(r rect) string // 1 row: Shorts joined by " | " (two spaces if that does not fit); 4 rows: boxed tiles side by side, Gateways 27 wide so its hint fits, the rest sharing what is left
+  ```
+- Values: a value, `n/a` (no data), `~value` (some input stale: `Stale.*` or the stream retrying), `FAIL <code>` (no value and the section errored). Never 0 for unknown; aggregates name unknowns (`1/3 synced · 1 n/a`).
+  - Boxes: `N up M down`, loading (`CheckedAt == nil`, never seen) counted as `n/a`; `n/a` before the first fleet.
+  - Synced: rows with `Status.Overall == synced` / rows, `· N syncing`, `· N n/a` for nil `Status`.
+  - Head lag: max `HeadLag` over rows with one, `· N n/a` for the others; none → `n/a`.
+  - Peers: exec/beacon sums over rows with `Status`, `~` if any of them is stale, `· N n/a`.
+  - Disk: min free (`100 − DiskUsedPct`) and the box with it; none → `n/a`, or `FAIL <code>` from `DiskError`.
+  - Gateways: `N live M failing` (`running` = live, a known other state = failing) and `n/a  no request counts yet` (U1); before the first `Gateways()` reply `n/a`.
+  - Alerts: `N FAIL M warn` and the first alert; `0` when the list is known and empty; `n/a` when unknown.
+
+- [ ] **Step 1: Failing tests**
+  - `TestKPIsSampleFleet`: on `dashFleet()` + one running gateway, Short / Lines:
+    Boxes `boxes 1/3 up` / `1 up 1 down`, `1 n/a of 3`;
+    Synced `synced ~1/3` / `~1/3 synced`, `1 sync 1 n/a`;
+    Head lag `lag 2` / `max 2 blk`, `2 n/a`;
+    Peers `peers ~51/81` / `~51 exec`, `~81 bcn 1 n/a`;
+    Disk `disk 39%` / `min 39% free`, `box-a 61% used`;
+    Gateways `gw 1/1 live` / `1 live 0 failing`, `n/a no request counts yet`;
+    Alerts `! 1 FAIL 2 warn` / `1 FAIL 2 warn`, `box-b down 4m`.
+    Without a gateways reply: `gw n/a` / `n/a`, `n/a no request counts yet`.
+  - `TestKPIsUnknownNeverZero`: fleet of three rows with every section nil (and no gateways reply) → every tile's Short and Lines contain `n/a` and none matches `\b0\b` except a known count.
+  - `TestKPIsFailFromSectionError`: one row, nil `Disk`, `DiskError{Code: "disk_probe"}` → Disk Short `disk FAIL disk_probe`.
+  - `TestKPIGatewaysHint`: Gateways tile Lines[1] contains `no request counts yet`.
+  - `TestKPIViewFits`: `kpiView` at w 80..200 with H 1 and 4 → exactly H lines, each ≤ w cells; ascii passes `requireASCII`.
+- [ ] **Step 2:** Run — FAIL.
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** PASS.
+
+### Task 9: The KPI region, alert counts and the gateways feed
+
+**Files:** Modify `layout.go`, `layout_test.go`, `frame.go`, `frame_test.go`, `app.go`; goldens.
+
+**Interfaces:**
+- `layout.KPI rect`: Y=1, H=1 when `h < 30`, H=4 (boxed) at `h >= 30`; Main starts below it. Main floor (≥ 50×8) still holds at every size.
+- `func (a *App) alertCount() string` — `! N alerts` (`! alerts n/a` when unknown).
+- Header right: `! N alerts · <age>` (alerts in Bad/Warn colour when N > 0).
+- Drawer line: `! alerts n/a` becomes `alertCount()`.
+- App keeps `gws []api.GatewaySummary`, `gwsHas bool` from every `gatewaysMsg` (an error keeps the last list); `Init` adds `loadGateways(a)` and a 30 s `gwTickMsg` that reloads. No new box polling: `/api/gateways` reads the server's store.
+
+- [ ] **Step 1: Failing tests**
+  - `TestLayoutForKPI`: (80,24) KPI.H == 1, Main.Y == 2; (100,30) KPI.H == 4, Main.Y == 5; `TestLayoutForMainFloor` adds KPI.H to the row sum and the overlap check.
+  - `TestHeaderAlertCount`: dash fleet → header contains `! 3 alerts`, line ≤ w at 80 and 120; before the fleet `! alerts n/a` is not in the header (right says `connecting`).
+  - `TestDrawerLineAlertCount`: dash fleet at 80×24 → last line contains `! 3 alerts`; `TestDrawerLineFailsClosed` keeps `! alerts n/a` before the fleet.
+  - `TestGatewaysFeed`: `Init` calls `Gateways`; a `gatewaysMsg` sets `a.gws`; `gwTickMsg` returns a reload command; an error reply keeps the old list.
+  - Goldens: regenerate `dash_*`; add `dash_degraded_120x40` (three rows: status nil, disk nil with `DiskError`, firewall nil, stale flags, one down, no gateways reply) — `requireASCII`, and `TestDegradedNoZeroForUnknown`: the KPI rows of that frame contain `n/a` per tile and no bare `0`.
+- [ ] **Step 2:** Run — FAIL.
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** `go test ./internal/tui/... -update`, review every golden diff; `go test ./...` PASS.
+- [ ] **Step 5:** Commit `feat(tui): the KPI strip and client-derived alerts`.
+
+### Task 10: Phase-2 verification
+
+- [ ] `gofmt -l .` empty; `go vet ./...` and `go vet -tags notui ./...` clean; `go test ./...` PASS; `go list -tags notui -deps ./cmd/jumpgate | grep -E 'charm|charmbracelet'` empty.
 
 ## Phase 3: Tree + context sidebar, Hosts into Fleet (U3)
 
