@@ -201,12 +201,23 @@ describe("ModulesSection", () => {
     expect(list.textContent).toContain("enr:-abc");
     expect(list.textContent).toContain(ENODE);
     fireEvent.click(screen.getByRole("button", { name: `Remove ${ENODE}` }));
+    // It restarts a client, so it asks first.
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("This restarts go-pulse on b.example.");
+    expect(api.startSetup).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove bootnode" }));
     await waitFor(() => expect(api.startSetup).toHaveBeenCalledWith("t1", { ...node.wire, Bootnodes: ["enr:-abc"] }));
     expect(await screen.findByText("b.example: setup started, go-pulse restarts.")).toBeTruthy();
+    // The removed entry is gone from the list at once, and a second
+    // removal before the targets refetch does not send it back.
+    await waitFor(() => expect(list.textContent).not.toContain(ENODE));
     vi.mocked(api.startSetup).mockRejectedValueOnce(new Error("busy"));
     fireEvent.click(screen.getByRole("button", { name: "Remove enr:-abc" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove bootnode" }));
     expect(await screen.findByText("b.example: busy")).toBeTruthy();
-    expect(api.startSetup).toHaveBeenLastCalledWith("t1", { ...node.wire, Bootnodes: [ENODE] });
+    expect(api.startSetup).toHaveBeenLastCalledWith("t1", { ...node.wire, Bootnodes: [] });
+    // A failed removal keeps the entry listed.
+    expect(list.textContent).toContain("enr:-abc");
   });
 
   it("stops using a bootnode on the nodes that list it", async () => {

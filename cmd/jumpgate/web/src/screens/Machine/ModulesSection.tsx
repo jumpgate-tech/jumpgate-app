@@ -489,17 +489,34 @@ function ConfirmDialog({
 // NodeBootnodes lists this node's saved Bootnodes with a Remove per entry,
 // whether or not anything still runs that bootnode. Remove resubmits the
 // node's wire without the entry through POST /api/targets/{id}/setup, which
-// restarts the client the entry went to.
+// restarts the client the entry went to, so it asks first.
+//
+// removed holds the entries already removed here: the saved wire is only
+// re-read on the next targets refetch, and a second removal built from the
+// stale wire would send the first entry back. They are filtered from both
+// the list and every wire sent, and dropped once the refetched wire no
+// longer has them.
 function NodeBootnodes({ target, wire, onChanged }: { target: api.Target; wire: api.WireConfig; onChanged: () => void }) {
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const list = wire.Bootnodes ?? [];
+  const [asking, setAsking] = useState<string | null>(null);
+  const [removed, setRemoved] = useState<string[]>([]);
+  const saved = wire.Bootnodes ?? [];
+  const savedKey = saved.join(",");
+  useEffect(() => {
+    setRemoved((r) => (r.some((e) => !saved.includes(e)) ? r.filter((e) => saved.includes(e)) : r));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedKey]);
+  const list = saved.filter((b) => !removed.includes(b));
   if (list.length === 0 && !result) return null;
+  const clientOf = (entry: string) => (entry.startsWith("enr:") ? wire.BeaconID : wire.ExecID);
   async function remove(entry: string): Promise<void> {
+    setAsking(null);
     setBusy(true);
-    const client = entry.startsWith("enr:") ? wire.BeaconID : wire.ExecID;
+    const client = clientOf(entry);
     try {
-      await api.startSetup(target.id, withoutBootnode(wire, entry));
+      await api.startSetup(target.id, { ...wire, Bootnodes: list.filter((b) => b !== entry) });
+      setRemoved((r) => [...r, entry]);
       setResult(`${boxName(target)}: setup started, ${client} restarts.`);
       onChanged();
     } catch (err) {
@@ -515,13 +532,32 @@ function NodeBootnodes({ target, wire, onChanged }: { target: api.Target; wire: 
         {list.map((b) => (
           <li key={b}>
             <code>{b}</code>{" "}
-            <button type="button" className="btn btn-ghost small" disabled={busy} aria-label={`Remove ${b}`} onClick={() => void remove(b)}>
+            <button type="button" className="btn btn-ghost small" disabled={busy} aria-label={`Remove ${b}`} onClick={() => setAsking(b)}>
               Remove
             </button>
           </li>
         ))}
       </ul>
       {result && <p className="small">{result}</p>}
+      {asking && (
+        <Modal onClose={() => setAsking(null)} label="Remove this bootnode">
+          <h3>Remove this bootnode</h3>
+          <p>
+            <code>{asking}</code>
+          </p>
+          <p>
+            This restarts {clientOf(asking)} on {boxName(target)}.
+          </p>
+          <div className="wizard-actions">
+            <button className="btn btn-ghost" type="button" onClick={() => setAsking(null)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" type="button" disabled={busy} onClick={() => void remove(asking)}>
+              Remove bootnode
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
