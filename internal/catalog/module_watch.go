@@ -39,10 +39,11 @@ var watchNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 func ParseWatchEndpoint(s string) (WatchEndpoint, error) {
 	name, raw, ok := strings.Cut(s, "=")
 	if !ok {
-		return WatchEndpoint{}, fmt.Errorf("watch endpoint %q is not name=url", s)
+		return WatchEndpoint{}, fmt.Errorf("a watch endpoint is not name=url")
 	}
 	if !watchNameRe.MatchString(name) {
-		return WatchEndpoint{}, fmt.Errorf("watch endpoint name %q may use only letters, digits, '.', '_' and '-'", name)
+		// Not echoed: a bare URL with a "=" in its query parses as a name.
+		return WatchEndpoint{}, fmt.Errorf("a watch endpoint name may use only letters, digits, '.', '_' and '-'")
 	}
 	kind := "rpc"
 	if rest, ok := strings.CutPrefix(raw, "beacon+"); ok {
@@ -53,6 +54,17 @@ func ParseWatchEndpoint(s string) (WatchEndpoint, error) {
 		return WatchEndpoint{}, fmt.Errorf("watch endpoint %s: the URL must be http:// or https:// with a host", name)
 	}
 	return WatchEndpoint{Name: name, URL: raw, Kind: kind}, nil
+}
+
+// RedactURL is raw cut to scheme://host[:port], for text that leaves the
+// box (alerts, logs, errors): an endpoint URL can carry an API key in its
+// userinfo, path or query.
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "(a URL)"
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // WatchEndpoints parses and checks every endpoint of a watch record.

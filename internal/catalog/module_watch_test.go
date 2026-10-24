@@ -59,3 +59,19 @@ func TestParseWatchEndpoint(t *testing.T) {
 		t.Errorf("rpc: %+v %v", e, err)
 	}
 }
+
+// Refusals never echo an endpoint URL: it may carry a key.
+func TestParseWatchEndpointErrorsHideURL(t *testing.T) {
+	for _, in := range []string{"https://rpc.example/key-abc", "https://x/key-abc?k=1=v", "gw=ftp://u:key-abc@h/"} {
+		_, err := ParseWatchEndpoint(in)
+		if err == nil || strings.Contains(err.Error(), "key-abc") {
+			t.Errorf("ParseWatchEndpoint(%q) err = %v", in, err)
+		}
+	}
+	if got := RedactURL("https://u:p@h.example:1/a?b=c"); got != "https://h.example:1" {
+		t.Errorf("RedactURL = %q", got)
+	}
+	if got := RedactURL("::bad"); got != "(a URL)" {
+		t.Errorf("RedactURL bad = %q", got)
+	}
+}

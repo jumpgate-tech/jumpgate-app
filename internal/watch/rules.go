@@ -80,7 +80,7 @@ func checks(in Inputs) []check {
 	}
 	for _, e := range in.EndpointList {
 		err, probed := in.Endpoints[e.Name]
-		out = append(out, check{"endpoint:" + e.Name, probed && err != nil, fmt.Sprintf("%s (%s) stopped answering.", e.Name, e.URL)})
+		out = append(out, check{"endpoint:" + e.Name, probed && err != nil, fmt.Sprintf("%s (%s) stopped answering.", e.Name, catalog.RedactURL(e.URL))})
 	}
 	return out
 }

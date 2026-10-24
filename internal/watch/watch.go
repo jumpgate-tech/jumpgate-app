@@ -144,7 +144,8 @@ func probe(ctx context.Context, hc *http.Client, e Endpoint) error {
 		}
 	}
 	if err != nil {
-		return err
+		// url errors quote the URL, which may carry a key.
+		return fmt.Errorf("%s has a URL that does not parse", e.Name)
 	}
 	resp, err := hc.Do(req)
 	if err != nil {

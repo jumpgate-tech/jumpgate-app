@@ -1,7 +1,10 @@
 package watch
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,7 +104,7 @@ func TestEndpointAlert(t *testing.T) {
 		Endpoints:    map[string]error{"gw-eu": errors.New("timeout")},
 	}
 	a := open(twice(in), "endpoint:gw-eu")
-	if a == nil || a.Message != "gw-eu (https://gw.example/rpc) stopped answering." {
+	if a == nil || a.Message != "gw-eu (https://gw.example) stopped answering." {
 		t.Errorf("endpoint alert = %+v", a)
 	}
 }
@@ -149,5 +152,30 @@ func TestNoWireOnlyEndpoints(t *testing.T) {
 	s := twice(in)
 	if len(s.Open) != 0 || len(s.Strikes) != 0 {
 		t.Errorf("Snap nil evaluated node rules: %+v", s)
+	}
+}
+
+// An endpoint URL can carry an API key in its userinfo, path or query; the
+// alert text (which reaches the webhook, logs and UI) names only the host.
+func TestEndpointAlertNeverCarriesKey(t *testing.T) {
+	in := Inputs{
+		EndpointList: []Endpoint{{Name: "gw", URL: "https://user:pw1@rpc.example.com:8443/v1/key-abc?apikey=q42", Kind: "rpc"}},
+		Endpoints:    map[string]error{"gw": errors.New("timeout")},
+	}
+	a := open(twice(in), "endpoint:gw")
+	if a == nil || a.Message != "gw (https://rpc.example.com:8443) stopped answering." {
+		t.Fatalf("alert = %+v", a)
+	}
+	for _, k := range []string{"pw1", "user", "key-abc", "q42"} {
+		if strings.Contains(a.Message, k) {
+			t.Errorf("alert carries %q: %s", k, a.Message)
+		}
+	}
+}
+
+func TestProbeErrorNeverCarriesURL(t *testing.T) {
+	err := probe(context.Background(), http.DefaultClient, Endpoint{Name: "gw", URL: "https://rpc.example/\x7fkey-abc", Kind: "rpc"})
+	if err == nil || strings.Contains(err.Error(), "key-abc") {
+		t.Errorf("probe err = %v", err)
 	}
 }
