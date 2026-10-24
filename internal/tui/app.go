@@ -107,6 +107,14 @@ type App struct {
 	gws      []api.GatewaySummary
 	gwsHas   bool
 	alertSrc alertSource // nil: derivedAlerts
+	// The fleet tree: which boxes are expanded, their modules readings, and
+	// the tree's cursor. a.sel is the one selection the tree and the table
+	// share; selNode narrows it to one client, selAll widens it to the fleet.
+	expanded map[string]bool
+	mods     map[string]treeMods
+	treeCur  int
+	selNode  string
+	selAll   bool
 	conn     apiclient.ConnState
 	connErr  error
 
@@ -170,7 +178,7 @@ func New(o Options) *App {
 // Init starts the fleet watch, the clock and a prefs fetch. The fetch does
 // not block the first frame: the TUI shows the defaults until prefsMsg lands.
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs(), loadGateways(a), gwTick())
+	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs(), loadGateways(a), gwTick(), treeTick())
 }
 
 // gatewaysEvery is how often the KPI strip re-reads the gateways: the
@@ -260,6 +268,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tick()
 	case gwTickMsg:
 		return a, tea.Batch(loadGateways(a), gwTick())
+	case treeModsMsg:
+		a.gotTreeMods(msg)
+		return a, nil
+	case treeTickMsg:
+		return a, tea.Batch(a.treeRefresh(), treeTick())
 	case gatewaysMsg:
 		if msg.err == nil { // an error keeps the last list
 			a.gws, a.gwsHas = msg.gws, true
