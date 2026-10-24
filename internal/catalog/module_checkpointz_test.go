@@ -68,7 +68,8 @@ func TestCheckpointzConfig(t *testing.T) {
 
 	b943 := BoxModule{ID: "checkpointz", ChainID: 943, BindAddr: "10.0.0.5", Port: 5600,
 		Upstreams: []string{"http://127.0.0.1:5052", "https://10.0.0.6:5052/"}}
-	u, err = RenderBoxModule(b943)
+	// PulseChain is disabled (Task 19), so its unit is rendered directly.
+	u, err = checkpointzUnit(b943)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,8 +79,13 @@ func TestCheckpointzConfig(t *testing.T) {
 			t.Errorf("943 config lacks %q:\n%s", want, got)
 		}
 	}
-	if !strings.Contains(u.Files[b943.SidecarPath()], `"bind":"10.0.0.5"`) {
-		t.Errorf("sidecar = %s", u.Files[b943.SidecarPath()])
+	b1 := BoxModule{ID: "checkpointz", ChainID: 1, BindAddr: "10.0.0.5", Upstreams: []string{"http://127.0.0.1:5052"}}
+	u, err = RenderBoxModule(b1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(u.Files[b1.SidecarPath()], `"bind":"10.0.0.5"`) {
+		t.Errorf("sidecar = %s", u.Files[b1.SidecarPath()])
 	}
 }
 
@@ -127,8 +133,16 @@ func TestCheckpointzBetaOnPulseChain(t *testing.T) {
 	if !m.IsBeta(943) || !m.IsBeta(369) || m.IsBeta(1) || m.IsBeta(560048) {
 		t.Errorf("BetaChains = %v", m.BetaChains)
 	}
-	for _, c := range []int{1, 560048, 369, 943} {
+	for _, c := range []int{1, 560048} {
 		if ok, r := m.Applies(c, ""); !ok {
+			t.Errorf("Applies(%d) = %v %q", c, ok, r)
+		}
+	}
+	// Until the 943 test passes, PulseChain is disabled with a reason
+	// (plan Task 19's fallback); the beta label returns with it.
+	const want = "Checkpointz has not been shown to work with PulseChain's beacon preset yet."
+	for _, c := range []int{369, 943} {
+		if ok, r := m.Applies(c, ""); ok || r != want {
 			t.Errorf("Applies(%d) = %v %q", c, ok, r)
 		}
 	}
@@ -240,7 +254,7 @@ func TestCheckpointzKeysExist(t *testing.T) {
 	}
 	for _, chain := range []int{1, 943} {
 		b := BoxModule{ID: "checkpointz", ChainID: chain, Upstreams: []string{"http://127.0.0.1:5052"}}
-		u, err := RenderBoxModule(b)
+		u, err := checkpointzUnit(b)
 		if err != nil {
 			t.Fatal(err)
 		}

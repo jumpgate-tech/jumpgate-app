@@ -20,8 +20,12 @@ import (
 // checkpoint-sync from it. Config keys are checked against v0.32.0 in
 // testdata/checkpointz-keys-v0.32.0.txt.
 //
-// PulseChain is beta: custom_preset makes it decode PulseChain's beacon
-// preset, which has not yet been shown to work (plan Task 19).
+// PulseChain is off for now: custom_preset makes checkpointz read the
+// beacon's own spec (go-eth2-client custom spec support, dynamic SSZ), which
+// should cover PulseChain's preset, but no run against a synced
+// lighthouse-pulse beacon has shown it serving a checkpoint another node
+// syncs from (plan Task 19). 369/943 stay in Chains and BetaChains, so
+// dropping the Unsupported entry once that test passes ships them as beta.
 func init() {
 	modules = append(modules, Module{
 		ID:         "checkpointz",
@@ -31,7 +35,11 @@ func init() {
 		Placement:  PlaceBox,
 		Chains:     []int{1, 560048, 369, 943},
 		BetaChains: []int{369, 943},
-		NeedsSync:  true,
+		Unsupported: map[int]string{
+			369: checkpointzPulseReason,
+			943: checkpointzPulseReason,
+		},
+		NeedsSync: true,
 		// Full mode caches up to 5 finalized states in memory.
 		Resources: Resources{RAMBytes: 3 << 30, DiskBytes: 1 << 20},
 		Unit:      checkpointzUnit,
@@ -39,6 +47,10 @@ func init() {
 }
 
 const checkpointzPort = 5555
+
+// checkpointzPulseReason disables Checkpointz on PulseChain until the 943
+// test passes (plan Task 19's fallback copy).
+const checkpointzPulseReason = "Checkpointz has not been shown to work with PulseChain's beacon preset yet."
 
 // checkpointzListen is b's listen host and port: BindAddr (loopback, or a
 // private address) or 127.0.0.1, and Port or 5555.

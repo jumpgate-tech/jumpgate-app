@@ -5,7 +5,7 @@ summary: Serve finalized checkpoints from your own synced beacon node, for your 
 recap: |
   Checkpointz needs a synced beacon node on its chain, and it should never point at a beacon with validators attached.
   It listens on 127.0.0.1:5555 by default, or on a private address you give. It never serves the internet.
-  PulseChain is beta.
+  Ethereum and Hoodi only for now; PulseChain is off until it is tested.
 requires: [box-modules]
 verified: {}
 ---
@@ -19,9 +19,13 @@ only your own boxes.
 
 jumpgate builds Checkpointz v0.32.0 from source on the box and runs it as
 `jumpgate-mod-checkpointz-<chain>.service`. It runs on Ethereum (1) and Hoodi
-(560048). PulseChain (369) and PulseChain testnet (943) are **beta**: there
-it decodes PulseChain's beacon preset (`custom_preset`), and that has not
-yet been shown to work end to end.
+(560048).
+
+On PulseChain (369) and PulseChain testnet (943) the toggle is off, with the
+reason "Checkpointz has not been shown to work with PulseChain's beacon
+preset yet." Checkpointz can read a beacon's own preset (`custom_preset`),
+which jumpgate sets on PulseChain. It comes back as **beta** once a run on
+943 shows a node checkpoint-syncing from it.
 
 ## What you need
 
