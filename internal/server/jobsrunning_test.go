@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/api"
@@ -16,19 +17,35 @@ import (
 func TestRunningJobsNeverAsksABox(t *testing.T) {
 	requireAgentPeer(t)
 	b := newBoxRig(t, withoutDriver)
-	rec := b.startJob(t, `{}`)
-
+	// The hooks go in before startJob, so no goroutine startJob leaves
+	// running reads them mid-write (-race); they only judge once armed,
+	// since startJob itself sends and lists.
+	var armed atomic.Bool
 	prev := onSendIntent
-	onSendIntent = func(target, kind string) { t.Errorf("GET /api/jobs/running sent %s to %s", kind, target) }
+	onSendIntent = func(target, kind string) {
+		if armed.Load() {
+			t.Errorf("GET /api/jobs/running sent %s to %s", kind, target)
+		}
+	}
 	t.Cleanup(func() { onSendIntent = prev })
-	b.srv.jobs.listJobs = func(context.Context, config.Config, config.Target) (intent.JobListResult, error) {
-		t.Error("GET /api/jobs/running listed a box")
-		return intent.JobListResult{}, nil
+	listJobs := b.srv.jobs.listJobs
+	b.srv.jobs.listJobs = func(ctx context.Context, cfg config.Config, tg config.Target) (intent.JobListResult, error) {
+		if armed.Load() {
+			t.Error("GET /api/jobs/running listed a box")
+			return intent.JobListResult{}, nil
+		}
+		return listJobs(ctx, cfg, tg)
 	}
-	b.srv.jobs.readJob = func(context.Context, config.Config, config.Target, intent.JobReadPayload) (intent.JobReadResult, error) {
-		t.Error("GET /api/jobs/running read a job")
-		return intent.JobReadResult{}, nil
+	readJob := b.srv.jobs.readJob
+	b.srv.jobs.readJob = func(ctx context.Context, cfg config.Config, tg config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
+		if armed.Load() {
+			t.Error("GET /api/jobs/running read a job")
+			return intent.JobReadResult{}, nil
+		}
+		return readJob(ctx, cfg, tg, p)
 	}
+	rec := b.startJob(t, `{}`)
+	armed.Store(true)
 
 	var got api.RunningJobs
 	if code := b.do(t, "GET", "/api/jobs/running", nil, &got); code != 200 {
