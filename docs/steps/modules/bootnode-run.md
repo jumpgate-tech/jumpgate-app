@@ -45,6 +45,6 @@ Once the bootnode runs, its card shows the address it logged:
 - **App.** The address is under **Running** on the bootnode's card. Click
   **Copy** next to it.
 - **TUI.** Press `m` and move to the bootnode. The full address is printed
-  under it. Press `c` to copy it through your terminal.
+  under it. Press `c` to send it to the terminal clipboard.
 
 To use it on your own nodes, see the next step.

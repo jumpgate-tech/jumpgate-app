@@ -431,7 +431,7 @@ func (m *modulesModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	case key.Matches(k, modKeys.Copy):
 		if m.cursor < len(cards) {
 			if id, _ := m.h.boxIdentity(cards[m.cursor]); id != "" {
-				m.note, m.errText = "Copied the "+identityKind(id)+" to the clipboard.", ""
+				m.note, m.errText = "Sent the "+identityKind(id)+" to the terminal clipboard.", ""
 				return false, tea.SetClipboard(id)
 			}
 		}

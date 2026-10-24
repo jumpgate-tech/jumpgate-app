@@ -45,7 +45,18 @@ anything else, including spaces, commas and shell characters, with "catalog: a
 bootnode must start with enode:// or enr:-" or a reason for the malformed
 entry.
 
+An enode that advertises `0.0.0.0` or `[::]` is refused, because no peer
+can dial it. For the same reason, the app does not offer **Use on my other
+&lt;chain&gt; nodes** while the card shows a note or an undialable address. It
+says "Set the box's public IP before your other nodes can use this bootnode."
+instead.
+
 ## Stop using it
 
-A node with no bootnodes has exactly the units it had before. Removing every
-entry puts the clients back on the network's built-in bootnodes.
+On the bootnode's card, click **Stop using on my &lt;chain&gt; nodes**. This
+button shows while any of your nodes lists the address. Then click **Stop
+using bootnode**. jumpgate removes the address from each node that lists it
+and runs that node's setup again, with the same per-node report.
+
+A node with no bootnodes has exactly the units it had before, so removing
+every entry puts the clients back on the network's built-in bootnodes.

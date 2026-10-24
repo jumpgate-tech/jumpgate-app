@@ -168,6 +168,41 @@ describe("ModulesSection", () => {
     expect(card("el-bootnode").textContent).toContain("Set the box's public IP (ExtIP) on the bootnode.");
     fireEvent.click(screen.getByRole("button", { name: "Copy enode" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(ENODE));
+    expect(screen.queryByRole("button", { name: /Use on my other/ })).toBeNull();
+    expect(card("el-bootnode").textContent).toContain("Set the box's public IP before your other nodes can use this bootnode.");
+  });
+
+  it("puts a failed copy's hint on its own line", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    setup(bootnodeFleet()[0], { statuses: [BOOT_STATUS] });
+    const btn = await screen.findByRole("button", { name: "Copy enode" });
+    fireEvent.click(btn);
+    await waitFor(() => expect(card("el-bootnode").querySelector(".module-copy-failed")?.textContent).toBe("Copy failed; select the text instead."));
+    expect(btn.textContent).toBe("Copy");
+  });
+
+  it("offers no fleet action for an enode that advertises 0.0.0.0", async () => {
+    const fleet = bootnodeFleet();
+    setup(fleet[0], { fleet, statuses: [{ ...BOOT_STATUS, identity: ENODE.replace("203.0.113.7", "0.0.0.0") }] });
+    await waitFor(() => expect(card("el-bootnode").querySelector("code.module-identity")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: /Use on my other/ })).toBeNull();
+    expect(card("el-bootnode").textContent).toContain("Set the box's public IP before your other nodes can use this bootnode.");
+  });
+
+  it("stops using a bootnode on the nodes that list it", async () => {
+    const fleet = bootnodeFleet();
+    fleet[2].wire!.Bootnodes = ["enr:-abc", ENODE];
+    vi.mocked(api.startSetup).mockResolvedValue({ status: "started" });
+    setup(fleet[0], { fleet, statuses: [BOOT_STATUS] });
+    fireEvent.click(await screen.findByRole("button", { name: "Stop using on my chain 369 nodes" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("a.example: does not use this bootnode.");
+    expect(dialog.textContent).toContain("Restarts go-pulse on b.example.");
+    fireEvent.click(screen.getByRole("button", { name: "Stop using bootnode" }));
+    await waitFor(() => expect(api.startSetup).toHaveBeenCalledTimes(1));
+    expect(api.startSetup).toHaveBeenCalledWith("b", { ...fleet[2].wire, Bootnodes: ["enr:-abc"] });
+    await waitFor(() => expect(dialog.textContent).toContain("b.example: setup started, go-pulse restarts."));
   });
 
   it("offers a running bootnode to the fleet's other nodes on its chain", async () => {

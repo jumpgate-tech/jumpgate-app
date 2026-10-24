@@ -3,6 +3,7 @@ package catalog
 import (
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 )
@@ -27,6 +28,10 @@ func ValidateBootnode(s string) error {
 	case strings.HasPrefix(s, "enode://"):
 		if !enodeRe.MatchString(s) {
 			return fmt.Errorf("catalog: bootnode %q is not a valid enode URL (enode://<128 hex>@<host>:<port>)", s)
+		}
+		host := enodeRe.FindStringSubmatch(s)[1]
+		if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil && ip.IsUnspecified() {
+			return fmt.Errorf("catalog: bootnode %q advertises %s, which no peer can dial; set the bootnode box's public IP", s, host)
 		}
 	case strings.HasPrefix(s, "enr:-"):
 		if !enrRe.MatchString(s) {

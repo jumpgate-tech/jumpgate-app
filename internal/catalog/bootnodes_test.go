@@ -107,7 +107,10 @@ func TestBootnodesValidated(t *testing.T) {
 	}
 	for _, bad := range []string{
 		testEnode1 + " --foo", testEnode1 + ",x", testEnode1 + ";rm", "enr:-abc$(id)", "enr:-a`b`",
-		"enr:-a%n", testEnode1 + "\n", "enr:-a'b", "enr:-a\"b", "enode://", "enr:-", "enr:-a\\b",
+		"enr:-a%n", testEnode1 + "\n",
+		"enode://" + strings.Repeat("ab12", 32) + "@0.0.0.0:30303",
+		"enode://" + strings.Repeat("ab12", 32) + "@[::]:30303",
+		"enode://" + strings.Repeat("ab12", 32) + "@[0:0::0]:30303?discport=30301", "enr:-a'b", "enr:-a\"b", "enode://", "enr:-", "enr:-a\\b",
 	} {
 		w.Bootnodes = []string{bad}
 		if _, _, err := RenderUnits(w); err == nil {

@@ -139,7 +139,7 @@ func TestModulesModalCopiesBootnodeIdentity(t *testing.T) {
 	if got, want := fmt.Sprint(cmd()), fmt.Sprint(tea.SetClipboard(enode)()); got != want {
 		t.Fatalf("clipboard msg %q, want %q", got, want)
 	}
-	if !strings.Contains(mm.note, "Copied the enode") {
+	if !strings.Contains(mm.note, "Sent the enode to the terminal clipboard") {
 		t.Fatalf("note %q", mm.note)
 	}
 }
