@@ -131,3 +131,33 @@ func TestPriceClientKeepsTheLastGoodPriceThroughAnOutage(t *testing.T) {
 		t.Errorf("refresh failed: price = %d, want the last good 75", got)
 	}
 }
+
+// The price book names msgboard's two billable methods (spec open question 8).
+// The store's answer wins; during a store outage the book's entry is charged
+// instead of the one-credit fallback, so a full contentPage is never sold at 1.
+func TestPriceBookNamesMsgboard(t *testing.T) {
+	for _, method := range []string{"msgboard_contentPage", "msgboard_addMessage"} {
+		want, ok := priceBook[method]
+		if !ok {
+			t.Fatalf("price book does not name %s", method)
+		}
+		if want != defaultPrice {
+			t.Errorf("%s = %d, want the default price %d", method, want, defaultPrice)
+		}
+
+		down := newBillingStub(t)
+		down.status = http.StatusInternalServerError
+		if got := NewBillingClient(down.socket, "relay-token").PriceOf(context.Background(), method, 369); got != want {
+			t.Errorf("%s during an outage = %d, want the book's %d", method, got, want)
+		}
+
+		up := newBillingStub(t)
+		up.body = `{"credits":42,"known":true}`
+		if got := NewBillingClient(up.socket, "relay-token").PriceOf(context.Background(), method, 369); got != 42 {
+			t.Errorf("%s with the store up = %d, want the store's 42", method, got)
+		}
+	}
+	if _, ok := priceBook["msgboard_content"]; ok {
+		t.Error("msgboard_content is never public and must not be priced")
+	}
+}

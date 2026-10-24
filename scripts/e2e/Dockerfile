@@ -14,6 +14,19 @@ RUN useradd -m -s /bin/bash alice \
     && echo 'alice ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/alice \
     && chmod 0440 /etc/sudoers.d/alice \
     && useradd -m -s /bin/bash bob
+# Stub clients for the module toggle e2e: install's Verify passes on
+# `--version`, reth's `node --help` lists the msgboard flag, and running
+# either just sleeps, so systemd sees an active unit. They serve no RPC.
+RUN printf '%s\n' '#!/bin/sh' \
+      'case "$1" in' \
+      '  --version) echo "reth stub" ;;' \
+      '  node) if [ "$2" = --help ]; then echo "      --msgboard.block-range <BLOCKS>"; else exec sleep infinity; fi ;;' \
+      '  *) exec sleep infinity ;;' \
+      'esac' > /usr/local/bin/reth \
+    && printf '%s\n' '#!/bin/sh' \
+      'if [ "$1" = --version ]; then echo "lighthouse-pulse stub"; else exec sleep infinity; fi' \
+      > /usr/local/bin/lighthouse-pulse \
+    && chmod 0755 /usr/local/bin/reth /usr/local/bin/lighthouse-pulse
 STOPSIGNAL SIGRTMIN+3
 # systemd marks / rshared at boot only on a real host; inside a container it
 # leaves Docker's rprivate root alone. Credential setup (LoadCredential=) mounts

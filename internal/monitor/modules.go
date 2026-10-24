@@ -72,6 +72,8 @@ func decodeServed(string) (ModuleStatus, error) { return ModuleStatus{Served: tr
 // probeModules reads every node module that applies to w. A node that
 // answers "method not found" is not serving the module, which is a reading
 // rather than an error.
+//
+// docs:covers msgboard-status
 func probeModules(ctx context.Context, ex executor.Executor, w catalog.WireConfig) []ModuleStatus {
 	var out []ModuleStatus
 	for _, m := range nodeModules() {

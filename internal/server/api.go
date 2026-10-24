@@ -1260,6 +1260,10 @@ func (s *Server) reconcileWire(w http.ResponseWriter, r *http.Request, cfg confi
 	return wire, true
 }
 
+// planWire is the node plan startWireSetup runs; a var so the e2e test can
+// drop the steps a stub client cannot pass (the handshake, the snapshot).
+var planWire = setup.Plan
+
 // startWireSetup runs the node wizard's plan for an already decided wire:
 // it claims the target's setup slot, refuses during a job or on a migrated
 // box, persists the wire and launches the run. afterSuccess, when set, runs
@@ -1267,7 +1271,7 @@ func (s *Server) reconcileWire(w http.ResponseWriter, r *http.Request, cfg confi
 // answered with an error; on true the caller writes the 202.
 func (s *Server) startWireSetup(w http.ResponseWriter, r *http.Request, cfg config.Config, target config.Target, wire catalog.WireConfig, afterSuccess func()) bool {
 	id := target.ID
-	steps, err := setup.Plan(wire)
+	steps, err := planWire(wire)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return false
