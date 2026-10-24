@@ -4,12 +4,18 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
 )
 
 func TestStateWriteIsAtomic(t *testing.T) {
+	// The watch runs only on Linux boxes. Windows refuses to rename over a
+	// file another goroutine has open, and has no 0640 modes to check.
+	if runtime.GOOS == "windows" {
+		t.Skip("the watch state file is a Linux box file")
+	}
 	dir := t.TempDir()
 	p := filepath.Join(dir, "state.json")
 	big := State{At: t0}
