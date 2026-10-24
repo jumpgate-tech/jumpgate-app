@@ -437,7 +437,7 @@ At 120×40 the fleet table lost DISK and FW (main was 62 inside its box). `layou
 **Files:** Create `internal/tui/bars.go`, `internal/tui/bars_test.go`; modify `layout.go`, `layout_test.go` (the drawer's height follows its lines), `frame.go` (the open drawer draws bars; `activity()` goes), `frame_test.go`, `focus.go` (`a.layout()` passes the line count), `dash_test.go` (flows); goldens. `host_modules.go` is not touched. No new polling: bars read only the fleet stream and the jobs inbox the Jobs view already watches.
 
 **What the API exposes (2026-10-23):**
-- Jobs: `api.JobView.Step` / `Steps` (the inbox, `WatchJobs`), only while the Jobs view watches it (`snapshot.Jobs` rule). Watching it from the drawer too would make the server list every box's jobs every few seconds (`handleJobsStream` → `jobs.refresh`), new box polling, so off the Jobs view the drawer shows no job bars, only the fleet's per-box counts in its empty-state line.
+- Jobs: `api.JobView.Step` / `Steps` (the inbox, `WatchJobs`), only while the Jobs view watches it (`snapshot.Jobs` rule). Watching it from the drawer too would make the server list every box's jobs every few seconds (`handleJobsStream` → `jobs.refresh`), new box polling. Off the Jobs view the drawer reads `GET /api/jobs/running` instead (Task 21).
 - EL sync: `Status.Exec.Head` vs `Status.RefHead` (the public reference head); a bar only while exec is `syncing` and `RefHead > 0`.
 - CL sync: `Status.Beacon.Head` vs `Head + Distance` (slots behind); a bar only while beacon is `syncing` and `Distance > 0`.
 - Snapshot download/extract: **not exposed** (no field in `api.NodeStatus`, `api.JobView` or any stream). No bar until the API carries bytes done/total; then it slots in after the jobs.
@@ -513,6 +513,17 @@ Jobs in `needs-decision`, then `running` (inbox order within each; step k/n as `
 
 - [ ] `gofmt -l .` empty; `go vet ./...` and `go vet -tags notui ./...` clean; `go test ./...` PASS; `go list -tags notui -deps ./cmd/jumpgate | grep -E 'charm|charmbracelet'` empty.
 
+### Task 21: Job bars on every view (`GET /api/jobs/running`)
+
+**Finding (2026-10-23).** A job's durable state (manifest: `Step`, `Steps`, `State`, signed log) lives on the box, in the gate's `jobs.Store` (`internal/jobs/store.go:43` `OpenStore`, `:77` `manifestPath`), written only by the gate's `jobs.Manager` (`internal/jobs/manager.go:41`). The controller drives a job by intents (`internal/server/jobsdrive.go:132` `job.advance`, `:137` lease renew) and keeps a copy of every box's `intent.JobRecord`s in memory, `jobsHub.boxes` (`internal/server/jobs.go:93`; records carry `Step`, `Steps`, `State`), filled by `job.list` (`jobs.go:114`, `list` → `listBox`) and by `setRecord` after each start/adopt/decide/read (`jobs.go:350`, `jobsdrive.go:386,401,440`). That listing already runs every fleet round (`internal/server/fleet.go:449-452`, reused within `jobsListEvery`), and `FleetRow.Jobs` is a count over the same cache (`fleet.go:681` → `jobsHub.summary`, `jobs.go:415`). Nothing is on the controller's disk. So the server holds step k/n in memory without contacting a box; `/api/jobs` and `/api/jobs/stream` differ only by calling `refresh` (`jobs.go:686,704,717`, before this task 663,675,688).
+
+**Files:** `internal/api/jobs.go` (`RunningJob`, `RunningJobs`), `internal/server/jobs.go` (`jobsHub.running`, `handleJobsRunning`), `api.go` (route), `node.go` (`onSendIntent` test hook), `jobsrunning_test.go`; `apiclient/methods.go` `RunningJobs`; `tui/backend.go`, `tuitest/fake.go` (`RunningV`), `app.go` (`runningMsg`, `readRunning` after each fleet reading, one in flight), `frame.go` (`barInput` uses it off the Jobs view), `running_test.go`, `frame_test.go`; goldens.
+
+- [x] `TestRunningJobsNeverAsksABox`: with `onSendIntent`, `listJobs` and `readJob` failing the test (and `jobsListEvery` 0, so a refresh would list), `GET /api/jobs/running` answers the cached job with its step and total. `TestRunningJobsShape`: terminal jobs left out, `needsDecision` flagged.
+- [x] `TestRunningJobsUsesTheCacheRoute` (apiclient).
+- [x] `TestFleetReadingAsksForRunningJobs`: a fleet reading reads `RunningJobs`, never `WatchJobs`/`Jobs`. `TestDrawerJobBarsOnEveryView`: Fleet view draws both job bars; a failed read marks them `~ stale`, the next clears it. `dash_*` goldens regenerated.
+- [x] Commits `feat(server): GET /api/jobs/running, from the jobs cache alone`, `feat(tui): job bars on every view, from the running-jobs cache`.
+
 ## Phase 5: Node detail (U5)
 
 Node detail main view with current values and the delta from the previous reading (`head lag 2 blk (was 40)`); no sparklines or trend graphs. Golden `dash_node_detail_120x40`. Landing `docs-images.mjs` points at `dash_120x40` / `dash_80x24`.
@@ -520,3 +531,5 @@ Node detail main view with current values and the delta from the previous readin
 ## Phase 6: Gateway request counts (U1)
 
 Server: request/error counters + rate per gateway in `api.GatewaySummary` and `/api/gateways`; TUI tile shows them and drops the hint.
+
+Snapshot download/extract bars and fleet rollout (n/m boxes) bars wait for APIs that expose their progress (bytes done/total; a rollout object with boxes done/total); `drawerBars` slots them in after the jobs once they exist.

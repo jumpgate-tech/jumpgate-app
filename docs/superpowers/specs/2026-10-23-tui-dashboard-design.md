@@ -248,7 +248,7 @@ one new server aggregate in phase 4.
 | Alerts | derived client-side (below, U2) | each fleet update | none → `0`, never hidden |
 | Fleet tree | fleet rows + gateways (`RoutesTo`) + `ListModules` per expanded box | modules fetched on expand, then 60 s | `GateStale` → `gate stale` on the module line |
 | Right sidebar (log, U6) | diffs of fleet/jobs/gateways/modules/signers snapshots already held | each update | ring of ~200, session-only; each line carries its age |
-| Job bars | `WatchJobs` inbox: `Step`/`len(Steps)`, `NeedsDecision` | stream | `JobsSummary == nil` → no bar, footer says `jobs n/a` for that box |
+| Job bars | on the Jobs view the `WatchJobs` inbox (`Step`/`len(Steps)`); on every other view `GET /api/jobs/running` (`step`, `total`, `needsDecision`), served from the server's jobs cache without asking any box | inbox: stream; running: after each fleet update | `JobsSummary == nil` → no bar, footer says `jobs n/a` for that box; a failed read → `~ stale` |
 | Sync bars | `Status` head vs reference head for syncing nodes | 15 s | no reference head → indeterminate bar `[<=>  ]`, no percent |
 | Event ticker | client-side diff of successive fleet/jobs/module snapshots | each update | ring of 200, session-only |
 
