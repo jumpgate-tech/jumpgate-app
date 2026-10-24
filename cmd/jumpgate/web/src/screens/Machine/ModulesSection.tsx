@@ -209,13 +209,19 @@ export function ModulesSection({ targetId }: { targetId: string }) {
   }
 
   if (nodeCards.length === 0 && boxCards.length === 0) {
-    return <p className="muted">No modules apply to this machine yet.</p>;
+    return (
+      <>
+        <p className="muted">No modules apply to this machine yet.</p>
+        {wire && <NodeBootnodes target={target} wire={wire} onChanged={() => void qc.invalidateQueries({ queryKey: ["targets"] })} />}
+      </>
+    );
   }
 
   return (
     <div className="modules-section">
       {error && <p className="error">{error}</p>}
       {note && <p className="muted">{note}</p>}
+      {wire && <NodeBootnodes target={target} wire={wire} onChanged={() => void qc.invalidateQueries({ queryKey: ["targets"] })} />}
       {run && (
         <div className="module-run">
           <p className="small">
@@ -477,6 +483,46 @@ function ConfirmDialog({
         </button>
       </div>
     </Modal>
+  );
+}
+
+// NodeBootnodes lists this node's saved Bootnodes with a Remove per entry,
+// whether or not anything still runs that bootnode. Remove resubmits the
+// node's wire without the entry through POST /api/targets/{id}/setup, which
+// restarts the client the entry went to.
+function NodeBootnodes({ target, wire, onChanged }: { target: api.Target; wire: api.WireConfig; onChanged: () => void }) {
+  const [result, setResult] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const list = wire.Bootnodes ?? [];
+  if (list.length === 0 && !result) return null;
+  async function remove(entry: string): Promise<void> {
+    setBusy(true);
+    const client = entry.startsWith("enr:") ? wire.BeaconID : wire.ExecID;
+    try {
+      await api.startSetup(target.id, withoutBootnode(wire, entry));
+      setResult(`${boxName(target)}: setup started, ${client} restarts.`);
+      onChanged();
+    } catch (err) {
+      setResult(`${boxName(target)}: ${formatError(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="card module-card node-bootnodes">
+      <strong>Bootnodes this node uses</strong>
+      <ul className="small" aria-label="Bootnodes">
+        {list.map((b) => (
+          <li key={b}>
+            <code>{b}</code>{" "}
+            <button type="button" className="btn btn-ghost small" disabled={busy} aria-label={`Remove ${b}`} onClick={() => void remove(b)}>
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
+      {result && <p className="small">{result}</p>}
+    </div>
   );
 }
 

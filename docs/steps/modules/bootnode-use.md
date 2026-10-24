@@ -58,5 +58,10 @@ button shows while any of your nodes lists the address. Then click **Stop
 using bootnode**. jumpgate removes the address from each node that lists it
 and runs that node's setup again, with the same per-node report.
 
+To remove one entry from one node, for example from a bootnode you stopped
+or deleted, open that node's machine and go to **Modules**. **Bootnodes this
+node uses** lists every saved entry. Click **Remove** next to one. jumpgate
+runs the node's setup again without it and says which client restarts.
+
 A node with no bootnodes has exactly the units it had before, so removing
 every entry puts the clients back on the network's built-in bootnodes.

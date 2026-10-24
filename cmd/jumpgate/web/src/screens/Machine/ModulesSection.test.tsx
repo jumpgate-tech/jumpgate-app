@@ -105,6 +105,7 @@ function card(id: string): HTMLElement {
 
 beforeEach(() => {
   vi.mocked(api.setModule).mockReset();
+  vi.mocked(api.startSetup).mockReset();
 });
 afterEach(cleanup);
 
@@ -188,6 +189,24 @@ describe("ModulesSection", () => {
     await waitFor(() => expect(card("el-bootnode").querySelector("code.module-identity")).toBeTruthy());
     expect(screen.queryByRole("button", { name: /Use on my other/ })).toBeNull();
     expect(card("el-bootnode").textContent).toContain("Set the box's public IP before your other nodes can use this bootnode.");
+  });
+
+  it("lists a node's saved bootnodes and removes one, whatever runs them", async () => {
+    const node = bootnodeFleet()[2];
+    node.id = "t1";
+    node.wire!.Bootnodes = ["enr:-abc", ENODE];
+    vi.mocked(api.startSetup).mockResolvedValue({ status: "started" });
+    setup(node);
+    const list = await screen.findByRole("list", { name: "Bootnodes" });
+    expect(list.textContent).toContain("enr:-abc");
+    expect(list.textContent).toContain(ENODE);
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${ENODE}` }));
+    await waitFor(() => expect(api.startSetup).toHaveBeenCalledWith("t1", { ...node.wire, Bootnodes: ["enr:-abc"] }));
+    expect(await screen.findByText("b.example: setup started, go-pulse restarts.")).toBeTruthy();
+    vi.mocked(api.startSetup).mockRejectedValueOnce(new Error("busy"));
+    fireEvent.click(screen.getByRole("button", { name: "Remove enr:-abc" }));
+    expect(await screen.findByText("b.example: busy")).toBeTruthy();
+    expect(api.startSetup).toHaveBeenLastCalledWith("t1", { ...node.wire, Bootnodes: [ENODE] });
   });
 
   it("stops using a bootnode on the nodes that list it", async () => {
