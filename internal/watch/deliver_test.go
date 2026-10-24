@@ -152,12 +152,14 @@ func TestDeliverFailureDoesNotBlock(t *testing.T) {
 		StatePath: filepath.Join(dir, "state.json"),
 		Webhook:   srv.URL + "/topic",
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+	// Five polls must land while one webhook attempt is still hanging (2s).
+	// Stop as soon as they do: a fixed window flaked under full-suite load.
+	ctx, cancel := context.WithTimeout(context.Background(), 1900*time.Millisecond)
 	defer cancel()
 	polls := 0
 	var last time.Time
 	go func() { _ = Run(ctx, cfg) }()
-	for ctx.Err() == nil {
+	for ctx.Err() == nil && (polls < 5 || h.count() == 0) {
 		if s, err := ReadState(cfg.StatePath); err == nil && s.At.After(last) {
 			last = s.At
 			polls++
