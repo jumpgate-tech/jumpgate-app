@@ -38,7 +38,7 @@ type progressBar struct {
 }
 
 // barInput is the data the drawer reads: the fleet stream, and the jobs
-// inbox while the Jobs view watches it.
+// (the inbox while the Jobs view watches it, else GET /api/jobs/running).
 type barInput struct {
 	Fleet      api.Fleet
 	FleetStale bool

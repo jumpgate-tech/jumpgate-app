@@ -18,7 +18,7 @@
 
 
 
-
  3 boxes | sort: host | ~ stale  * this machine
- no progress to show | jobs 1 running  [! 1 needs decision]  (2 Jobs: steps)
+ job  box-a      migrate-names  step 2/3     [###.......] ! needs decision
+ job  box-b      migrate-names  step 4/8     [####......]
  . drawer  ? help  : command  1-5 views  [ ] panels  q quit

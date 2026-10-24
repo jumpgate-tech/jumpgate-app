@@ -46,6 +46,7 @@ type Fake struct {
 
 	JobsV        api.JobsInbox
 	JobsCh       chan apiclient.Update[api.JobsInbox]
+	RunningV     api.RunningJobs          // what RunningJobs answers
 	JobV         map[string]api.JobDetail // key "target/id"
 	JobViewV     api.JobView              // the answer of MigrateNames, Decide and Adopt
 	LastDecision api.JobDecision          // what Decide last received
@@ -309,6 +310,10 @@ func (f *Fake) Gateways(context.Context) ([]api.GatewaySummary, error) {
 }
 
 func (f *Fake) Jobs(context.Context) (api.JobsInbox, error) { return f.JobsV, f.call("Jobs") }
+
+func (f *Fake) RunningJobs(context.Context) (api.RunningJobs, error) {
+	return f.RunningV, f.call("RunningJobs")
+}
 
 func (f *Fake) WatchJobs(ctx context.Context) <-chan apiclient.Update[api.JobsInbox] {
 	_ = f.call("WatchJobs")

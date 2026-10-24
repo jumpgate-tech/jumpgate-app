@@ -42,7 +42,8 @@ func dashApp(t *testing.T, f *tuitest.Fake, w, h int, glyphs, drawer string) *Ap
 	a := newTestApp(t, f, w, h, glyphs)
 	m, _ := tuitest.Send(a, prefsMsg{p: api.UIPrefs{Glyphs: glyphs, ShowEstimates: true, Drawer: drawer}},
 		fleetMsg{u: apiclient.Update[api.Fleet]{Value: dashFleetBefore(), Has: true, State: apiclient.Live}},
-		fleetMsg{u: apiclient.Update[api.Fleet]{Value: dashFleet(), Has: true, State: apiclient.Live}})
+		fleetMsg{u: apiclient.Update[api.Fleet]{Value: dashFleet(), Has: true, State: apiclient.Live}},
+		runningMsg{v: dashRunning()})
 	return m.(*App)
 }
 
@@ -179,7 +180,7 @@ func TestDrawerViewCapsAndMore(t *testing.T) {
 		more  string
 	}{{80, 24, 3, "+2 more"}, {120, 40, 5, ""}} {
 		a := dashApp(t, tuitest.NewFake(), c.w, c.h, "ascii", "open")
-		m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: f, Has: true, State: apiclient.Live}})
+		m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: f, Has: true, State: apiclient.Live}}, runningMsg{})
 		a = m.(*App)
 		l := a.layout()
 		v := ansi.Strip(a.drawerView(l.Drawer, l.DrawerCompact))
@@ -194,14 +195,15 @@ func TestDrawerViewCapsAndMore(t *testing.T) {
 		f.Rows = append(f.Rows, pctRow(fmt.Sprintf("box-x%d", i), 90))
 	}
 	a := dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "open")
-	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: f, Has: true, State: apiclient.Live}})
+	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: f, Has: true, State: apiclient.Live}}, runningMsg{})
 	if v := ansi.Strip(tuitest.Frame(m)); strings.Count(v, "| disk ") != 6 || !strings.Contains(v, "+3 more") {
 		t.Errorf("120x40 with 9 bars:\n%s", v)
 	}
 }
 
 func TestDrawerViewEmpty(t *testing.T) {
-	a := dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "open")
+	m, _ := tuitest.Send(dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "open"), runningMsg{})
+	a := m.(*App)
 	v := ansi.Strip(a.drawerView(a.layout().Drawer, false))
 	if !strings.Contains(v, "no progress to show | jobs 1 running  [! 1 needs decision]  (2 Jobs: steps)") || strings.Contains(v, "[#") {
 		t.Fatalf("drawer:\n%s", v)

@@ -282,8 +282,9 @@ func (a *App) statusLine() string {
 }
 
 // barInput is what the drawer's bars read: the fleet stream, and the jobs
-// inbox only while the Jobs view watches it (off it the inbox is old, and
-// watching it from here would have the server ask every box).
+// inbox while the Jobs view watches it. On every other view the job bars
+// come from GET /api/jobs/running, the server's cache read after each fleet
+// reading (watching the inbox from here would have the server ask every box).
 func (a *App) barInput() barInput {
 	in := barInput{Fleet: a.fleet, FleetStale: a.conn != apiclient.Live}
 	if !a.fleetHas {
@@ -291,8 +292,21 @@ func (a *App) barInput() barInput {
 	}
 	if js, ok := a.screens[scrJobs].(*jobsScreen); ok && js.has && a.active == scrJobs {
 		in.Jobs, in.JobsHas, in.JobsStale = js.in.Jobs, true, js.conn != apiclient.Live
+	} else if a.runningHas {
+		in.Jobs, in.JobsHas, in.JobsStale = runningViews(a.running), true, a.runningErr != nil || in.FleetStale
 	}
 	return in
+}
+
+// runningViews is the running jobs in the inbox's shape, as much of it as
+// drawerBars reads: target, kind, state, step, and the step count.
+func runningViews(r api.RunningJobs) []api.JobView {
+	out := make([]api.JobView, 0, len(r.Jobs))
+	for _, j := range r.Jobs {
+		out = append(out, api.JobView{Target: j.Target, ID: j.ID, Kind: j.Kind, State: j.State, Step: j.Step,
+			Steps: make([]api.JobStepView, max(j.Total, 0))})
+	}
+	return out
 }
 
 // barCap is how many bars the drawer shows: 3 compact, 6 boxed.

@@ -73,6 +73,10 @@ type (
 		u  apiclient.Update[api.Fleet]
 		ch <-chan apiclient.Update[api.Fleet]
 	}
+	runningMsg struct {
+		v   api.RunningJobs
+		err error
+	}
 )
 
 const (
@@ -97,6 +101,14 @@ type App struct {
 
 	fleet    api.Fleet
 	fleetHas bool
+	// running is the last GET /api/jobs/running (runningHas: one arrived;
+	// runningErr: the latest read failed, so its bars are stale), read after
+	// each fleet reading for the drawer's job bars on every view. It is the
+	// server's cache: reading it asks no box. runningBusy: a read is out.
+	running     api.RunningJobs
+	runningHas  bool
+	runningErr  error
+	runningBusy bool
 	// needs is the fleet-wide count of jobs that need a decision at the last
 	// reading, and needsKnown says there was one: the bell compares against it.
 	needs      int
@@ -221,6 +233,18 @@ func (a *App) watchFleet(ch <-chan apiclient.Update[api.Fleet]) tea.Cmd {
 	}
 }
 
+// readRunning reads the running jobs once, unless a read is already out.
+func (a *App) readRunning() tea.Cmd {
+	if a.runningBusy {
+		return nil
+	}
+	a.runningBusy = true
+	return a.do("running", func(ctx context.Context, be Backend) tea.Msg {
+		v, err := be.RunningJobs(ctx)
+		return runningMsg{v: v, err: err}
+	})
+}
+
 // do runs f off the update loop with the app's context and backend as they
 // are now: a restart that replaces a.ctx cancels this one, so work started
 // for the old server stops, and the command goroutine never reads a field
@@ -311,7 +335,13 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.needs, a.needsKnown = n, true
 		}
-		return a, tea.Batch(a.watchFleet(msg.ch), a.broadcast(msg), ring)
+		return a, tea.Batch(a.watchFleet(msg.ch), a.broadcast(msg), ring, a.readRunning())
+	case runningMsg:
+		a.runningBusy, a.runningErr = false, msg.err
+		if msg.err == nil {
+			a.running, a.runningHas = msg.v, true
+		}
+		return a, nil
 	case openJobsMsg:
 		a.flash = sanitizeLine(msg.flash)
 		return a, a.openScreen(scrJobs)
