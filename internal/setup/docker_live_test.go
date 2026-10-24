@@ -130,6 +130,49 @@ func provisionLiveGateway(ctx context.Context, t *testing.T, e executor.Executor
 	}
 }
 
+// TestPrivateSendLive provisions a chain-1 Docker gateway with private send
+// next to one public read upstream, then sends eth_sendRawTransaction with a
+// payload that cannot decode as a transaction, so nothing can ever be mined.
+// The error must come from a private route (eRPC names upstream 1-mod-*),
+// never the public one, and a read must still be served. It builds the eRPC
+// image when absent, so it also needs JUMPGATE_DOCKER_LIVE_GATEWAY=1.
+func TestPrivateSendLive(t *testing.T) {
+	if os.Getenv("JUMPGATE_DOCKER_LIVE") != "1" || os.Getenv("JUMPGATE_DOCKER_LIVE_GATEWAY") != "1" {
+		t.Skip("set JUMPGATE_DOCKER_LIVE=1 and JUMPGATE_DOCKER_LIVE_GATEWAY=1 to provision a private-send gateway")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
+	defer cancel()
+	e := executor.NewLocal()
+	const id = "jumpgate-live-private-send"
+	g := catalog.GatewayConfig{
+		Port: freePort(t), MetricsPort: freePort(t),
+		Modules: []catalog.GatewayModule{{ID: "private-send"}},
+		Networks: []catalog.GatewayNetwork{{ChainID: 1, Upstreams: []catalog.GatewayUpstream{
+			{ID: "1-public", Endpoint: "https://ethereum-rpc.publicnode.com"},
+		}}},
+	}
+	t.Cleanup(func() { _ = ops.RemoveContainer(context.Background(), e, ops.ERPCContainerNameFor(id)) })
+	provisionLiveGateway(ctx, t, e, id, g)
+
+	call := func(method, params string) string {
+		t.Helper()
+		body := `{"jsonrpc":"2.0","id":1,"method":"` + method + `","params":` + params + `}`
+		res, err := http.Post("http://127.0.0.1:"+strconv.Itoa(g.Port)+g.PathForArch("evm", 1), "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		defer res.Body.Close()
+		raw, _ := io.ReadAll(res.Body)
+		return string(raw)
+	}
+	if got := call("eth_sendRawTransaction", `["0x00"]`); !strings.Contains(got, "1-mod-") || strings.Contains(got, "1-public") {
+		t.Fatalf("the send was not answered by a private route only: %s", got)
+	}
+	if got := call("eth_blockNumber", `[]`); !strings.Contains(got, `"result":"0x`) {
+		t.Fatalf("read not served: %s", got)
+	}
+}
+
 func freePort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")

@@ -469,6 +469,42 @@ func TestCatalogCarriesModules(t *testing.T) {
 	}
 }
 
+// TestCatalogPrivateSendReasons: the real entry reaches /api/catalog with
+// chain 1 usable and every other chain disabled with its reason, verbatim.
+func TestCatalogPrivateSendReasons(t *testing.T) {
+	a := newAPITestServer(t)
+	res := a.do(t, "GET", "/api/catalog", nil)
+	got := decodeJSON[struct {
+		Modules []catalogModule `json:"modules"`
+	}](t, res)
+	want := map[int]string{
+		1:      "",
+		369:    "No private send route exists on PulseChain.",
+		943:    "No private send route exists on PulseChain.",
+		560048: "No private send route exists on Hoodi.",
+	}
+	for _, m := range got.Modules {
+		if m.ID != "private-send" {
+			continue
+		}
+		if m.Placement != "gateway" || m.DocsStep != "private-send" {
+			t.Fatalf("private-send = %+v", m)
+		}
+		for _, ap := range m.Applies {
+			r, ok := want[ap.ChainID]
+			if !ok || ap.OK != (r == "") || ap.Reason != r {
+				t.Errorf("applies row %+v", ap)
+			}
+			delete(want, ap.ChainID)
+		}
+		if len(want) != 0 {
+			t.Errorf("no rows for %v", want)
+		}
+		return
+	}
+	t.Fatal("private-send is not in the catalog")
+}
+
 func TestSetGatewayModuleRefusesOtherPlacements(t *testing.T) {
 	fakeModules(t)
 	a := newAPITestServer(t)

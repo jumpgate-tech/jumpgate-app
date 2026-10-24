@@ -92,7 +92,13 @@ type GatewaySummary struct {
 		Networks []struct {
 			Upstreams []GatewayUpstreamRef
 		}
+		Modules []GatewayModuleRef
 	} `json:"config"`
+}
+
+// GatewayModuleRef is one gateway module turned on, by id.
+type GatewayModuleRef struct {
+	ID string `json:"id"`
 }
 
 // GatewayUpstreamRef is one upstream's kind and managed machine, as stored

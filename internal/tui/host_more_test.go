@@ -80,6 +80,22 @@ func TestGatewaysScreenIsReadOnly(t *testing.T) {
 	tuitest.Golden(t, "gateways", fr)
 }
 
+func TestGatewaysScreenShowsPrivateSend(t *testing.T) {
+	f := tuitest.NewFake()
+	g := gateway("rpc-main", "box")
+	g.Networks = []api.GatewayNetwork{{ChainID: 1, Name: "Ethereum", URL: "https://rpc.example.org/1"}}
+	g.Config.Modules = []api.GatewayModuleRef{{ID: "private-send"}}
+	f.GatewaysV = []api.GatewaySummary{g, gateway("plain", "box")}
+	a := newTestApp(t, f, 100, 24, "unicode")
+	m, cmds := tuitest.Send(a, tuitest.Key("4"))
+	m = tuitest.Settle(m, cmds...)
+	fr := tuitest.Frame(m)
+	want := "private send: transactions go only to Flashbots Protect and MEV Blocker"
+	if strings.Count(fr, want) != 1 {
+		t.Errorf("want %q once:\n%s", want, fr)
+	}
+}
+
 func TestMaskURL(t *testing.T) {
 	for in, want := range map[string]string{
 		"http://127.0.0.1:8545":                                         "http://127.0.0.1:8545",

@@ -1,0 +1,5 @@
+id: private-send
+title: Send transactions privately on Ethereum
+audience: operator
+after: [first-box]
+steps: [modules-what, private-send]
