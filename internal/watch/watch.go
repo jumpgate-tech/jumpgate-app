@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -34,9 +35,10 @@ type Config struct {
 }
 
 // LoadConfig builds a Config from the module's config.json (a
-// catalog.BoxModule) and, when it exists, the box's node.json (read as the
-// gate reads it, names marker applied).
-func LoadConfig(configPath, nodePath, namesPath string) (Config, error) {
+// catalog.BoxModule) and, when it exists, the node.json setup stages
+// beside it (catalog.BoxModule.NodePath: the box's node, secrets stripped,
+// names already resolved).
+func LoadConfig(configPath string) (Config, error) {
 	var cfg Config
 	b, err := os.ReadFile(configPath)
 	if err != nil {
@@ -57,7 +59,7 @@ func LoadConfig(configPath, nodePath, namesPath string) (Config, error) {
 	}
 	cfg.Webhook = m.Webhook
 	cfg.StatePath = m.DataDir() + "/state.json"
-	w, err := jobs.ReadNodeConfig(nodePath, namesPath)
+	w, err := jobs.ReadNodeConfig(filepath.Join(filepath.Dir(configPath), "node.json"), "")
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 	case err != nil:

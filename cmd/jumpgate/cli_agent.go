@@ -74,7 +74,7 @@ func cmdAgent(args []string) int {
 		if *watchConfig == "" {
 			return usage("usage: jumpgate agent watch --config FILE (the health watch's config.json)")
 		}
-		err = agentWatch(*watchConfig, *conf)
+		err = agentWatch(*watchConfig)
 	case "job-step":
 		var a jobs.StepArgs
 		if a, err = jobs.ParseStepArgs(args[1:]); err == nil {
@@ -180,8 +180,8 @@ func agentResetReplay(stateDir string) error {
 }
 
 // agentWatch runs the on-box health watch until SIGTERM.
-func agentWatch(configPath, configDir string) error {
-	cfg, err := watch.LoadConfig(configPath, filepath.Join(configDir, "node.json"), filepath.Join(configDir, "names.json"))
+func agentWatch(configPath string) error {
+	cfg, err := watch.LoadConfig(configPath)
 	if err != nil {
 		return err
 	}

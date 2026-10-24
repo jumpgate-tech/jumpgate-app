@@ -50,6 +50,19 @@ func (b BoxModule) SidecarPath() string { return b.ConfigDir() + "/module.json" 
 // or upstreams.
 func (b BoxModule) ConfigPath() string { return b.ConfigDir() + "/config.json" }
 
+// NodePath is the copy of the box's node config (WireConfig, secrets
+// stripped) that setup stages for a module that watches the node, in
+// ConfigDir: the gate's own node.json sits in a root-only dir.
+func (b BoxModule) NodePath() string { return b.ConfigDir() + "/node.json" }
+
+// PublicWire is w without its secrets (the snapshot key, and eRPC
+// upstream URLs, which can carry API keys), for a module to read.
+func PublicWire(w WireConfig) WireConfig {
+	w.SnapshotKey = ""
+	w.ERPCUpstreams = nil
+	return w
+}
+
 // BoxSidecar is the public part of a box module record, all a gate or an
 // SSH probe needs to find and read the module. It never holds endpoints,
 // webhooks or secrets.
