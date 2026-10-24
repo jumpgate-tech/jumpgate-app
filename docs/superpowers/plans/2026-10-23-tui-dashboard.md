@@ -434,7 +434,84 @@ At 120×40 the fleet table lost DISK and FW (main was 62 inside its box). `layou
 
 ## Phase 4: Activity drawer bars (U7)
 
-`func drawerBars(...) []bar` pure: running job step k/n (`WatchJobs`, reuse `jobs.go` step format), EL sync % (head vs highest), CL sync %, snapshot download/extract if exposed, fleet rollout n/m boxes, disk fill per box only when ≥ 85 %. No bar without a denominator. Order needs decision → running jobs → syncing → disk; cap 3 bars at h < 34 (80×24), 6 at ≥ 34 (120×40), then `+N more`. Tests: ordering, caps and `+N more`, no-denominator exclusion, disk 84 % vs 85 %. Goldens `dash_jobs_120x40`, `dash_80x24_drawer_open`; teatest: job advances, bar moves; stream drop → stale → recovers.
+**Files:** Create `internal/tui/bars.go`, `internal/tui/bars_test.go`; modify `layout.go`, `layout_test.go` (the drawer's height follows its lines), `frame.go` (the open drawer draws bars; `activity()` goes), `frame_test.go`, `focus.go` (`a.layout()` passes the line count), `dash_test.go` (flows); goldens. `host_modules.go` is not touched. No new polling: bars read only the fleet stream and the jobs inbox the Jobs view already watches.
+
+**What the API exposes (2026-10-23):**
+- Jobs: `api.JobView.Step` / `Steps` (the inbox, `WatchJobs`), only while the Jobs view watches it (`snapshot.Jobs` rule). Watching it from the drawer too would make the server list every box's jobs every few seconds (`handleJobsStream` → `jobs.refresh`), new box polling, so off the Jobs view the drawer shows no job bars, only the fleet's per-box counts in its empty-state line.
+- EL sync: `Status.Exec.Head` vs `Status.RefHead` (the public reference head); a bar only while exec is `syncing` and `RefHead > 0`.
+- CL sync: `Status.Beacon.Head` vs `Head + Distance` (slots behind); a bar only while beacon is `syncing` and `Distance > 0`.
+- Snapshot download/extract: **not exposed** (no field in `api.NodeStatus`, `api.JobView` or any stream). No bar until the API carries bytes done/total; then it slots in after the jobs.
+- Fleet rollout n/m: **not exposed** (no rollout or multi-box upgrade object in the API). No bar; it slots in after the jobs when it exists.
+- Disk: `diskFrac` (the fleet table's DISK source), a bar only at ≥ 85 % used.
+
+### Review Focus (phase 4)
+
+11. Nothing without a denominator gets a bar: a job with no steps, exec syncing with `RefHead == 0`, beacon syncing with `Distance == 0`, disk unknown. Test in Task 17 (`TestDrawerBarsNoDenominator`).
+12. Stale data is marked, never shown as current: a bar from a stale section, a retrying fleet stream or a retrying jobs stream ends in `~ stale`. Test in Task 17 and Task 19.
+13. The drawer never grows main below 50×8: an open drawer is at most 7 activity lines boxed (6 bars + `+N more`) and 4 compact (3 + `+N more`). Test in Task 18 (`TestLayoutForMainFloor` with lines 1–7).
+
+### Task 17: `drawerBars`
+
+**Files:** Create `bars.go`, `bars_test.go`.
+
+**Interfaces:**
+```go
+type barKind int // barDecision, barJob, barSync, barDisk (the U7 order)
+type progressBar struct {
+    Kind        barKind
+    Box, What   string  // sanitized: "box-a", "migrate-names" / "exec" / "beacon" / "disk"
+    Done, Total uint64  // Total > 0 always
+    Note        string  // "step 2/3", "21.1M/21.3M", "91% used"
+    Stale       bool
+}
+type barInput struct {
+    Fleet api.Fleet; FleetStale bool
+    Jobs []api.JobView; JobsHas, JobsStale bool
+}
+func drawerBars(in barInput) []progressBar // pure, ordered
+func capBars(bs []progressBar, n int) ([]progressBar, int) // shown, the +N more count
+```
+Jobs in `needs-decision`, then `running` (inbox order within each; step k/n as `jobs.go` writes it, `min(Step+1, n)/n`, fill `Step/n`); then per box exec and beacon sync; then disk ≥ 85 %, fullest first.
+
+- [ ] **Step 1: Failing tests**
+  - `TestDrawerBarsOrder`: a running job, a needs-decision job, box-b exec syncing, box-c disk 91 % → decision, job, sync, disk.
+  - `TestDrawerBarsNoDenominator`: no-step job, exec syncing with `RefHead 0`, beacon syncing with `Distance 0`, disk unknown → no bars.
+  - `TestDrawerBarsDiskThreshold`: 84 % → none, 85 % → one, `85% used`.
+  - `TestDrawerBarsSync`: exec 21,100,000 of 21,300,000 → `21.1M/21.3M`; beacon head 900 distance 100 → 900/1000.
+  - `TestDrawerBarsStale`: `Stale.Status`, `FleetStale`, `JobsStale` each mark their bars.
+  - `TestCapBars`: 8 bars cap 3 → 3 shown, 5 more; cap 6 → 6, 2; 2 bars → 2, 0.
+- [ ] **Step 2:** `go test ./internal/tui -run 'DrawerBars|CapBars'` — FAIL.
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** PASS.
+- [ ] **Step 5:** Commit `feat(tui): drawerBars, progress with a known end`.
+
+### Task 18: The drawer draws bars
+
+**Files:** Modify `layout.go`, `layout_test.go`, `frame.go`, `frame_test.go`, `focus.go`; goldens.
+
+**Interfaces:** `layoutFor(w, h int, d drawerState, lines int) layout`: an open drawer is `2 + clamp(lines, 1, 7)` rows boxed (h ≥ 34) and `clamp(lines, 1, 4)` rows compact. `App.drawerLines()` = shown bars + 1 when some are cut, at least 1. Bars cap at 3 compact, 6 boxed. A line: `job  box-a  migrate-names  step 2/3 [######......] ! needs decision`, `sync box-b  exec  21.1M/21.3M [##########..] 99%`, `disk box-c  [###########.] 91% used`; `~ stale` after a stale one; the bar `Full`/`Empty` glyphs (ASCII `#`/`.`). No bars: `no progress to show | jobs 1 running [! 1 needs decision]` (`2 Jobs` shows job steps). The minimized line is unchanged. `activity()` and the drawer's status line go.
+
+- [ ] **Step 1: Failing tests**
+  - `TestLayoutForMainFloor` over lines 1–7; `TestLayoutForDrawerLines`: (120,40,auto,1) H 3, (…,7) H 9, (…,9) H 9; (80,24,open,3) H 3, (…,9) H 4.
+  - `TestDrawerViewBars`: jobs inbox + fleet → lines in order, ASCII `#`/`.` only, `+N more` past the cap, no `server live` status line.
+  - `TestDrawerViewEmpty`: dash fleet without the inbox → `no progress to show`, `[! 1 needs decision]`.
+  - Goldens: `dash_jobs_120x40` (Jobs view, inbox delivered), `dash_80x24_drawer_open` updated, `dash_*` regenerated; ascii through `requireASCII`; `TestFrameLinesFitWindow` covers `dash_jobs_120x40`.
+  - `TestNarrowFramesKeepTheirLastRows` still passes.
+- [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** `-update`, review goldens; PASS.
+- [ ] **Step 5:** Commit `feat(tui): the activity drawer draws progress bars`.
+
+### Task 19: Flows
+
+**Files:** Modify `dash_test.go`.
+
+- [ ] **Step 1: Tests**
+  - `TestDrawerJobBarAdvances` (teatest, 120×40, Jobs view): the fake's inbox moves box-b's job from step 4/8 to 5/8; the drawer line changes from `step 4/8` to `step 5/8` and its bar fills one more cell.
+  - `TestDrawerBarsStaleThenRecover`: the jobs stream sends `Retrying` → the job bars read `~ stale`; a `Live` inbox → the mark goes. Same for the fleet stream and the sync bar.
+- [ ] **Step 2:** Run; fix what fails. **Step 3:** Commit `test(tui): drawer bars follow the streams`.
+
+### Task 20: Phase-4 verification
+
+- [ ] `gofmt -l .` empty; `go vet ./...` and `go vet -tags notui ./...` clean; `go test ./...` PASS; `go list -tags notui -deps ./cmd/jumpgate | grep -E 'charm|charmbracelet'` empty.
 
 ## Phase 5: Node detail (U5)
 
