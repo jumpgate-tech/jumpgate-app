@@ -157,10 +157,14 @@ func (s *fleetScreen) cell(a *App, r api.FleetRow, col string) string {
 	}
 	switch col {
 	case "host":
+		h := sanitizeLine(r.ID)
 		if r.ThisMachine {
-			return sanitizeLine(r.ID) + "*"
+			h += "*"
 		}
-		return sanitizeLine(r.ID)
+		if r.AlertCount > 0 { // the box's health watch has open alerts
+			h += " " + a.th.Warn.Render(fmt.Sprintf("!%d", r.AlertCount))
+		}
+		return h
 	case "link":
 		w := linkWord(r)
 		if w == "down" && r.LastSeen != nil {

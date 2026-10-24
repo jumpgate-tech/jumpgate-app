@@ -72,6 +72,10 @@ type SetModule struct {
 	ChainID int    `json:"chainId,omitempty"`
 	Port    int    `json:"port,omitempty"`
 	ExtIP   string `json:"extIp,omitempty"`
+	// Upstreams are the watch's endpoints (name=url). The watch's webhook
+	// is set from the web; this request never carries one, which keeps the
+	// saved one.
+	Upstreams []string `json:"upstreams,omitempty"`
 }
 
 // SetModuleResult is its answer: "started" (follow the setup stream),

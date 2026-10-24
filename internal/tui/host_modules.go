@@ -496,6 +496,11 @@ func (m *modulesModal) openFields(c modCard) {
 		in.SetValue(value)
 		m.fields, m.labels = append(m.fields, in), append(m.labels, label)
 	}
+	if c.m.ID == "watch" {
+		add("endpoints", "")
+		m.fields[0].CharLimit = 2048
+		m.fields[0].Placeholder = "name=https://url, ..."
+	}
 	if f, ok := boxFields[c.m.ID]; ok {
 		add("port", strconv.Itoa(f.port))
 		if f.extIP {
@@ -503,6 +508,17 @@ func (m *modulesModal) openFields(c modCard) {
 		}
 	}
 	m.focusField()
+}
+
+// chainAgnostic says a box module covers the whole box (the health watch):
+// the catalog lists it for chain 0 only, and it takes no chain.
+func chainAgnostic(m api.CatalogModule) bool {
+	for _, r := range m.Applies {
+		if r.ChainID != 0 {
+			return false
+		}
+	}
+	return len(m.Applies) > 0
 }
 
 func (m *modulesModal) focusField() {
@@ -534,7 +550,7 @@ func (m *modulesModal) fieldsKey(a *App, k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "enter":
 		req := api.SetModule{Enabled: true}
-		if w := m.h.modTarget; w != nil && w.Wire != nil {
+		if w := m.h.modTarget; w != nil && w.Wire != nil && !chainAgnostic(m.fieldsFor.m) {
 			req.ChainID = w.Wire.ChainID
 		}
 		for i, l := range m.labels {
@@ -549,6 +565,12 @@ func (m *modulesModal) fieldsKey(a *App, k tea.KeyPressMsg) tea.Cmd {
 				req.Port = p
 			case "public IP":
 				req.ExtIP = v
+			case "endpoints":
+				for _, e := range strings.Split(v, ",") {
+					if e = strings.TrimSpace(e); e != "" {
+						req.Upstreams = append(req.Upstreams, e)
+					}
+				}
 			}
 		}
 		id := m.fieldsFor.m.ID
