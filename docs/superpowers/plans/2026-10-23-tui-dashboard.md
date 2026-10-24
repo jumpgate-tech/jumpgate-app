@@ -1,0 +1,193 @@
+# TUI Fleet Dashboard Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Turn the tab-bar TUI into a fleet dashboard (header, KPI strip, views + fleet tree, main, context sidebar, minimizable activity drawer), one shippable phase at a time.
+
+**Architecture:** A pure `layoutFor(w, h, drawer)` returns region rectangles; `App.render` draws each region from data the App already holds, and existing screens render unchanged inside the main region. Every phase keeps all screens working and updates the goldens it changes.
+
+**Tech Stack:** Go, charm.land bubbletea/v2, lipgloss/v2, bubbles/v2, `x/exp/teatest/v2`, the `internal/tui/tuitest` golden helper and fake backend.
+
+**Spec:** `docs/superpowers/specs/2026-10-23-tui-dashboard-design.md` (decisions U1–U4 and §1–§7).
+
+## Global Constraints
+
+- Fail closed: nil section → `n/a`, stale → `~`, error → `FAIL`; never 0 for unknown. URLs via `maskURL`.
+- 16 ANSI colours, colour never the only signal, `NO_COLOR` honoured; every glyph has an ASCII twin; ASCII frames contain only 0x20–0x7e and `\n` (`requireASCII`).
+- Minimum 80×24; below it the existing `tooSmall` message, unchanged.
+- Goldens: ANSI-stripped `View()` under the ASCII profile, fixed clock (`testNow`) and `tuitest.Fake`; `-update` regenerates; teatest for flows only.
+- No new box polling.
+- User text says **gate**, never **agent** (code names unchanged).
+- `.` toggles the drawer; state persists in `UIPrefs.Drawer` (`auto`|`open`|`min`, default `auto`); `auto` = minimized when `h < 34`.
+- The drawer never opens itself; a pending decision is highlighted on the minimized line as `[! N needs decision]`.
+- `go build -tags notui ./cmd/jumpgate` links no `charm.land`/`charmbracelet` package (`scripts/build-agents.sh` check).
+- Touch `internal/tui/host_modules.go` minimally (another branch edits it).
+
+## Review Focus
+
+1. Window exactly 80×24 and 100×24 with drawer open: body keeps ≥ 8 rows; the drawer shrinks to its 2-line form rather than squeezing main. Test in Task 1 (`TestLayoutForMainFloor`).
+2. Typing `.` in a text field (filter, host-add form, AI key) types a dot, never toggles the drawer. Test in Task 4 (`TestDrawerKeyIgnoredWhileCapturing`).
+3. A save of the drawer state refused by the server: the flash says so and the state comes back from the re-read, as other prefs do. Test in Task 4 (`TestDrawerSaveRefused`).
+4. An older server/stored prefs block without `drawer`: `WithDefaults` gives `auto`, `Validate` accepts it. Test in Task 3.
+5. Modals (help, confirm, palette) still own the keyboard and draw inside main, with header and drawer around them. Test in Task 5 (`help_80x24` golden regenerated, `TestModalInsideFrame`).
+
+---
+
+## File Structure (phase 1)
+
+- Create `internal/tui/layout.go` — `drawerState`, `rect`, `layout`, `layoutFor`. Pure.
+- Create `internal/tui/layout_test.go`.
+- Create `internal/tui/frame.go` — `header()`, `viewsList()`, `tabRow()`, `boxed()`, `drawerView()`, `drawerLine()`; replaces `topBar`/`statusBar` in `app.go`.
+- Create `internal/tui/frame_test.go` — dashboard goldens and drawer flows.
+- Modify `internal/api/prefs.go` — `Drawer` field, default, validation.
+- Modify `internal/tui/app.go` — render via layout; `.` key; remove `topBar`/`statusBar`.
+- Modify `internal/tui/keys.go` — `globalKeys.Drawer`.
+- Modify `internal/tui/settings.go` — a "activity drawer" item cycling auto/open/min.
+- Modify `internal/tui/host.go` — host list moves into the left sidebar.
+- Modify user-text `agent` sites: `app.go` (`linkWord`), `hostadd.go:450`, `hosts.go:222`, `signers.go:123,241`, fleet column header for `agent` if user-visible.
+
+---
+
+## Phase 1: Frame and activity drawer
+
+### Task 1: `layoutFor`
+
+**Files:** Create `internal/tui/layout.go`, `internal/tui/layout_test.go`
+
+**Interfaces:**
+- Produces:
+  ```go
+  type drawerState int // drawerAuto, drawerOpen, drawerMin
+  func drawerFromPref(s string) drawerState // "open"/"min", anything else auto
+  func (d drawerState) pref() string        // "auto"|"open"|"min"
+  type rect struct{ X, Y, W, H int }
+  type layout struct {
+      Header rect     // always 1 row at Y=0
+      Tabs   rect     // H=1 when w < 100 (one-line view tabs), else zero
+      Left   rect     // views list + host list, W=24 when w >= 100, else zero
+      Main   rect
+      Drawer rect     // boxed activity rows; H=0 when minimized
+      Hints  rect     // 1 row, last line (minimized: the status line)
+      DrawerOpen bool // resolved: auto → h >= 34
+      DrawerCompact bool // open but h < 34: 1 activity line, no box
+  }
+  func layoutFor(w, h int, d drawerState) layout
+  ```
+  Skew banner is not a region: `render` takes one row from Main for it.
+
+- [ ] **Step 1: Write failing tests**
+
+```go
+func TestLayoutForMainFloor(t *testing.T) // for w in 80..200, h in 24..60, d in all three:
+//   Main.W >= 50, Main.H >= 8; Left.W+Main.W == w; rows Header+Tabs+Main+Drawer+Hints == h;
+//   rects don't overlap.
+func TestLayoutForBreakpoints(t *testing.T) // table:
+//   (80,24,auto): Left.W==0, Tabs.H==1, DrawerOpen==false, Drawer.H==0, Hints.H==1
+//   (80,24,open): DrawerOpen, DrawerCompact, Drawer.H==1
+//   (100,30,auto): Left.W==24, Tabs.H==0, DrawerOpen==false
+//   (120,40,auto): DrawerOpen, !DrawerCompact, Drawer.H==5 (box: 2 borders + 3 lines)
+//   (120,40,min): Drawer.H==0
+func TestDrawerPrefRoundTrip(t *testing.T) // pref() of drawerFromPref(x)==x for auto/open/min; "" and "bogus" → auto
+```
+
+- [ ] **Step 2:** `go test ./internal/tui -run 'TestLayoutFor|TestDrawerPref'` — FAIL (undefined).
+- [ ] **Step 3:** Implement. Open drawer at `h >= 34`: 5 rows (box); at `h < 34`: 1 row, unboxed.
+- [ ] **Step 4:** Tests pass.
+- [ ] **Step 5:** Commit `feat(tui): layoutFor, the dashboard's regions as a pure function`.
+
+### Task 2: "gate" in user text
+
+**Files:** Modify `app.go` (`linkWord`), `hostadd.go`, `hosts.go`, `signers.go`, `fleet.go` header for the `agent` column (column ID unchanged; header text `GATE`), check `internal/api` column titles. Test: `internal/tui/vocab_test.go`.
+
+- [ ] **Step 1: Failing test** `TestNoAgentInUserText`: render frames from the existing golden setups (fleet, hosts, signers, host overview, hostadd confirm) under ascii and assert `!regexp.MustCompile(`(?i)\bagent\b`).MatchString(frame)`, except the literal `ssh-agent`. Also `linkWord(api.FleetRow{Link: api.LinkAgent, Reachable: true}) == "gate"`.
+- [ ] **Step 2:** Run — FAIL.
+- [ ] **Step 3:** Change the strings (`paired: gate …`, `pairing this machine needs Linux: a gate runs only on Linux. Pair a Linux box with a.`, `gate %s`). Regenerate affected goldens with `-update`, inspect the diff is only agent→gate.
+- [ ] **Step 4:** `go test ./internal/tui/...` — PASS.
+- [ ] **Step 5:** Commit `feat(tui): say gate, not agent, in user-facing text`.
+
+### Task 3: `UIPrefs.Drawer`
+
+**Files:** Modify `internal/api/prefs.go`, its test; `internal/tui/settings.go` and `settings_test.go`.
+
+**Interfaces:** Produces `UIPrefs.Drawer string \`json:"drawer"\`` (`"auto"|"open"|"min"`); `DefaultPrefs().Drawer == "auto"`.
+
+- [ ] **Step 1: Failing tests** — `TestPrefsDrawerDefault`: `UIPrefs{}.WithDefaults().Drawer == "auto"`; `TestPrefsDrawerValidate`: `"open"`,`"min"`,`"auto"` ok, `"x"` → error containing `drawer "x"`. TUI: `TestSettingsDrawerCycles`: on the Settings screen, the item labelled `activity drawer` shows `auto`; space → save with `open`, then `min`, then `auto` (Fake records saved prefs).
+- [ ] **Step 2:** Run — FAIL.
+- [ ] **Step 3:** Implement default, validation (`drawer %q (want auto, open or min)`), settings item in the display section.
+- [ ] **Step 4:** `go test ./internal/api/... ./internal/tui/...` PASS (regenerate `settings.golden`).
+- [ ] **Step 5:** Commit `feat: the activity drawer's state is a saved display setting`.
+
+### Task 4: Drawer key and lines
+
+**Files:** Create `internal/tui/frame.go` (drawer parts), `internal/tui/frame_test.go`; modify `keys.go`, `app.go`.
+
+**Interfaces:**
+- Consumes: `layoutFor`, `drawerFromPref`, `savePrefs(a, p)`.
+- Produces:
+  ```go
+  globalKeys.Drawer = key.NewBinding(key.WithKeys("."), key.WithHelp(".", "activity drawer"))
+  func (a *App) drawerOpen() bool             // layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer)).DrawerOpen
+  func (a *App) drawerLine(w int) string      // minimized line
+  func (a *App) drawerView(r rect, compact bool) string // open content
+  func (a *App) hints() string                // key hints for the current screen
+  ```
+- `.` sets `Drawer` to the opposite of the *resolved* state (`open`/`min`) and calls `savePrefs`.
+- Minimized line, left to right, joined by two spaces: `jobs N running` (sum of `Jobs.Running`; `jobs n/a` when no row has `Jobs`), the highlight `[! N needs decision]` only when `needCount() > 0` (Warn style), `! alerts n/a` until phase 2, the flash if any (replaces counts), then ` | ` and `hints()`; truncated to `w`.
+- Open content (phase 1): one line per box with a `Jobs` section: `jobs  <box>  N running · N needs decision`; then the old status line content (`<sel> | <link> | server live | updated 5s ago`); boxed with title `Activity` when not compact; compact = the first job line or the status line, then hints line.
+
+- [ ] **Step 1: Failing tests (teatest/tuitest)**
+  - `TestDrawerToggleSaves`: 120×40, auto → open; press `.` → frame lacks `+- Activity`, Fake's last saved prefs `.Drawer == "min"`; press `.` → `"open"`.
+  - `TestDrawerAutoMinimizedAt80x24`: frame's last line starts with ` jobs`, contains `. drawer`.
+  - `TestDrawerHighlightsDecisionNoOpen`: 80×24 auto, fleet with `Jobs{Running:1, NeedsDecision:1}` → last line contains `[! 1 needs decision]`, frame has no `Activity`.
+  - `TestDrawerKeyIgnoredWhileCapturing`: open fleet filter `/`, type `.`; prefs not saved, filter text contains `.`.
+  - `TestDrawerSaveRefused`: Fake SavePrefs returns error → flash `could not save the display setting`, then re-read state applies.
+- [ ] **Step 2:** Run — FAIL.
+- [ ] **Step 3:** Implement; add `Drawer` to help via `globalKeys` (automatic from `keyList`).
+- [ ] **Step 4:** PASS.
+- [ ] **Step 5:** Commit `feat(tui): a minimizable activity drawer, toggled with .`.
+
+### Task 5: The frame
+
+**Files:** Modify `frame.go`, `app.go` (`render`), `host.go` (`sidebarView` → part of left sidebar); goldens.
+
+**Interfaces:** Produces `func (a *App) header(w int) string`, `func (a *App) viewsList(r rect) string`, `func (a *App) tabRow(w int) string`, `func (a *App) boxed(title string, focused bool, body string, w, h int) string`.
+
+- Header: ` jumpgate  server <conn>[ (err)] · <ver if known>` left; right `! N alerts`-free in phase 1: `updated <age> ago` (or `connecting` before the first fleet); age styled warn+`~` after 2×`IntervalSeconds`, `stale` after 4× or `Retrying`.
+- Left (w ≥ 100): boxed `Views`, lines `> Fleet  [1]` … for the six current screens (Hosts stays until phase 3), active one with `gl.Sel`; when a host is open, a separator then the host list (old `sidebarView`).
+- Below 100: `tabRow` (`[Fleet] Hosts Signers Gateways Jobs Settings`), and `[` keeps the host-list overlay as today.
+- Main: boxed with the screen's title (`Fleet`, or the host id for detail); the screen's `view(a, w-2, h-2)`; modal views also render inside main.
+- Borders: unicode rounded via `lipgloss.RoundedBorder()`, ascii `+-|` (custom `lipgloss.Border`); titles in the top border; colours from `Theme`.
+
+- [ ] **Step 1: Failing goldens + tests** in `frame_test.go` using the fleet fixture from `fleet_test.go` (box-a/box-b/laptop with box-a `Jobs{Running:1,NeedsDecision:1}`):
+  `dash_120x40` (drawer open), `dash_120x40_drawer_min`, `dash_100x30`, `dash_80x24`, `dash_80x24_drawer_open`, `dash_unicode_120x40`; each ascii one through `requireASCII`; `TestFrameLinesFitWindow` (every golden size: exactly h lines, each ≤ w cells); `TestModalInsideFrame` (`?` at 120×40: header and drawer still present).
+- [ ] **Step 2:** Run — FAIL (no goldens / old frame).
+- [ ] **Step 3:** Implement `render` from `layoutFor`; delete `topBar`/`statusBar` (move the `statusBar` tests in `app_test.go` to `drawerView`/header).
+- [ ] **Step 4:** `go test ./internal/tui/... -update`, review every changed golden for: frame intact, no lost content, `gate` wording; then `go test ./...` PASS.
+- [ ] **Step 5:** Commit `feat(tui): the dashboard frame: header, views sidebar, boxed main, drawer`.
+
+### Task 6: Phase-1 verification
+
+- [ ] `gofmt -l .` empty; `go vet ./...` and `go vet -tags notui ./...` clean; `go test ./...` PASS; `go list -tags notui -deps ./cmd/jumpgate | grep -E 'charm|charmbracelet'` empty.
+- [ ] Whole-branch review; fix findings; commit.
+
+---
+
+## Phase 2: KPI strip + alerts (U2)
+
+Files: `internal/tui/kpi.go`, `internal/tui/alerts.go` (+ tests). `type alert struct{Sev string; Box, Text string; At time.Time}`; `func alerts(fl api.Fleet, gw []api.GatewaySummary, now time.Time) []alert` covering spec §3's list; `func kpis(fl api.Fleet, gw []api.GatewaySummary) []tile` with value/`n/a`/`~`/`FAIL`. Layout gains `KPI rect` (1 row < 30 h, 4 rows ≥ 30). Gateways tile: `live/failing` plus `n/a` and hint `no request counts yet` (U1). Header gains `! N alerts`; drawer's `! alerts n/a` becomes the count. Goldens: `dash_degraded_120x40` (no zeros for unknowns). An interface `alertSource` so phase 3+ can swap in the health-watch feed.
+
+## Phase 3: Tree + context sidebar, Hosts into Fleet (U3)
+
+Files: `tree.go`, `context.go`. Tree from fleet + gateways (`RoutesTo`) + `ListModules` on expand (60 s), reusing `moduleCards`/`moduleStatus` read-only from `host_modules.go`. Right sidebar at ≥ 120 (27 %, 32–40), overlays `[`/`]` below; focus regions + `tab`. Hosts actions (`a`,`p`,`d`,`L`, table mode `v`) move onto Fleet; views renumber to Fleet, Jobs, Signers, Gateways, Settings (`1-5`). Goldens `dash_80x24_tree_overlay`, `dash_80x24_ctx_overlay`, `dash_box_detail_120x40`.
+
+## Phase 4: Activity drawer content
+
+Job bars from `WatchJobs` (reuse `jobs.go` step format), sync bars (indeterminate without reference head), event ticker (ring 200, snapshot diffs); compact drawer rotates every 5 s. Goldens `dash_jobs_120x40`; teatest: job advances, bar moves; stream drop → stale → recovers.
+
+## Phase 5: Node detail + sparklines
+
+Node detail main view; sparklines at ≥ 160 from a client ring. Golden `dash_node_detail_120x40`, `dash_160x48`. Landing `docs-images.mjs` points at `dash_120x40` / `dash_80x24`.
+
+## Phase 6: Gateway request counts (U1)
+
+Server: request/error counters + rate per gateway in `api.GatewaySummary` and `/api/gateways`; TUI tile shows them and drops the hint.
