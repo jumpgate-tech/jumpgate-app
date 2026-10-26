@@ -251,9 +251,11 @@ release-snapshot:
     - cat dist/checksums.txt
     - grep -q ' jumpgate-linux-amd64$' dist/checksums.txt
     - grep -q ' jumpgate-linux-arm64$' dist/checksums.txt
+  # The archives exceed this instance's artifact size limit (413); keep the
+  # checksums and the goreleaser metadata, which are what a dry run checks.
   artifacts:
     paths:
-      - dist/*.tar.gz
-      - dist/*.zip
       - dist/checksums.txt
+      - dist/artifacts.json
+      - dist/metadata.json
     expire_in: 2 weeks
