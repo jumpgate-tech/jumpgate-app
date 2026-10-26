@@ -36,7 +36,7 @@ web:
 
 go-linux:
   stage: test
-  image: golang:1.26-bookworm
+  image: golang:1.26.10-bookworm
   timeout: 60m
   cache:
     key:
@@ -65,7 +65,7 @@ go-linux:
 
 cross:
   stage: test
-  image: golang:1.26-bookworm
+  image: golang:1.26.10-bookworm
   timeout: 60m
   cache:
     key:
@@ -90,7 +90,7 @@ cross:
 # Running the tray tests needs Windows: the local VM or the windows job.
 windows-tray-cross:
   stage: test
-  image: golang:1.26-trixie
+  image: golang:1.26.10-trixie
   cache:
     key:
       files: [go.sum]
@@ -171,7 +171,7 @@ windows:
 # runs in a Docker container on GitHub; here the job's image is that container).
 secret-service:
   stage: test
-  image: golang:1.26-bookworm
+  image: golang:1.26.10-bookworm
   cache:
     key:
       files: [go.sum]
@@ -230,7 +230,7 @@ e2e:
 # artifacts to inspect archives, checksums.txt and the raw agents.
 release-snapshot:
   stage: test
-  image: golang:1.26-bookworm
+  image: golang:1.26.10-bookworm
   timeout: 60m
   when: manual
   allow_failure: true
