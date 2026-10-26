@@ -241,7 +241,9 @@ release-snapshot:
       files: [go.sum]
     paths: [.cache/go-mod/, .cache/go-build/]
   script:
-    - go install github.com/goreleaser/goreleaser/v2@v2.18.2
+    # goreleaser v2.18 itself needs Go 1.27 to build; the release binaries
+    # still build with the pinned toolchain.
+    - GOTOOLCHAIN=go1.27.3 go install github.com/goreleaser/goreleaser/v2@v2.18.2
     - export PATH="$(go env GOPATH)/bin:$PATH"
     - goreleaser check
     - goreleaser release --snapshot --clean --skip=publish
