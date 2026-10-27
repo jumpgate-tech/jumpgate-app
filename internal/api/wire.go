@@ -3,8 +3,21 @@ package api
 import (
 	"encoding/json"
 
+	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/intent"
 )
+
+// PairingInfo is GET /api/pairing-info: what a CLI needs to install and
+// enroll an agent in its own process (the jumpgate service never logs in to
+// a box). Everything in it is public.
+type PairingInfo struct {
+	Controller   string              `json:"controller"`      // the recorded controller address
+	TransportKey string              `json:"transportKey"`    // the tunnel key, an authorized_keys line
+	System       bool                `json:"system"`          // serve --system
+	ServiceUID   int                 `json:"serviceUid"`      // the service's uid in system mode, else -1
+	Scope        string              `json:"scope,omitempty"` // "self" under --self-only
+	Wire         *catalog.WireConfig `json:"wire,omitempty"`  // the named target's, when ?target= is given
+}
 
 // IntentReply is the server's answer to POST /api/targets/{id}/intent/{kind}:
 // the verified receipt. Hint is the server's remedy for a rejection.

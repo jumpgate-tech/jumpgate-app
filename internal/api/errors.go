@@ -121,6 +121,12 @@ const (
 	CodeVaultUnsafe Code = "vault_unsafe"
 	// CodeNoVault: there is no vault file.
 	CodeNoVault Code = "no_vault"
+
+	// The jumpgate service (serve --system).
+	// CodeKeyPathRefused: a client named an SSH key file for the service to read.
+	CodeKeyPathRefused Code = "key_path_refused"
+	// CodeServiceNoLogin: the service never logs in to a box over SSH itself.
+	CodeServiceNoLogin Code = "service_no_login"
 )
 
 // Exit classes: the CLI's process exit statuses, published in the README.
@@ -210,6 +216,8 @@ var registry = map[Code]codeInfo{
 	CodeVaultCorrupt:        {"the vault file was changed or damaged and jumpgate will not fall back to plain files; restore a backup: `jumpgate stop`, then `jumpgate vault restore FILE`", ExitSecurity},
 	CodeVaultUnsafe:         {"the vault file is not private to this user, is not a regular file, or is a link; jumpgate never fixes it itself: check who changed it, then fix it as the message says", ExitSecurity},
 	CodeNoVault:             {"create one with `jumpgate vault migrate` (moves existing secrets in) or `jumpgate vault init`", ExitUsage},
+	CodeKeyPathRefused:      {"the jumpgate service never reads your SSH keys; leave out --key: `jumpgate hosts add` runs the root steps in your own shell", ExitUsage},
+	CodeServiceNoLogin:      {"the jumpgate service reaches boxes only through their agents; pair the box, or use `jumpgate ssh NAME` for a shell", ExitFailed},
 	CodeJobKindNotAllowed:   {"this server starts only the jobs it knows (for example `jumpgate migrate-names HOST`); other node operations have their own commands", ExitUsage},
 }
 

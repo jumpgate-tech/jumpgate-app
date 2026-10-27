@@ -285,6 +285,9 @@ func New(cfg Config) *Server {
 	if s.newExecutor == nil {
 		s.newExecutor = defaultNewExecutor
 	}
+	if cfg.System {
+		s.newExecutor = systemExecutor(s.newExecutor)
+	}
 	s.newAIProvider = cfg.NewAIProvider
 	if s.newAIProvider == nil {
 		s.newAIProvider = ai.New

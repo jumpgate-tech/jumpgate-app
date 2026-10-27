@@ -201,6 +201,17 @@ func (c *Client) SavePrefs(ctx context.Context, p api.UIPrefs) (api.UIPrefs, err
 	return out, err
 }
 
+// PairingInfo is GET /api/pairing-info; a non-empty target adds its wire.
+func (c *Client) PairingInfo(ctx context.Context, target string) (api.PairingInfo, error) {
+	var v api.PairingInfo
+	path := "/api/pairing-info"
+	if target != "" {
+		path += "?target=" + url.QueryEscape(target)
+	}
+	err := c.Do(ctx, http.MethodGet, path, nil, &v)
+	return v, err
+}
+
 func (c *Client) Controller(ctx context.Context) (api.ControllerView, error) {
 	var v api.ControllerView
 	err := c.Do(ctx, http.MethodGet, "/api/controller", nil, &v)

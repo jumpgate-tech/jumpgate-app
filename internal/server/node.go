@@ -368,6 +368,8 @@ func classifyNodeError(err error) (int, api.Error) {
 		return http.StatusBadGateway, api.Error{Message: fail.msg, Code: api.CodeAgentFailed}
 	case errors.Is(err, errNotSetUp):
 		return http.StatusConflict, api.Error{Message: msg, Code: api.CodeTargetNotSetUp}
+	case errors.Is(err, errServiceNoLogin):
+		return http.StatusConflict, api.Error{Message: msg, Code: api.CodeServiceNoLogin}
 	case errors.As(err, &nokey):
 		return http.StatusServiceUnavailable, noControllerKeyError(nokey.cause)
 	case errors.Is(err, errNoController):

@@ -690,6 +690,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/targets", s.handleListTargets)
 	mux.HandleFunc("POST /api/targets", s.handleAddTarget)
+	mux.HandleFunc("GET /api/pairing-info", s.handlePairingInfo)
 	mux.HandleFunc("DELETE /api/targets/{id}", s.handleDeleteTarget)
 
 	mux.HandleFunc("POST /api/targets/{id}/setup", s.handleStartSetup)
@@ -901,8 +902,21 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, `mode must be "local" or "ssh"`)
 		return
 	}
+	if t.Mode == "ssh" && s.cfg.System {
+		// The service never reads a key file a client names (it can read
+		// files the client cannot), and never dials the box itself: the CLI
+		// confirmed the host keys and runs the root steps in its own shell.
+		if t.SSH != nil && clientKeyPath(t.SSH) {
+			writeErrorDetail(w, http.StatusBadRequest, "the jumpgate service does not take an SSH key path", "", api.CodeKeyPathRefused)
+			return
+		}
+		if t.SSH == nil || t.SSH.Host == "" || t.SSH.User == "" {
+			writeError(w, http.StatusBadRequest, "ssh targets need host and user")
+			return
+		}
+	}
 	if t.Mode == "ssh" {
-		if t.SSH == nil || t.SSH.Host == "" || t.SSH.User == "" || (t.SSH.KeyPath == "" && !executor.AgentAvailable()) {
+		if t.SSH == nil || t.SSH.Host == "" || t.SSH.User == "" || (t.SSH.KeyPath == "" && !s.cfg.System && !executor.AgentAvailable()) {
 			writeError(w, http.StatusBadRequest, "ssh targets need host, user, and a key path or a running ssh-agent")
 			return
 		}
@@ -935,11 +949,15 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Dial now (SSH TOFU happens on this call) to validate the target is
-	// reachable before persisting it.
-	ex, err := s.newExecutor(t)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("could not reach target: %v", err))
-		return
+	// reachable before persisting it. The service saves an ssh target
+	// without dialling: it never logs in to a box.
+	var ex executor.Executor
+	if !(s.cfg.System && t.Mode == "ssh") {
+		ex, err = s.newExecutor(t)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, fmt.Sprintf("could not reach target: %v", err))
+			return
+		}
 	}
 
 	exists := false
@@ -952,7 +970,9 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		ex.Close()
+		if ex != nil {
+			ex.Close()
+		}
 		// A second add that won the race to the config is the same answer as
 		// the check above, so a client re-pairs on the code either way.
 		code := api.CodeConflict
@@ -963,7 +983,9 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.reg.get(t.ID).setExec(ex)
+	if ex != nil {
+		s.reg.get(t.ID).setExec(ex)
+	}
 
 	added, _ := findTarget(cfg, t.ID)
 	writeJSON(w, http.StatusCreated, added)
