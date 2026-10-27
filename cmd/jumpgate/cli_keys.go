@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -20,9 +21,11 @@ import (
 
 func cmdKeys(args []string) int {
 	if len(args) == 0 {
-		return usage("usage: jumpgate keys init|show [--recorded]")
+		return usage("usage: jumpgate keys init|show [--recorded]|export --keystore-v3 FILE")
 	}
 	switch args[0] {
+	case "export":
+		return keysExport(args[1:])
 	case "show":
 		return keysShow(args[1:], os.Stdout, os.Stderr)
 	case "init":
@@ -225,6 +228,73 @@ func openVaultKey(ref string) (*signer.Key, error) {
 	}
 	defer v.Lock()
 	return signer.OpenVault(v, ref)
+}
+
+// exportScryptN is the keystore v3 scrypt cost; tests lower it.
+var exportScryptN = 262144
+
+// keysExport is `jumpgate keys export --keystore-v3 FILE`: it writes the
+// vault's controller key as an Ethereum keystore v3 file a wallet can
+// import. Every passphrase comes from the terminal; there is no --stdin.
+func keysExport(args []string) int {
+	fset := flag.NewFlagSet("keys export", flag.ContinueOnError)
+	fset.SetOutput(os.Stderr)
+	v3 := fset.Bool("keystore-v3", false, "write an Ethereum keystore v3 file")
+	if err := fset.Parse(args); err != nil || !*v3 || fset.NArg() != 1 {
+		return usage("usage: jumpgate keys export --keystore-v3 FILE")
+	}
+	out := fset.Arg(0)
+	c, err := config.Load()
+	if err != nil {
+		return failed("load config: %v", err)
+	}
+	if c.Controller == nil {
+		return failed("no controller key; run `jumpgate keys init`")
+	}
+	if signer.Store(c.Controller.KeyStore) != signer.StoreVault {
+		return usage("only a vault key is exported; the other stores already hold it where a wallet or tool can reach it")
+	}
+	if _, err := os.Lstat(out); err == nil {
+		return failed("%s already exists; jumpgate never overwrites it", out)
+	}
+	k, err := openVaultKey(c.Controller.KeyRef) // core dumps off first
+	if err != nil {
+		return vaultFail("keys export", err)
+	}
+	if err := signer.CheckAddress(k, c.Controller.Address); err != nil {
+		fmt.Fprintf(os.Stderr, "jumpgate: SECURITY: the vault key is %s, but config.json records %s\n", k.Address().Hex(), c.Controller.Address)
+		return exitCode("controller_key_mismatch")
+	}
+	pass, err := readPassphrase("keystore file passphrase: ", false, true)
+	if err != nil {
+		return failed("keys export: %v", err)
+	}
+	check := bytes.Clone(pass)
+	defer clear(check)
+	b, err := signer.EncryptKeystoreV3(k, pass, exportScryptN) // clears pass
+	if err != nil {
+		return failed("keys export: %v", err)
+	}
+	err = writeNewPrivate(out, b)
+	if errors.Is(err, fs.ErrExist) {
+		return failed("%s already exists; jumpgate never overwrites it", out)
+	}
+	if err != nil {
+		return failed("keys export: %v", err)
+	}
+	written, err := os.ReadFile(out)
+	if err == nil {
+		var back *signer.Key
+		if back, err = signer.DecryptKeystoreV3(written, bytes.Clone(check)); err == nil && back.Address() != k.Address() {
+			err = errors.New("another address")
+		}
+	}
+	if err != nil {
+		os.Remove(out)
+		return failed("keys export: the written file does not read back to %s (%v); it was removed", k.Address().Hex(), err)
+	}
+	fmt.Printf("wrote %s (%s); anyone with this file and its passphrase controls the key\n", out, k.Address().Hex())
+	return 0
 }
 
 // createVaultKey creates the vault if needed and stores a new key in it.
