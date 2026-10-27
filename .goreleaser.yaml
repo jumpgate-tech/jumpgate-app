@@ -38,6 +38,28 @@ archives:
       - goos: windows
         formats: [zip]
 
+# The controller service as deb and rpm (D14): the binary, the unit and the
+# sysusers entry. The postinst never enables the unit and never plainly
+# restarts it (a restart comes back locked); the agent binary on a box is
+# never the package's.
+nfpms:
+  - id: jumpgate
+    package_name: jumpgate
+    ids: [jumpgate]
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    homepage: https://jumpgate.app
+    description: jumpgate controller and CLI
+    license: see LICENSE
+    # Placeholder until confirmed at review.
+    maintainer: jumpgate-tech <https://github.com/jumpgate-tech/jumpgate-app>
+    file_name_template: "{{ .PackageName }}_{{ .Version }}_{{ .Arch }}"
+    contents:
+      - {src: packaging/linux/server/jumpgate.service, dst: /usr/lib/systemd/system/jumpgate.service, file_info: {mode: 0644}}
+      - {src: packaging/linux/server/jumpgate.sysusers, dst: /usr/lib/sysusers.d/jumpgate.conf, file_info: {mode: 0644}}
+    scripts:
+      postinstall: packaging/linux/server/postinst.sh
+
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
