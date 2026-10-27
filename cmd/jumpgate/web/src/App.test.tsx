@@ -56,6 +56,9 @@ vi.mock("./screens/Analytics/Analytics", async () => {
 vi.mock("./components/UpdateBanner", () => ({
   UpdateBanner: () => null,
 }));
+vi.mock("./components/VaultBanner", () => ({
+  VaultBanner: () => null,
+}));
 
 describe("activeNav", () => {
   it("maps machine→targets and home/panel→rpc, else identity", () => {

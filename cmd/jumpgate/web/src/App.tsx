@@ -9,6 +9,7 @@ import { Targets } from "./screens/Targets/Targets";
 import { Analytics } from "./screens/Analytics/Analytics";
 import { Machine } from "./screens/Machine/Machine";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { VaultBanner } from "./components/VaultBanner";
 
 const NAV = [
   { to: "#/rpc", nav: "rpc", label: "RPC" },
@@ -79,6 +80,7 @@ export function App() {
       )}
       <main id="content" className="content">
         <UpdateBanner />
+        <VaultBanner />
         <Routes>
           <Route path="/" element={<Panel />} />
           <Route path="/panel" element={<Panel />} />

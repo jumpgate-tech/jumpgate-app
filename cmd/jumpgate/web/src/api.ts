@@ -1599,6 +1599,49 @@ export function getUpdate(refresh = false): Promise<Update> {
 }
 
 // ---------------------------------------------------------------------
+// vault (internal/server/vault.go, internal/api/vault.go)
+// ---------------------------------------------------------------------
+
+export type VaultState = "none" | "locked" | "unlocked" | "unusable";
+
+// Vault mirrors api.VaultView. plain lists secret fields still stored
+// unencrypted in config.json.
+export interface Vault {
+  state: VaultState;
+  slots: string[];
+  plain?: string[];
+  reason?: string;
+}
+
+export function getVault(): Promise<Vault> {
+  return request<Vault>("/api/vault");
+}
+
+// toBase64 encodes the UTF-8 bytes of s: api.UnlockRequest.Passphrase is a
+// []byte, which encoding/json reads as base64.
+function toBase64(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  bytes.fill(0);
+  return btoa(bin);
+}
+
+// unlockVault sends the passphrase; it is never logged. A wrong one is an
+// ApiError with code "wrong_passphrase" (403).
+export function unlockVault(passphrase: string): Promise<Vault> {
+  return request<Vault>("/api/vault/unlock", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ passphrase: toBase64(passphrase) }),
+  });
+}
+
+export function lockVault(): Promise<Vault> {
+  return request<Vault>("/api/vault/lock", { method: "POST" });
+}
+
+// ---------------------------------------------------------------------
 // docker readiness (the local machine that hosts the one-click gateway)
 // ---------------------------------------------------------------------
 
