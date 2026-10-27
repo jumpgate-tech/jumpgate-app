@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -439,6 +440,88 @@ func runTask(t *testing.T, b *builtServer, name string) {
 		}
 	}
 	t.Fatalf("no %s task in %v", name, taskNames(b))
+}
+
+// A relay whose tokens are in the vault serves nothing until an unlock, then
+// comes up with the tokens the vault holds.
+func TestRelayWithAVaultTokenStartsAfterUnlock(t *testing.T) {
+	vaultHome(t, func(v *vault.Vault) {
+		if err := v.Put(secrets.NameRelayToken, []byte("rt"), "test"); err != nil {
+			t.Fatal(err)
+		}
+		if err := v.Put(secrets.NameAdminToken, []byte("at"), "test"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Setenv(credentialsDirEnv, "")
+	relayBind := freeAddr(t)
+	var log syncBuilder
+	b, err := buildServer(serverOptions{
+		Bind: freeAddr(t), RelayBind: relayBind, BillingSocket: "/tmp/jg-no-such.sock",
+		ERPCURL: "http://127.0.0.1:4000", RelayToken: "vault:relay-token", AdminToken: "vault:admin-token", Meter: true,
+	}, func() {}, &log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(log.String(), "relay waits for the vault to be unlocked") {
+		t.Fatalf("log = %q", log.String())
+	}
+	for _, n := range taskNames(b) {
+		if strings.HasPrefix(n, "relay-") {
+			t.Fatalf("relay task %s before unlock", n)
+		}
+	}
+	if b.srv.RelayHandler() != nil {
+		t.Fatal("a relay handler before unlock")
+	}
+	if !b.shape.KeyAdmin {
+		t.Fatalf("shape = %+v", b.shape)
+	}
+	if _, err := b.srv.Unlock([]byte(vaulttest.Passphrase)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c, err := net.DialTimeout("tcp", relayBind, 100*time.Millisecond)
+		if err == nil {
+			c.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("relay listener never came up: %v; log %q", err, log.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// syncBuilder is a strings.Builder safe for the log a background task writes.
+type syncBuilder struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuilder) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuilder) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// A vault reference must name the token's own entry.
+func TestServerRefusesAForeignTokenReference(t *testing.T) {
+	shortHome(t)
+	_, err := buildServer(serverOptions{
+		Bind: freeAddr(t), RelayBind: freeAddr(t), BillingSocket: "/tmp/jg-no-such.sock",
+		ERPCURL: "http://127.0.0.1:4000", RelayToken: "vault:controller-key", AdminToken: "at",
+	}, func() {}, io.Discard)
+	if err == nil {
+		t.Fatal("a relay token naming the controller key was accepted")
+	}
 }
 
 func TestBuildServerStartsLockedWithAVaultKey(t *testing.T) {

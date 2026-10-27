@@ -148,6 +148,25 @@ func TestRelaySubcommandRefusesAHalfConfiguredRelay(t *testing.T) {
 	}
 }
 
+// The standalone relay never opens controller state, so a vault reference
+// is refused with the way to pass the token instead.
+func TestStandaloneRelayRefusesVaultRefs(t *testing.T) {
+	// The standalone relay takes only the relay token.
+	for _, ref := range []string{"vault:relay-token", " vault:admin-token"} {
+		var log strings.Builder
+		code := relayMain(context.Background(), []string{"--relay-bind", freeAddr(t), "--billing-socket", "/tmp/jg-none.sock"}, func(n string) string {
+			if n == "JUMPGATE_RELAY_TOKEN" {
+				return ref
+			}
+			return ""
+		}, &log)
+		want := "the standalone relay never opens controller state; use JUMPGATE_RELAY_TOKEN_FILE or systemd LoadCredential="
+		if code != 2 || !strings.Contains(log.String(), want) {
+			t.Fatalf("%q: exit %d, log %q", ref, code, log.String())
+		}
+	}
+}
+
 func TestRelayIsASubcommand(t *testing.T) {
 	if _, ok := subcommands["relay"]; !ok {
 		t.Fatal("no relay subcommand")

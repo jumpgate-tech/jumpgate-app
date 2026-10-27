@@ -21,10 +21,40 @@ import (
 // no keys. A gateway with no metering needs no data plane, and the absence must
 // not be a nil dereference at startup.
 func (s *Server) RelayHandler() http.Handler {
-	if s.cfg.Relay == nil {
-		return nil
+	if s.cfg.Relay != nil {
+		return s.cfg.Relay
 	}
-	return s.cfg.Relay
+	s.relayMu.RLock()
+	defer s.relayMu.RUnlock()
+	return s.relayH
+}
+
+// keyStore is Config.Keys, or the key admin AttachRelay installed; nil
+// when the operator sells no keys.
+func (s *Server) keyStore() KeyAdmin {
+	if s.cfg.Keys != nil {
+		return s.cfg.Keys
+	}
+	s.relayMu.RLock()
+	defer s.relayMu.RUnlock()
+	return s.relayKeys
+}
+
+// AttachRelay installs a relay handler and key admin built after start,
+// once the vault that holds their tokens is unlocked. It may be called once,
+// and only when Config.Relay and Config.Keys are nil. The caller then runs
+// ListenAndServeRelay.
+func (s *Server) AttachRelay(h http.Handler, keys KeyAdmin) error {
+	s.relayMu.Lock()
+	defer s.relayMu.Unlock()
+	if s.cfg.Relay != nil || s.cfg.Keys != nil {
+		return errors.New("server: a relay was configured at start")
+	}
+	if s.relayAttached {
+		return errors.New("server: a relay is already attached")
+	}
+	s.relayAttached, s.relayH, s.relayKeys = true, h, keys
+	return nil
 }
 
 // ListenAndServeRelay runs the data plane until ctx is canceled. It is a

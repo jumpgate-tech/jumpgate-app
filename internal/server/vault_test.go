@@ -390,3 +390,69 @@ func TestUnlockLockAndSignedRoutesInParallel(t *testing.T) {
 		t.Fatalf("state %s but signer err %v", st, err)
 	}
 }
+
+func secretBody(v string) string {
+	raw, _ := json.Marshal(api.SecretValue{Value: []byte(v)})
+	return string(raw)
+}
+
+// PUT /api/vault/secrets/{name} stores only the relay and admin tokens, and
+// answers locked while the vault is.
+func TestVaultPutAcceptsOnlyTokens(t *testing.T) {
+	p, pass := vaulttest.Path(t)
+	srv, ts, token := vaultServer(t, p)
+	if res, e := do(t, ts, token, "PUT", "/api/vault/secrets/relay-token", secretBody("rt")); res.StatusCode != 503 || e.Code != api.CodeLocked {
+		t.Fatalf("locked put = %d %+v", res.StatusCode, e)
+	}
+	if _, err := srv.Unlock(pass); err != nil {
+		t.Fatal(err)
+	}
+	if res, e := do(t, ts, token, "PUT", "/api/vault/secrets/relay-token", secretBody("rt")); res.StatusCode != 204 {
+		t.Fatalf("put relay-token = %d %+v", res.StatusCode, e)
+	}
+	if got, err := srv.vault().Get("relay-token"); err != nil || string(got) != "rt" {
+		t.Fatalf("relay-token = %q, %v", got, err)
+	}
+	for _, name := range []string{"ai-key", "controller-key", "transport-key"} {
+		if res, _ := do(t, ts, token, "PUT", "/api/vault/secrets/"+name, secretBody("x")); res.StatusCode != 400 {
+			t.Fatalf("put %s = %d", name, res.StatusCode)
+		}
+	}
+	for _, body := range []string{"", `{"value":""}`, secretBody("vault:controller-key"), `{"value":"` + strings.Repeat("A", 64<<10) + `"}`} {
+		if res, _ := do(t, ts, token, "PUT", "/api/vault/secrets/admin-token", body); res.StatusCode != 400 {
+			t.Fatalf("put %.40q = %d", body, res.StatusCode)
+		}
+	}
+	// Not without the session.
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/vault/secrets/admin-token", strings.NewReader(secretBody("at")))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 401 {
+		t.Fatalf("unauthenticated put = %d", res.StatusCode)
+	}
+}
+
+func TestAttachRelayOnce(t *testing.T) {
+	srv, _, _ := vaultServer(t, filepath.Join(t.TempDir(), "vault"))
+	if srv.RelayHandler() != nil {
+		t.Fatal("a relay before attach")
+	}
+	h := http.NotFoundHandler()
+	if err := srv.AttachRelay(h, nil); err != nil {
+		t.Fatal(err)
+	}
+	if srv.RelayHandler() == nil {
+		t.Fatal("no relay after attach")
+	}
+	if err := srv.AttachRelay(h, nil); err == nil {
+		t.Fatal("a second attach was accepted")
+	}
+	pre := New(Config{Token: "t", UI: fstest.MapFS{}, Relay: h, noJobsDriver: true})
+	defer pre.fleet.stop()
+	if err := pre.AttachRelay(h, nil); err == nil {
+		t.Fatal("attach over a configured relay was accepted")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"net/http"
+	"net/url"
 
 	"github.com/valve-tech/jumpgate/internal/api"
 )
@@ -28,6 +29,20 @@ func (c *Client) Unlock(ctx context.Context, passphrase []byte) (api.VaultView, 
 	var v api.VaultView
 	err := c.Do(ctx, http.MethodPost, "/api/vault/unlock", rawJSON(body), &v)
 	return v, err
+}
+
+// PutVaultSecret stores value in the server's unlocked vault as name
+// (relay-token or admin-token). The value and the encoded body are cleared
+// before it returns.
+func (c *Client) PutVaultSecret(ctx context.Context, name string, value []byte) error {
+	defer clear(value)
+	const pre, post = `{"value":"`, `"}`
+	body := make([]byte, len(pre)+base64.StdEncoding.EncodedLen(len(value))+len(post))
+	defer clear(body)
+	n := copy(body, pre)
+	base64.StdEncoding.Encode(body[n:], value)
+	copy(body[len(body)-len(post):], post)
+	return c.Do(ctx, http.MethodPut, "/api/vault/secrets/"+url.PathEscape(name), rawJSON(body), nil)
 }
 
 // Lock drops the vault key from the server's memory.

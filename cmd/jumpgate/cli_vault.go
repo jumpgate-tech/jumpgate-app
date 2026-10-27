@@ -21,7 +21,10 @@ import (
 	"github.com/valve-tech/jumpgate/internal/vault"
 )
 
-const vaultUsage = "usage: jumpgate vault init|migrate|backup|restore|add-recovery|rekdf|seal"
+const vaultUsage = "usage: jumpgate vault init|migrate|backup|restore|add-recovery|rekdf|seal|put"
+
+// vaultPutUsage is `jumpgate vault put`'s usage line.
+const vaultPutUsage = "usage: jumpgate vault put relay-token|admin-token [--stdin]"
 
 // Test seams: daemon.Find, and the OS key store `vault init --keystore
 // auto` adds a slot for.
@@ -53,6 +56,8 @@ func cmdVault(args []string) int {
 		return vaultRekdf(rest)
 	case "seal":
 		return vaultSeal(rest)
+	case "put":
+		return vaultPut(rest)
 	}
 	return usage("unknown vault subcommand %q; %s", args[0], vaultUsage)
 }
@@ -321,6 +326,41 @@ func openVaultOffline() (*vault.Vault, error) {
 		return nil, err
 	}
 	return unlockOffline(v, pass)
+}
+
+// vaultPut is `jumpgate vault put relay-token|admin-token [--stdin]`: it
+// stores the in-process relay's token in the running server's unlocked
+// vault, where JUMPGATE_RELAY_TOKEN=vault:relay-token (or the admin
+// equivalent) finds it. The value is read hidden from the terminal, or as one
+// line of standard input, and never echoed.
+func vaultPut(args []string) int {
+	fset := vaultFlags("put")
+	fromStdin := fset.Bool("stdin", false, "read the value as one line of standard input")
+	var name string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		name, args = args[0], args[1:]
+	}
+	if err := fset.Parse(args); err != nil || fset.NArg() > 0 {
+		return usage(vaultPutUsage)
+	}
+	if name != secrets.NameRelayToken && name != secrets.NameAdminToken {
+		return usage(vaultPutUsage)
+	}
+	val, err := readPassphrase(name+": ", *fromStdin, false)
+	if err != nil {
+		return failed("vault put: %v", err)
+	}
+	defer clear(val)
+	if bytes.HasPrefix(bytes.TrimSpace(val), []byte(config.SecretRefPrefix)) {
+		return usage("vault put: the value may not start with %q", config.SecretRefPrefix)
+	}
+	code := withVaultClient("vault put", func(ctx context.Context, c *apiclient.Client) error {
+		return c.PutVaultSecret(ctx, name, val) // clears val
+	})
+	if code == 0 {
+		fmt.Printf("stored %s in the vault\n", name)
+	}
+	return code
 }
 
 func vaultAddRecovery(args []string) int {

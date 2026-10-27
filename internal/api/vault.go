@@ -16,3 +16,9 @@ type VaultView struct {
 type UnlockRequest struct {
 	Passphrase []byte `json:"passphrase"`
 }
+
+// SecretValue is PUT /api/vault/secrets/{name}. Value is base64 in JSON so
+// both ends can clear it; it is never logged.
+type SecretValue struct {
+	Value []byte `json:"value"`
+}

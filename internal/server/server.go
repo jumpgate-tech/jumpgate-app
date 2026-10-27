@@ -163,6 +163,13 @@ type Server struct {
 	// bg counts the work each unlock starts (afterUnlock).
 	bg sync.WaitGroup
 
+	// relayMu guards a relay attached after start (AttachRelay), which
+	// takes the place of Config.Relay and Config.Keys.
+	relayMu       sync.RWMutex
+	relayAttached bool
+	relayH        http.Handler
+	relayKeys     KeyAdmin
+
 	// critical counts destructive operations in flight (clear, wipe). Shutdown
 	// waits for them; see criticalOp.
 	critical       sync.WaitGroup

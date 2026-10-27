@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -317,6 +318,62 @@ func (s *Server) registerVaultRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/vault/lock", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.Lock())
 	})
+	mux.HandleFunc("PUT /api/vault/secrets/{name}", s.handlePutVaultSecret)
+}
+
+// maxSecretBody bounds PUT /api/vault/secrets/{name}.
+const maxSecretBody = 4 << 10
+
+// apiSecretNames are the entries PUT /api/vault/secrets may write: the
+// in-process relay's tokens, which no settings field owns. Every other entry
+// is written only by the field or command that owns it.
+var apiSecretNames = map[string]bool{secrets.NameRelayToken: true, secrets.NameAdminToken: true}
+
+// handlePutVaultSecret is PUT /api/vault/secrets/{name} with
+// {"value": base64}. The value is never logged or echoed.
+func (s *Server) handlePutVaultSecret(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	name := r.PathValue("name")
+	if !apiSecretNames[name] {
+		writeError(w, http.StatusBadRequest, "only relay-token and admin-token can be set here")
+		return
+	}
+	var req api.SecretValue
+	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSecretBody)).Decode(&req)
+	defer clear(req.Value)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, `want {"value": base64}`)
+		return
+	}
+	trimmed := bytes.TrimSpace(req.Value)
+	if len(trimmed) == 0 {
+		writeError(w, http.StatusBadRequest, "the value is empty")
+		return
+	}
+	if bytes.HasPrefix(trimmed, []byte(config.SecretRefPrefix)) {
+		writeVaultError(w, errRefValue)
+		return
+	}
+	if err := s.putAPISecret(name, req.Value); err != nil {
+		writeVaultError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// putAPISecret stores value as name in the unlocked vault: vault.ErrNoVault
+// with no vault file, vault.ErrLocked while locked.
+func (s *Server) putAPISecret(name string, value []byte) error {
+	s.vctl.mu.Lock()
+	defer s.vctl.mu.Unlock()
+	v, err := s.openVaultLocked()
+	if err != nil {
+		return err
+	}
+	if v.Locked() {
+		return vault.ErrLocked
+	}
+	return v.Put(name, value, "api")
 }
 
 // errForeignRef is a field whose vault reference names another field's
