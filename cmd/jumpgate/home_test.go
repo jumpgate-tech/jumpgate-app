@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/apiclient"
+	"github.com/valve-tech/jumpgate/internal/signer"
 )
 
 // triedToStartServer records a test that reached the real connect seam.
@@ -34,6 +35,9 @@ func TestMain(m *testing.M) {
 		triedToStartServer.Store(true)
 		return nil, errors.New("test tried to start a jumpgate server")
 	}
+	// `vault init` must never add a slot to the developer's real keychain;
+	// a test that wants one fakes the store.
+	vaultKeystoreStore = func() signer.Store { return signer.StoreVault }
 	code := m.Run()
 	if triedToStartServer.Load() {
 		fmt.Fprintln(os.Stderr, "FAIL: a test tried to start a jumpgate server; point connect at an in-process server (see withServer)")

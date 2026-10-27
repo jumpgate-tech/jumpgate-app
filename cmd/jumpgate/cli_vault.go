@@ -17,13 +17,18 @@ import (
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/fsperm"
 	"github.com/valve-tech/jumpgate/internal/secrets"
+	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/vault"
 )
 
-const vaultUsage = "usage: jumpgate vault init|migrate|backup|restore|add-recovery|rekdf"
+const vaultUsage = "usage: jumpgate vault init|migrate|backup|restore|add-recovery|rekdf|seal"
 
-// findServer is daemon.Find; a test seam.
-var findServer = daemon.Find
+// Test seams: daemon.Find, and the OS key store `vault init --keystore
+// auto` adds a slot for.
+var (
+	findServer         = daemon.Find
+	vaultKeystoreStore = signer.DefaultStore
+)
 
 // cmdVault is `jumpgate vault ...`: administration of ~/.jumpgate/vault. It
 // runs in this process on the file, under the vault's file lock; a running
@@ -46,6 +51,8 @@ func cmdVault(args []string) int {
 		return vaultAddRecovery(rest)
 	case "rekdf":
 		return vaultRekdf(rest)
+	case "seal":
+		return vaultSeal(rest)
 	}
 	return usage("unknown vault subcommand %q; %s", args[0], vaultUsage)
 }
@@ -107,8 +114,12 @@ func vaultExists(path string) bool {
 func vaultInit(args []string) int {
 	fset := vaultFlags("init")
 	fromStdin := fset.Bool("stdin", false, "read the passphrase as one line of standard input")
+	keystore := fset.String("keystore", "auto", "auto: also add a slot this user's OS key store unlocks (macOS keychain, Windows Credential Manager); none: passphrase only")
 	if err := fset.Parse(args); err != nil || fset.NArg() > 0 {
 		return exitCode("usage")
+	}
+	if *keystore != "auto" && *keystore != "none" {
+		return usage("vault init: --keystore is auto or none")
 	}
 	path, err := secrets.VaultPath()
 	if err != nil {
@@ -124,8 +135,17 @@ func vaultInit(args []string) int {
 	if err != nil {
 		return vaultFail("vault init", err)
 	}
-	v.Lock()
+	defer v.Lock()
 	fmt.Printf("created %s\n", path)
+	if *keystore == "auto" {
+		switch store := vaultKeystoreStore(); store {
+		case signer.StoreKeychain, signer.StoreWinCred:
+			if err := secrets.AddKeystoreSlot(context.Background(), v, store, secrets.KeystoreRef); err != nil {
+				return failed("the vault was created, but no %s slot was added (the passphrase still unlocks it): %v", store, err)
+			}
+			fmt.Printf("added a %s slot (item %s): the server unlocks the vault at start with no prompt\n", store, secrets.KeystoreRef)
+		}
+	}
 	return 0
 }
 

@@ -114,27 +114,51 @@ func readCredentialKEK(getenv func(string) string) ([]byte, error) {
 	return raw, nil
 }
 
+// keystoreKEK is secrets.KeystoreKEK; a test seam.
+var keystoreKEK = secrets.KeystoreKEK
+
 // autoUnlock is the vault-auto-unlock task: it unlocks with the systemd
-// credential when one was passed. A failure leaves the vault locked and is
-// logged; the passphrase still unlocks it.
-func autoUnlock(s *server.Server, getenv func(string) string, logf func(string, ...any)) {
+// credential when one was passed, then with each keystore slot of v (an OS
+// key store item this user can read). A failure leaves the vault locked and
+// is logged; the passphrase still unlocks it.
+func autoUnlock(s *server.Server, v *vault.Vault, getenv func(string) string, logf func(string, ...any)) {
 	kek, err := readCredentialKEK(getenv)
 	switch {
 	case err != nil:
 		logf("vault stays locked: %v; the passphrase still works", err)
-		return
 	case kek == nil:
-		return
-	}
-	if s.VaultState().State == "unlocked" {
+	case s.VaultState().State == "unlocked":
 		clear(kek)
 		return
-	}
-	if _, err := s.UnlockKEK(vault.SlotSystemdCreds, kek); err != nil {
+	default:
+		if _, err := s.UnlockKEK(vault.SlotSystemdCreds, kek); err == nil {
+			logf("vault unlocked with the systemd credential %s", vaultCredName)
+			return
+		}
 		logf("vault stays locked: %v; the passphrase still works", err)
+	}
+	if v == nil {
 		return
 	}
-	logf("vault unlocked with the systemd credential %s", vaultCredName)
+	for _, sl := range v.Slots() {
+		if sl.Kind != vault.SlotKeystore {
+			continue
+		}
+		if s.VaultState().State == "unlocked" {
+			return
+		}
+		kek, err := keystoreKEK(context.Background(), signer.Store(sl.Store), sl.Ref)
+		if err != nil {
+			logf("vault: the %s item %s did not open: %v; the passphrase still works", safe(sl.Store), safe(sl.Ref), err)
+			continue
+		}
+		if _, err := s.UnlockKEK(vault.SlotKeystore, kek); err != nil {
+			logf("vault stays locked: %v; the passphrase still works", err)
+			continue
+		}
+		logf("vault unlocked with the %s item %s", safe(sl.Store), safe(sl.Ref))
+		return
+	}
 }
 
 // serverOptions is everything that shapes the controller server. The web app
@@ -431,7 +455,7 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 	}})
 	if v != nil || os.Getenv(credentialsDirEnv) != "" {
 		b.background = append(b.background, backgroundTask{"vault-auto-unlock", func(context.Context) {
-			autoUnlock(s, os.Getenv, logf)
+			autoUnlock(s, v, os.Getenv, logf)
 		}})
 	}
 	if relayHandler != nil {
