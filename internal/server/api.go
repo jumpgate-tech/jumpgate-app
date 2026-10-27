@@ -35,6 +35,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/logwatch"
 	"github.com/valve-tech/jumpgate/internal/monitor"
 	"github.com/valve-tech/jumpgate/internal/ops"
+	"github.com/valve-tech/jumpgate/internal/secrets"
 	"github.com/valve-tech/jumpgate/internal/setup"
 )
 
@@ -1749,6 +1750,11 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		writeErrorDetail(w, http.StatusConflict, "no AI provider is configured; set one in Settings first", "", api.CodeAIUnconfigured)
 		return
 	}
+	aiKey, err := s.secret(cfg.AIKey)
+	if err != nil {
+		writeVaultError(w, err)
+		return
+	}
 
 	var req explainRequest
 	if r.Body != nil && r.ContentLength != 0 {
@@ -1802,7 +1808,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	redacted := !slices.Equal(sent, tail)
 	sent = ai.CapLines(sent)
 
-	provider, err := s.newAIProvider(cfg.AIProvider, cfg.AIKey, "")
+	provider, err := s.newAIProvider(cfg.AIProvider, aiKey, "")
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -2166,12 +2172,43 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Secrets go into the vault first and config.json gets their references
+	// after, so a failure leaves at most an unreferenced vault entry, never
+	// a reference to nothing. A locked vault refuses before anything is
+	// written.
+	stored := map[string]string{}
+	if req.AIKey != nil && *req.AIKey != "" {
+		ref, err := s.putSecret(secrets.NameAIKey, *req.AIKey)
+		if err != nil {
+			writeVaultError(w, err)
+			return
+		}
+		stored[secrets.NameAIKey] = ref
+	}
+	for name, v := range req.ProviderKeys {
+		name, v = strings.TrimSpace(name), strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		ref, err := s.putSecret(secrets.ProviderName(name), v)
+		if err != nil {
+			writeVaultError(w, err)
+			return
+		}
+		stored[secrets.ProviderName(name)] = ref
+	}
+	var dropped []string
 	cfg, err := s.updateConfig(func(c *config.Config) error {
 		if req.AIProvider != nil {
 			c.AIProvider = *req.AIProvider
 		}
 		if req.AIKey != nil {
-			c.AIKey = *req.AIKey
+			if *req.AIKey == "" {
+				dropped = append(dropped, c.AIKey)
+				c.AIKey = ""
+			} else {
+				c.AIKey = stored[secrets.NameAIKey]
+			}
 		}
 		if req.RefRPCBase != nil {
 			c.RefRPCBase = *req.RefRPCBase
@@ -2183,19 +2220,25 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			name = strings.TrimSpace(name)
 			v = strings.TrimSpace(v)
 			if v == "" {
+				dropped = append(dropped, c.ProviderKeys[name])
 				delete(c.ProviderKeys, name)
 				continue
 			}
 			if c.ProviderKeys == nil {
 				c.ProviderKeys = map[string]string{}
 			}
-			c.ProviderKeys[name] = v
+			c.ProviderKeys[name] = stored[secrets.ProviderName(name)]
 		}
 		return nil
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	for _, old := range dropped {
+		if err := s.dropSecret(old); err != nil {
+			log.Printf("jumpgate: settings: forget a cleared secret: %v", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, settingsResponseFrom(cfg))

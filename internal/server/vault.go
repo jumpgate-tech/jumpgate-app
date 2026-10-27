@@ -302,6 +302,62 @@ func (s *Server) registerVaultRoutes(mux *http.ServeMux) {
 	})
 }
 
+// secret is stored itself when it is a literal, or the value its vault:NAME
+// reference names. A vault not yet found or locked is vault.ErrLocked.
+func (s *Server) secret(stored string) (string, error) {
+	if !config.IsSecretRef(stored) {
+		return stored, nil
+	}
+	s.keys.mu.RLock()
+	v := s.keys.v
+	s.keys.mu.RUnlock()
+	return secrets.Resolve(v, stored)
+}
+
+// putSecret stores value: under secretStore "vault" in the vault as name,
+// returning the reference config.json keeps; otherwise it returns value, the
+// literal config.json keeps.
+func (s *Server) putSecret(name, value string) (stored string, err error) {
+	c, err := config.Load()
+	if err != nil {
+		return "", err
+	}
+	if c.SecretStore != config.SecretStoreVault {
+		return value, nil
+	}
+	s.keys.mu.RLock()
+	v := s.keys.v
+	s.keys.mu.RUnlock()
+	if v == nil {
+		return "", vault.ErrLocked
+	}
+	raw := []byte(value)
+	defer clear(raw)
+	if err := v.Put(name, raw, "settings"); err != nil {
+		return "", err
+	}
+	return config.SecretRef(name), nil
+}
+
+// dropSecret deletes the vault entry a reference names; a literal, or an
+// entry already gone, is nothing to do.
+func (s *Server) dropSecret(stored string) error {
+	name, ok := config.SecretRefName(stored)
+	if !ok {
+		return nil
+	}
+	s.keys.mu.RLock()
+	v := s.keys.v
+	s.keys.mu.RUnlock()
+	if v == nil {
+		return vault.ErrLocked
+	}
+	if err := v.Delete(name); err != nil && !errors.Is(err, vault.ErrNotFound) {
+		return err
+	}
+	return nil
+}
+
 // plainSecrets names the secret fields config.json still holds as plain
 // values.
 func (s *Server) plainSecrets() []string {

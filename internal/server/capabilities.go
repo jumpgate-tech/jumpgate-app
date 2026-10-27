@@ -195,6 +195,7 @@ type capFlight struct {
 // ok is false only when ctx ends while the caller is waiting on another
 // caller's probe.
 func (s *Server) sharedCapabilityProbe(ctx context.Context, cfg config.Config, gw config.Gateway) (capabilitiesResponse, bool) {
+	cfg = s.keyedConfig(cfg)
 	s.capMu.Lock()
 	if f, running := s.capFlights[gw.ID]; running {
 		f.waiters++
@@ -316,7 +317,7 @@ func probeGatewayCapabilities(ctx context.Context, prober *capabilities.Prober, 
 	// Redaction happens in the VIEW, never in the job: probeURL is the address
 	// this process actually dials, so it must keep the real key right up to the
 	// socket. Only the copy that reaches the browser has the slot put back.
-	keys := providerKeys(cfg)
+	keys := literalProviderKeys(cfg)
 
 	// Probed concurrently: the Prober already caps in-flight round trips via
 	// its own Concurrency, so serialising the endpoints here would only add a

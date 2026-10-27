@@ -487,7 +487,7 @@ func (s *Server) reprovisionGatewaysFor(id string) (started []string, failed []g
 		gw, _ := cfg.FindGateway(gid)
 		if _, err := reprovisionGateway(s, cfg, gw); err != nil {
 			log.Printf("jumpgate: modules: re-provision gateway %s after a module change on %s: %v", gid, id, err)
-			failed = append(failed, gatewayFailure{ID: gid, Error: redactKeys(err.Error(), providerKeys(cfg))})
+			failed = append(failed, gatewayFailure{ID: gid, Error: redactKeys(err.Error(), literalProviderKeys(s.keyedConfig(cfg)))})
 			continue
 		}
 		started = append(started, gid)

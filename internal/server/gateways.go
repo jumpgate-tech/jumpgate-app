@@ -56,6 +56,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/fsperm"
 	"github.com/valve-tech/jumpgate/internal/ops"
 	"github.com/valve-tech/jumpgate/internal/setup"
+	"github.com/valve-tech/jumpgate/internal/vault"
 )
 
 // gatewayIDPattern is what an id may look like. It is deliberately narrow:
@@ -441,13 +442,17 @@ func (s *Server) handleKnownSet(w http.ResponseWriter, r *http.Request) {
 
 	// One key for every chain: valve's key is an account, and migrate() has
 	// already folded any per-chain keys an older config held into this one.
-	key := strings.TrimSpace(cfg.ProviderKeys[config.ValveKeyPlaceholder])
-	out := knownSetResponse{UsingDefaultKey: key == "" || key == catalog.DefaultValveKey}
-
+	//
 	// keys is the same provider-key map discovery resolves and redacts
 	// against — see providerKeys and redactKeys in chainlist.go — so the set
 	// and the feed cannot disagree about which key answers which placeholder.
-	keys := providerKeys(cfg)
+	// A key held in a locked vault is not guessed at: 503 locked.
+	keys, err := s.providerKeys(cfg)
+	if err != nil {
+		writeVaultError(w, err)
+		return
+	}
+	out := knownSetResponse{UsingDefaultKey: keys[config.ValveKeyPlaceholder] == catalog.DefaultValveKey}
 	for _, e := range catalog.KnownSet(chainID) {
 		// AlreadyAdded has to compare against the RESOLVED URL: what is
 		// actually stored on the gateway is the dialable address (see
@@ -518,8 +523,9 @@ func (s *Server) handleGatewayGet(w http.ResponseWriter, r *http.Request) {
 // gatewayViewFor assembles one gateway's whole card. Failures land in the
 // view, not in an error return, for the reason handleGatewayList documents.
 func (s *Server) gatewayViewFor(r *http.Request, cfg config.Config, gw config.Gateway, probed map[string]dockerView) gatewayView {
+	cfg = s.keyedConfig(cfg)
 	resolved, problems := resolveGateway(cfg, gw)
-	keys := providerKeys(cfg)
+	keys := literalProviderKeys(cfg)
 
 	v := gatewayView{
 		ID:            gw.ID,
@@ -1088,7 +1094,7 @@ func redactEach(ss []string, keys map[string]string) []string {
 // the same poll. Nothing is written back through gw or resolved — the redacted
 // string only ever lands in the view being built.
 func networkViews(cfg config.Config, gw config.Gateway, resolved catalog.GatewayConfig, base, localBase string) []networkView {
-	keys := providerKeys(cfg)
+	keys := literalProviderKeys(cfg)
 	out := make([]networkView, 0, len(gw.Config.Networks))
 	for _, n := range gw.Config.Networks {
 		nv := networkView{
@@ -1319,7 +1325,11 @@ func (s *Server) handleGatewayCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	keys := providerKeys(keyCfg)
+	keys, err := s.providerKeys(keyCfg)
+	if err != nil {
+		writeVaultError(w, err)
+		return
+	}
 	if err := resolveUpstreamKeys(&gwCfg, keys); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1435,7 +1445,11 @@ func (s *Server) handleGatewayPutConfig(w http.ResponseWriter, r *http.Request) 
 	// Before validation, because an unfilled ${...} slot is not a URL eRPC
 	// could ever dial, and the operator should be told which key is missing
 	// rather than whatever the renderer makes of the literal.
-	keys := providerKeys(keyCfg)
+	keys, err := s.providerKeys(keyCfg)
+	if err != nil {
+		writeVaultError(w, err)
+		return
+	}
 	if err := resolveUpstreamKeys(&gwCfg, keys); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1997,12 +2011,18 @@ func writeProvisionError(w http.ResponseWriter, err error) {
 // stream reports the run). The provision route and a module change that
 // alters a gateway's routes both start it here.
 func (s *Server) provisionGateway(cfg config.Config, gw config.Gateway) (string, error) {
+	// A provider key held in a locked vault can neither be checked nor
+	// redacted: nothing runs until the vault is unlocked.
+	keys, kerr := s.providerKeys(cfg)
+	if errors.Is(kerr, vault.ErrLocked) {
+		return "", &provisionError{status: http.StatusServiceUnavailable, code: api.CodeLocked, msg: "the vault is locked"}
+	}
 	resolved, problems := resolveGateway(cfg, gw)
 	if len(resolved.Networks) == 0 {
 		// Redacted for the reason gatewayViewFor's Warnings are: these are the
 		// same resolveUpstream strings, reaching the same browser.
 		return "", &provisionError{status: http.StatusBadRequest, code: api.CodeNotConfigured,
-			msg: gatewayUnprovisionable(gw, redactEach(problems, providerKeys(cfg)))}
+			msg: gatewayUnprovisionable(gw, redactEach(problems, keys))}
 	}
 
 	steps, err := setup.PlanGateway(gw.ID, resolved, gw.Placement.Backend)
