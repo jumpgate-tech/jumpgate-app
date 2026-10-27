@@ -752,6 +752,10 @@ func ConfirmedHostsFile() (string, error) {
 // keys are different: if the configured key file or the transport key cannot
 // be made private, err names it and the server must not start, since a key
 // is never to be left open to other users and used anyway.
+//
+// The vault (~/.jumpgate/vault) and its lock file are never touched here: a
+// vault with loose permissions is refused when it is opened (vault_unsafe),
+// so the operator learns of it rather than having it silently fixed.
 func TightenState(keyFile string) (tightened []string, warnings []error, err error) {
 	dir, err := Dir()
 	if err != nil {

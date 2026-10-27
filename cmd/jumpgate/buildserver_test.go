@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,9 +18,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
+	"github.com/valve-tech/jumpgate/internal/fsperm"
+	"github.com/valve-tech/jumpgate/internal/secrets"
+	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/testutil"
+	"github.com/valve-tech/jumpgate/internal/vault"
+	"github.com/valve-tech/jumpgate/internal/vault/vaulttest"
 )
 
 // Every start says so while a secret is stored unencrypted.
@@ -359,5 +370,185 @@ func TestTokensFromFiles(t *testing.T) {
 	env["JUMPGATE_ADMIN_TOKEN_FILE"] = filepath.Join(dir, "missing")
 	if _, err := parseServeArgs(nil, func(k string) string { return env[k] }); err == nil {
 		t.Fatal("an unreadable token file was accepted")
+	}
+}
+
+// vaultHome puts a fixture vault at ~/.jumpgate/vault holding a controller
+// key recorded in config.json, runs setup on it unlocked, and leaves it
+// locked on disk.
+func vaultHome(t *testing.T, setup func(v *vault.Vault)) {
+	t.Helper()
+	shortHome(t)
+	src, pass := vaulttest.Path(t)
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := secrets.VaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fsperm.MkdirPrivate(filepath.Dir(p)); err != nil {
+		t.Fatal(err)
+	}
+	if err := fsperm.WriteFilePrivate(p, raw); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Unlock(pass); err != nil {
+		t.Fatal(err)
+	}
+	k, err := signer.CreateVault(v, secrets.NameControllerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setup != nil {
+		setup(v)
+	}
+	v.Lock()
+	writeControllerConfig(t, string(signer.StoreVault), secrets.NameControllerKey, k.Address().Hex())
+}
+
+func controllerState(t *testing.T, b *builtServer) string {
+	t.Helper()
+	ts := httptest.NewServer(b.srv.Handler())
+	defer ts.Close()
+	req, _ := http.NewRequest("GET", ts.URL+"/api/controller", nil)
+	req.Header.Set("Authorization", "Bearer "+b.token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var cv api.ControllerView
+	if err := json.NewDecoder(res.Body).Decode(&cv); err != nil {
+		t.Fatal(err)
+	}
+	return cv.State
+}
+
+func runTask(t *testing.T, b *builtServer, name string) {
+	t.Helper()
+	for _, task := range b.background {
+		if task.name == name {
+			task.run(context.Background())
+			return
+		}
+	}
+	t.Fatalf("no %s task in %v", name, taskNames(b))
+}
+
+func TestBuildServerStartsLockedWithAVaultKey(t *testing.T) {
+	vaultHome(t, nil)
+	t.Setenv(credentialsDirEnv, "")
+	var log strings.Builder
+	b, err := buildServer(serverOptions{Bind: freeAddr(t), ERPCURL: "http://127.0.0.1:4000"}, func() {}, &log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(b.signerErr, vault.ErrLocked) {
+		t.Fatalf("signerErr %v", b.signerErr)
+	}
+	if got := controllerState(t, b); got != "locked" {
+		t.Fatalf("controller state %q", got)
+	}
+	if strings.Contains(log.String(), "box commands are unavailable") {
+		t.Fatalf("a locked key logged as a missing one: %q", log.String())
+	}
+}
+
+func TestUnlockRunsMigrationThenOpensTheKey(t *testing.T) {
+	vaultHome(t, nil)
+	t.Setenv(credentialsDirEnv, "")
+	if _, err := config.Update(func(c *config.Config) error { c.AIKey = "sk-plain"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var log strings.Builder
+	b, err := buildServer(serverOptions{Bind: freeAddr(t), ERPCURL: "http://127.0.0.1:4000"}, func() {}, &log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.srv.Unlock([]byte(vaulttest.Passphrase)); err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AIKey != "vault:ai-key" || c.SecretStore != config.SecretStoreVault {
+		t.Fatalf("aiKey %q secretStore %q", c.AIKey, c.SecretStore)
+	}
+	if got := controllerState(t, b); got != "ok" {
+		t.Fatalf("controller state %q", got)
+	}
+	if strings.Contains(log.String(), "sk-plain") {
+		t.Fatalf("the log carries a secret: %q", log.String())
+	}
+}
+
+// credentialDir writes kek as the systemd credential and points the
+// environment at it.
+func credentialDir(t *testing.T, kek []byte) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := fsperm.WriteFilePrivate(filepath.Join(dir, vaultCredName), kek); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(credentialsDirEnv, dir)
+}
+
+func TestCredentialUnlocksAtStart(t *testing.T) {
+	kek := bytes.Repeat([]byte{7}, 32)
+	vaultHome(t, func(v *vault.Vault) {
+		if err := v.AddKEKSlot(vault.Slot{Kind: vault.SlotSystemdCreds, Cred: vaultCredName}, bytes.Clone(kek)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	credentialDir(t, kek)
+	if got, ok := credentialKEK(os.Getenv); !ok || !bytes.Equal(got, kek) {
+		t.Fatalf("credentialKEK %x %v", got, ok)
+	}
+	b, err := buildServer(serverOptions{Bind: freeAddr(t), ERPCURL: "http://127.0.0.1:4000"}, func() {}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runTask(t, b, "vault-auto-unlock")
+	if got := b.srv.VaultState().State; got != "unlocked" {
+		t.Fatalf("vault state %q", got)
+	}
+	if got := controllerState(t, b); got != "ok" {
+		t.Fatalf("controller state %q", got)
+	}
+}
+
+func TestBadCredentialStaysLocked(t *testing.T) {
+	vaultHome(t, func(v *vault.Vault) {
+		if err := v.AddKEKSlot(vault.Slot{Kind: vault.SlotSystemdCreds, Cred: vaultCredName}, bytes.Repeat([]byte{7}, 32)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for _, kek := range [][]byte{bytes.Repeat([]byte{8}, 32), []byte("short")} {
+		credentialDir(t, kek)
+		var log strings.Builder
+		b, err := buildServer(serverOptions{Bind: freeAddr(t), ERPCURL: "http://127.0.0.1:4000"}, func() {}, &log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runTask(t, b, "vault-auto-unlock")
+		if got := b.srv.VaultState().State; got != "locked" {
+			t.Fatalf("vault state %q", got)
+		}
+		if !strings.Contains(log.String(), "the passphrase still works") {
+			t.Fatalf("log %q", log.String())
+		}
+	}
+}
+
+func TestCredentialKEKWithoutADirectory(t *testing.T) {
+	if kek, ok := credentialKEK(noEnv); ok || kek != nil {
+		t.Fatalf("credentialKEK %x %v", kek, ok)
 	}
 }

@@ -113,3 +113,40 @@ func TestTightenStateFailsOnlyForASigningKeyItCannotRestrict(t *testing.T) {
 		os.Remove(key)
 	}
 }
+
+// V1: the vault is never auto-tightened. A vault others can read is refused
+// when it is opened (vault_unsafe), never silently fixed.
+func TestTightenStateLeavesTheVaultAlone(t *testing.T) {
+	testutil.RequireUnix(t)
+	home := testutil.Home(t)
+	dir := filepath.Join(home, ".jumpgate")
+	if err := fsperm.MkdirPrivate(dir); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "vault")
+	if err := os.WriteFile(p, []byte("JGVAULT1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	tightened, warnings, err := TightenState("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(tightened, p) {
+		t.Fatalf("tightened %v", tightened)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w.Error(), p) {
+			t.Fatalf("warning names the vault: %v", w)
+		}
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o640 {
+		t.Fatalf("vault mode %04o", fi.Mode().Perm())
+	}
+}

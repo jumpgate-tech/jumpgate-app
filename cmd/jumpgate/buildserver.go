@@ -2,20 +2,140 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/valve-tech/jumpgate/cmd/jumpgate/web"
+	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/relay"
 	"github.com/valve-tech/jumpgate/internal/secretenv"
+	"github.com/valve-tech/jumpgate/internal/secrets"
 	"github.com/valve-tech/jumpgate/internal/server"
+	"github.com/valve-tech/jumpgate/internal/signer"
+	"github.com/valve-tech/jumpgate/internal/vault"
 )
+
+// credentialsDirEnv is where systemd puts a unit's credentials, and
+// vaultCredName the one holding the vault's 32-byte slot key.
+const (
+	credentialsDirEnv = "CREDENTIALS_DIRECTORY"
+	vaultCredName     = "jumpgate-vault-key"
+)
+
+// openStartVault opens ~/.jumpgate/vault, locked. No vault yet is nil: the
+// server finds one made later (S8). A vault that will not open is logged and
+// nil too; the server reports it as unusable.
+func openStartVault(logf func(string, ...any)) *vault.Vault {
+	p, err := secrets.VaultPath()
+	if err != nil {
+		logf("vault: %v", err)
+		return nil
+	}
+	v, err := vault.Open(p)
+	switch {
+	case errors.Is(err, vault.ErrNoVault):
+		return nil
+	case err != nil:
+		logf("vault %s cannot be opened: %v", p, err)
+		return nil
+	}
+	return v
+}
+
+// unlockedHook runs after every unlock: it moves plain secrets into the
+// vault (never under secretStore "file"), logs what moved by field and path
+// (never a value), and opens the controller key when the vault holds it. A
+// key kept elsewhere stays as it was (nil, nil).
+func unlockedHook(logf func(string, ...any)) func(*vault.Vault) (signer.Signer, error) {
+	return func(v *vault.Vault) (signer.Signer, error) {
+		cfg, err := config.Load()
+		if err != nil {
+			return nil, err
+		}
+		if cfg.SecretStore != config.SecretStoreFile {
+			rep, err := secrets.Migrate(v)
+			if err != nil {
+				logf("moving plain secrets into the vault stopped: %v; the next unlock or `jumpgate vault migrate` resumes it", err)
+			}
+			if len(rep.Moved) > 0 {
+				logf("moved into the vault: %s", strings.Join(rep.Moved, ", "))
+			}
+			if len(rep.Removed) > 0 {
+				logf("overwrote and removed the plain copies: %s", strings.Join(rep.Removed, ", "))
+			}
+			if len(rep.Conflicts) > 0 {
+				logf("left plain, the vault holds a different value: %s", strings.Join(rep.Conflicts, ", "))
+			}
+			if cfg, err = config.Load(); err != nil {
+				return nil, err
+			}
+		}
+		if cfg.Controller == nil || signer.Store(cfg.Controller.KeyStore) != signer.StoreVault {
+			return nil, nil
+		}
+		return openControllerKey(cfg, v)
+	}
+}
+
+// credentialKEK reads the vault's slot key from the systemd credential
+// $CREDENTIALS_DIRECTORY/jumpgate-vault-key: exactly 32 bytes, read through
+// readPrivateFile. ok is false when there is none or it is unusable.
+func credentialKEK(getenv func(string) string) ([]byte, bool) {
+	kek, err := readCredentialKEK(getenv)
+	return kek, err == nil && kek != nil
+}
+
+// readCredentialKEK is credentialKEK with the reason; nil, nil when no
+// credential directory is set.
+func readCredentialKEK(getenv func(string) string) ([]byte, error) {
+	dir := getenv(credentialsDirEnv)
+	if dir == "" {
+		return nil, nil
+	}
+	p := filepath.Join(dir, vaultCredName)
+	raw, err := readPrivateFile(p)
+	if err != nil {
+		clear(raw)
+		return nil, err
+	}
+	if len(raw) != 32 {
+		clear(raw)
+		return nil, fmt.Errorf("the credential %s is not a 32-byte key", p)
+	}
+	return raw, nil
+}
+
+// autoUnlock is the vault-auto-unlock task: it unlocks with the systemd
+// credential when one was passed. A failure leaves the vault locked and is
+// logged; the passphrase still unlocks it.
+func autoUnlock(s *server.Server, getenv func(string) string, logf func(string, ...any)) {
+	kek, err := readCredentialKEK(getenv)
+	switch {
+	case err != nil:
+		logf("vault stays locked: %v; the passphrase still works", err)
+		return
+	case kek == nil:
+		return
+	}
+	if s.VaultState().State == "unlocked" {
+		clear(kek)
+		return
+	}
+	if _, err := s.UnlockKEK(vault.SlotSystemdCreds, kek); err != nil {
+		logf("vault stays locked: %v; the passphrase still works", err)
+		return
+	}
+	logf("vault unlocked with the systemd credential %s", vaultCredName)
+}
 
 // serverOptions is everything that shapes the controller server. The web app
 // (runApp) and `jumpgate serve` fill it from the same flags and environment
@@ -198,6 +318,12 @@ type builtServer struct {
 // auto-started the server gets a clear answer instead of a server that never
 // appears. Everything else that is wrong (a corrupt config, a half-configured
 // relay) is fatal.
+//
+// A controller key kept in the vault is different: the server starts
+// `locked` (box routes answer 503 locked, distinct from no_controller_key)
+// and signs nothing until an unlock. Each unlock first moves any plain
+// secrets into the vault (secrets.Migrate), then opens the key. At start the
+// vault-auto-unlock task tries the systemd credential, if one was passed.
 func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtServer, error) {
 	logf := func(format string, a ...any) { fmt.Fprintf(logw, "jumpgate: "+format+"\n", a...) }
 	// opts already holds the tokens; drop them from the environment before
@@ -214,8 +340,20 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 	if err != nil {
 		return nil, err
 	}
-	sgn, keyErr := openControllerKey(cfg)
-	if keyErr != nil {
+	v := openStartVault(logf)
+	if v != nil || cfg.SecretStore == config.SecretStoreVault {
+		// Before the first unlock: a core file or a ptrace of this process
+		// would otherwise expose the data key.
+		if err := vault.DisableCoreDumps(); err != nil {
+			logf("%v", err)
+		}
+	}
+	sgn, keyErr := openControllerKey(cfg, v)
+	switch {
+	case errors.Is(keyErr, vault.ErrLocked):
+		logf("the controller key is in the vault, which is locked; box commands wait for `jumpgate unlock`")
+		sgn = nil
+	case keyErr != nil:
 		logf("controller key not loaded, box commands are unavailable: %v", keyErr)
 		sgn = nil
 	}
@@ -261,6 +399,8 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 		RelayBind: opts.RelayBind,
 		Signer:    sgn,
 		SignerErr: keyErr,
+		Vault:     v,
+		Unlocked:  unlockedHook(logf),
 		Shutdown:  shutdown,
 		// Without it the mint API returns bare codes and `jumpgate open` can
 		// only print the link.
@@ -289,6 +429,11 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 			}
 		}
 	}})
+	if v != nil || os.Getenv(credentialsDirEnv) != "" {
+		b.background = append(b.background, backgroundTask{"vault-auto-unlock", func(context.Context) {
+			autoUnlock(s, os.Getenv, logf)
+		}})
+	}
 	if relayHandler != nil {
 		// The data plane runs beside the control plane on its own listener. A
 		// failure here is the relay's and must not be mistaken for the UI
