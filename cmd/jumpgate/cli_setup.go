@@ -54,11 +54,13 @@ const setupStagingDir = "/var/lib/jumpgate/staging"
 
 func cmdSetup(args []string) int {
 	if len(args) == 0 {
-		return usage("usage: jumpgate setup install-service [--bin PATH]")
+		return usage("usage: jumpgate setup install-service [--bin PATH] | jumpgate setup server …")
 	}
 	switch args[0] {
 	case "install-service":
 		return setupInstallService(context.Background(), args[1:])
+	case "server":
+		return setupServer(context.Background(), args[1:])
 	}
 	return usage("unknown setup subcommand %q", args[0])
 }

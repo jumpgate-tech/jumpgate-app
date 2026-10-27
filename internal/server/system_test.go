@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/peercred"
 	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/testutil"
 )
@@ -159,5 +161,94 @@ func TestPairingInfoWithoutAKey(t *testing.T) {
 	status, _, e := getPairingInfo(t, ts, token)
 	if status != http.StatusServiceUnavailable || e.Code != api.CodeNoControllerKey {
 		t.Fatalf("got %d %+v, want 503 no_controller_key", status, e)
+	}
+}
+
+// peerServer is a system-mode server whose every request arrives as if over
+// the admin socket from a peer with uid (and in jumpgate-admin, gid 4242,
+// when admin is set). It has no controller key.
+func peerServer(t *testing.T, uid int, admin bool, adjust func(*Config)) (*httptest.Server, *Server) {
+	t.Helper()
+	testutil.Home(t)
+	cfg := Config{Token: NewSessionToken(), UI: fstest.MapFS{}, System: true, AdminGID: 4242}
+	if adjust != nil {
+		adjust(&cfg)
+	}
+	s := New(cfg)
+	cred := peercred.Cred{UID: uid}
+	if admin {
+		cred.GIDs = []int{4242}
+	}
+	h := s.Handler()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), peerCredKey{}, cred)))
+	}))
+	t.Cleanup(ts.Close)
+	return ts, s
+}
+
+func TestSystemInitKeyCreatesAVaultKeyAndLocks(t *testing.T) {
+	ts, s := peerServer(t, 0, false, nil)
+	res, e := do(t, ts, "", "POST", "/api/system/init-key", `{"store":"vault","passphrase":"cHc="}`)
+	if res.StatusCode/100 != 2 {
+		t.Fatalf("got %d %+v", res.StatusCode, e)
+	}
+	c, _ := config.Load()
+	if c.Controller == nil || c.Controller.KeyStore != "vault" || c.Controller.KeyRef != "controller-key" || c.Controller.Address == "" {
+		t.Fatalf("controller %+v", c.Controller)
+	}
+	if st := s.VaultState().State; st != "locked" {
+		t.Fatalf("vault state %q, want locked", st)
+	}
+	if _, err := s.Unlock([]byte("pw")); err != nil {
+		t.Fatalf("unlock with the setup passphrase: %v", err)
+	}
+}
+
+func TestSystemInitKeyIsForSocketPeersOnly(t *testing.T) {
+	ts, token, _ := systemServer(t, nil)
+	if res, _ := do(t, ts, token, "POST", "/api/system/init-key", `{"store":"vault","passphrase":"cHc="}`); res.StatusCode != http.StatusNotFound {
+		t.Fatalf("over TCP: %d, want 404", res.StatusCode)
+	}
+}
+
+func TestSystemInitKeyRefusesASecondKey(t *testing.T) {
+	ts, _ := peerServer(t, 0, false, nil)
+	k, _ := signer.GenerateKey()
+	recordController(t, k)
+	res, e := do(t, ts, "", "POST", "/api/system/init-key", `{"store":"vault","passphrase":"cHc="}`)
+	if res.StatusCode != http.StatusConflict || e.Code != api.CodeControllerExists || e.Hint == "" {
+		t.Fatalf("got %d %+v, want 409 controller_exists", res.StatusCode, e)
+	}
+}
+
+func TestSystemInitKeyRefusesPlainWithoutTheFlag(t *testing.T) {
+	ts, _ := peerServer(t, 0, false, nil)
+	res, e := do(t, ts, "", "POST", "/api/system/init-key", `{"store":"file"}`)
+	if res.StatusCode != http.StatusBadRequest || !strings.Contains(e.Message, "--insecure-plain-key") {
+		t.Fatalf("got %d %+v", res.StatusCode, e)
+	}
+}
+
+func TestSystemInitKeyRefusesAClientChosenFileRef(t *testing.T) {
+	ts, _ := peerServer(t, 0, false, nil)
+	res, e := do(t, ts, "", "POST", "/api/system/init-key", `{"store":"file","insecurePlain":true,"ref":"/etc/shadow"}`)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("got %d %+v, want 400", res.StatusCode, e)
+	}
+	if c, _ := config.Load(); c.Controller != nil {
+		t.Fatalf("recorded %+v", c.Controller)
+	}
+}
+
+func TestSystemInitKeyRecordsScopeSelf(t *testing.T) {
+	ts, _ := peerServer(t, 0, false, nil)
+	res, e := do(t, ts, "", "POST", "/api/system/init-key", `{"store":"file","insecurePlain":true,"scope":"self"}`)
+	if res.StatusCode/100 != 2 {
+		t.Fatalf("got %d %+v", res.StatusCode, e)
+	}
+	c, _ := config.Load()
+	if c.Controller == nil || c.Controller.Scope != "self" || c.Controller.KeyStore != "file" {
+		t.Fatalf("controller %+v", c.Controller)
 	}
 }

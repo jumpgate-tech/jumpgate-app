@@ -19,6 +19,18 @@ type PairingInfo struct {
 	Wire         *catalog.WireConfig `json:"wire,omitempty"`  // the named target's, when ?target= is given
 }
 
+// SystemInitKey is POST /api/system/init-key: `jumpgate setup server` asks
+// the jumpgate service to create its controller key. Passphrase is a byte
+// slice (base64 in JSON) so both ends can clear it; it is never logged. A
+// file key's path is always the service's own: Ref is refused for it.
+type SystemInitKey struct {
+	Store         string `json:"store"` // "vault" (default) | "1password" | "file"
+	Ref           string `json:"ref,omitempty"`
+	Passphrase    []byte `json:"passphrase,omitempty"`
+	Scope         string `json:"scope,omitempty"` // "" or "self"
+	InsecurePlain bool   `json:"insecurePlain,omitempty"`
+}
+
 // IntentReply is the server's answer to POST /api/targets/{id}/intent/{kind}:
 // the verified receipt. Hint is the server's remedy for a rejection.
 type IntentReply struct {

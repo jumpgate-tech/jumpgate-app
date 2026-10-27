@@ -3,6 +3,7 @@ package apiclient
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/url"
 
@@ -43,6 +44,19 @@ func (c *Client) PutVaultSecret(ctx context.Context, name string, value []byte) 
 	base64.StdEncoding.Encode(body[n:], value)
 	copy(body[len(body)-len(post):], post)
 	return c.Do(ctx, http.MethodPut, "/api/vault/secrets/"+url.PathEscape(name), rawJSON(body), nil)
+}
+
+// SystemInitKey asks the jumpgate service to create its controller key
+// (POST /api/system/init-key). req.Passphrase and the encoded body are
+// cleared before it returns.
+func (c *Client) SystemInitKey(ctx context.Context, req api.SystemInitKey) error {
+	defer clear(req.Passphrase)
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	defer clear(body)
+	return c.Do(ctx, http.MethodPost, "/api/system/init-key", rawJSON(body), nil)
 }
 
 // Lock drops the vault key from the server's memory.

@@ -60,6 +60,9 @@ func (s *Server) handlePairingInfo(w http.ResponseWriter, r *http.Request) {
 	if cfg.Controller != nil && cfg.Controller.Address != "" {
 		info.Controller = cfg.Controller.Address
 	}
+	if cfg.Controller != nil {
+		info.Scope = cfg.Controller.Scope
+	}
 	if s.cfg.System {
 		info.ServiceUID = os.Getuid()
 	}

@@ -385,6 +385,7 @@ func (s *Server) Handler() http.Handler {
 	s.registerAPIRoutes(mux)
 	s.registerVaultRoutes(mux)
 	s.registerKeyRoutes(mux)
+	s.registerSystemRoutes(mux)
 
 	uiHandler := http.FileServerFS(s.cfg.UI)
 	mux.Handle("/", uiHandler)
