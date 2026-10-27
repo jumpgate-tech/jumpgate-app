@@ -131,6 +131,8 @@ const (
 	CodeInstalledMismatch Code = "installed_mismatch"
 	// CodeControllerExists: setup server asked for a key the controller already has.
 	CodeControllerExists Code = "controller_exists"
+	// CodeSelfOnly: a self-only controller drives only the machine it runs on.
+	CodeSelfOnly Code = "self_only"
 )
 
 // Exit classes: the CLI's process exit statuses, published in the README.
@@ -224,6 +226,7 @@ var registry = map[Code]codeInfo{
 	CodeServiceNoLogin:      {"the jumpgate service reaches boxes only through their agents; pair the box, or use `jumpgate ssh NAME` for a shell", ExitFailed},
 	CodeInstalledMismatch:   {"the agent answering on this host is not the one `jumpgate agent setup` printed; check the address and the host", ExitSecurity},
 	CodeControllerExists:    {"this controller already has a key; run `jumpgate unlock`", ExitFailed},
+	CodeSelfOnly:            {"this controller is self-only: it drives only the machine it runs on, so it cannot pair or invite other boxes", ExitFailed},
 	CodeJobKindNotAllowed:   {"this server starts only the jobs it knows (for example `jumpgate migrate-names HOST`); other node operations have their own commands", ExitUsage},
 }
 

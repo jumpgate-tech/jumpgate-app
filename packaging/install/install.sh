@@ -13,6 +13,9 @@
 #   --require-provenance    fail unless `gh attestation verify` can run
 #   --self-only             with --controller: the next step is a self-only
 #                           controller (`jumpgate setup server --self-only`)
+#   --agent --controller ADDR --transport-key KEY
+#                           set this box's gate up for that controller (root);
+#                           `jumpgate hosts invite NAME` prints this line
 #
 # Every download is checked against the release's checksums.txt; with gh
 # signed in, its build provenance is checked too. The whole script is one
@@ -23,7 +26,7 @@ main() {
 
 	base="${JUMPGATE_INSTALL_BASE_URL:-https://github.com/jumpgate-tech/jumpgate-app/releases}"
 	repo=jumpgate-tech/jumpgate-app
-	usage="usage: install.sh [--controller] [--version vX.Y.Z] [--yes] [--prefix DIR] [--require-provenance] [--self-only]"
+	usage="usage: install.sh [--controller | --agent --controller ADDR --transport-key KEY] [--version vX.Y.Z] [--yes] [--prefix DIR] [--require-provenance] [--self-only]"
 
 	say() { printf '%s\n' "$*"; }
 	die() {
@@ -38,9 +41,37 @@ main() {
 	prefix=
 	require_provenance=0
 	self_only=0
+	controller=
+	transport_key=
+	# --agent changes what --controller means (an address, not the role), so
+	# find it before parsing.
+	agent=0
+	for arg in "$@"; do
+		[ "$arg" != --agent ] || agent=1
+	done
+	[ "$agent" = 0 ] || role=agent
 	while [ $# -gt 0 ]; do
 		case "$1" in
-		--controller) role=controller ;;
+		--agent) ;;
+		--controller)
+			if [ "$agent" = 1 ]; then
+				[ $# -ge 2 ] || die "--controller needs the controller's address with --agent; $usage"
+				controller="$2"
+				shift
+			else
+				role=controller
+			fi
+			;;
+		--controller=*)
+			[ "$agent" = 1 ] || die "--controller takes no value without --agent; $usage"
+			controller="${1#--controller=}"
+			;;
+		--transport-key)
+			[ $# -ge 2 ] || die "--transport-key needs a value; $usage"
+			transport_key="$2"
+			shift
+			;;
+		--transport-key=*) transport_key="${1#--transport-key=}" ;;
 		--version)
 			[ $# -ge 2 ] || die "--version needs a value; $usage"
 			version="$2"
@@ -71,6 +102,12 @@ main() {
 	if [ "$self_only" = 1 ] && [ "$role" != controller ]; then
 		die "--self-only goes with --controller"
 	fi
+	if [ "$role" = agent ]; then
+		[ -n "$controller" ] || die "--agent needs --controller ADDR (run \`jumpgate hosts invite NAME\` on the controller for the full command)"
+		[ -n "$transport_key" ] || die "--agent needs --transport-key KEY (run \`jumpgate hosts invite NAME\` on the controller for the full command)"
+	elif [ -n "$transport_key" ]; then
+		die "--transport-key goes with --agent"
+	fi
 	if [ "$version" != latest ]; then
 		case "$version" in
 		v*) ;;
@@ -87,7 +124,7 @@ main() {
 	*) die "unsupported architecture $machine; supported: Linux on amd64 or arm64" ;;
 	esac
 
-	if [ -e /usr/bin/jumpgate ]; then
+	if [ "$role" != agent ] && [ -e /usr/bin/jumpgate ]; then
 		if { command -v dpkg >/dev/null 2>&1 && dpkg -S /usr/bin/jumpgate >/dev/null 2>&1; } ||
 			{ command -v rpm >/dev/null 2>&1 && rpm -qf /usr/bin/jumpgate >/dev/null 2>&1; }; then
 			die "/usr/bin/jumpgate belongs to a package; use apt upgrade jumpgate or dnf upgrade jumpgate"
@@ -96,12 +133,16 @@ main() {
 
 	if [ -z "$role" ]; then
 		if has_tty; then
-			printf '%s\n' "install jumpgate as:" "  1) CLI only (default)  2) controller server" >/dev/tty
+			printf '%s\n' "install jumpgate as:" "  1) CLI only (default)  2) controller server  3) gate-only box" >/dev/tty
 			printf '%s' "choice [1]: " >/dev/tty
 			read -r choice </dev/tty || choice=
 			case "$choice" in
 			"" | 1) role=cli ;;
 			2) role=controller ;;
+			3)
+				say "a gate-only box pairs with a controller: run \`jumpgate hosts invite NAME\` there, then run the command it prints here, as root"
+				return 0
+				;;
 			*) die "no such choice: $choice" ;;
 			esac
 		else
@@ -167,19 +208,30 @@ main() {
 	}
 
 	dl="$base/download/$tag"
-	archive="jumpgate_linux_${arch}.tar.gz"
 	fetch "$dl/checksums.txt" "$tmp/checksums.txt" || die "download $dl/checksums.txt failed"
-	fetch "$dl/$archive" "$tmp/$archive" || die "download $dl/$archive failed"
-	verify "$archive"
-	mkdir "$tmp/x"
-	tar -xzf "$tmp/$archive" -C "$tmp/x" jumpgate || die "$archive holds no jumpgate binary"
-	if [ ! -f "$tmp/x/jumpgate" ] || [ -L "$tmp/x/jumpgate" ]; then
-		die "$archive holds no jumpgate binary"
+	if [ "$role" = agent ]; then
+		# The gate is the raw static binary the release ships beside the archives.
+		file="jumpgate-linux-${arch}"
+		fetch "$dl/$file" "$tmp/$file" || die "download $dl/$file failed"
+		verify "$file"
+		src="$tmp/$file"
+		bin=/usr/local/lib/jumpgate/jumpgate
+	else
+		file="jumpgate_linux_${arch}.tar.gz"
+		fetch "$dl/$file" "$tmp/$file" || die "download $dl/$file failed"
+		verify "$file"
+		mkdir "$tmp/x"
+		tar -xzf "$tmp/$file" -C "$tmp/x" jumpgate || die "$file holds no jumpgate binary"
+		if [ ! -f "$tmp/x/jumpgate" ] || [ -L "$tmp/x/jumpgate" ]; then
+			die "$file holds no jumpgate binary"
+		fi
+		src="$tmp/x/jumpgate"
+		bin=/usr/local/bin/jumpgate
 	fi
 
 	if [ "$role" = cli ] && [ -n "$prefix" ]; then
 		mkdir -p "$prefix/bin"
-		install -m 0755 "$tmp/x/jumpgate" "$prefix/bin/jumpgate"
+		install -m 0755 "$src" "$prefix/bin/jumpgate"
 		say "installed $prefix/bin/jumpgate"
 		case ":$PATH:" in
 		*":$prefix/bin:"*) ;;
@@ -188,14 +240,16 @@ main() {
 		return 0
 	fi
 
-	bin=/usr/local/bin/jumpgate
 	sudo=
 	if [ "$(id -u)" != 0 ]; then
 		command -v sudo >/dev/null 2>&1 || die "installing to $bin needs root, and sudo is not installed; run as root, or use --prefix \"\$HOME/.local\""
 		sudo=sudo
 		say "this runs, with sudo:"
-		say "  sudo install -D -o root -g root -m 0755 $tmp/x/jumpgate $bin"
-		[ "$role" != controller ] || say "  sudo $bin setup install-service"
+		say "  sudo install -D -o root -g root -m 0755 $src $bin"
+		case "$role" in
+		controller) say "  sudo $bin setup install-service" ;;
+		agent) say "  sudo $bin agent setup --controller $controller --transport-key '$transport_key'" ;;
+		esac
 		if [ "$yes" != 1 ]; then
 			if ! has_tty; then
 				say "no terminal to confirm on; rerun with --yes, or with --prefix \"\$HOME/.local\" for no root"
@@ -210,9 +264,10 @@ main() {
 		fi
 	fi
 
-	$sudo install -D -o root -g root -m 0755 "$tmp/x/jumpgate" "$bin"
+	$sudo install -D -o root -g root -m 0755 "$src" "$bin"
 	say "installed $bin"
-	if [ "$role" = controller ]; then
+	case "$role" in
+	controller)
 		$sudo "$bin" setup install-service
 		next="sudo jumpgate setup server"
 		[ "$self_only" = 0 ] || next="$next --self-only"
@@ -220,10 +275,18 @@ main() {
 		say "root on this controller server, with the key unlocked, can sign routine intents for every box that trusts it, including agent.upgrade, which replaces a box's agent. Encryption protects the key at rest, in backups and against disk theft; it does not protect it from live root."
 		say ""
 		say "next: $next"
-	elif [ "${hint_roles:-0}" = 1 ]; then
-		say ""
-		say "for a controller server: curl -fsSL https://jumpgate.app/install.sh | sh -s -- --controller"
-	fi
+		;;
+	agent)
+		$sudo "$bin" agent setup --controller "$controller" --transport-key "$transport_key"
+		;;
+	*)
+		if [ "${hint_roles:-0}" = 1 ]; then
+			say ""
+			say "for a controller server: curl -fsSL https://jumpgate.app/install.sh | sh -s -- --controller"
+			say "for a gate-only box: run \`jumpgate hosts invite NAME\` on its controller, and run the command it prints on the box"
+		fi
+		;;
+	esac
 }
 
 main "$@"

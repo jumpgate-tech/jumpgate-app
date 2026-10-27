@@ -65,6 +65,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build \
   -ldflags "-X github.com/valve-tech/jumpgate/internal/buildinfo.version=v0.0.2" \
   -o "$work/jumpgate-real" ./cmd/jumpgate
 publish v0.0.2-real "$work/jumpgate-real"
+# The raw gate binary beside the archive, as a release ships it, for --agent.
+cp "$work/jumpgate-real" "$rel/download/v0.0.2-real/jumpgate-linux-$goarch"
+(cd "$rel/download/v0.0.2-real" && sha "jumpgate_linux_${goarch}.tar.gz" "jumpgate-linux-$goarch" >checksums.txt)
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -o "$work/relsrv" ./scripts/e2e/relsrv
 
 # No bind mounts (colima does not share every temp dir): make the cert in a
@@ -92,6 +95,9 @@ docker start "$srv" >/dev/null
 # fresh_box starts a new container as $name that trusts relsrv's cert and
 # holds the script at /install.sh.
 fresh_box() {
+  # With a dozen systemd containers up at once, ubuntu's systemd never came
+  # up in the last one, so the previous case's box goes first.
+  if [ -n "${name:-}" ] && [ -z "${KEEP:-}" ]; then docker rm -f "$name" >/dev/null 2>&1 || true; fi
   name="jumpgate-e2e-install-$$-$1"
   names+=("$name")
   # shellcheck disable=SC2086 # E2E_DOCKER_FLAGS is a list of flags
@@ -207,5 +213,28 @@ docker exec "$name" getent group jumpgate-admin >/dev/null || fail "controller: 
 enabled="$(docker exec "$name" systemctl is-enabled jumpgate 2>/dev/null || true)"
 [ "$enabled" != enabled ] || fail "controller: jumpgate.service is enabled"
 ok "--controller installs the service, not enabled"
+
+echo "== 10 --agent without --transport-key"
+fresh_box agentargs
+run_as root sh /install.sh --agent --controller 0x0000000000000000000000000000000000000001 --version v0.0.2-real --yes
+[ "$rc" != 0 ] || fail "agent args: exit 0"
+want --transport-key "agent args"
+docker exec "$name" test ! -e /usr/local/lib/jumpgate/jumpgate || fail "agent args: gate installed"
+ok "--agent needs --transport-key"
+
+echo "== 11 --agent sets the gate up for a controller"
+fresh_box agent
+ssh-keygen -q -t ed25519 -N '' -C jumpgate-controller -f "$work/transport" # throwaway
+tkey="$(cat "$work/transport.pub")"
+run_as root sh /install.sh --agent --controller 0x0000000000000000000000000000000000000001 \
+  --transport-key "$tkey" --version v0.0.2-real --yes
+[ "$rc" = 0 ] || fail "agent: exit $rc"
+want "on the controller, run: jumpgate hosts add NAME --ssh jumpgate@" agent
+want "--installed 0x" agent
+docker exec "$name" test -x /usr/local/lib/jumpgate/jumpgate || fail "agent: no /usr/local/lib/jumpgate/jumpgate"
+docker exec "$name" test ! -e /usr/local/bin/jumpgate || fail "agent: the CLI was installed too"
+docker exec "$name" grep -qF "$(cut -d' ' -f2 "$work/transport.pub")" /var/lib/jumpgate/home/.ssh/authorized_keys ||
+  fail "agent: the transport key is not authorized"
+ok "--agent installs and pairs the gate"
 
 echo "e2e-install: OK"

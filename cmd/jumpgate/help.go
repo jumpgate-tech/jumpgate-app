@@ -19,6 +19,7 @@ var commandHelp = []struct{ name, text string }{
 	{"vault add-recovery|rekdf", "add a recovery code; raise the passphrase's argon2id cost"},
 	{"hosts add NAME --ssh USER@HOST", "pair a Linux box over SSH (--local pairs this Linux machine)"},
 	{"hosts list", "list machines and their pairing"},
+	{"hosts invite NAME", "print the one-liner that sets up a box's gate to pair with this controller"},
 	{"status HOST", "sync, peers and disk of a paired box"},
 	{"disk HOST", "disk usage of a paired box"},
 	{"endpoints HOST", "RPC endpoints of a paired box"},
@@ -36,6 +37,7 @@ var commandHelp = []struct{ name, text string }{
 	{"setup install-service [--bin PATH]", "install jumpgate.service on this Linux server (as root)"},
 	{"relay", "run only the metered RPC data plane, in the foreground"},
 	{"stop", "stop the background server"},
+	{"agent setup --controller ADDR --transport-key KEY", "on a box, as root: install its gate for a controller (pull pairing)"},
 	{"agent watch --config FILE", "the box's health watch (its gate's watch module runs it)"},
 	{"help", "this list"},
 }

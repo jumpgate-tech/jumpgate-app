@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -25,13 +26,18 @@ import (
 
 func cmdHosts(args []string) int {
 	if len(args) == 0 {
-		return usage("usage: jumpgate hosts add|list|forget-key")
+		return usage("usage: jumpgate hosts add|list|invite|forget-key")
 	}
 	switch args[0] {
 	case "list":
 		return hostsList(context.Background(), os.Stdout)
 	case "add":
 		return hostsAdd(args[1:])
+	case "invite":
+		if len(args) != 2 {
+			return usage("usage: jumpgate hosts invite NAME")
+		}
+		return hostsInvite(context.Background(), os.Stdout, args[1])
 	case "forget-key":
 		return hostsForgetKey(context.Background(), args[1:], newConsentReader(os.Stdin), os.Stdout, os.Stderr)
 	}
@@ -40,6 +46,54 @@ func cmdHosts(args []string) int {
 
 // hostsList prints every target from the server, which is the one reader and
 // writer of config.json (the CLI used to read the file itself).
+// releaseVersion is a released controller's version; an invite pins the box
+// to the same release, and a development build has none to pin.
+var releaseVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// inviteName is a host name safe to print into a command line.
+var inviteName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// hostsInvite prints the one-liner that pull-pairs a box to this controller
+// (run as root on the box), pinned to this controller's release, and the
+// hosts add that attaches it afterwards. Everything printed is public: the
+// controller address and the tunnel key's public half.
+func hostsInvite(ctx context.Context, out io.Writer, name string) int {
+	if !inviteName.MatchString(name) {
+		return usage("hosts invite: %q is not a host name (letters, digits, '.', '_' and '-')", name)
+	}
+	c, err := connect(ctx)
+	if err != nil {
+		return failed("%v", err)
+	}
+	version := c.Info().Version
+	if !releaseVersion.MatchString(version) {
+		return failed("this controller is a development build (%s); an invite needs a released version", version)
+	}
+	info, err := c.PairingInfo(ctx, "")
+	var e *api.Error
+	if errors.As(err, &e) {
+		return reportServerErrorFrom(os.Stderr, "hosts invite", c.Info(), *e)
+	}
+	if err != nil {
+		return failed("pairing info: %v", err)
+	}
+	if info.Scope == "self" {
+		return reportServerError(os.Stderr, "hosts invite", apiError{Message: "this controller is self-only (self_only)", Code: api.CodeSelfOnly})
+	}
+	if _, err := eip712.ParseAddress(info.Controller); err != nil {
+		return failed("controller address from the server: %v", err)
+	}
+	key := strings.TrimSpace(info.TransportKey)
+	if key == "" || strings.ContainsAny(key, "\r\n") {
+		return failed("the server gave no usable transport key")
+	}
+	fmt.Fprintln(out, "on the box, as root:")
+	fmt.Fprintln(out, `curl -fsSL https://jumpgate.app/install.sh | sh -s -- --agent \`)
+	fmt.Fprintf(out, "  --version %s --controller %s --transport-key '%s'\n", version, info.Controller, strings.ReplaceAll(key, "'", `'"'"'`))
+	fmt.Fprintf(out, "then: jumpgate hosts add %s --ssh jumpgate@HOST --installed <address printed on the box>\n", name)
+	return 0
+}
+
 func hostsList(ctx context.Context, w io.Writer) int {
 	c, err := connect(ctx)
 	if err != nil {

@@ -10,11 +10,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/agent"
 	"github.com/valve-tech/jumpgate/internal/agentclient"
+	"github.com/valve-tech/jumpgate/internal/bootstrap"
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -34,7 +37,7 @@ func cmdAgent(args []string) int {
 		return failed("`jumpgate agent` runs on the Linux boxes jumpgate manages, not on Windows")
 	}
 	if len(args) == 0 {
-		return usage("usage: jumpgate agent init|enroll|run|watch|reset-replay|job-step|job-abandon")
+		return usage("usage: jumpgate agent setup|init|enroll|run|watch|reset-replay|job-step|job-abandon")
 	}
 	fset := flag.NewFlagSet("agent "+args[0], flag.ContinueOnError)
 	state := fset.String("state-dir", defaultStateDir, "agent state directory")
@@ -51,6 +54,8 @@ func cmdAgent(args []string) int {
 	fset.String("step", "", "step id (job-step)")
 	fset.String("attempt", "", "attempt (job-step)")
 	watchConfig := fset.String("config", "", "watch: the health watch's config.json")
+	controller := fset.String("controller", "", "setup: the controller address to enroll")
+	transportKey := fset.String("transport-key", "", "setup: the controller's tunnel key, an authorized_keys line")
 	if err := fset.Parse(args[1:]); err != nil {
 		return exitCode("usage")
 	}
@@ -64,6 +69,11 @@ func cmdAgent(args []string) int {
 	}
 	var err error
 	switch args[0] {
+	case "setup":
+		if fset.NArg() != 0 {
+			return usage("usage: jumpgate agent setup --controller ADDR --transport-key KEY [--label L]")
+		}
+		return agentSetup(context.Background(), os.Stdout, *controller, *transportKey, *label)
 	case "init":
 		err = agentInit(os.Stdout, *state, *conf, *resetReplay)
 	case "enroll":
@@ -100,6 +110,57 @@ func cmdAgent(args []string) int {
 		fmt.Fprintln(os.Stderr, "jumpgate agent:", err)
 		return 1
 	}
+	return 0
+}
+
+// selfBinary is the agent source for `agent setup`: this binary, which is
+// already on the box and checked by whoever installed it.
+var selfBinary = func(arch string) ([]byte, error) {
+	if arch != runtime.GOARCH {
+		return nil, fmt.Errorf("this jumpgate is built for %s, the box is %s", runtime.GOARCH, arch)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(exe)
+}
+
+// agentSetup is pull pairing (`jumpgate agent setup`): run as root on the
+// box, it installs and enrolls the gate for controller, with the controller's
+// tunnel key, the same steps a push runs over SSH. The controller then
+// attaches the box with `hosts add … --installed ADDR`, checking that the
+// gate answering is the one printed here.
+func agentSetup(ctx context.Context, out io.Writer, controller, transportKey, label string) int {
+	const use = "usage: jumpgate agent setup --controller ADDR --transport-key KEY [--label L]"
+	addr, err := eip712.ParseAddress(controller)
+	if err != nil {
+		return usage("--controller: %v; %s", err, use)
+	}
+	transportKey = strings.TrimSpace(transportKey)
+	if transportKey == "" || strings.ContainsAny(transportKey, "\r\n") {
+		return usage("--transport-key needs the controller's key, one authorized_keys line (`jumpgate hosts invite NAME` prints it); %s", use)
+	}
+	if geteuid() != 0 {
+		return failed("setting up the gate on this box needs root; run it with sudo")
+	}
+	if label == "" {
+		label = "pull"
+	}
+	agentAddr, err := runBootstrap(ctx, bootstrap.Options{
+		Exec: newLocalExecutor(), AgentBinary: selfBinary,
+		Controller: addr, ControllerLabel: label, TransportKey: transportKey,
+		Event: func(step, line string) { fmt.Fprintf(out, "[%s] %s\n", step, line) },
+	})
+	if err != nil {
+		return failed("gate setup failed: %v", err)
+	}
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "HOST"
+	}
+	fmt.Fprintf(out, "gate address %s\n", agentAddr.Hex())
+	fmt.Fprintf(out, "on the controller, run: jumpgate hosts add NAME --ssh jumpgate@%s --installed %s\n", host, agentAddr.Hex())
 	return 0
 }
 
