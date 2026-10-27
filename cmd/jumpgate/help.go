@@ -13,6 +13,8 @@ import (
 var commandHelp = []struct{ name, text string }{
 	{"keys init [--store vault]", "create this controller's signing key (OS key store, else the vault)"},
 	{"keys show", "print this controller's address"},
+	{"unlock", "unlock the vault so the server can sign"},
+	{"lock", "drop the vault key from the server's memory"},
 	{"hosts add NAME --ssh USER@HOST", "pair a Linux box over SSH (--local pairs this Linux machine)"},
 	{"hosts list", "list machines and their pairing"},
 	{"status HOST", "sync, peers and disk of a paired box"},
