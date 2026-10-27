@@ -10,11 +10,10 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/user"
-	"strconv"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/peercred"
 )
 
 // Listen opens the agent socket. A stale socket from a previous run is
@@ -80,15 +79,11 @@ func ApplySocketMode(path string, p Policy) error {
 
 // JumpgateGID is the jumpgate group's id, or -1 when the group is absent.
 func JumpgateGID() int {
-	g, err := user.LookupGroup("jumpgate")
-	if err != nil {
+	gid, ok := peercred.GroupID("jumpgate")
+	if !ok {
 		return -1
 	}
-	n, err := strconv.Atoi(g.Gid)
-	if err != nil {
-		return -1
-	}
-	return n
+	return gid
 }
 
 // peerAllowed: the agent's own uid (root in production), a uid enrolled for
@@ -118,12 +113,12 @@ type peerKey struct{}
 // peerGate decides whether a connection's peer may use the socket. It is a
 // variable so a test can stand in for a second uid.
 var peerGate = func(a *Agent, c net.Conn, jumpgateGID int) bool {
-	uid, gids, err := peerCred(c)
+	cred, err := peercred.Of(c)
 	if err != nil {
 		return false
 	}
 	p, _ := LoadPolicy(a.cfg.PolicyPath)
-	return peerAllowed(p, uid, gids, jumpgateGID)
+	return peerAllowed(p, cred.UID, cred.GIDs, jumpgateGID)
 }
 
 // gatedListener closes a refused peer's connection inside Accept, before
