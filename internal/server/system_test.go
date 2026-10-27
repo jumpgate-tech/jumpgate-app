@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/catalog"
@@ -185,6 +186,28 @@ func peerServer(t *testing.T, uid int, admin bool, adjust func(*Config)) (*httpt
 	}))
 	t.Cleanup(ts.Close)
 	return ts, s
+}
+
+func TestRestartRouteOnlyWhenConfigured(t *testing.T) {
+	ts, _ := peerServer(t, 0, false, nil)
+	if res, _ := do(t, ts, "", "POST", "/api/restart", ""); res.StatusCode != http.StatusNotFound {
+		t.Fatalf("without Restart: %d, want 404", res.StatusCode)
+	}
+	called := make(chan struct{}, 2)
+	ts, _ = peerServer(t, 0, false, func(c *Config) { c.Restart = func() { called <- struct{}{} } })
+	if res, e := do(t, ts, "", "POST", "/api/restart", ""); res.StatusCode != http.StatusAccepted {
+		t.Fatalf("with Restart: %d %+v, want 202", res.StatusCode, e)
+	}
+	select {
+	case <-called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Restart was not called")
+	}
+	select {
+	case <-called:
+		t.Fatal("Restart called twice")
+	case <-time.After(50 * time.Millisecond):
+	}
 }
 
 func TestSystemInitKeyCreatesAVaultKeyAndLocks(t *testing.T) {

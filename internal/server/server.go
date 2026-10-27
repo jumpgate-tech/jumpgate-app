@@ -150,6 +150,9 @@ type Config struct {
 	// credentials instead of the token. AdminGID is jumpgate-admin's gid.
 	System   bool
 	AdminGID int
+	// Restart makes the jumpgate service exit so systemd starts it again
+	// (POST /api/restart, D15). Set only by serve --system; nil answers 404.
+	Restart func()
 
 	// noJobsDriver keeps the jobs hub listing and verifying but never
 	// driving. Tests only (ruling P5): a test that inspects a job mid-way

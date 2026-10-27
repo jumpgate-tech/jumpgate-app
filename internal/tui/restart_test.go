@@ -90,3 +90,16 @@ func TestASecondRestartWhileOneIsUnderWayIsANoOp(t *testing.T) {
 		})
 	}
 }
+
+// The jumpgate service comes back locked after a restart: the banner says so
+// before R is pressed.
+func TestSkewBannerForTheServiceMentionsUnlock(t *testing.T) {
+	f := tuitest.NewFake()
+	f.ServerVersion = "v0.8.0"
+	a := New(Options{Backend: f, SystemService: true, GOOS: "linux", Getenv: func(string) string { return "" },
+		Restart: func(context.Context) (Backend, error) { return f, nil }})
+	t.Cleanup(func() { a.cancel() })
+	if !strings.Contains(a.skew, "press R to restart now (you will need to unlock)") {
+		t.Fatalf("banner %q", a.skew)
+	}
+}

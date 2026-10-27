@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -17,6 +18,18 @@ func TestServeSystemIsRefusedOffLinux(t *testing.T) {
 	}
 	if out := stderr(); !strings.Contains(out, "Linux") {
 		t.Fatalf("stderr = %q, want a mention of Linux", out)
+	}
+}
+
+func TestServeSystemExitsSeventyFiveOnRestart(t *testing.T) {
+	if got := systemExitCode(true, nil); got != 75 {
+		t.Fatalf("restart: %d, want 75", got)
+	}
+	if got := systemExitCode(false, nil); got != 0 {
+		t.Fatalf("clean: %d, want 0", got)
+	}
+	if got := systemExitCode(false, errors.New("x")); got != 1 {
+		t.Fatalf("error: %d, want 1", got)
 	}
 }
 

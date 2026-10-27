@@ -23,8 +23,19 @@ const maxInitKeyBody = 8 << 10
 // vaultKeyRef is the vault entry that holds the controller key.
 const vaultKeyRef = "controller-key"
 
+// SetRestart sets Config.Restart on a built server, before it serves.
+func (s *Server) SetRestart(f func()) { s.cfg.Restart = f }
+
 func (s *Server) registerSystemRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/system/init-key", s.handleSystemInitKey)
+	mux.HandleFunc("POST /api/restart", func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.Restart == nil {
+			writeError(w, http.StatusNotFound, "only the jumpgate service restarts over the API")
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		go s.cfg.Restart()
+	})
 }
 
 // socketPeer is the admin-socket peer of r. It answers 404 and false for a

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
@@ -59,6 +60,12 @@ func cmdServeSystem(opts serverOptions) int {
 	if err != nil {
 		return failed("%v", err)
 	}
+	var restartRequested atomic.Bool
+	b.srv.SetRestart(func() {
+		fmt.Fprintln(os.Stderr, "jumpgate: restart requested; exiting so systemd starts the service again (it comes back locked)")
+		restartRequested.Store(true)
+		stop()
+	})
 	if cfg, err := config.Load(); err == nil {
 		for _, w := range systemStartWarnings(cfg) {
 			fmt.Fprintf(os.Stderr, "jumpgate: %s\n", w)
@@ -66,8 +73,24 @@ func cmdServeSystem(opts serverOptions) int {
 	}
 	b.start(ctx, os.Stderr)
 	defer daemon.RemoveSystem(dir)
-	if err := serveSystem(ctx, stop, b.srv, dir, opts.Bind); err != nil {
-		return failed("%v", err)
+	err = serveSystem(ctx, stop, b.srv, dir, opts.Bind)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "jumpgate: %v\n", err)
+	}
+	return systemExitCode(restartRequested.Load(), err)
+}
+
+// exitRestart is serve --system's status after POST /api/restart: a failure
+// to systemd, so Restart=on-failure starts the service again.
+const exitRestart = 75
+
+// systemExitCode is serve --system's exit status.
+func systemExitCode(restartRequested bool, err error) int {
+	switch {
+	case restartRequested:
+		return exitRestart
+	case err != nil:
+		return 1
 	}
 	return 0
 }
