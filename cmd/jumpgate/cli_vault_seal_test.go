@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -32,13 +33,106 @@ func fakeSystemdCreds(t *testing.T, fail string) *[]credsCall {
 	old := runSystemdCreds
 	runSystemdCreds = func(_ context.Context, stdin []byte, args ...string) error {
 		calls = append(calls, credsCall{bytes.Clone(stdin), args})
+		if len(args) > 0 && args[0] == "encrypt" {
+			// Like systemd-creds, it may leave a partial file on failure.
+			if err := os.WriteFile(args[len(args)-1], []byte("cred"), 0o600); err != nil {
+				return err
+			}
+		}
 		if len(args) > 0 && args[0] == fail {
 			return errors.New("systemd-creds: " + fail + " failed")
 		}
 		return nil
 	}
 	t.Cleanup(func() { runSystemdCreds = old })
+	fakeCredFile(t, "")
 	return &calls
+}
+
+// fakeCredFile runs the credential's mv and rm in this process and records
+// them; fail answers an error for the command it names.
+func fakeCredFile(t *testing.T, fail string) *[][]string {
+	t.Helper()
+	var calls [][]string
+	old := runCredFile
+	runCredFile = func(_ context.Context, argv ...string) error {
+		calls = append(calls, argv)
+		if argv[0] == fail {
+			return errors.New(fail + " failed")
+		}
+		switch argv[0] {
+		case "mv":
+			return os.Rename(argv[3], argv[4])
+		case "rm":
+			if err := os.Remove(argv[3]); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			return nil
+		}
+		return errors.New("unexpected " + argv[0])
+	}
+	t.Cleanup(func() { runCredFile = old })
+	return &calls
+}
+
+// The credential is encrypted to a temporary name beside --out and moved
+// into place only after the slot is added; a failed slot leaves the old
+// credential and no temporary file.
+func TestSealRenamesTheCredentialAfterTheSlot(t *testing.T) {
+	testutil.Home(t)
+	_, stderr := captureStdio(t)
+	placeVault(t)
+	calls := fakeSystemdCreds(t, "")
+	files := fakeCredFile(t, "")
+	useFakeTTY(t, vaulttest.Passphrase)
+	dir := t.TempDir()
+	out := filepath.Join(dir, "cred")
+	if code := cmdVault([]string{"seal", "--allow-host-key", "--out", out}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr())
+	}
+	tmp := (*calls)[0].args[len((*calls)[0].args)-1]
+	if filepath.Dir(tmp) != dir || tmp == out {
+		t.Fatalf("encrypt wrote %s, want a temporary name in %s", tmp, dir)
+	}
+	if len(*files) != 1 || !slices.Equal((*files)[0], []string{"mv", "-f", "--", tmp, out}) {
+		t.Fatalf("file ops %q", *files)
+	}
+	if b, err := os.ReadFile(out); err != nil || string(b) != "cred" {
+		t.Fatalf("credential %q %v", b, err)
+	}
+	for _, op := range *files {
+		for _, a := range op {
+			if strings.Contains(a, string((*calls)[0].stdin)) {
+				t.Fatal("the KEK is on argv")
+			}
+		}
+	}
+}
+
+func TestSealFailedMoveRemovesTheTemp(t *testing.T) {
+	testutil.Home(t)
+	captureStdio(t)
+	placeVault(t)
+	fakeSystemdCreds(t, "")
+	files := fakeCredFile(t, "mv")
+	useFakeTTY(t, vaulttest.Passphrase)
+	dir := t.TempDir()
+	out := filepath.Join(dir, "cred")
+	if err := os.WriteFile(out, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := cmdVault([]string{"seal", "--allow-host-key", "--out", out}); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	if len(*files) != 2 || (*files)[1][0] != "rm" {
+		t.Fatalf("file ops %q", *files)
+	}
+	if b, _ := os.ReadFile(out); string(b) != "old" {
+		t.Fatalf("credential replaced: %q", b)
+	}
+	if m, _ := filepath.Glob(filepath.Join(dir, ".cred.tmp-*")); len(m) != 0 {
+		t.Fatalf("temp left: %v", m)
+	}
 }
 
 func slotKinds(t *testing.T, p string) []vault.SlotKind {
@@ -72,7 +166,7 @@ func TestSealPipesTheKEKOnStdin(t *testing.T) {
 	}
 	c := (*calls)[0]
 	if c.args[0] != "encrypt" || !slices.Contains(c.args, "--with-key=host") || !slices.Contains(c.args, "--name=jumpgate-vault-key") ||
-		!slices.Contains(c.args, "-") || c.args[len(c.args)-1] != out {
+		!slices.Contains(c.args, "-") || filepath.Dir(c.args[len(c.args)-1]) != filepath.Dir(out) {
 		t.Fatalf("args %q", c.args)
 	}
 	if len(c.stdin) != 32 {

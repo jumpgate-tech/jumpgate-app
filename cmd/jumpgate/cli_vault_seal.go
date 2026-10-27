@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -37,6 +39,36 @@ var runSystemdCreds = func(ctx context.Context, stdin []byte, args ...string) er
 		return fmt.Errorf("systemd-creds %s: %w: %s", args[0], err, safe(strings.TrimSpace(errb.String())))
 	}
 	return nil
+}
+
+// runCredFile runs a file command (mv or rm) on the credential: as root
+// directly, else through sudo, as encrypt is, since root wrote the file in
+// a directory root owns. argv never holds a key. A test seam.
+var runCredFile = func(ctx context.Context, argv ...string) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	name, args := argv[0], argv[1:]
+	if geteuid() != 0 {
+		name, args = "sudo", append([]string{"--"}, argv...)
+	}
+	c := exec.CommandContext(ctx, name, args...)
+	c.Env = secretenv.Environ()
+	var errb bytes.Buffer
+	c.Stdout, c.Stderr = io.Discard, &errb
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("%s: %w: %s", argv[0], err, safe(strings.TrimSpace(errb.String())))
+	}
+	return nil
+}
+
+// credTempPath is a fresh name beside out for the credential until its
+// slot is added.
+func credTempPath(out string) (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(out), "."+filepath.Base(out)+".tmp-"+hex.EncodeToString(b[:])), nil
 }
 
 // systemdCredsCommand is the command line for systemd-creds args. Only root
@@ -108,15 +140,29 @@ func vaultSeal(args []string) int {
 	if _, err := rand.Read(kek); err != nil {
 		return failed("vault seal: %v", err)
 	}
-	if err := runSystemdCreds(ctx, kek, "encrypt", "--with-key="+mode, "--name="+vaultCredName, "-", *out); err != nil {
+	// The credential goes to a temporary name and is renamed over *out only
+	// once the slot it opens is in the vault: a failed seal never replaces
+	// a working credential.
+	tmp, err := credTempPath(*out)
+	if err != nil {
+		return failed("vault seal: %v", err)
+	}
+	dropTmp := func() {
+		if rerr := runCredFile(ctx, "rm", "-f", "--", tmp); rerr != nil {
+			fmt.Fprintf(os.Stderr, "  %s opens nothing; remove it as root (%v)\n", tmp, rerr)
+		}
+	}
+	if err := runSystemdCreds(ctx, kek, "encrypt", "--with-key="+mode, "--name="+vaultCredName, "-", tmp); err != nil {
+		dropTmp()
 		return failed("vault seal: %v", err)
 	}
 	if err := v.AddKEKSlot(vault.Slot{Kind: vault.SlotSystemdCreds, Cred: vaultCredName}, kek); err != nil { // clears kek
-		// It opens nothing without the slot; one root wrote is root's to remove.
-		if rerr := os.Remove(*out); rerr != nil && !os.IsNotExist(rerr) {
-			fmt.Fprintf(os.Stderr, "  %s opens nothing without the slot; remove it as root\n", *out)
-		}
+		dropTmp()
 		return vaultFail("vault seal", err)
+	}
+	if err := runCredFile(ctx, "mv", "-f", "--", tmp, *out); err != nil {
+		dropTmp()
+		return failed("vault seal: the slot was added but %s was not put in place; run `jumpgate vault seal` again: %v", *out, err)
 	}
 	fmt.Printf("sealed the vault key into %s (%s); a unit with LoadCredentialEncrypted=%s unlocks the vault at start\n", *out, mode, vaultCredName)
 	return 0
