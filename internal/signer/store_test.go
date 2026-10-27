@@ -378,12 +378,12 @@ func TestLinuxKeychainFailureNamesTheFileStore(t *testing.T) {
 	}
 	withRunner(t, f, "linux", "secret-tool")
 	_, err := Create(context.Background(), StoreKeychain, "controller")
-	if err == nil || !strings.Contains(err.Error(), "--store file") {
-		t.Fatalf("err = %v, want mention of --store file", err)
+	if err == nil || !strings.Contains(err.Error(), "--store vault") {
+		t.Fatalf("err = %v, want mention of --store vault", err)
 	}
 	_, err = Open(context.Background(), StoreKeychain, "controller")
-	if err == nil || !strings.Contains(err.Error(), "--store file") {
-		t.Fatalf("Open err = %v, want mention of --store file", err)
+	if err == nil || !strings.Contains(err.Error(), "--store vault") {
+		t.Fatalf("Open err = %v, want mention of --store vault", err)
 	}
 }
 
@@ -617,5 +617,27 @@ func TestLockedKeyringIsNotTreatedAsAbsent(t *testing.T) {
 	_, err := Open(context.Background(), StoreKeychain, "controller")
 	if err == nil || !strings.Contains(err.Error(), "locked") || strings.Contains(err.Error(), "no item") {
 		t.Fatalf("Open = %v, want a locked-keyring error, not not-found", err)
+	}
+}
+
+// Where no OS key store works, keys go into the encrypted vault, never a
+// plain key file.
+func TestDefaultStoreFallsBackToTheVault(t *testing.T) {
+	withRunner(t, &fakeRunner{}, "linux")
+	withDBus(t, false)
+	if got := DefaultStore(); got != StoreVault {
+		t.Fatalf("linux without secret-tool: DefaultStore() = %q, want vault", got)
+	}
+	withRunner(t, &fakeRunner{}, "darwin")
+	if got := DefaultStore(); got != StoreVault {
+		t.Fatalf("darwin without security: DefaultStore() = %q, want vault", got)
+	}
+}
+
+func TestStoreHintsNameTheVault(t *testing.T) {
+	for _, err := range []error{ErrNoKeychain, ErrKeychainLocked, toolTimeoutErr("security"), toolTimeoutErr("secret-tool")} {
+		if !strings.Contains(err.Error(), "--store vault") || strings.Contains(err.Error(), "--store file") {
+			t.Errorf("%q: want --store vault, not --store file", err)
+		}
 	}
 }

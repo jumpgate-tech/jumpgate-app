@@ -92,6 +92,9 @@ func loadServerConfig(stderr io.Writer) (config.Config, error) {
 	if cfg.Controller != nil && signer.Store(cfg.Controller.KeyStore) == signer.StoreFile {
 		keyFile = cfg.Controller.KeyRef
 	}
+	if w := plainSecretsWarning(cfg); w != "" {
+		fmt.Fprintf(stderr, "jumpgate: %s\n", w)
+	}
 	tightened, warnings, err := config.TightenState(keyFile)
 	for _, p := range tightened {
 		fmt.Fprintf(stderr, "jumpgate: other users could read or change %s; it is now restricted to you (if it holds a key, treat that key as exposed)\n", p)
@@ -100,6 +103,17 @@ func loadServerConfig(stderr io.Writer) (config.Config, error) {
 		fmt.Fprintf(stderr, "jumpgate: %v\n", w)
 	}
 	return cfg, err
+}
+
+// plainSecretsWarning is the warning every start prints while any secret is
+// stored unencrypted: secretStore "file", a plain value in a secret field, or
+// a controller key file. Otherwise it is "".
+func plainSecretsWarning(cfg config.Config) string {
+	if cfg.SecretStore == config.SecretStoreFile || len(cfg.PlainSecrets()) > 0 ||
+		(cfg.Controller != nil && signer.Store(cfg.Controller.KeyStore) == signer.StoreFile) {
+		return "secrets are stored unencrypted; run `jumpgate vault migrate`"
+	}
+	return ""
 }
 
 // openControllerKey opens the controller key named in the config, or returns

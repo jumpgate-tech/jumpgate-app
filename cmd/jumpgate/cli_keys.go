@@ -81,13 +81,17 @@ func keysInit(args []string) int {
 	fset := flag.NewFlagSet("keys init", flag.ContinueOnError)
 	// The default is resolved only when --store is not given, so an explicit
 	// store never runs the Secret Service probe.
-	store := fset.String("store", "", "vault | keychain | wincred | 1password | file (default: this machine's OS key store, else file)")
+	store := fset.String("store", "", "vault | keychain | wincred | 1password | file (file needs --insecure-plain) (default: this machine's OS key store, else vault)")
+	insecurePlain := fset.Bool("insecure-plain", false, "with --store file: confirm the key is kept unencrypted on disk")
 	ref := fset.String("ref", "", "key file path, keychain or Windows credential name, or op://vault/item/field")
 	if err := fset.Parse(args); err != nil {
 		return exitCode("usage")
 	}
 	if *store == "" {
 		*store = string(signer.DefaultStore())
+	}
+	if signer.Store(*store) == signer.StoreFile && !*insecurePlain {
+		return usage("--store file keeps the key unencrypted on disk; add --insecure-plain to confirm, or use --store vault")
 	}
 	c, err := config.Load()
 	if err != nil {
@@ -132,6 +136,9 @@ func keysInit(args []string) int {
 		// are until they are migrated.
 		if signer.Store(*store) == signer.StoreVault && len(c.PlainSecrets()) == 0 {
 			c.SecretStore = config.SecretStoreVault
+		}
+		if signer.Store(*store) == signer.StoreFile {
+			c.SecretStore = config.SecretStoreFile
 		}
 		return nil
 	}); err != nil {

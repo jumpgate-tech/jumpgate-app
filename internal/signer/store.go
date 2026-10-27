@@ -68,9 +68,9 @@ var errToolTimeout = errors.New("key-store tool timed out")
 func toolTimeoutErr(name string) error {
 	switch name {
 	case "secret-tool":
-		return fmt.Errorf("secret-tool did not answer within %s; the keyring may be locked with nothing to prompt you. Unlock it, or use --store file", toolTimeout)
+		return fmt.Errorf("secret-tool did not answer within %s; the keyring may be locked with nothing to prompt you. Unlock it, or use --store vault", toolTimeout)
 	case "security":
-		return fmt.Errorf("macOS keychain (security) did not answer within %s; a keychain prompt may be waiting for an answer. Answer it and try again, or use --store file", toolTimeout)
+		return fmt.Errorf("macOS keychain (security) did not answer within %s; a keychain prompt may be waiting for an answer. Answer it and try again, or use --store vault", toolTimeout)
 	case "op":
 		return fmt.Errorf("1Password CLI (op) did not answer within %s; it may be waiting for you to unlock 1Password or approve access. Unlock it and try again", toolTimeout)
 	}
@@ -97,7 +97,7 @@ func (e *cmdError) Unwrap() error { return e.Err }
 // DefaultStore picks the OS key store when it can actually be used here:
 // Credential Manager on Windows; the macOS keychain; on Linux the Secret
 // Service only when a D-Bus session exists and the service answers (a
-// headless box or an SSH login has neither). Otherwise a key file.
+// headless box or an SSH login has neither). Otherwise the encrypted vault.
 func DefaultStore() Store {
 	switch hostOS {
 	case "windows":
@@ -111,7 +111,7 @@ func DefaultStore() Store {
 			return StoreKeychain
 		}
 	}
-	return StoreFile
+	return StoreVault
 }
 
 // Open loads an existing key.

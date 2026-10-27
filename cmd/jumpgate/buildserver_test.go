@@ -15,7 +15,45 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
+	"github.com/valve-tech/jumpgate/internal/testutil"
 )
+
+// Every start says so while a secret is stored unencrypted.
+func TestServerStartWarnsAboutPlainSecrets(t *testing.T) {
+	const warning = "secrets are stored unencrypted; run `jumpgate vault migrate`"
+	testutil.Home(t)
+	if _, err := config.Update(func(c *config.Config) error { c.AIKey = "sk"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var stderr strings.Builder
+	if _, err := loadServerConfig(&stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), warning) {
+		t.Fatalf("stderr %q, want the warning", stderr.String())
+	}
+	if _, err := config.Update(func(c *config.Config) error {
+		c.SecretStore, c.AIKey = config.SecretStoreVault, config.SecretRefPrefix+"ai-key"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stderr.Reset()
+	if _, err := loadServerConfig(&stderr); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stderr.String(), warning) {
+		t.Fatalf("warned with only vault references: %q", stderr.String())
+	}
+	for _, c := range []config.Config{
+		{SecretStore: config.SecretStoreFile},
+		{Controller: &config.Controller{KeyStore: "file", KeyRef: "/k"}},
+	} {
+		if plainSecretsWarning(c) == "" {
+			t.Errorf("no warning for %+v", c)
+		}
+	}
+}
 
 // serverFlagNames lists the flags that shape the server on a flag set, so the
 // two entry points can be compared.

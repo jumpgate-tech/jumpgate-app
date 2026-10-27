@@ -13,7 +13,7 @@ import (
 // ErrNoKeychain means this machine has no usable keychain. It is an error
 // rather than a quiet fallback to a file, so a key never lands somewhere the
 // operator did not choose.
-var ErrNoKeychain = errors.New("signer: no OS keychain here (macOS needs `security`; Linux needs `secret-tool` and a D-Bus session; Windows uses --store wincred); use --store file")
+var ErrNoKeychain = errors.New("signer: no OS keychain here (macOS needs `security`; Linux needs `secret-tool` and a D-Bus session; Windows uses --store wincred); use --store vault")
 
 const keychainService = "jumpgate"
 
@@ -138,13 +138,13 @@ func secretToolItemListed(ctx context.Context, ref string) (bool, error) {
 
 // ErrKeychainLocked means the item exists but the tool could not read it,
 // which on Linux is a locked Secret Service collection.
-var ErrKeychainLocked = errors.New("signer: the keychain item exists but could not be read (is the keyring locked? unlock it, or use --store file)")
+var ErrKeychainLocked = errors.New("signer: the keychain item exists but could not be read (is the keyring locked? unlock it, or use --store vault)")
 
 // keychainErr wraps a tool failure. On Linux the usual cause is a headless box
 // with no Secret Service, so the error names the file store.
 func keychainErr(op string, err error) error {
 	if hostOS == "linux" {
-		return fmt.Errorf("signer: keychain %s: %w (is a Secret Service running? on a headless box use --store file)", op, err)
+		return fmt.Errorf("signer: keychain %s: %w (is a Secret Service running? on a headless box use --store vault)", op, err)
 	}
 	return fmt.Errorf("signer: keychain %s: %w", op, err)
 }

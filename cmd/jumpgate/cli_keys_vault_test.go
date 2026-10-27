@@ -74,3 +74,27 @@ func TestKeysShowOpensAVaultKey(t *testing.T) {
 		t.Fatalf("out %q, want %s", out.String(), c.Controller.Address)
 	}
 }
+
+func TestKeysInitFileNeedsInsecurePlain(t *testing.T) {
+	testutil.Home(t)
+	_, stderr := captureStdio(t)
+	if code := keysInit([]string{"--store", "file"}); code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if !strings.Contains(stderr(), "--store file keeps the key unencrypted on disk; add --insecure-plain to confirm, or use --store vault") {
+		t.Fatalf("stderr %q", stderr())
+	}
+	if c, _ := config.Load(); c.Controller != nil {
+		t.Fatal("a key was recorded without --insecure-plain")
+	}
+	if code := keysInit([]string{"--store", "file", "--insecure-plain"}); code != 0 {
+		t.Fatalf("with --insecure-plain: exit %d: %s", code, stderr())
+	}
+	c, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Controller == nil || c.SecretStore != "file" {
+		t.Fatalf("controller %+v secretStore %q", c.Controller, c.SecretStore)
+	}
+}

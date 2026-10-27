@@ -11,7 +11,7 @@ import (
 
 // commandHelp is one line per command, in the order a new user needs them.
 var commandHelp = []struct{ name, text string }{
-	{"keys init", "create this controller's signing key"},
+	{"keys init [--store vault]", "create this controller's signing key (OS key store, else the vault)"},
 	{"keys show", "print this controller's address"},
 	{"hosts add NAME --ssh USER@HOST", "pair a Linux box over SSH (--local pairs this Linux machine)"},
 	{"hosts list", "list machines and their pairing"},

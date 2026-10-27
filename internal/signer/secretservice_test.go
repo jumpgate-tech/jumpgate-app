@@ -35,12 +35,12 @@ func TestDefaultStorePerOS(t *testing.T) {
 	}{
 		{"windows", "windows", nil, false, answers, StoreWinCred},
 		{"macOS with security", "darwin", []string{"security"}, false, answers, StoreKeychain},
-		{"macOS without security", "darwin", nil, false, answers, StoreFile},
+		{"macOS without security", "darwin", nil, false, answers, StoreVault},
 		{"linux desktop", "linux", []string{"secret-tool"}, true, answers, StoreKeychain},
-		{"linux over SSH, no D-Bus", "linux", []string{"secret-tool"}, false, answers, StoreFile},
-		{"linux, D-Bus but no Secret Service", "linux", []string{"secret-tool"}, true, noService, StoreFile},
-		{"linux, Secret Service does not answer", "linux", []string{"secret-tool"}, true, timedOut, StoreFile},
-		{"linux without secret-tool", "linux", nil, true, answers, StoreFile},
+		{"linux over SSH, no D-Bus", "linux", []string{"secret-tool"}, false, answers, StoreVault},
+		{"linux, D-Bus but no Secret Service", "linux", []string{"secret-tool"}, true, noService, StoreVault},
+		{"linux, Secret Service does not answer", "linux", []string{"secret-tool"}, true, timedOut, StoreVault},
+		{"linux without secret-tool", "linux", nil, true, answers, StoreVault},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -93,8 +93,8 @@ func TestKeychainOnLinuxWithoutDBusNamesTheFileStore(t *testing.T) {
 	withRunner(t, f, "linux", "secret-tool")
 	withDBus(t, false)
 	_, err := Create(context.Background(), StoreKeychain, "controller")
-	if !errors.Is(err, ErrNoKeychain) || !strings.Contains(err.Error(), "D-Bus") || !strings.Contains(err.Error(), "--store file") {
-		t.Fatalf("Create = %v; want ErrNoKeychain naming D-Bus and --store file", err)
+	if !errors.Is(err, ErrNoKeychain) || !strings.Contains(err.Error(), "D-Bus") || !strings.Contains(err.Error(), "--store vault") {
+		t.Fatalf("Create = %v; want ErrNoKeychain naming D-Bus and --store vault", err)
 	}
 	_, err = Open(context.Background(), StoreKeychain, "controller")
 	if !errors.Is(err, ErrNoKeychain) || !strings.Contains(err.Error(), "D-Bus") {
@@ -128,7 +128,7 @@ func TestToolTimeoutMessagesFitTheTool(t *testing.T) {
 	for _, c := range []struct{ tool, want, notWant string }{
 		{"secret-tool", "keyring may be locked", ""},
 		{"security", "keychain prompt may be waiting", "locked with nothing to prompt"},
-		{"op", "1Password CLI (op) did not answer within", "--store file"},
+		{"op", "1Password CLI (op) did not answer within", "--store vault"},
 	} {
 		msg := toolTimeoutErr(c.tool).Error()
 		if !strings.Contains(msg, c.want) || (c.notWant != "" && strings.Contains(msg, c.notWant)) {
