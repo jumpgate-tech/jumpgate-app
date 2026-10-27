@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -162,9 +163,20 @@ func (s *Server) UnlockKEK(kind vault.SlotKind, kek []byte) (api.VaultView, erro
 	return s.unlockWith(func(v *vault.Vault) error { return v.UnlockKEK(kind, kek) })
 }
 
+// disableCoreDumps is vault.DisableCoreDumps; a test seam.
+var disableCoreDumps = vault.DisableCoreDumps
+
 func (s *Server) unlockWith(open func(*vault.Vault) error) (api.VaultView, error) {
 	s.vctl.mu.Lock()
 	v, err := s.openVaultLocked()
+	if err == nil {
+		// Before any key material is derived: a vault created or first
+		// unlocked after startup must not leave this process dumpable.
+		// If that cannot be guaranteed, refuse the unlock.
+		if derr := disableCoreDumps(); derr != nil {
+			err = fmt.Errorf("vault: refusing to unlock: cannot disable core dumps: %w", derr)
+		}
+	}
 	if err == nil {
 		err = open(v)
 	}
