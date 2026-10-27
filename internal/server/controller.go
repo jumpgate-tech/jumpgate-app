@@ -19,6 +19,8 @@ import (
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/fsperm"
+	"github.com/valve-tech/jumpgate/internal/secrets"
+	"github.com/valve-tech/jumpgate/internal/vault"
 )
 
 // jgPath is a path under the controller's state directory (~/.jumpgate).
@@ -30,7 +32,30 @@ func jgPath(parts ...string) string {
 // transportKeyPath is the controller's SSH key for the jumpgate tunnel user.
 func transportKeyPath() string { return jgPath("ssh", "jumpgate_ed25519") }
 
-// ensureTransportKey returns the controller's tunnel key as an authorized_keys
+// usesVault reports whether secrets live in the vault (secretStore "vault").
+func usesVault() bool {
+	c, err := config.Load()
+	return err == nil && c.SecretStore == config.SecretStoreVault
+}
+
+// vault is the vault this server holds, nil until found.
+func (s *Server) vault() *vault.Vault {
+	s.keys.mu.RLock()
+	defer s.keys.mu.RUnlock()
+	return s.keys.v
+}
+
+// ensureTransportKey is the tunnel key's authorized_keys line: under
+// secretStore "vault" from the vault's transport-key entry (vault.ErrLocked
+// while locked), otherwise from the key file.
+func (s *Server) ensureTransportKey() (string, error) {
+	if usesVault() {
+		return secrets.EnsureTransportKey(s.vault())
+	}
+	return ensureTransportKeyFile()
+}
+
+// ensureTransportKeyFile returns the controller's tunnel key as an authorized_keys
 // line, creating an ed25519 key (0600) on first use. It is separate from the
 // operator's login key so revoking jumpgate's access never touches theirs.
 //
@@ -40,7 +65,7 @@ func transportKeyPath() string { return jgPath("ssh", "jumpgate_ed25519") }
 // new key is written to a temp file and hard-linked into place, so a
 // concurrent caller sees either no file or a whole key, and exactly one
 // caller's key wins.
-func ensureTransportKey() (string, error) {
+func ensureTransportKeyFile() (string, error) {
 	path := transportKeyPath()
 	line, err := readTransportKey(path)
 	if err == nil {
@@ -119,8 +144,10 @@ func readTransportKey(path string) (string, error) {
 
 // agentTarget is how this controller reaches t's agent: directly for a local
 // target, otherwise as the jumpgate tunnel user with the transport key and
-// strict host-key checking.
-func agentTarget(t config.Target) (agentclient.Target, error) {
+// strict host-key checking. Under secretStore "vault" the transport key is
+// the vault's, in memory (KeyPath stays empty); a locked vault is
+// vault.ErrLocked.
+func (s *Server) agentTarget(t config.Target) (agentclient.Target, error) {
 	if t.Agent == nil {
 		return agentclient.Target{}, fmt.Errorf("target %q is not paired", t.ID)
 	}
@@ -138,8 +165,17 @@ func agentTarget(t config.Target) (agentclient.Target, error) {
 			return agentclient.Target{}, err
 		}
 		at.SSH = executor.SSHConfig{
-			Host: t.SSH.Host, Port: t.SSH.Port, User: "jumpgate", KeyPath: transportKeyPath(), Jump: t.SSH.Jump,
+			Host: t.SSH.Host, Port: t.SSH.Port, User: "jumpgate", Jump: t.SSH.Jump,
 			HostKey: hostKey, HostKeyAlgorithms: algos,
+		}
+		if usesVault() {
+			sgn, err := secrets.TransportSigner(s.vault())
+			if err != nil {
+				return agentclient.Target{}, err
+			}
+			at.SSH.Signer = sgn
+		} else {
+			at.SSH.KeyPath = transportKeyPath()
 		}
 	}
 	return at, nil

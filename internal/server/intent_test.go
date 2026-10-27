@@ -282,7 +282,7 @@ func TestAgentTargetIsStrictAndUsesTheTunnelUser(t *testing.T) {
 		SSH:   &executor.SSHConfig{Host: d.host, Port: d.port, User: "root", KeyPath: "/k", Jump: jump},
 		Agent: &config.AgentPairing{Address: agentKey.Address().Hex(), Transport: "ssh"}}
 
-	at, err := agentTarget(tg)
+	at, err := (&Server{}).agentTarget(tg)
 	if err != nil {
 		t.Fatal(err)
 	}

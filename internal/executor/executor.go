@@ -43,9 +43,12 @@ type Executor interface {
 
 // SSHConfig configures NewSSH and DialSSH.
 type SSHConfig struct {
-	Host        string
-	User        string
-	KeyPath     string // optional when an ssh-agent is available
+	Host    string
+	User    string
+	KeyPath string // optional when an ssh-agent is available
+	// Signer, if set, is an in-memory key (the vault's transport key)
+	// offered first, in place of reading KeyPath. It is never persisted.
+	Signer      ssh.Signer `json:"-"`
 	HostKeyFile string
 	Port        int // 0 => 22
 	// Jump, if set, is dialled first and this host is reached through it

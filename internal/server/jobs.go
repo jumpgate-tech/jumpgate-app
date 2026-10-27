@@ -538,7 +538,7 @@ func (h *jobsHub) viewLocked(target string, r intent.JobRecord, agentTime int64)
 // less is errJobLogInvalid, and the job's mark is dropped, so no part of
 // that log is shown and the next read starts over.
 func (h *jobsHub) readVerified(ctx context.Context, cfg config.Config, t config.Target, id string, full bool) (intent.JobRecord, []joblog.Entry, int64, error) {
-	at, err := agentTarget(t)
+	at, err := h.s.agentTarget(t)
 	if err != nil {
 		return intent.JobRecord{}, nil, 0, &localError{err}
 	}

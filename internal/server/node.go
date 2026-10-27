@@ -119,7 +119,7 @@ func (s *Server) sendIntent(ctx context.Context, cfg config.Config, t config.Tar
 	if sgn == nil {
 		return agentclient.Response{}, &noControllerKey{serr}
 	}
-	at, err := agentTarget(t)
+	at, err := s.agentTarget(t)
 	if err != nil {
 		return agentclient.Response{}, &localError{err}
 	}

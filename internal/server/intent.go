@@ -65,7 +65,11 @@ func (s *Server) handleIntent(w http.ResponseWriter, r *http.Request) {
 		writeErrorDetail(w, http.StatusConflict, "this target has no paired agent", "", api.CodeNotPaired)
 		return
 	}
-	if _, err := agentTarget(t); err != nil {
+	if _, err := s.agentTarget(t); err != nil {
+		if status, e, ok := vaultError(err); ok {
+			writeAPIError(w, status, e)
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

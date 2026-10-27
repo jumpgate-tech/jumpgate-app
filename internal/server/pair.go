@@ -18,6 +18,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/vault"
 )
 
 type pairRequest struct {
@@ -148,8 +149,12 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 
 	transportKey := ""
 	if !local {
-		if transportKey, err = ensureTransportKey(); err != nil {
-			send(api.PairEvent{Step: "transport-key", Error: err.Error(), Code: api.CodeTransportKey})
+		if transportKey, err = s.ensureTransportKey(); err != nil {
+			code := api.CodeTransportKey
+			if errors.Is(err, vault.ErrLocked) {
+				code = api.CodeLocked
+			}
+			send(api.PairEvent{Step: "transport-key", Error: err.Error(), Code: code})
 			return
 		}
 	}
@@ -214,7 +219,7 @@ func (s *Server) verifyPairing(ctx context.Context, t config.Target) (uint64, *a
 	fail := func(err error, code api.Code, hint string) (uint64, *api.PairEvent) {
 		return 0, &api.PairEvent{Step: "verify", Error: err.Error(), Code: code, Hint: hint}
 	}
-	at, err := agentTarget(t)
+	at, err := s.agentTarget(t)
 	if err != nil {
 		return fail(err, api.CodeVerifyFailed, "")
 	}
