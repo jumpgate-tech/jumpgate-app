@@ -92,6 +92,36 @@ func TestNewTalksOverTheUnixSocket(t *testing.T) {
 	}
 }
 
+// The jumpgate service admits by peer credentials and publishes no token:
+// a client for it sends no Authorization header at all.
+func TestNoBearerHeaderWithoutAToken(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "jgc")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skipf("unix sockets unavailable: %v", err)
+	}
+	got := make(chan http.Header, 1)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case got <- r.Header.Clone():
+		default:
+		}
+		io.WriteString(w, `{"ok":true}`)
+	})}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	c := New(daemon.Info{Socket: sock})
+	if err := c.Do(context.Background(), http.MethodGet, "/api/health", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	h := <-got
+	if _, ok := h["Authorization"]; ok {
+		t.Fatalf("Authorization = %q, want no header", h.Get("Authorization"))
+	}
+}
+
 // Ruling T2a: the client asks daemon.SkewWarning, the one version
 // comparison, so an unknown server version (an older server.json) counts as
 // a skew there and here alike.

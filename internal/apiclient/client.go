@@ -216,7 +216,11 @@ func sendVia(ctx context.Context, base, token string, hc *http.Client, method, p
 	for k, vs := range header {
 		req.Header[k] = vs
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	// The jumpgate service admits by peer credentials and has no token to
+	// send; an empty bearer would only be refused.
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
