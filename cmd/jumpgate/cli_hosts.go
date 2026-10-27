@@ -19,6 +19,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/bootstrap"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
+	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
@@ -63,7 +64,7 @@ func hostsList(ctx context.Context, w io.Writer) int {
 }
 
 func hostsAdd(args []string) int {
-	const usageText = "usage: jumpgate hosts add NAME (--ssh USER@HOST[:PORT] [--key PATH] [--jump USER@HOST[:PORT]] [--sudo] | --local)"
+	const usageText = "usage: jumpgate hosts add NAME (--ssh USER@HOST[:PORT] [--key PATH] [--jump USER@HOST[:PORT]] [--sudo] | --local | --ssh jumpgate@HOST --installed ADDR)"
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		return usage(usageText)
 	}
@@ -74,8 +75,17 @@ func hostsAdd(args []string) int {
 	jumpArg := fset.String("jump", "", "jump host user@host[:port]")
 	sudo := fset.Bool("sudo", false, "run setup commands through sudo -n")
 	local := fset.Bool("local", false, "pair this machine")
+	installedArg := fset.String("installed", "", "the agent address `jumpgate agent setup` printed on the box")
 	if err := fset.Parse(args[1:]); err != nil || (*local == (*sshArg != "")) {
 		return usage("give exactly one of --ssh or --local")
+	}
+	if *installedArg != "" {
+		if *local {
+			return usage("--installed names an agent on another box; it needs --ssh, not --local")
+		}
+		if _, err := eip712.ParseAddress(*installedArg); err != nil {
+			return usage("--installed: %v", err)
+		}
 	}
 	if *local {
 		if err := bootstrap.LocalSupported(hostGOOS); err != nil {
@@ -152,16 +162,35 @@ func hostsAdd(args []string) int {
 		// re-paired or an interrupted pairing finished.
 		fmt.Printf("target %s already exists; pairing it again\n", name)
 	}
-	if *local && geteuid() != 0 {
-		cfg, err := config.Load()
-		if err != nil {
-			return failed("%v", err)
+	if *installedArg != "" {
+		// The agent was installed on the box by `jumpgate agent setup`; the
+		// server only verifies it over the tunnel and records it.
+		return streamPair(c, name, api.PairRequest{Installed: *installedArg}, false)
+	}
+	// Against the jumpgate service this always runs here, as root too: the
+	// service runs as its own user and never as root.
+	if system := serverIsSystem(c); *local && (system || geteuid() != 0) {
+		var (
+			f    pairingFacts
+			code int
+		)
+		if system {
+			f, code = factsFromServer(ctx, c, name)
+		} else {
+			cfg, err := config.Load()
+			if err != nil {
+				return failed("%v", err)
+			}
+			t, ok := findTargetByID(cfg, name)
+			if !ok {
+				return failed("target %s is not in config.json after adding it", name)
+			}
+			f, code = factsFromConfig(t)
 		}
-		t, ok := findTargetByID(cfg, name)
-		if !ok {
-			return failed("target %s is not in config.json after adding it", name)
+		if code != 0 {
+			return code
 		}
-		addr, code := pairLocalForeground(ctx, os.Stdout, t)
+		addr, code := pairLocalForeground(ctx, os.Stdout, f)
 		if code != 0 {
 			return code
 		}

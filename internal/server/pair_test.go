@@ -483,15 +483,6 @@ func TestPairInstalledMustBeAnAddress(t *testing.T) {
 	}
 }
 
-func TestPairInstalledOnlyAppliesToLocalTargets(t *testing.T) {
-	d := startPairTestSSHD(t, nil)
-	ts, token := pairServer(t, d)
-	res := postPair(t, ts, token, `{"installed":"0x0000000000000000000000000000000000000001"}`)
-	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status %d, want 400", res.StatusCode)
-	}
-}
-
 // linuxBoxExec passes bootstrap's preflight as an amd64 systemd box and
 // fails every later command, so a pairing gets as far as choosing the agent
 // binary and stops at the upload.

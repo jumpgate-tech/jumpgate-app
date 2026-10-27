@@ -127,6 +127,8 @@ const (
 	CodeKeyPathRefused Code = "key_path_refused"
 	// CodeServiceNoLogin: the service never logs in to a box over SSH itself.
 	CodeServiceNoLogin Code = "service_no_login"
+	// CodeInstalledMismatch: the agent on the host is not the one the CLI named.
+	CodeInstalledMismatch Code = "installed_mismatch"
 )
 
 // Exit classes: the CLI's process exit statuses, published in the README.
@@ -218,6 +220,7 @@ var registry = map[Code]codeInfo{
 	CodeNoVault:             {"create one with `jumpgate vault migrate` (moves existing secrets in) or `jumpgate vault init`", ExitUsage},
 	CodeKeyPathRefused:      {"the jumpgate service never reads your SSH keys; leave out --key: `jumpgate hosts add` runs the root steps in your own shell", ExitUsage},
 	CodeServiceNoLogin:      {"the jumpgate service reaches boxes only through their agents; pair the box, or use `jumpgate ssh NAME` for a shell", ExitFailed},
+	CodeInstalledMismatch:   {"the agent answering on this host is not the one `jumpgate agent setup` printed; check the address and the host", ExitSecurity},
 	CodeJobKindNotAllowed:   {"this server starts only the jobs it knows (for example `jumpgate migrate-names HOST`); other node operations have their own commands", ExitUsage},
 }
 

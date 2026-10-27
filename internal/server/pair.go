@@ -70,16 +70,18 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 	var installed eip712.Address
 	if req.Installed != "" {
-		if !local {
-			writeError(w, http.StatusBadRequest, `"installed" applies only to pairing this machine`)
-			return
-		}
 		a, err := eip712.ParseAddress(req.Installed)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "installed: "+err.Error())
 			return
 		}
 		installed = a
+	}
+	if !local && req.Installed == "" && s.cfg.System {
+		// The service never logs in to a box: `jumpgate hosts add` runs
+		// bootstrap in the operator's shell and sends the address here.
+		writeErrorDetail(w, http.StatusConflict, "the jumpgate service does not log in to boxes to pair them", "", api.CodeServiceNoLogin)
+		return
 	}
 	if local && req.Installed == "" && s.geteuid() != 0 {
 		writeErrorDetail(w, http.StatusConflict,
@@ -101,8 +103,9 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 
 	var priv executor.Executor
 	switch {
-	case local && req.Installed != "":
-		// The CLI already ran the privileged steps; nothing runs as root here.
+	case req.Installed != "":
+		// The CLI already ran the privileged steps, on this machine or over
+		// its own SSH login; nothing runs as root here and no login opens.
 	case local:
 		// Root (checked above): run the steps directly. A root controller on
 		// stock Debian may have no sudo at all (B-4).
@@ -186,7 +189,11 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 	send(api.PairEvent{Step: "verify", Line: "start"})
 	t.Agent = &config.AgentPairing{Address: addr.Hex(), Transport: transport}
-	next, ev := s.verifyPairing(ctx, t)
+	verify := s.verifyPairing
+	if req.Installed != "" {
+		verify = s.verifyInstalled
+	}
+	next, ev := verify(ctx, t)
 	if ev != nil {
 		send(*ev)
 		return
@@ -216,8 +223,25 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 // the client resynchronises from its signed answer, and the returned value
 // follows it.
 func (s *Server) verifyPairing(ctx context.Context, t config.Target) (uint64, *api.PairEvent) {
-	fail := func(err error, code api.Code, hint string) (uint64, *api.PairEvent) {
-		return 0, &api.PairEvent{Step: "verify", Error: err.Error(), Code: code, Hint: hint}
+	next, ev, _ := s.verify(ctx, t)
+	return next, ev
+}
+
+// verifyInstalled is verifyPairing for an agent the CLI installed and named:
+// an answer signed by another key, or a signed wrong_agent refusal, means the
+// address does not belong to the agent on that host, and says so.
+func (s *Server) verifyInstalled(ctx context.Context, t config.Target) (uint64, *api.PairEvent) {
+	next, ev, reason := s.verify(ctx, t)
+	if ev != nil && (ev.Code == api.CodeBadReceipt || reason == intent.ReasonWrongAgent) {
+		ev.Code, ev.Hint = api.CodeInstalledMismatch, api.HintFor(api.CodeInstalledMismatch)
+	}
+	return next, ev
+}
+
+// verify is verifyPairing's body; reason is a signed rejection's reason.
+func (s *Server) verify(ctx context.Context, t config.Target) (uint64, *api.PairEvent, string) {
+	fail := func(err error, code api.Code, hint string) (uint64, *api.PairEvent, string) {
+		return 0, &api.PairEvent{Step: "verify", Error: err.Error(), Code: code, Hint: hint}, ""
 	}
 	at, err := s.agentTarget(t)
 	if err != nil {
@@ -250,13 +274,18 @@ func (s *Server) verifyPairing(ctx context.Context, t config.Target) (uint64, *a
 	case err != nil:
 		return fail(err, api.CodeVerifyFailed, "")
 	case res.Status != intent.StatusOK:
-		return fail(fmt.Errorf("agent refused agent.info: %s", res.Result), api.CodeRejected, "")
+		n, ev, _ := fail(fmt.Errorf("agent refused agent.info: %s", res.Result), api.CodeRejected, "")
+		reason := ""
+		if res.Rejection != nil {
+			reason = res.Rejection.Code
+		}
+		return n, ev, reason
 	}
 	next, err := seqs.Next(at.Agent)
 	if err != nil {
 		return fail(err, api.CodeVerifyFailed, "")
 	}
-	return next, nil
+	return next, nil, ""
 }
 
 func controllerLabel() string {
