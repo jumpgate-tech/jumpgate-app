@@ -145,6 +145,12 @@ type Config struct {
 	// link (fail-safe: no browser is opened on it).
 	LoginDir string
 
+	// System is `jumpgate serve --system`, the jumpgate service: a request
+	// on the admin socket (ServeUnixSystem) is admitted by its peer's kernel
+	// credentials instead of the token. AdminGID is jumpgate-admin's gid.
+	System   bool
+	AdminGID int
+
 	// noJobsDriver keeps the jobs hub listing and verifying but never
 	// driving. Tests only (ruling P5): a test that inspects a job mid-way
 	// must not race the driver. Unexported, so no caller outside the
@@ -390,6 +396,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if r.URL.Path == "/login" && r.Method == http.MethodGet {
 			s.handleLogin(w, r)
 			return
+		}
+
+		// The system socket admits by peer credentials; TCP requests carry
+		// none and fall through to the token and cookie checks.
+		if s.cfg.System {
+			if c, ok := peerFrom(r.Context()); ok && admitPeer(c, s.selfUID, s.cfg.AdminGID) {
+				s.noteRequest(r)
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
 
 		// ?token= stays for one caller only: the tray's in-process webview
