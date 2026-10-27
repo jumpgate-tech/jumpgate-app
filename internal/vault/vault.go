@@ -409,8 +409,21 @@ func (v *Vault) Delete(name string) error {
 // On any error the vault in memory is as it was before. Callers must not
 // hold v.mu.
 func (v *Vault) update(fn func(h *header, m map[string]entryRec) error) error {
+	return v.updateKey(nil, fn)
+}
+
+// updateKey is update, but when next is non-nil the result is sealed under
+// next, which then replaces the held data key (the old one is cleared). fn
+// must wrap next into every slot it keeps. updateKey takes over next and
+// clears it on any error.
+func (v *Vault) updateKey(next []byte, fn func(h *header, m map[string]entryRec) error) (err error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	defer func() {
+		if err != nil && next != nil {
+			clear(next)
+		}
+	}()
 	if v.dek == nil {
 		return ErrLocked
 	}
@@ -440,8 +453,12 @@ func (v *Vault) update(fn func(h *header, m map[string]entryRec) error) error {
 		clearEntries(m)
 		return err
 	}
+	key := v.dek
+	if next != nil {
+		key = next
+	}
 	b := body{Entries: m}
-	raw, err := seal(h, v.dek, b)
+	raw, err := seal(h, key, b)
 	if err != nil {
 		clearEntries(m)
 		return err
@@ -453,12 +470,13 @@ func (v *Vault) update(fn func(h *header, m map[string]entryRec) error) error {
 	if writeHook != nil {
 		raw = writeHook(raw)
 	}
-	if err := v.writeVerified(raw, b); err != nil {
+	if err := v.writeVerified(raw, b, key); err != nil {
 		clearEntries(m)
 		return err
 	}
 	clearEntries(m)
-	if err := v.reload(v.dek); err != nil {
+	// reload clears the old key when key is next.
+	if err := v.reload(key); err != nil {
 		v.drop()
 		return err
 	}
@@ -468,7 +486,7 @@ func (v *Vault) update(fn func(h *header, m map[string]entryRec) error) error {
 // writeVerified writes raw to a private temp file, reads it back and checks
 // that it decrypts to want under the held key, and only then renames it over
 // the vault and syncs the directory.
-func (v *Vault) writeVerified(raw []byte, want body) error {
+func (v *Vault) writeVerified(raw []byte, want body, key []byte) error {
 	dir := filepath.Dir(v.path)
 	tmp, err := fsperm.CreateTempPrivate(dir, "."+filepath.Base(v.path)+".tmp-*")
 	if err != nil {
@@ -495,7 +513,7 @@ func (v *Vault) writeVerified(raw []byte, want body) error {
 	if err != nil {
 		return fmt.Errorf("vault: read back: %w", err)
 	}
-	if err := v.verify(back, want); err != nil {
+	if err := verify(back, want, key); err != nil {
 		return fmt.Errorf("vault: the written file does not read back: %w", err)
 	}
 	if err := fsperm.Rename(name, v.path); err != nil {
@@ -505,12 +523,12 @@ func (v *Vault) writeVerified(raw []byte, want body) error {
 	return fsatomic.SyncDir(dir)
 }
 
-func (v *Vault) verify(raw []byte, want body) error {
+func verify(raw []byte, want body, key []byte) error {
 	h, line, ct, err := parse(raw)
 	if err != nil {
 		return err
 	}
-	got, err := openBody(line, ct, v.dek, h.Nonce)
+	got, err := openBody(line, ct, key, h.Nonce)
 	if err != nil {
 		return err
 	}

@@ -218,7 +218,7 @@ func TestKEKSlotUnlocks(t *testing.T) {
 	if err := v.AddKEKSlot(s, []byte("short")); err == nil {
 		t.Fatal("a short KEK was accepted")
 	}
-	if err := v.RemoveSlots(SlotSystemdCreds); err != nil {
+	if _, err := v.RemoveSlots(SlotSystemdCreds, pass()); err != nil {
 		t.Fatal(err)
 	}
 	if n := countSlots(v, SlotSystemdCreds); n != 0 {
@@ -232,7 +232,7 @@ func TestKEKSlotUnlocks(t *testing.T) {
 
 func TestLastPassphraseSlotCannotBeRemoved(t *testing.T) {
 	v, _ := newVault(t)
-	if err := v.RemoveSlots(SlotPassphrase); err == nil {
+	if _, err := v.RemoveSlots(SlotPassphrase, pass()); err == nil {
 		t.Fatal("removed every passphrase slot")
 	}
 	if n := countSlots(v, SlotPassphrase); n != 1 {
