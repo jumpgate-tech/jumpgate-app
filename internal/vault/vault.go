@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/valve-tech/jumpgate/internal/filelock"
 	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/fsperm"
 )
@@ -127,12 +126,12 @@ func Create(path string, passphrase []byte, p Params) (*Vault, error) {
 		clear(dek)
 		return nil, err
 	}
-	lk, err := filelock.Lock(path+".lock", true)
+	unlock, err := lockFile(path + ".lock")
 	if err != nil {
 		clear(dek)
-		return nil, fmt.Errorf("vault: lock %s: %w", path, err)
+		return nil, err
 	}
-	defer lk.Unlock()
+	defer unlock()
 	if err := createFile(path, raw); err != nil {
 		clear(dek)
 		return nil, err
@@ -415,13 +414,20 @@ func (v *Vault) update(fn func(h *header, m map[string]entryRec) error) error {
 	if v.dek == nil {
 		return ErrLocked
 	}
-	lk, err := filelock.Lock(v.path+".lock", true)
-	if err != nil {
-		return fmt.Errorf("vault: lock %s: %w", v.path, err)
+	// Root refuses before it creates anything in another user's directory.
+	if err := checkWriteOwner(v.path, v.seen.fi); err != nil {
+		return err
 	}
-	defer lk.Unlock()
+	unlock, err := lockFile(v.path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := v.reload(v.dek); err != nil {
 		v.drop()
+		return err
+	}
+	if err := checkWriteOwner(v.path, v.seen.fi); err != nil {
 		return err
 	}
 	h := v.hdr
@@ -476,9 +482,6 @@ func (v *Vault) writeVerified(raw []byte, want body) error {
 			os.Remove(name)
 		}
 	}()
-	if err := keepFileOwner(tmp, v.seen.fi); err != nil {
-		return err
-	}
 	if _, err := tmp.Write(raw); err != nil {
 		return fmt.Errorf("vault: write: %w", err)
 	}

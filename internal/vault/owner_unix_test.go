@@ -3,30 +3,23 @@
 package vault
 
 import (
-	"io/fs"
-	"syscall"
+	"errors"
+	"strings"
 	"testing"
-	"time"
 )
 
-type fakeInfo struct{ st *syscall.Stat_t }
-
-func (fakeInfo) Name() string       { return "vault" }
-func (fakeInfo) Size() int64        { return 0 }
-func (fakeInfo) Mode() fs.FileMode  { return 0o600 }
-func (fakeInfo) ModTime() time.Time { return time.Time{} }
-func (fakeInfo) IsDir() bool        { return false }
-func (f fakeInfo) Sys() any         { return f.st }
-
-func TestRootWriteKeepsTheOwner(t *testing.T) {
-	uid, gid, chown := keepOwner(fakeInfo{&syscall.Stat_t{Uid: 990, Gid: 990}}, 0)
-	if uid != 990 || gid != 990 || !chown {
-		t.Fatalf("root: (%d, %d, %v)", uid, gid, chown)
+// TestRootRefusesToWriteAnotherUsersVault replaces the plan's
+// TestRootWriteKeepsTheOwner: root never writes in another user's directory;
+// it is told to run as that user.
+func TestRootRefusesToWriteAnotherUsersVault(t *testing.T) {
+	err := writeOwnerProblem("v", 990, 0)
+	if !errors.Is(err, ErrUnsafeFile) || !strings.Contains(err.Error(), "uid 990") {
+		t.Fatalf("root on uid 990: %v", err)
 	}
-	if _, _, chown := keepOwner(fakeInfo{&syscall.Stat_t{Uid: 501, Gid: 20}}, 501); chown {
-		t.Fatal("a user's own write chowns")
+	if err := writeOwnerProblem("v", 0, 0); err != nil {
+		t.Fatalf("root on its own vault: %v", err)
 	}
-	if _, _, chown := keepOwner(nil, 0); chown {
-		t.Fatal("chown with no previous file")
+	if err := writeOwnerProblem("v", 501, 501); err != nil {
+		t.Fatalf("own vault: %v", err)
 	}
 }

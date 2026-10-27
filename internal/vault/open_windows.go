@@ -37,6 +37,38 @@ func openNoFollow(path string) (*os.File, error) {
 	return os.NewFile(uintptr(h), path), nil
 }
 
+// lockFile takes an exclusive lock on path, refusing a reparse point.
+func lockFile(path string) (func(), error) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, fmt.Errorf("vault: %w", err)
+	}
+	h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil,
+		windows.OPEN_ALWAYS, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		return nil, fmt.Errorf("vault: lock %s: %w", path, err)
+	}
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+		windows.CloseHandle(h)
+		return nil, fmt.Errorf("vault: lock %s: %w", path, err)
+	}
+	if info.FileAttributes&(windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DIRECTORY) != 0 {
+		windows.CloseHandle(h)
+		return nil, fmt.Errorf("%w: %s is a link", ErrUnsafeFile, path)
+	}
+	ol := new(windows.Overlapped)
+	if err := windows.LockFileEx(h, windows.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, ol); err != nil {
+		windows.CloseHandle(h)
+		return nil, fmt.Errorf("vault: lock %s: %w", path, err)
+	}
+	return func() {
+		windows.UnlockFileEx(h, 0, 1, 0, new(windows.Overlapped))
+		windows.CloseHandle(h)
+	}, nil
+}
+
 // checkOwner is a no-op: fsperm.CheckPrivateFile already checks the owner
 // and the DACL of the handle.
 func checkOwner(string, os.FileInfo) error { return nil }
