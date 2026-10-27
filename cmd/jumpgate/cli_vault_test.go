@@ -346,3 +346,23 @@ func TestVaultOfflineUnlockRefusesWithCoreDumpsOn(t *testing.T) {
 		t.Fatalf("stderr %q", stderr())
 	}
 }
+
+// vault put says a running relay keeps its old token until a restart.
+func TestVaultPutSaysRestartToApply(t *testing.T) {
+	withServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/vault/secrets/relay-token" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"note": "x"})
+	})
+	withStdin(t, "a-relay-token\n")
+	stdout, stderr := captureStdio(t)
+	if code := cmdVault([]string{"put", "relay-token", "--stdin"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr())
+	}
+	if !strings.Contains(stdout(), "restart jumpgate to apply") {
+		t.Fatalf("stdout %q", stdout())
+	}
+}

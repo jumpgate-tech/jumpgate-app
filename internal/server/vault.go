@@ -364,8 +364,14 @@ func (s *Server) handlePutVaultSecret(w http.ResponseWriter, r *http.Request) {
 		writeVaultError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	// A running relay keeps the token it started with; it is built once,
+	// after unlock, and not rebuilt here.
+	writeJSON(w, http.StatusOK, map[string]string{"note": TokenRestartNote})
 }
+
+// TokenRestartNote is what PUT /api/vault/secrets answers, and what `jumpgate
+// vault put` prints: the stored token reaches the relay only at its next start.
+const TokenRestartNote = "stored; a relay already running keeps its old token: restart jumpgate to apply"
 
 // putAPISecret stores value as name in the unlocked vault: vault.ErrNoVault
 // with no vault file, vault.ErrLocked while locked.

@@ -407,8 +407,17 @@ func TestVaultPutAcceptsOnlyTokens(t *testing.T) {
 	if _, err := srv.Unlock(pass); err != nil {
 		t.Fatal(err)
 	}
-	if res, e := do(t, ts, token, "PUT", "/api/vault/secrets/relay-token", secretBody("rt")); res.StatusCode != 204 {
-		t.Fatalf("put relay-token = %d %+v", res.StatusCode, e)
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/vault/secrets/relay-token", strings.NewReader(secretBody("rt")))
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var note map[string]string
+	_ = json.NewDecoder(res.Body).Decode(&note)
+	res.Body.Close()
+	if res.StatusCode != 200 || !strings.Contains(note["note"], "restart jumpgate to apply") {
+		t.Fatalf("put relay-token = %d %v", res.StatusCode, note)
 	}
 	if got, err := srv.vault().Get("relay-token"); err != nil || string(got) != "rt" {
 		t.Fatalf("relay-token = %q, %v", got, err)
@@ -424,8 +433,8 @@ func TestVaultPutAcceptsOnlyTokens(t *testing.T) {
 		}
 	}
 	// Not without the session.
-	req, _ := http.NewRequest("PUT", ts.URL+"/api/vault/secrets/admin-token", strings.NewReader(secretBody("at")))
-	res, err := http.DefaultClient.Do(req)
+	req, _ = http.NewRequest("PUT", ts.URL+"/api/vault/secrets/admin-token", strings.NewReader(secretBody("at")))
+	res, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

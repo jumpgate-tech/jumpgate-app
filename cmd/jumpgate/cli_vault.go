@@ -19,6 +19,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/fsperm"
 	"github.com/valve-tech/jumpgate/internal/secrets"
+	"github.com/valve-tech/jumpgate/internal/server"
 	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/vault"
 )
@@ -422,6 +423,7 @@ func vaultPut(args []string) int {
 	})
 	if code == 0 {
 		fmt.Printf("stored %s in the vault\n", name)
+		fmt.Println(server.TokenRestartNote)
 	}
 	return code
 }
