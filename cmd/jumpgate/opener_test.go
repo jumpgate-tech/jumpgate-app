@@ -276,3 +276,26 @@ func TestHandOffPrintModePrintsToANonTerminal(t *testing.T) {
 		t.Fatalf("--print: argv %q, output %q, want the link and no opener", *argv, out.String())
 	}
 }
+
+// D8: the jumpgate service runs on a server, not the operator's machine. Its
+// login link is always printed, with the port forward that reaches it.
+func TestOpenPrintsAndExplainsTheTunnelInSystemMode(t *testing.T) {
+	argv := stubOpener(t, daemon.Info{System: true, HTTPAddr: "127.0.0.1:8799"}, nil)
+	fakeTerminal(t, false)
+	old := requestLoginLink
+	requestLoginLink = func(context.Context, daemon.Info) (server.LoginLink, error) {
+		return server.LoginLink{Code: "c", URL: loginURL("127.0.0.1:8799", "c")}, nil
+	}
+	t.Cleanup(func() { requestLoginLink = old })
+	var out strings.Builder
+	if err := openWebApp(context.Background(), &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "ssh -L 8799:127.0.0.1:8799") || !strings.Contains(got, "/login?code=c") {
+		t.Fatalf("output %q: want the tunnel hint and the link", got)
+	}
+	if len(*argv) != 0 {
+		t.Fatalf("an opener ran: %q", *argv)
+	}
+}

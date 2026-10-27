@@ -102,3 +102,21 @@ func TestTCPListenerStillNeedsTheToken(t *testing.T) {
 		t.Fatalf("TCP health without a token: %d, want 401", res.StatusCode)
 	}
 }
+
+func TestLoginCodeMintRecordsTheSocketPeer(t *testing.T) {
+	s := New(Config{System: true, AdminGID: os.Getgid(), Token: "tok", UI: fstest.MapFS{}})
+	sock := startSystemSocket(t, s)
+	res, err := unixClient(sock).Post("http://x/api/login-code", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("mint over the system socket: %d", res.StatusCode)
+	}
+	s.codes.mu.Lock()
+	defer s.codes.mu.Unlock()
+	if len(s.codes.list) != 1 || s.codes.list[0].uid != os.Getuid() {
+		t.Fatalf("codes = %+v, want one for uid %d", s.codes.list, os.Getuid())
+	}
+}

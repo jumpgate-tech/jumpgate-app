@@ -154,7 +154,9 @@ func mustRequest(ctx context.Context, info daemon.Info, path string, body []byte
 	if err != nil {
 		panic(err) // the URL is a constant plus a path segment built by this program
 	}
-	req.Header.Set("Authorization", "Bearer "+info.Token)
+	if info.Token != "" { // the jumpgate service admits by peer credentials
+		req.Header.Set("Authorization", "Bearer "+info.Token)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	return req
 }

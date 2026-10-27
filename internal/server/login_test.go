@@ -256,3 +256,51 @@ func TestLoginCodeMintNeedsTheToken(t *testing.T) {
 		t.Fatalf("minted code: %d, want 200", res.StatusCode)
 	}
 }
+
+// Review Focus 2: a code minted for one uid (over the system socket) is
+// refused to another uid without being consumed, so its owner still signs in.
+func TestLoginCodeRedeemsOnlyForItsUID(t *testing.T) {
+	s, ts, _ := loginServer(t)
+	code := s.addLoginCode("", 2001)
+	s.peerUID = func(*http.Request) (int, peerVerdict) { return 2002, peerFound }
+	res, body := login(t, ts, code)
+	if res.StatusCode != http.StatusForbidden || !strings.Contains(body, "belongs to another user") {
+		t.Fatalf("another uid: %d %q, want 403 belongs to another user", res.StatusCode, body)
+	}
+	s.peerUID = func(*http.Request) (int, peerVerdict) { return 2001, peerFound }
+	res, _ = login(t, ts, code)
+	if res.StatusCode != http.StatusOK || !hasSessionCookie(res) {
+		t.Fatalf("its own uid: %d, want 200 with the session cookie", res.StatusCode)
+	}
+}
+
+func TestRootRedeemsAnyUsersCode(t *testing.T) {
+	s, ts, _ := loginServer(t)
+	code := s.addLoginCode("", 2001)
+	s.peerUID = func(*http.Request) (int, peerVerdict) { return 0, peerFound }
+	if res, _ := login(t, ts, code); res.StatusCode != http.StatusOK {
+		t.Fatalf("root: %d, want 200", res.StatusCode)
+	}
+}
+
+func TestPerUserCodesStillBelongToTheServer(t *testing.T) {
+	s, ts, _ := loginServer(t)
+	code := s.NewLoginCode()
+	s.peerUID = func(*http.Request) (int, peerVerdict) { return s.selfUID + 1, peerFound }
+	if res, _ := login(t, ts, code); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("another uid: %d, want 403", res.StatusCode)
+	}
+	s.peerUID = func(*http.Request) (int, peerVerdict) { return s.selfUID, peerFound }
+	if res, _ := login(t, ts, code); res.StatusCode != http.StatusOK {
+		t.Fatalf("the server's uid: %d, want 200", res.StatusCode)
+	}
+}
+
+func hasSessionCookie(res *http.Response) bool {
+	for _, c := range res.Cookies() {
+		if c.Name == cookieName && c.Value != "" {
+			return true
+		}
+	}
+	return false
+}

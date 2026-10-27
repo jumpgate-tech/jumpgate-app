@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -60,8 +61,9 @@ func loginDir() string {
 }
 
 // requestLoginLink asks a running server, over its socket, for a login code
-// and the redirect file that carries it.
-func requestLoginLink(ctx context.Context, info daemon.Info) (server.LoginLink, error) {
+// and the redirect file that carries it. A variable so tests can stand in
+// for the server.
+var requestLoginLink = func(ctx context.Context, info daemon.Info) (server.LoginLink, error) {
 	var link server.LoginLink
 	res, err := info.Client().Do(mustRequest(ctx, info, "/api/login-code", nil))
 	if err != nil {
@@ -156,10 +158,28 @@ func openWebAppWith(ctx context.Context, out io.Writer, open bool) error {
 	if err != nil {
 		return err
 	}
+	if info.System {
+		systemLoginHint(out, info.HTTPAddr, link)
+		return nil
+	}
 	mode := handOffOpen
 	if !open {
 		mode = handOffPrint
 	}
 	handOffLogin(out, info.HTTPAddr, link, mode)
 	return nil
+}
+
+// systemLoginHint prints a login link from the jumpgate service. The service
+// runs on a server, so no browser here is the operator's: the link is always
+// printed, with the port forward that reaches it from the operator's own
+// machine. The code is the asking uid's alone (D8).
+func systemLoginHint(out io.Writer, addr string, link server.LoginLink) {
+	port := addr
+	if _, p, err := net.SplitHostPort(addr); err == nil {
+		port = p
+	}
+	fmt.Fprintf(out, "on your own machine, forward the port first: ssh -L %s:127.0.0.1:%s <this server>\n", port, port)
+	// 60 seconds is the server's loginCodeTTL.
+	fmt.Fprintf(out, "then open this one-time link there within 60 seconds (`jumpgate open` makes a new one):\n  %s\n", link.URL)
 }

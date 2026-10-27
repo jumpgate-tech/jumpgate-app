@@ -365,7 +365,13 @@ func (s *Server) Handler() http.Handler {
 	// authenticated socket; the code, not the token, goes to the browser.
 	mux.HandleFunc("POST /api/login-code", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		link, err := s.NewLoginLink()
+		// Over the service's admin socket the code is the asking peer's
+		// (D8): only that uid's browser, or root's, may redeem it.
+		uid := -1
+		if c, ok := peerFrom(r.Context()); ok {
+			uid = c.UID
+		}
+		link, err := s.NewLoginLinkFor(uid)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
