@@ -62,7 +62,7 @@ func factsFromConfig(t config.Target) (pairingFacts, int) {
 	if err != nil {
 		return pairingFacts{}, failed("controller address in config.json: %v", err)
 	}
-	return pairingFacts{TargetID: t.ID, Controller: controller, LocalUID: os.Getuid(), Wire: t.Wire}, 0
+	return pairingFacts{TargetID: t.ID, Controller: controller, LocalUID: os.Getuid(), Wire: t.Wire, Scope: c.Controller.Scope}, 0
 }
 
 // factsFromServer is the jumpgate service's facts: its config is not this
@@ -114,11 +114,20 @@ func pairLocalForeground(ctx context.Context, out io.Writer, f pairingFacts) (st
 	addr, err := runBootstrap(ctx, bootstrap.Options{
 		Exec: ex, Local: true, LocalUID: f.LocalUID,
 		AgentBinary: agentbin.Reporting(func(line string) { fmt.Fprintf(out, "[upload] %s\n", line) }),
-		Controller:  f.Controller, ControllerLabel: label, Wire: f.Wire,
+		Controller:  f.Controller, ControllerLabel: label, Wire: f.Wire, Scope: localScope(f.Scope),
 		Event: func(step, line string) { fmt.Fprintf(out, "[%s] %s\n", step, line) },
 	})
 	if err != nil {
 		return unpaired("pairing failed: %v", err)
 	}
 	return addr.Hex(), 0
+}
+
+// localScope is the enroll scope for a controller of scope: a self-only
+// controller is enrolled on its own box for local use only (D11).
+func localScope(scope string) string {
+	if scope == "self" {
+		return "local"
+	}
+	return ""
 }

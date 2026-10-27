@@ -42,6 +42,7 @@ type Options struct {
 	ControllerLabel string
 	TransportKey    string // "ssh-ed25519 AAAA… comment"; empty with Local
 	Wire            *catalog.WireConfig
+	Scope           string // "local": enroll the controller for local use only (--self-only)
 	Event           func(step, line string)
 }
 
@@ -418,6 +419,9 @@ func (r runner) policyAndNode() error {
 	// any local uid opens the socket's mode to every local user.
 	if r.o.Local && r.o.LocalUID != 0 {
 		cmd += " --local-uid " + strconv.Itoa(r.o.LocalUID)
+	}
+	if r.o.Scope == "local" {
+		cmd += " --scope local"
 	}
 	if _, err := r.sh("policy", cmd); err != nil {
 		return err

@@ -55,6 +55,7 @@ func cmdAgent(args []string) int {
 	fset.String("attempt", "", "attempt (job-step)")
 	watchConfig := fset.String("config", "", "watch: the health watch's config.json")
 	controller := fset.String("controller", "", "setup: the controller address to enroll")
+	scope := fset.String("scope", "", "enroll: local admits the controller only from this box, never through the tunnel")
 	transportKey := fset.String("transport-key", "", "setup: the controller's tunnel key, an authorized_keys line")
 	if err := fset.Parse(args[1:]); err != nil {
 		return exitCode("usage")
@@ -77,7 +78,7 @@ func cmdAgent(args []string) int {
 	case "init":
 		err = agentInit(os.Stdout, *state, *conf, *resetReplay)
 	case "enroll":
-		err = agentEnroll(*conf, agentclient.DefaultSocket, *address, *tier, *label, *localUID)
+		err = agentEnroll(*conf, agentclient.DefaultSocket, *address, *tier, *label, *localUID, *scope)
 	case "run":
 		err = agentRun(*state, *conf)
 	case "watch":
@@ -205,7 +206,7 @@ func agentInit(out io.Writer, stateDir, configDir string, resetReplay bool) erro
 // nothing, including its tier. A running agent's socket is re-chmodded to the
 // new policy's mode (R23) so an enrolled local uid can connect at once; an
 // empty socketPath skips that.
-func agentEnroll(configDir, socketPath, address, tier, label string, localUID int) error {
+func agentEnroll(configDir, socketPath, address, tier, label string, localUID int, scope string) error {
 	a, err := eip712.ParseAddress(address)
 	if err != nil {
 		return err
@@ -213,12 +214,19 @@ func agentEnroll(configDir, socketPath, address, tier, label string, localUID in
 	if tier != string(agent.TierRoutine) && tier != string(agent.TierApproval) {
 		return fmt.Errorf("tier must be routine or approval")
 	}
+	if scope != "" && scope != agent.ScopeLocal {
+		return fmt.Errorf("scope must be local (or left out)")
+	}
 	path := filepath.Join(configDir, "policy.json")
 	p, err := agent.LoadPolicy(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	p.AddSigner(agent.SignerEntry{Address: a.Hex(), Tier: agent.Tier(tier), Label: label})
+	p.AddSigner(agent.SignerEntry{Address: a.Hex(), Tier: agent.Tier(tier), Label: label, Scope: scope})
+	// --scope local narrows an existing entry; leaving it out never widens.
+	if scope == agent.ScopeLocal {
+		p.NarrowScope(a.Hex())
+	}
 	if localUID >= 0 {
 		p.AddLocalUID(localUID)
 	}

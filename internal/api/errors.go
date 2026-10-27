@@ -226,7 +226,7 @@ var registry = map[Code]codeInfo{
 	CodeServiceNoLogin:      {"the jumpgate service reaches boxes only through their agents; pair the box, or use `jumpgate ssh NAME` for a shell", ExitFailed},
 	CodeInstalledMismatch:   {"the agent answering on this host is not the one `jumpgate agent setup` printed; check the address and the host", ExitSecurity},
 	CodeControllerExists:    {"this controller already has a key; run `jumpgate unlock`", ExitFailed},
-	CodeSelfOnly:            {"this controller is self-only: it drives only the machine it runs on, so it cannot pair or invite other boxes", ExitFailed},
+	CodeSelfOnly:            {"this controller was set up with --self-only and pairs only this machine; to pair other boxes, set up a controller without --self-only", ExitFailed},
 	CodeJobKindNotAllowed:   {"this server starts only the jobs it knows (for example `jumpgate migrate-names HOST`); other node operations have their own commands", ExitUsage},
 }
 
@@ -295,6 +295,7 @@ var rejectionHints = map[string]string{
 	intent.ReasonBadSignature:     "the box could not verify this controller's signature; re-pair it",
 	intent.ReasonUnauthorizedKind: "this controller is not enrolled on the box for that; pair it",
 	intent.ReasonUnknownKind:      "the box runs an older gate; run `jumpgate hosts upgrade NAME`",
+	intent.ReasonScopeLocal:       "this controller is enrolled on the box for local use only (--self-only); it cannot reach the box through a tunnel",
 	intent.ReasonStaleSeq:         "another process is using this controller key against this box",
 	intent.ReasonReplayedNonce:    "the same intent was sent twice; retry",
 	intent.ReasonBusy:             "another request from this controller is still running on the box",

@@ -7,6 +7,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/peercred"
 	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/testutil"
 )
@@ -91,6 +92,40 @@ func TestAuthoriseWithAnExtraApprovalTier(t *testing.T) {
 		t.Fatal("an approval question passed with only the controller's signature")
 	}
 	if err := p.Authorise(intent.KindJobDecide, ctl.Address(), []eip712.Address{ctl.Address(), wallet.Address()}, TierApproval); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func scopedPolicy() Policy {
+	return Policy{LocalUIDs: []int{991}, Signers: []SignerEntry{{Address: addr(1).Hex(), Tier: TierRoutine, Scope: ScopeLocal}}}
+}
+
+func TestCheckScopeLocalAdmitsRootAndLocalUIDs(t *testing.T) {
+	p := scopedPolicy()
+	for _, uid := range []int{0, 991} {
+		if err := p.CheckScope(addr(1), peercred.Cred{UID: uid}, true); err != nil {
+			t.Fatalf("uid %d: %v", uid, err)
+		}
+	}
+}
+
+func TestCheckScopeLocalRefusesTheTunnelUser(t *testing.T) {
+	var r *Reject
+	if err := scopedPolicy().CheckScope(addr(1), peercred.Cred{UID: 997, GIDs: []int{997}}, true); !errors.As(err, &r) || r.Code != intent.ReasonScopeLocal {
+		t.Fatalf("err = %v, want scope_local", err)
+	}
+}
+
+func TestCheckScopeLocalRefusesWithoutAPeer(t *testing.T) {
+	var r *Reject
+	if err := scopedPolicy().CheckScope(addr(1), peercred.Cred{}, false); !errors.As(err, &r) || r.Code != intent.ReasonScopeLocal {
+		t.Fatalf("err = %v, want scope_local", err)
+	}
+}
+
+func TestUnscopedSignerIgnoresThePeer(t *testing.T) {
+	p := Policy{Signers: []SignerEntry{{Address: addr(1).Hex(), Tier: TierRoutine}}}
+	if err := p.CheckScope(addr(1), peercred.Cred{UID: 997}, true); err != nil {
 		t.Fatal(err)
 	}
 }

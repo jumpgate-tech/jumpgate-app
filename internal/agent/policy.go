@@ -9,6 +9,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/peercred"
 )
 
 // Tier is how much a signer is trusted.
@@ -24,7 +25,14 @@ type SignerEntry struct {
 	Address string `json:"address"`
 	Tier    Tier   `json:"tier"`
 	Label   string `json:"label"`
+	// Scope is "" (any peer) or ScopeLocal: the signer is admitted only
+	// from a peer on the box itself (root or an enrolled local uid), never
+	// through the SSH tunnel (D11, a --self-only controller).
+	Scope string `json:"scope,omitempty"`
 }
+
+// ScopeLocal limits a signer to peers on the box itself.
+const ScopeLocal = "local"
 
 // Policy is /etc/jumpgate/policy.json: who may ask this box for what.
 type Policy struct {
@@ -101,6 +109,45 @@ func (p *Policy) AddSigner(e SignerEntry) bool {
 	}
 	p.Signers = append(p.Signers, e)
 	return true
+}
+
+// NarrowScope sets address's scope to ScopeLocal. It only ever narrows: no
+// call widens a scoped signer back to any peer. It reports a change.
+func (p *Policy) NarrowScope(address string) bool {
+	for i, s := range p.Signers {
+		if strings.EqualFold(s.Address, address) && s.Scope != ScopeLocal {
+			p.Signers[i].Scope = ScopeLocal
+			return true
+		}
+	}
+	return false
+}
+
+// CheckScope admits controller's request from peer. An unscoped signer is
+// admitted from any peer; a ScopeLocal one only from root or a uid in
+// LocalUIDs, which the tunnel user never is.
+func (p Policy) CheckScope(controller eip712.Address, peer peercred.Cred, havePeer bool) error {
+	scope := ""
+	for _, s := range p.Signers {
+		if parsed, err := eip712.ParseAddress(s.Address); err == nil && parsed == controller {
+			scope = s.Scope
+			break
+		}
+	}
+	if scope == "" {
+		return nil
+	}
+	if havePeer {
+		if peer.UID == 0 {
+			return nil
+		}
+		for _, u := range p.LocalUIDs {
+			if u == peer.UID {
+				return nil
+			}
+		}
+	}
+	return reject(intent.ReasonScopeLocal, fmt.Sprintf("controller %s is enrolled for local use only and cannot reach this box through a tunnel", controller.Hex()))
 }
 
 // AddLocalUID allows a local uid to use the socket.

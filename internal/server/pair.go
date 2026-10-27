@@ -55,6 +55,10 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	local := t.Mode == "local"
+	if !local && cfg.Controller != nil && cfg.Controller.Scope == "self" {
+		writeErrorDetail(w, http.StatusConflict, "this controller was set up with --self-only and pairs only this machine", "", api.CodeSelfOnly)
+		return
+	}
 	if !local && t.SSH == nil {
 		writeError(w, http.StatusBadRequest, "this target has no SSH address")
 		return
@@ -170,6 +174,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 			Exec: priv, Local: local, LocalUID: os.Getuid(),
 			AgentBinary: agentbin.Reporting(func(line string) { send(api.PairEvent{Step: "upload", Line: line}) }),
 			Controller:  sgn.Address(), ControllerLabel: controllerLabel(), TransportKey: transportKey, Wire: t.Wire,
+			Scope: enrollScope(cfg),
 			Event: func(step, line string) { send(api.PairEvent{Step: step, Line: line}) },
 		})
 		if err != nil {
@@ -294,4 +299,13 @@ func controllerLabel() string {
 		return "controller"
 	}
 	return h
+}
+
+// enrollScope is how a box enrolls this controller: a self-only controller
+// is admitted on its own machine for local use only (D11).
+func enrollScope(cfg config.Config) string {
+	if cfg.Controller != nil && cfg.Controller.Scope == "self" {
+		return "local"
+	}
+	return ""
 }

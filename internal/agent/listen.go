@@ -110,6 +110,9 @@ func peerAllowed(p Policy, uid int, gids []int, jumpgateGID int) bool {
 
 type peerKey struct{}
 
+// credKey holds the connection's peer credentials, for CheckScope.
+type credKey struct{}
+
 // peerGate decides whether a connection's peer may use the socket. It is a
 // variable so a test can stand in for a second uid.
 var peerGate = func(a *Agent, c net.Conn, jumpgateGID int) bool {
@@ -187,7 +190,11 @@ func Serve(ctx context.Context, a *Agent, ln net.Listener) error {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
-			return context.WithValue(ctx, peerKey{}, peerGate(a, c, gid))
+			ctx = context.WithValue(ctx, peerKey{}, peerGate(a, c, gid))
+			if cred, err := peercred.Of(c); err == nil {
+				ctx = context.WithValue(ctx, credKey{}, cred)
+			}
+			return ctx
 		},
 	}
 	go func() {

@@ -15,6 +15,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/jobs"
+	"github.com/valve-tech/jumpgate/internal/peercred"
 	"github.com/valve-tech/jumpgate/internal/signer"
 )
 
@@ -138,6 +139,10 @@ func (a *Agent) Handle(ctx context.Context, env intent.Envelope) intent.ReceiptE
 		return a.answerReject(i, reqHash, reject(intent.ReasonUnauthorizedKind, err.Error()))
 	}
 	if err := policy.Authorise(i.Kind, i.Controller, signers); err != nil {
+		return a.answerReject(i, reqHash, asReject(err))
+	}
+	peer, havePeer := ctx.Value(credKey{}).(peercred.Cred)
+	if err := policy.CheckScope(i.Controller, peer, havePeer); err != nil {
 		return a.answerReject(i, reqHash, asReject(err))
 	}
 

@@ -34,6 +34,7 @@ const (
 	ReasonValidation       = "validation"
 	ReasonNotSetUp         = "not_set_up"
 	ReasonReplayState      = "replay_state"
+	ReasonScopeLocal       = "scope_local" // a local-only controller arrived through the tunnel
 )
 
 // Rejection is the result of a rejected intent. LastSeq lets a controller
