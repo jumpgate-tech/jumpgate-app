@@ -109,7 +109,7 @@ func (v *Vault) AddRecovery() (string, error) {
 // hand:
 //
 //   - the recovery slot: its code is shown once and never stored, so it
-//     cannot be re-wrapped; `vault recovery` makes a new one;
+//     cannot be re-wrapped; `vault add-recovery` makes a new one;
 //   - systemd-creds and keystore slots: their keys live outside this
 //     process; `vault seal` (or the keystore setup) adds them again.
 //
