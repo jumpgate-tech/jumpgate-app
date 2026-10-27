@@ -1,0 +1,11 @@
+# scripts/e2e/Dockerfile.fedora — a systemd Fedora box for the dnf repo e2e
+# (scripts/e2e-repo.sh): the package's postinst creates its users only when
+# systemd is running.
+FROM fedora:41
+ENV container=docker
+# systemd-resolved would replace Docker's DNS, and the repo host is a
+# container alias only Docker's DNS knows.
+RUN dnf install -y systemd procps-ng curl && dnf clean all \
+    && systemctl mask systemd-resolved.service
+STOPSIGNAL SIGRTMIN+3
+CMD ["/bin/sh", "-c", "mount --make-rshared / && exec /usr/lib/systemd/systemd"]
