@@ -41,11 +41,18 @@ func newHelp(a *App) *helpModal {
 }
 
 // offers reports whether b can act now. Restart acts only on a skewed server
-// when cmd/jumpgate gave a way to restart it (spec D30); every other global
-// key always can.
+// when cmd/jumpgate gave a way to restart it (spec D30). The vault keys always
+// act but are listed only when relevant; every other global key always can.
 func (a *App) offers(b key.Binding) bool {
-	if b.Help() == globalKeys.Restart.Help() {
+	switch b.Help() {
+	case globalKeys.Restart.Help():
 		return a.canRestart()
+	case globalKeys.Unlock.Help():
+		// The vault keys are listed when they are the news, so the help
+		// still fits 80x24; both keys work at any time.
+		return a.fleetHas && a.fleet.Locked
+	case globalKeys.Lock.Help():
+		return a.vaultOpen && !(a.fleetHas && a.fleet.Locked)
 	}
 	return b.Enabled()
 }

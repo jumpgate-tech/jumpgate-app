@@ -52,6 +52,10 @@ type Backend interface {
 	ListModules(ctx context.Context, target string) (api.ModulesView, error)
 	SetModule(ctx context.Context, target, module string, req api.SetModule) (api.SetModuleResult, error)
 	WatchSetup(ctx context.Context, target string) (<-chan api.SetupEvent, error)
+	Vault(ctx context.Context) (api.VaultView, error)
+	// Unlock clears passphrase before it returns.
+	Unlock(ctx context.Context, passphrase []byte) (api.VaultView, error)
+	Lock(ctx context.Context) (api.VaultView, error)
 }
 
 var _ Backend = (*apiclient.Client)(nil)

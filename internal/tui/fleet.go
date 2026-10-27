@@ -543,6 +543,15 @@ func (s *fleetScreen) view(a *App, w, h int) string {
 		}
 		cells := make([]string, len(cols))
 		for j, c := range cols {
+			if j > 0 && rowLocked(rows[i]) {
+				// The rest of a locked row is one note across its columns.
+				rest := len(cols) - 1
+				for _, c := range cols[1:] {
+					rest += c.Width
+				}
+				cells = append(cells[:1], a.th.Warn.Render(truncate("locked: unlock to read", rest-1, a.gl.Ellipsis)))
+				break
+			}
 			cells[j] = pad(truncate(s.cell(a, rows[i], c.ID), c.Width, a.gl.Ellipsis), c.Width)
 		}
 		out = append(out, mark+strings.Join(cells, " "))

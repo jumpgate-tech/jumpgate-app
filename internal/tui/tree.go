@@ -132,7 +132,7 @@ func (a *App) boxState(r api.FleetRow) string {
 	switch {
 	case w == "down" && r.LastSeen != nil:
 		return "down " + formatAge(a.now().Sub(*r.LastSeen))
-	case w == "HOSTKEY" || r.Status == nil || r.Status.Overall == "" || r.Status.Overall == api.SyncUnavailable:
+	case w == "HOSTKEY" || w == "locked" || r.Status == nil || r.Status.Overall == "" || r.Status.Overall == api.SyncUnavailable:
 		if r.Status == nil && w == "gate" {
 			return "n/a"
 		}
