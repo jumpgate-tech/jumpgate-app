@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The scrypt test vector of the Web3 Secret Storage Definition
@@ -21,6 +22,38 @@ const v3Vector = `{
   "id": "3198bc9c-6672-5ab3-d995-4942343ae5b6",
   "version": 3
 }`
+
+// scrypt needs about 128*N*r bytes: a crafted file asking for more than
+// N=2^18 at r=8 (256 MiB), or with malformed parameters, is refused before
+// any derivation, quickly.
+func TestKeystoreV3CapsScryptMemory(t *testing.T) {
+	cases := map[string][2]string{
+		"n=2^19 r=8":  {`"n": 262144, "r": 1`, `"n": 524288, "r": 8`},
+		"n=2^18 r=16": {`"r": 1`, `"r": 16`},
+		"n=2^30 r=1":  {`"n": 262144`, `"n": 1073741824`},
+		"n not pow2":  {`"n": 262144`, `"n": 262143`},
+		"n=1":         {`"n": 262144`, `"n": 1`},
+		"r=0":         {`"r": 1`, `"r": 0`},
+		"negative r":  {`"r": 1`, `"r": -8`},
+		"p=0":         {`"p": 8`, `"p": 0`},
+		"p absurd":    {`"p": 8`, `"p": 1000000`},
+		"dklen 64":    {`"dklen": 32`, `"dklen": 64`},
+	}
+	for name, c := range cases {
+		f := strings.Replace(v3Vector, c[0], c[1], 1)
+		if f == v3Vector {
+			t.Fatalf("%s: the vector has no %s", name, c[0])
+		}
+		start := time.Now()
+		_, err := DecryptKeystoreV3([]byte(f), []byte("x"))
+		if err == nil || !strings.Contains(err.Error(), "out of bounds") {
+			t.Errorf("%s: %v", name, err)
+		}
+		if d := time.Since(start); d > 100*time.Millisecond {
+			t.Errorf("%s: took %v", name, d)
+		}
+	}
+}
 
 func TestKeystoreV3KnownVector(t *testing.T) {
 	k, err := DecryptKeystoreV3([]byte(v3Vector), []byte("testpassword"))

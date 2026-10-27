@@ -17,11 +17,21 @@ import (
 )
 
 // Web3 Secret Storage (keystore v3) limits on what DecryptKeystoreV3 will
-// run: a hostile file must not make scrypt exhaust memory.
+// run, checked before any derivation: scrypt takes about 128*N*r bytes, so
+// N*r is capped at maxScryptNR (2^18 at r=8, geth's standard cost: 256 MiB),
+// and p, which multiplies the time, at maxScryptP.
 const (
-	maxScryptN  = 1 << 20
-	maxScryptRP = 64
+	maxScryptN  = 1 << 18
+	maxScryptNR = 1 << 18 * 8
+	maxScryptP  = 16
 )
+
+// scryptParamsOK reports whether n, r, p, dklen are within those limits: n a
+// power of two above 1, r and p at least 1, dklen 32.
+func scryptParamsOK(n, r, p, dklen int) bool {
+	return dklen == 32 && n > 1 && n&(n-1) == 0 && n <= maxScryptNR &&
+		r >= 1 && r <= maxScryptNR/n && p >= 1 && p <= maxScryptP
+}
 
 type v3CipherParams struct {
 	IV string `json:"iv"`
@@ -136,8 +146,7 @@ func DecryptKeystoreV3(b, passphrase []byte) (*Key, error) {
 	if err := json.Unmarshal(c.KDFParams, &kp); err != nil {
 		return nil, fmt.Errorf("signer: keystore kdfparams: %w", err)
 	}
-	if kp.DKLen != 32 || kp.N < 2 || kp.N > maxScryptN || kp.N&(kp.N-1) != 0 ||
-		kp.R < 1 || kp.P < 1 || kp.R*kp.P > maxScryptRP {
+	if !scryptParamsOK(kp.N, kp.R, kp.P, kp.DKLen) {
 		return nil, fmt.Errorf("signer: keystore scrypt parameters n=%d r=%d p=%d dklen=%d are out of bounds", kp.N, kp.R, kp.P, kp.DKLen)
 	}
 	salt, err1 := hex.DecodeString(kp.Salt)
