@@ -91,7 +91,7 @@ func vaultFlags(name string) *flag.FlagSet {
 // not nil, receives a copy of the passphrase, which the caller clears.
 func createVaultAt(path string, fromStdin bool, keep *[]byte) (*vault.Vault, error) {
 	fmt.Println("a lost passphrase cannot be recovered: jumpgate keeps no copy")
-	pass, err := readPassphrase("new vault passphrase: ", fromStdin, !fromStdin)
+	pass, err := readNewPassphrase("new vault passphrase: ", fromStdin, !fromStdin)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +145,7 @@ func vaultInit(args []string) int {
 	}
 	defer v.Lock()
 	fmt.Printf("created %s\n", path)
+	fmt.Println("next, run `jumpgate vault add-recovery` for a recovery code that unlocks the vault if the passphrase is lost")
 	if *keystore == "auto" {
 		switch store := vaultKeystoreStore(); store {
 		case signer.StoreKeychain, signer.StoreWinCred:
@@ -490,7 +491,7 @@ func vaultRekdf(args []string) int {
 	defer v.Lock()
 	var next []byte
 	if *newPass {
-		if next, err = readPassphrase("new vault passphrase: ", false, true); err != nil {
+		if next, err = readNewPassphrase("new vault passphrase: ", false, true); err != nil {
 			clear(keep)
 			return failed("vault rekdf: %v", err)
 		}

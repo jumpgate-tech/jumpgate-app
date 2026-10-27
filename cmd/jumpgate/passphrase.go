@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"unicode/utf8"
 )
 
 // maxPassphrase bounds a passphrase line, from a terminal or from stdin.
@@ -140,6 +141,24 @@ func readLine(r io.Reader) ([]byte, error) {
 		return nil, fmt.Errorf("passphrase too long (over %d bytes)", maxPassphrase)
 	}
 	return buf, nil
+}
+
+// minNewPassphrase is the fewest characters (runes) a new vault passphrase
+// may have. An existing vault unlocks with whatever passphrase it has.
+const minNewPassphrase = 12
+
+// readNewPassphrase is readPassphrase for a passphrase being chosen: one
+// under minNewPassphrase characters is refused before anything is created.
+func readNewPassphrase(prompt string, fromStdin, confirm bool) ([]byte, error) {
+	b, err := readPassphrase(prompt, fromStdin, confirm)
+	if err != nil {
+		return nil, err
+	}
+	if n := utf8.RuneCount(b); n < minNewPassphrase {
+		clear(b)
+		return nil, fmt.Errorf("the passphrase has %d characters; a new vault passphrase needs at least %d", n, minNewPassphrase)
+	}
+	return b, nil
 }
 
 func checkPassphrase(b []byte, err error) ([]byte, error) {

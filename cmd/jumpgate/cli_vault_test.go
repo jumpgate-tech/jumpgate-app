@@ -314,6 +314,64 @@ func TestVaultRekdfRefusesBelowTheFloor(t *testing.T) {
 	}
 }
 
+// A new vault passphrase needs 12 characters, counted as runes; nothing is
+// created with a shorter one. An existing vault unlocks with any length.
+func TestNewPassphraseNeedsTwelveCharacters(t *testing.T) {
+	testutil.Home(t)
+	_, stderr := captureStdio(t)
+	p, _ := secrets.VaultPath()
+	withStdin(t, "short pass\n")
+	if code := cmdVault([]string{"init", "--stdin", "--keystore", "none"}); code == 0 {
+		t.Fatal("init took a short passphrase")
+	}
+	if !strings.Contains(stderr(), "at least 12") {
+		t.Fatalf("stderr %q", stderr())
+	}
+	if vaultExists(p) {
+		t.Fatal("a vault was created")
+	}
+	useFakeTTY(t, "short", "short")
+	if code := keysInit([]string{"--store", "vault"}); code == 0 || vaultExists(p) {
+		t.Fatalf("keys init: exit %d, vault %v", code, vaultExists(p))
+	}
+	// Eleven runes but more than 12 bytes is still too short.
+	withStdin(t, "ééééééééééé\n")
+	if code := cmdVault([]string{"init", "--stdin", "--keystore", "none"}); code == 0 || vaultExists(p) {
+		t.Fatal("init took 11 runes")
+	}
+	stdout, _ := captureStdio(t)
+	withStdin(t, "twelve chars\n")
+	if code := cmdVault([]string{"init", "--stdin", "--keystore", "none"}); code != 0 {
+		t.Fatalf("12 runes: exit %d: %s", code, stderr())
+	}
+	if !strings.Contains(stdout(), "jumpgate vault add-recovery") {
+		t.Fatalf("no add-recovery advice: %q", stdout())
+	}
+	useFakeTTY(t, "twelve chars", "short", "short")
+	if code := cmdVault([]string{"rekdf", "--new-passphrase"}); code == 0 {
+		t.Fatal("rekdf took a short new passphrase")
+	}
+	openAt(t, p, []byte("twelve chars")).Lock()
+}
+
+func TestExistingShortPassphraseStillUnlocks(t *testing.T) {
+	testutil.Home(t)
+	_, stderr := captureStdio(t)
+	p, _ := secrets.VaultPath()
+	if err := fsperm.MkdirPrivate(filepath.Dir(p)); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Create(p, []byte("old"), vault.DefaultParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.Lock()
+	useFakeTTY(t, "old")
+	if code := cmdVault([]string{"rekdf", "--time", "4"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr())
+	}
+}
+
 func TestVaultRekdfKeepsTheEntries(t *testing.T) {
 	testutil.Home(t)
 	_, stderr := captureStdio(t)

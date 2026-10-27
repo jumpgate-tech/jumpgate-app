@@ -169,7 +169,7 @@ func unlockVault(create bool) (*vault.Vault, error) {
 			return nil, fmt.Errorf("no vault at %s", path)
 		}
 		fmt.Fprintln(os.Stderr, "a lost passphrase cannot be recovered: jumpgate keeps no copy")
-		pass, err := readPassphrase("new vault passphrase: ", false, true)
+		pass, err := readNewPassphrase("new vault passphrase: ", false, true)
 		if err != nil {
 			return nil, err
 		}
