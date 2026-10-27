@@ -476,6 +476,9 @@ func (v *Vault) writeVerified(raw []byte, want body) error {
 			os.Remove(name)
 		}
 	}()
+	if err := keepFileOwner(tmp, v.seen.fi); err != nil {
+		return err
+	}
 	if _, err := tmp.Write(raw); err != nil {
 		return fmt.Errorf("vault: write: %w", err)
 	}
