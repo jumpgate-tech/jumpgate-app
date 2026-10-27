@@ -105,6 +105,7 @@ func hostsAdd(args []string) int {
 
 	ctx := context.Background()
 	target := api.AddTarget{ID: name, Mode: "local"}
+	var login executor.SSHConfig // the operator's own login, with their key
 	if !*local {
 		keyPath := *key
 		if keyPath != "" {
@@ -137,6 +138,7 @@ func hostsAdd(args []string) int {
 		if err != nil {
 			return failed("%v", err)
 		}
+		login = cfg
 		view := sshViewOf(cfg)
 		target = api.AddTarget{ID: name, Mode: "ssh", SSH: &view}
 	}
@@ -148,6 +150,17 @@ func hostsAdd(args []string) int {
 		return failed("%v", err)
 	}
 	apiclient.WarnSkew(os.Stderr, c)
+	system := serverIsSystem(c)
+	if system && target.SSH != nil {
+		// The service never reads a key file the operator names; the key is
+		// used only here, by this process.
+		if target.SSH.Jump != nil {
+			return reportServerErrorFrom(os.Stderr, "add "+name, c.Info(), api.Error{
+				Message: "a jumpgate service cannot pair a box behind a jump host yet (" + string(api.CodeSSHJumpUnsupported) + ")",
+				Code:    api.CodeSSHJumpUnsupported})
+		}
+		target.SSH.KeyPath = ""
+	}
 	if target.SSH != nil {
 		if code := confirmHostKeys(ctx, c, *target.SSH, newConsentReader(os.Stdin), os.Stdout, os.Stderr); code != 0 {
 			return code
@@ -167,9 +180,17 @@ func hostsAdd(args []string) int {
 		// server only verifies it over the tunnel and records it.
 		return streamPair(c, name, api.PairRequest{Installed: *installedArg}, false)
 	}
+	if system && !*local {
+		// Push: bootstrap runs over the operator's own SSH login, here.
+		addr, code := pairRemoteForeground(ctx, os.Stdout, c, name, login, *sudo)
+		if code != 0 {
+			return code
+		}
+		return streamPair(c, name, api.PairRequest{Installed: addr}, false)
+	}
 	// Against the jumpgate service this always runs here, as root too: the
 	// service runs as its own user and never as root.
-	if system := serverIsSystem(c); *local && (system || geteuid() != 0) {
+	if *local && (system || geteuid() != 0) {
 		var (
 			f    pairingFacts
 			code int
