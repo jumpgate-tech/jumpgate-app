@@ -33,6 +33,7 @@ var commandHelp = []struct{ name, text string }{
 	{"home", "the plain status screen (bare jumpgate opens the terminal UI)"},
 	{"tui", "the terminal UI"},
 	{"serve", "run the server in the foreground"},
+	{"setup install-service [--bin PATH]", "install jumpgate.service on this Linux server (as root)"},
 	{"relay", "run only the metered RPC data plane, in the foreground"},
 	{"stop", "stop the background server"},
 	{"agent watch --config FILE", "the box's health watch (its gate's watch module runs it)"},

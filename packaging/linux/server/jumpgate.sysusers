@@ -1,0 +1,2 @@
+g jumpgate-admin -
+u jumpgate-ctl - "jumpgate controller" /var/lib/jumpgate-ctl /usr/sbin/nologin
