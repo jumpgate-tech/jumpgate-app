@@ -11,10 +11,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/valve-tech/jumpgate/internal/apiclient"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
+	"github.com/valve-tech/jumpgate/internal/fsatomic"
 	"github.com/valve-tech/jumpgate/internal/fsperm"
 	"github.com/valve-tech/jumpgate/internal/secrets"
 	"github.com/valve-tech/jumpgate/internal/signer"
@@ -268,11 +270,18 @@ func writeNewPrivate(path string, data []byte) error {
 	return werr
 }
 
+// vaultRestore is `jumpgate vault restore [--replace] [--stdin] FILE`. FILE
+// is checked as a vault (integrity and header) before anything at the vault
+// path is touched. With --replace, FILE must also unlock with a passphrase
+// (a wrong one changes nothing), and the vault it replaces is first kept as
+// a private vault.bak-<UTC time> next to it.
 func vaultRestore(args []string) int {
+	const use = "usage: jumpgate vault restore [--replace] [--stdin] FILE"
 	fset := vaultFlags("restore")
-	replace := fset.Bool("replace", false, "replace the vault that is there")
+	replace := fset.Bool("replace", false, "replace the vault that is there; FILE must unlock with its passphrase, and the old vault is kept as vault.bak-<UTC time>")
+	fromStdin := fset.Bool("stdin", false, "with --replace, read FILE's passphrase as one line of standard input")
 	if err := fset.Parse(args); err != nil || fset.NArg() != 1 {
-		return usage("usage: jumpgate vault restore [--replace] FILE")
+		return usage(use)
 	}
 	src := fset.Arg(0)
 	if _, running, err := findServer(context.Background()); err != nil {
@@ -284,14 +293,23 @@ func vaultRestore(args []string) int {
 	if err != nil {
 		return failed("%v", err)
 	}
-	if vaultExists(path) && !*replace {
+	exists := vaultExists(path)
+	if exists && !*replace {
 		return failed("a vault already exists at %s; add --replace to replace it", path)
 	}
-	// FILE is checked as a vault (integrity and header) before anything at
-	// path is touched.
 	raw, err := vault.ReadFile(src)
 	if err != nil {
 		return vaultFail("vault restore: "+src, err)
+	}
+	if exists {
+		if err := verifyRestoreCandidate(src, *fromStdin); err != nil {
+			return vaultFail("vault restore: "+src, err)
+		}
+		bak, err := backupBeforeReplace(path)
+		if err != nil {
+			return vaultFail("vault restore: keep the current vault", err)
+		}
+		fmt.Printf("kept the current vault as %s\n", bak)
 	}
 	if err := fsperm.MkdirPrivate(filepath.Dir(path)); err != nil {
 		return failed("%v", err)
@@ -305,6 +323,51 @@ func vaultRestore(args []string) int {
 	}
 	fmt.Printf("restored %s from %s\n", path, src)
 	return 0
+}
+
+// verifyRestoreCandidate unlocks the vault at src with a passphrase, after
+// core dumps are off, and locks it again: a replacement nobody can open is
+// refused.
+func verifyRestoreCandidate(src string, fromStdin bool) error {
+	v, err := vault.Open(src)
+	if err != nil {
+		return err
+	}
+	if err := noCoreDumps(); err != nil {
+		return err
+	}
+	pass, err := readPassphrase("passphrase of "+filepath.Base(src)+": ", fromStdin, false)
+	if err != nil {
+		return err
+	}
+	if _, err := unlockOffline(v, pass); err != nil { // clears pass
+		return err
+	}
+	v.Lock()
+	return nil
+}
+
+// restoreNow is the clock the backup name uses; a test seam.
+var restoreNow = time.Now
+
+// backupBeforeReplace copies the vault at path, read with the same checks
+// as Open, to a new private vault.bak-<UTC time> beside it, under the vault
+// lock. An existing file at that name is refused, never followed.
+func backupBeforeReplace(path string) (string, error) {
+	bak := path + ".bak-" + restoreNow().UTC().Format("20060102T150405Z")
+	unlock, err := vault.LockPath(path)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	raw, err := vault.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if err := writeNewPrivate(bak, raw); err != nil {
+		return "", err
+	}
+	return bak, fsatomic.SyncDir(filepath.Dir(path))
 }
 
 // openVaultOffline opens the vault and unlocks it in this process with a

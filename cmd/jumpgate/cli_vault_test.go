@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
@@ -196,6 +197,7 @@ func TestVaultRestoreChecksTheFileFirst(t *testing.T) {
 	if code := cmdVault([]string{"restore", good}); code != 1 {
 		t.Fatalf("existing vault without --replace: exit %d", code)
 	}
+	useFakeTTY(t, vaulttest.Passphrase)
 	if code := cmdVault([]string{"restore", "--replace", good}); code != 0 {
 		t.Fatalf("restore: exit %d: %s", code, stderr())
 	}
@@ -203,6 +205,73 @@ func TestVaultRestoreChecksTheFileFirst(t *testing.T) {
 	now, _ := os.ReadFile(p)
 	if !bytes.Equal(g, now) {
 		t.Fatal("the restored vault is not FILE")
+	}
+}
+
+// A replacement that does not unlock is refused and changes nothing.
+func TestVaultRestoreReplaceRefusesAWrongPassphrase(t *testing.T) {
+	testutil.Home(t)
+	_, stderr := captureStdio(t)
+	noServer(t, false)
+	p := placeVault(t)
+	before, _ := os.ReadFile(p)
+	good, _ := vaulttest.Path(t)
+	withStdin(t, "not the passphrase at all\n")
+	if code := cmdVault([]string{"restore", "--replace", "--stdin", good}); code == 0 {
+		t.Fatal("restored with a wrong passphrase")
+	}
+	after, _ := os.ReadFile(p)
+	if !bytes.Equal(before, after) {
+		t.Fatal("the current vault changed")
+	}
+	if m, _ := filepath.Glob(p + ".bak-*"); len(m) != 0 {
+		t.Fatalf("backup written: %v (%s)", m, stderr())
+	}
+}
+
+// Before replacing, the old vault is kept as a private byte copy, and an
+// existing backup name is refused.
+func TestVaultRestoreReplaceKeepsTheOldVault(t *testing.T) {
+	testutil.Home(t)
+	_, stderr := captureStdio(t)
+	noServer(t, false)
+	p := placeVault(t)
+	openAt(t, p, []byte(vaulttest.Passphrase)).Lock()
+	old, _ := os.ReadFile(p)
+	// A different vault file with the same passphrase.
+	v := openAt(t, p, []byte(vaulttest.Passphrase))
+	if err := v.Put("x", []byte("y"), "test"); err != nil {
+		t.Fatal(err)
+	}
+	v.Lock()
+	cand := filepath.Join(t.TempDir(), "cand")
+	nb, _ := os.ReadFile(p)
+	if err := fsperm.WriteFilePrivate(cand, nb); err != nil {
+		t.Fatal(err)
+	}
+	if err := fsperm.WriteFilePrivate(p, old); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	oldNow := restoreNow
+	restoreNow = func() time.Time { return when }
+	t.Cleanup(func() { restoreNow = oldNow })
+	withStdin(t, vaulttest.Passphrase+"\n")
+	if code := cmdVault([]string{"restore", "--replace", "--stdin", cand}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr())
+	}
+	bak := p + ".bak-20261027T120000Z"
+	b, err := os.ReadFile(bak)
+	if err != nil || !bytes.Equal(b, old) {
+		t.Fatalf("backup %v, equal %v", err, bytes.Equal(b, old))
+	}
+	testutil.AssertPrivate(t, bak)
+	if now, _ := os.ReadFile(p); !bytes.Equal(now, nb) {
+		t.Fatal("the restored vault is not FILE")
+	}
+	withStdin(t, vaulttest.Passphrase+"\n")
+	if code := cmdVault([]string{"restore", "--replace", "--stdin", cand}); code == 0 {
+		t.Fatal("overwrote an existing backup")
 	}
 }
 

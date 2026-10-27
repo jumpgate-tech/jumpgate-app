@@ -15,7 +15,7 @@ var commandHelp = []struct{ name, text string }{
 	{"keys show", "print this controller's address"},
 	{"unlock", "unlock the vault so the server can sign"},
 	{"lock", "drop the vault key from the server's memory"},
-	{"vault init|migrate|backup FILE|restore FILE", "create the vault, move plain secrets into it, copy it out and back"},
+	{"vault init|migrate|backup FILE|restore FILE", "create the vault, move plain secrets into it, copy it out and back (restore --replace asks FILE's passphrase and keeps the old vault as vault.bak-<time>)"},
 	{"vault add-recovery|rekdf", "add a recovery code; raise the passphrase's argon2id cost"},
 	{"hosts add NAME --ssh USER@HOST", "pair a Linux box over SSH (--local pairs this Linux machine)"},
 	{"hosts list", "list machines and their pairing"},
