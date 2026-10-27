@@ -27,7 +27,8 @@ const hostKeyNote = "--allow-host-key seals with the host key instead, which onl
 var runSystemdCreds = func(ctx context.Context, stdin []byte, args ...string) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	c := exec.CommandContext(ctx, "systemd-creds", args...)
+	name, argv := systemdCredsCommand(geteuid(), args)
+	c := exec.CommandContext(ctx, name, argv...)
 	c.Env = secretenv.Environ()
 	c.Stdin = bytes.NewReader(stdin)
 	var errb bytes.Buffer
@@ -36,6 +37,18 @@ var runSystemdCreds = func(ctx context.Context, stdin []byte, args ...string) er
 		return fmt.Errorf("systemd-creds %s: %w: %s", args[0], err, safe(strings.TrimSpace(errb.String())))
 	}
 	return nil
+}
+
+// systemdCredsCommand is the command line for systemd-creds args. Only root
+// reads the host credential secret (and the TPM), so a vault owner who is
+// not root encrypts through sudo. That root step gets the key on stdin
+// only, and writes only the credential: the vault is still written by its
+// owner, in this process, never by root.
+func systemdCredsCommand(euid int, args []string) (string, []string) {
+	if euid != 0 && len(args) > 0 && args[0] == "encrypt" {
+		return "sudo", append([]string{"--", "systemd-creds"}, args...)
+	}
+	return "systemd-creds", args
 }
 
 // vaultSeal is `jumpgate vault seal (--tpm2 | --allow-host-key) [--out
@@ -67,7 +80,7 @@ func vaultSeal(args []string) int {
 	if err := v.CheckWrite(); err != nil {
 		code := vaultFail("vault seal", err)
 		if os.Geteuid() == 0 {
-			fmt.Fprintf(os.Stderr, "  run `jumpgate vault seal` as the vault's owner. Writing %s needs root, so give --out a path that user can write, then install the file there as root\n", credstoreOut)
+			fmt.Fprintln(os.Stderr, "  run `jumpgate vault seal` as the vault's owner; it runs only systemd-creds encrypt as root, through sudo")
 		}
 		return code
 	}
@@ -98,7 +111,10 @@ func vaultSeal(args []string) int {
 		return failed("vault seal: %v", err)
 	}
 	if err := v.AddKEKSlot(vault.Slot{Kind: vault.SlotSystemdCreds, Cred: vaultCredName}, kek); err != nil { // clears kek
-		os.Remove(*out) // it opens nothing without the slot
+		// It opens nothing without the slot; one root wrote is root's to remove.
+		if rerr := os.Remove(*out); rerr != nil && !os.IsNotExist(rerr) {
+			fmt.Fprintf(os.Stderr, "  %s opens nothing without the slot; remove it as root\n", *out)
+		}
 		return vaultFail("vault seal", err)
 	}
 	fmt.Printf("sealed the vault key into %s (%s); a unit with LoadCredentialEncrypted=%s unlocks the vault at start\n", *out, mode, vaultCredName)

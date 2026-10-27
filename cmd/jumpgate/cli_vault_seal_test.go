@@ -101,6 +101,22 @@ func TestSealPipesTheKEKOnStdin(t *testing.T) {
 	v.Lock()
 }
 
+// Only root reads the host credential secret, so a vault owner who is not
+// root encrypts through sudo: the KEK still goes on stdin, the vault is
+// written by its owner, and root writes only the credential.
+func TestSystemdCredsEncryptRunsAsRoot(t *testing.T) {
+	enc := []string{"encrypt", "--with-key=host", "--name=jumpgate-vault-key", "-", "/etc/credstore.encrypted/jumpgate-vault-key"}
+	if name, args := systemdCredsCommand(1000, enc); name != "sudo" || !slices.Equal(args, append([]string{"--", "systemd-creds"}, enc...)) {
+		t.Fatalf("non-root: %s %q", name, args)
+	}
+	if name, args := systemdCredsCommand(0, enc); name != "systemd-creds" || !slices.Equal(args, enc) {
+		t.Fatalf("root: %s %q", name, args)
+	}
+	if name, _ := systemdCredsCommand(1000, []string{"has-tpm2"}); name != "systemd-creds" {
+		t.Fatalf("has-tpm2 needs no root: %s", name)
+	}
+}
+
 func TestSealTPM2WithoutATPMRefuses(t *testing.T) {
 	testutil.Home(t)
 	_, stderr := captureStdio(t)
