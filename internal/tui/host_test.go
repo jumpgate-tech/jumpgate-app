@@ -314,3 +314,24 @@ func TestHostDiskCallsRunOnTheHostContext(t *testing.T) {
 		t.Fatal("closing the host left a disk call's context live")
 	}
 }
+
+// D2: the Security tab says when more than one controller can sign for the
+// box, from a signed agent.info round trip.
+func TestSecurityTabShowsTrustedByWhenMoreThanOne(t *testing.T) {
+	for _, n := range []int{2, 1} {
+		f := tuitest.NewFake()
+		f.FirewallV["box"] = []api.CheckItem{{ID: "p2p", Title: "P2P port open", Status: "pass"}}
+		f.CheckV = api.AgentCheck{Controllers: n}
+		a := tab(t, openTestHost(t, f, "unicode"), 3)
+		fr := tuitest.Frame(a)
+		if !f.Called("CheckAgent box") {
+			t.Fatalf("%d: the Security tab never checked the gate", n)
+		}
+		if has := strings.Contains(fr, "trusted by 2 controllers"); has != (n == 2) {
+			t.Fatalf("controllers %d:\n%s", n, fr)
+		}
+		if n == 1 && strings.Contains(fr, "trusted by") {
+			t.Fatalf("one controller shows a trusted-by line:\n%s", fr)
+		}
+	}
+}

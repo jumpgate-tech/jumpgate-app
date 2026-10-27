@@ -92,6 +92,7 @@ type AgentInfo struct {
 	LastSeq      uint64   `json:"lastSeq"` // for the asking controller
 	PlanVersions []string `json:"planVersions"`
 	Signers      int      `json:"signers"`
+	Controllers  int      `json:"controllers"` // routine signers in the policy: controllers that can drive the box
 	SetUp        bool     `json:"setUp"`
 	ChainID      int      `json:"chainId,omitempty"` // the box's node; 0 before setup
 	Names        string   `json:"names,omitempty"`   // catalog names id of the box's node; "" is legacy

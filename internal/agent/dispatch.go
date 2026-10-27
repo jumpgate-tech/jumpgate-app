@@ -73,7 +73,7 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, env intent.Envelo
 		w, notSetUp := a.loadNode()
 		info := intent.AgentInfo{
 			Version: buildinfo.Version(), Arch: runtime.GOARCH, Address: a.Address().Hex(), LastSeq: a.replay.LastSeq(i.Controller),
-			PlanVersions: jobs.Versions(), Signers: len(p.Signers), SetUp: notSetUp == nil,
+			PlanVersions: jobs.Versions(), Signers: len(p.Signers), Controllers: p.routineSigners(), SetUp: notSetUp == nil,
 		}
 		switch {
 		case notSetUp == nil:

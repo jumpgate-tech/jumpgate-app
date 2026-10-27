@@ -150,6 +150,17 @@ func (p Policy) CheckScope(controller eip712.Address, peer peercred.Cred, havePe
 	return reject(intent.ReasonScopeLocal, fmt.Sprintf("controller %s is enrolled for local use only and cannot reach this box through a tunnel", controller.Hex()))
 }
 
+// routineSigners counts the controllers enrolled at the routine tier.
+func (p Policy) routineSigners() int {
+	n := 0
+	for _, s := range p.Signers {
+		if s.Tier == TierRoutine {
+			n++
+		}
+	}
+	return n
+}
+
 // AddLocalUID allows a local uid to use the socket.
 func (p *Policy) AddLocalUID(uid int) bool {
 	for _, u := range p.LocalUIDs {
