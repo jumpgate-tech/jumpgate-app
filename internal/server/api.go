@@ -740,6 +740,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// is why they live here behind authMiddleware's Origin check.
 	mux.HandleFunc("POST /api/targets/{id}/intent/{kind}", s.handleIntent)
 	mux.HandleFunc("POST /api/targets/{id}/pair", s.handlePair)
+	mux.HandleFunc("POST /api/targets/{id}/agent/upgrade", s.handleAgentUpgrade)
 
 	// Host-key confirmation: the server captures and records the keys, a
 	// person compares the fingerprint (hostkeys.go). Behind the same Origin

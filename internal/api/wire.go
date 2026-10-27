@@ -60,3 +60,11 @@ type PairEvent struct {
 	Done  bool   `json:"done,omitempty"`
 	Agent string `json:"agent,omitempty"`
 }
+
+// AgentUpgradeView is POST /api/targets/{id}/agent/upgrade: whether the
+// box's gate was replaced, and the versions before and after.
+type AgentUpgradeView struct {
+	Upgraded bool   `json:"upgraded"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+}

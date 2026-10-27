@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/intent"
@@ -131,5 +132,13 @@ func TestEveryDeclaredCodeIsKnown(t *testing.T) {
 	}
 	if n != len(Codes()) {
 		t.Errorf("errors.go declares %d Code constants, the registry has %d rows", n, len(Codes()))
+	}
+}
+
+func TestUpgradeHintsPointAtHostsUpgrade(t *testing.T) {
+	for _, h := range []string{RejectionHint(intent.ReasonUnknownKind), RejectionHint(intent.ReasonUnknownPlan), HintFor(CodeUnknownPlan)} {
+		if !strings.Contains(h, "jumpgate hosts upgrade") {
+			t.Errorf("hint %q does not point at hosts upgrade", h)
+		}
 	}
 }

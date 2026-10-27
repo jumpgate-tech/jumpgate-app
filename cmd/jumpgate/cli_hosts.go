@@ -26,7 +26,7 @@ import (
 
 func cmdHosts(args []string) int {
 	if len(args) == 0 {
-		return usage("usage: jumpgate hosts add|list|invite|forget-key")
+		return usage("usage: jumpgate hosts add|list|invite|upgrade|forget-key")
 	}
 	switch args[0] {
 	case "list":
@@ -38,6 +38,11 @@ func cmdHosts(args []string) int {
 			return usage("usage: jumpgate hosts invite NAME")
 		}
 		return hostsInvite(context.Background(), os.Stdout, args[1])
+	case "upgrade":
+		if len(args) != 2 {
+			return usage("usage: jumpgate hosts upgrade NAME")
+		}
+		return hostsUpgrade(context.Background(), os.Stdout, args[1])
 	case "forget-key":
 		return hostsForgetKey(context.Background(), args[1:], newConsentReader(os.Stdin), os.Stdout, os.Stderr)
 	}
@@ -91,6 +96,29 @@ func hostsInvite(ctx context.Context, out io.Writer, name string) int {
 	fmt.Fprintln(out, `curl -fsSL https://jumpgate.app/install.sh | sh -s -- --agent \`)
 	fmt.Fprintf(out, "  --version %s --controller %s --transport-key '%s'\n", version, info.Controller, strings.ReplaceAll(key, "'", `'"'"'`))
 	fmt.Fprintf(out, "then: jumpgate hosts add %s --ssh jumpgate@HOST --installed <address printed on the box>\n", name)
+	return 0
+}
+
+// hostsUpgrade sends this controller's gate to a paired box over the pairing
+// and reports the versions before and after.
+func hostsUpgrade(ctx context.Context, out io.Writer, name string) int {
+	c, err := connect(ctx)
+	if err != nil {
+		return failed("%v", err)
+	}
+	v, err := c.UpgradeAgent(ctx, name)
+	var e *api.Error
+	if errors.As(err, &e) {
+		return reportServerErrorFrom(os.Stderr, "hosts upgrade", c.Info(), *e)
+	}
+	if err != nil {
+		return failed("hosts upgrade: %v", err)
+	}
+	if v.Upgraded {
+		fmt.Fprintf(out, "%s: agent %s -> %s\n", name, v.From, v.To)
+	} else {
+		fmt.Fprintf(out, "%s: agent already %s\n", name, v.To)
+	}
 	return 0
 }
 

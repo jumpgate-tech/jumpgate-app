@@ -6,6 +6,7 @@ package agentclient
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/valve-tech/jumpgate/internal/agent"
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
@@ -108,6 +110,20 @@ func (c *Client) Close() error { return c.closer() }
 // Do sends one intent and returns the verified answer. A stale_seq rejection
 // resynchronises the counter from the agent's signed LastSeq and retries once.
 func (c *Client) Do(ctx context.Context, kind string, payload any) (Response, error) {
+	return c.send(ctx, kind, payload, nil)
+}
+
+// Upload is Do for an intent that carries a blob: the signed envelope goes in
+// the agent.UpgradeEnvelopeHeader header and blob is the body of POST
+// /v1/upgrade. A stale_seq rejection is retried once, with the same blob.
+func (c *Client) Upload(ctx context.Context, kind string, payload any, blob []byte) (Response, error) {
+	if blob == nil {
+		blob = []byte{}
+	}
+	return c.send(ctx, kind, payload, blob)
+}
+
+func (c *Client) send(ctx context.Context, kind string, payload any, blob []byte) (Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	body, err := json.Marshal(payload)
@@ -115,7 +131,7 @@ func (c *Client) Do(ctx context.Context, kind string, payload any) (Response, er
 		return Response{}, err
 	}
 	for attempt := 0; ; attempt++ {
-		res, err := c.once(ctx, kind, body)
+		res, err := c.once(ctx, kind, body, blob)
 		if err != nil {
 			return res, err
 		}
@@ -129,7 +145,14 @@ func (c *Client) Do(ctx context.Context, kind string, payload any) (Response, er
 	}
 }
 
-func (c *Client) once(ctx context.Context, kind string, body []byte) (Response, error) {
+// uploadTimeout bounds one Upload; a 256 MiB binary over a slow SSH link
+// needs longer than an intent's two minutes.
+const uploadTimeout = 15 * time.Minute
+
+// once signs and sends one intent. A nil blob posts the envelope to
+// /v1/intent; otherwise the envelope rides in a header and blob is the body
+// of /v1/upgrade.
+func (c *Client) once(ctx context.Context, kind string, body, blob []byte) (Response, error) {
 	seq, err := c.seqs.Next(c.t.Agent)
 	if err != nil {
 		return Response{}, err
@@ -151,9 +174,18 @@ func (c *Client) once(ctx context.Context, kind string, body []byte) (Response, 
 	}
 
 	envBytes, _ := json.Marshal(intent.Envelope{Intent: in.JSON(), Payload: body, Sigs: []string{sig.Hex()}})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://agent/v1/intent", bytes.NewReader(envBytes))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.hc.Do(req)
+	hc := c.hc
+	var req *http.Request
+	if blob == nil {
+		req, _ = http.NewRequestWithContext(ctx, http.MethodPost, "http://agent/v1/intent", bytes.NewReader(envBytes))
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		req, _ = http.NewRequestWithContext(ctx, http.MethodPost, "http://agent/v1/upgrade", bytes.NewReader(blob))
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set(agent.UpgradeEnvelopeHeader, base64.RawURLEncoding.EncodeToString(envBytes))
+		hc = &http.Client{Transport: c.hc.Transport, Timeout: uploadTimeout}
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
 		return Response{}, fmt.Errorf("%w: %v", ErrUnreachable, err)
 	}

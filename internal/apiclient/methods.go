@@ -352,3 +352,11 @@ func (c *Client) WatchSetup(ctx context.Context, target string) (<-chan api.Setu
 	}()
 	return ch, nil
 }
+
+// UpgradeAgent sends the controller's gate binary to a paired box and waits
+// for it to come back on the new version.
+func (c *Client) UpgradeAgent(ctx context.Context, target string) (api.AgentUpgradeView, error) {
+	var v api.AgentUpgradeView
+	err := c.Do(ctx, http.MethodPost, targetPath(target, "/agent/upgrade"), nil, &v)
+	return v, err
+}

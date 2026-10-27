@@ -215,7 +215,7 @@ var registry = map[Code]codeInfo{
 	CodeJobState:            {"the job moved on since you looked; reload it", ExitFailed},
 	CodeApprovalUnavailable: {"this decision needs an approval-tier signature (a hardware or browser wallet), which this jumpgate cannot make yet", ExitUsage},
 	CodeJobLogInvalid:       {"this job's history on the box does not verify against the box's agent key: do not act on it; inspect /var/lib/jumpgate/jobs on the box, and re-pair the box if its key changed", ExitSecurity},
-	CodeUnknownPlan:         {"this box's agent does not know that job's plan (it was downgraded?); re-pair the box to upgrade its agent", ExitFailed},
+	CodeUnknownPlan:         {"this box's gate does not know that job's plan (it was downgraded?); run `jumpgate hosts upgrade NAME`", ExitFailed},
 	CodeModuleNotApplicable: {"Pick a chain and client the module supports; /api/catalog lists them.", ExitFailed},
 	CodeLocked:              {"unlock the vault: `jumpgate unlock` or the unlock prompt in the TUI or web app; plans wait at their next step until then", ExitUsage},
 	CodeWrongPassphrase:     {"that passphrase does not open the vault; try again, or use a recovery code", ExitFailed},
@@ -294,7 +294,7 @@ var rejectionHints = map[string]string{
 	intent.ReasonClockSkew:        "the clocks disagree by more than 60s; enable NTP on this machine and the box",
 	intent.ReasonBadSignature:     "the box could not verify this controller's signature; re-pair it",
 	intent.ReasonUnauthorizedKind: "this controller is not enrolled on the box for that; pair it",
-	intent.ReasonUnknownKind:      "the box runs an older agent; re-pair it to upgrade the agent",
+	intent.ReasonUnknownKind:      "the box runs an older gate; run `jumpgate hosts upgrade NAME`",
 	intent.ReasonStaleSeq:         "another process is using this controller key against this box",
 	intent.ReasonReplayedNonce:    "the same intent was sent twice; retry",
 	intent.ReasonBusy:             "another request from this controller is still running on the box",
@@ -306,7 +306,7 @@ var rejectionHints = map[string]string{
 	intent.ReasonJobNotFound:      "no such job on this box; `jumpgate jobs HOST` lists them",
 	intent.ReasonJobActive:        "one job runs at a time on a box; wait for it, or decide it in the jobs inbox",
 	intent.ReasonLeaseHeld:        "another controller drives this job; watch it, or adopt it once its lease is stale (90 s without a heartbeat)",
-	intent.ReasonUnknownPlan:      "this box's agent does not know that job's plan (it was downgraded?); re-pair the box to upgrade its agent",
+	intent.ReasonUnknownPlan:      "this box's gate does not know that job's plan (it was downgraded?); run `jumpgate hosts upgrade NAME`",
 	intent.ReasonJobState:         "the job moved on since this request was made; reload it",
 }
 

@@ -168,6 +168,10 @@ type Config struct {
 type Server struct {
 	cfg Config
 
+	// loadAgent gives the gate binary for a box's arch, for hosts upgrade
+	// (a seam; agentbin.Load by default).
+	loadAgent func(arch string) ([]byte, error)
+
 	// keys is the vault and the controller signer (vault.go); vctl
 	// serializes unlock and lock.
 	keys keyState
@@ -285,6 +289,7 @@ func New(cfg Config) *Server {
 	s.initKeys()
 	s.markActivity()
 	s.newExecutor = cfg.NewExecutor
+	s.loadAgent = defaultLoadAgent
 	if s.newExecutor == nil {
 		s.newExecutor = defaultNewExecutor
 	}
