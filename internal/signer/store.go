@@ -23,6 +23,7 @@ const (
 	StoreKeychain    Store = "keychain"
 	StoreWinCred     Store = "wincred"
 	StoreOnePassword Store = "1password"
+	StoreVault       Store = "vault"
 )
 
 // Seams for tests: which OS we are on, whether a tool exists, and how a tool
@@ -124,6 +125,8 @@ func Open(ctx context.Context, store Store, ref string) (*Key, error) {
 		return winCredRead(ref)
 	case StoreOnePassword:
 		return onePasswordRead(ctx, ref)
+	case StoreVault:
+		return nil, ErrVaultStore
 	}
 	return nil, fmt.Errorf("signer: unknown key store %q", store)
 }
@@ -139,6 +142,8 @@ func Create(ctx context.Context, store Store, ref string) (*Key, error) {
 		return winCredCreate(ref)
 	case StoreOnePassword:
 		return onePasswordCreate(ctx, ref)
+	case StoreVault:
+		return nil, ErrVaultStore
 	}
 	return nil, fmt.Errorf("signer: unknown key store %q", store)
 }
