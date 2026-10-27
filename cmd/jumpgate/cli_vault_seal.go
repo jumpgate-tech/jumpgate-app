@@ -56,11 +56,12 @@ func systemdCredsCommand(euid int, args []string) (string, []string) {
 // credential, and adds a systemd-creds slot that key unlocks, so a service
 // started with LoadCredentialEncrypted=jumpgate-vault-key unlocks at boot.
 func vaultSeal(args []string) int {
-	const use = "usage: jumpgate vault seal (--tpm2 | --allow-host-key) [--out PATH]"
+	const use = "usage: jumpgate vault seal (--tpm2 | --allow-host-key) [--out PATH] [--stdin]"
 	fset := vaultFlags("seal")
 	tpm2 := fset.Bool("tpm2", false, "seal with this machine's TPM2")
 	hostKey := fset.Bool("allow-host-key", false, "seal with the systemd host key (no TPM2)")
 	out := fset.String("out", credstoreOut, "where the encrypted credential is written")
+	fromStdin := fset.Bool("stdin", false, "read the passphrase as one line of standard input")
 	if err := fset.Parse(args); err != nil || fset.NArg() > 0 {
 		return usage(use)
 	}
@@ -94,7 +95,7 @@ func vaultSeal(args []string) int {
 	} else {
 		fmt.Fprintln(os.Stderr, "jumpgate: warning: "+hostKeyNote)
 	}
-	pass, err := readPassphrase("vault passphrase: ", false, false)
+	pass, err := readPassphrase("vault passphrase: ", *fromStdin, false)
 	if err != nil {
 		return failed("vault seal: %v", err)
 	}

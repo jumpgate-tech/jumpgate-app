@@ -117,6 +117,26 @@ func TestSystemdCredsEncryptRunsAsRoot(t *testing.T) {
 	}
 }
 
+// With no terminal the passphrase error says to pipe it in with --stdin,
+// so seal takes --stdin, as init and unlock do.
+func TestSealReadsThePassphraseFromStdin(t *testing.T) {
+	testutil.Home(t)
+	_, stderr := captureStdio(t)
+	p := placeVault(t)
+	calls := fakeSystemdCreds(t, "")
+	_, opens := useFakeTTY(t)
+	withStdin(t, vaulttest.Passphrase+"\n")
+	if code := cmdVault([]string{"seal", "--allow-host-key", "--stdin", "--out", filepath.Join(t.TempDir(), "c")}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr())
+	}
+	if len(*calls) != 1 || *opens != 0 {
+		t.Fatalf("calls %+v, prompts %d", *calls, *opens)
+	}
+	if k := slotKinds(t, p); len(k) != 2 {
+		t.Fatalf("slots %v", k)
+	}
+}
+
 func TestSealTPM2WithoutATPMRefuses(t *testing.T) {
 	testutil.Home(t)
 	_, stderr := captureStdio(t)
