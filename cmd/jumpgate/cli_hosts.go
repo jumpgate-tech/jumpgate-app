@@ -115,9 +115,9 @@ func hostsUpgrade(ctx context.Context, out io.Writer, name string) int {
 		return failed("hosts upgrade: %v", err)
 	}
 	if v.Upgraded {
-		fmt.Fprintf(out, "%s: agent %s -> %s\n", name, v.From, v.To)
+		fmt.Fprintf(out, "%s: gate %s -> %s\n", name, v.From, v.To)
 	} else {
-		fmt.Fprintf(out, "%s: agent already %s\n", name, v.To)
+		fmt.Fprintf(out, "%s: gate already %s\n", name, v.To)
 	}
 	return 0
 }
@@ -157,13 +157,13 @@ func hostsAdd(args []string) int {
 	jumpArg := fset.String("jump", "", "jump host user@host[:port]")
 	sudo := fset.Bool("sudo", false, "run setup commands through sudo -n")
 	local := fset.Bool("local", false, "pair this machine")
-	installedArg := fset.String("installed", "", "the agent address `jumpgate agent setup` printed on the box")
+	installedArg := fset.String("installed", "", "the gate address `jumpgate agent setup` printed on the box")
 	if err := fset.Parse(args[1:]); err != nil || (*local == (*sshArg != "")) {
 		return usage("give exactly one of --ssh or --local")
 	}
 	if *installedArg != "" {
 		if *local {
-			return usage("--installed names an agent on another box; it needs --ssh, not --local")
+			return usage("--installed names a gate on another box; it needs --ssh, not --local")
 		}
 		if _, err := eip712.ParseAddress(*installedArg); err != nil {
 			return usage("--installed: %v", err)

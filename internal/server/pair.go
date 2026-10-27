@@ -279,7 +279,7 @@ func (s *Server) verify(ctx context.Context, t config.Target) (uint64, *api.Pair
 	case err != nil:
 		return fail(err, api.CodeVerifyFailed, "")
 	case res.Status != intent.StatusOK:
-		n, ev, _ := fail(fmt.Errorf("agent refused agent.info: %s", res.Result), api.CodeRejected, "")
+		n, ev, _ := fail(fmt.Errorf("gate refused agent.info: %s", res.Result), api.CodeRejected, "")
 		reason := ""
 		if res.Rejection != nil {
 			reason = res.Rejection.Code

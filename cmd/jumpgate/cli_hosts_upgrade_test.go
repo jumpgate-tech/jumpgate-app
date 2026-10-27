@@ -29,7 +29,7 @@ func TestHostsUpgradePrintsFromAndTo(t *testing.T) {
 	if code := hostsUpgrade(context.Background(), &out, "box"); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr())
 	}
-	if got := strings.TrimSpace(out.String()); got != "box: agent v0.6.0 -> v0.6.1" {
+	if got := strings.TrimSpace(out.String()); got != "box: gate v0.6.0 -> v0.6.1" {
 		t.Fatalf("stdout %q", got)
 	}
 }
@@ -41,7 +41,7 @@ func TestHostsUpgradeSaysWhenAlreadyCurrent(t *testing.T) {
 	if code := hostsUpgrade(context.Background(), &out, "box"); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if got := strings.TrimSpace(out.String()); got != "box: agent already v0.6.1" {
+	if got := strings.TrimSpace(out.String()); got != "box: gate already v0.6.1" {
 		t.Fatalf("stdout %q", got)
 	}
 }
