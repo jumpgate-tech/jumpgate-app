@@ -612,7 +612,8 @@ func TestHostsAddConfirmsThroughTheServerFirst(t *testing.T) {
 	if code := hostsAdd([]string{"box", "--ssh", "root@127.0.0.1:2200"}); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr())
 	}
-	if strings.Join(paths, ",") != "/api/hostkeys/probe,/api/targets,/api/targets/box/pair" {
+	// pairing-info first: a self-only controller refuses before any host key.
+	if strings.Join(paths, ",") != "/api/pairing-info,/api/hostkeys/probe,/api/targets,/api/targets/box/pair" {
 		t.Fatalf("requests %v", paths)
 	}
 	if !strings.Contains(targetBody, `"Host":"127.0.0.1"`) || !strings.Contains(targetBody, `"Port":2200`) || !strings.Contains(targetBody, `"HostKeyFile":""`) {

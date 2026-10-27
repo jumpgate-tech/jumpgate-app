@@ -233,6 +233,24 @@ func hostsAdd(args []string) int {
 	}
 	apiclient.WarnSkew(os.Stderr, c)
 	system := serverIsSystem(c)
+	if target.SSH != nil {
+		// A self-only controller drives only this machine. The server
+		// refuses at pair time, but a push runs bootstrap here first, so
+		// refuse before a host key is trusted or the box is touched.
+		// A server without /api/pairing-info predates --self-only.
+		info, err := c.PairingInfo(ctx, "")
+		var e *api.Error
+		switch {
+		case errors.As(err, &e) && e.Status == http.StatusNotFound:
+		case errors.As(err, &e):
+			return reportServerErrorFrom(os.Stderr, "add "+name, c.Info(), *e)
+		case err != nil:
+			return failed("pairing info: %v", err)
+		}
+		if err == nil && info.Scope == "self" {
+			return reportServerErrorFrom(os.Stderr, "add "+name, c.Info(), api.Error{Message: "this controller is self-only (self_only)", Code: api.CodeSelfOnly})
+		}
+	}
 	if system && target.SSH != nil {
 		// The service never reads a key file the operator names; the key is
 		// used only here, by this process.
