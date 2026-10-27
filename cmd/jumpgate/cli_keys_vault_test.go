@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -72,6 +74,53 @@ func TestKeysShowOpensAVaultKey(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), c.Controller.Address) {
 		t.Fatalf("out %q, want %s", out.String(), c.Controller.Address)
+	}
+}
+
+// failCoreDumps makes disabling core dumps fail and counts the attempts.
+func failCoreDumps(t *testing.T) *int {
+	t.Helper()
+	n := 0
+	old := disableCoreDumps
+	disableCoreDumps = func() error { n++; return errors.New("prctl refused") }
+	t.Cleanup(func() { disableCoreDumps = old })
+	return &n
+}
+
+// An offline unlock in the CLI process refuses when core dumps cannot be
+// turned off, before any key is derived.
+func TestKeysShowRefusesWhenCoreDumpsStayOn(t *testing.T) {
+	testutil.Home(t)
+	captureStdio(t)
+	useFakeTTY(t, vaulttest.Passphrase, vaulttest.Passphrase)
+	if code := keysInit([]string{"--store", "vault"}); code != 0 {
+		t.Fatalf("keys init exit %d", code)
+	}
+	n := failCoreDumps(t)
+	useFakeTTY(t, vaulttest.Passphrase)
+	var out, errb bytes.Buffer
+	if code := keysShow(nil, &out, &errb); code == 0 {
+		t.Fatalf("exit 0 with core dumps on: %s", out.String())
+	}
+	if *n == 0 || !strings.Contains(errb.String(), "cannot disable core dumps") {
+		t.Fatalf("attempts %d, stderr %q", *n, errb.String())
+	}
+}
+
+func TestKeysInitVaultRefusesWhenCoreDumpsStayOn(t *testing.T) {
+	testutil.Home(t)
+	_, stderr := captureStdio(t)
+	failCoreDumps(t)
+	useFakeTTY(t, vaulttest.Passphrase, vaulttest.Passphrase)
+	if code := keysInit([]string{"--store", "vault"}); code == 0 {
+		t.Fatal("exit 0 with core dumps on")
+	}
+	if !strings.Contains(stderr(), "cannot disable core dumps") {
+		t.Fatalf("stderr %q", stderr())
+	}
+	p, _ := secrets.VaultPath()
+	if _, err := os.Lstat(p); err == nil {
+		t.Fatal("a vault was created with core dumps on")
 	}
 }
 

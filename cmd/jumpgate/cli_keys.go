@@ -170,6 +170,10 @@ func unlockVault(create bool) (*vault.Vault, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := noCoreDumps(); err != nil {
+			clear(pass)
+			return nil, err
+		}
 		if err := fsperm.MkdirPrivate(filepath.Dir(path)); err != nil {
 			clear(pass)
 			return nil, err
@@ -184,7 +188,29 @@ func unlockVault(create bool) (*vault.Vault, error) {
 	if err != nil {
 		return nil, err
 	}
+	return unlockOffline(v, pass)
+}
+
+// disableCoreDumps is vault.DisableCoreDumps; a test seam.
+var disableCoreDumps = vault.DisableCoreDumps
+
+// noCoreDumps runs before this process derives or holds a vault key: a core
+// file or a ptrace would otherwise expose the data key. If that cannot be
+// guaranteed, the unlock is refused.
+func noCoreDumps() error {
+	if err := disableCoreDumps(); err != nil {
+		return fmt.Errorf("refusing to unlock the vault: cannot disable core dumps: %w", err)
+	}
+	return nil
+}
+
+// unlockOffline unlocks v in this process, after core dumps are off. It
+// clears pass.
+func unlockOffline(v *vault.Vault, pass []byte) (*vault.Vault, error) {
 	defer clear(pass)
+	if err := noCoreDumps(); err != nil {
+		return nil, err
+	}
 	if err := v.Unlock(pass); err != nil {
 		return nil, err
 	}
