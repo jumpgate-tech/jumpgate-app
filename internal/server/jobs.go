@@ -121,6 +121,13 @@ func newJobsHub(s *Server) *jobsHub {
 }
 
 // wake ends every driver's current backoff wait.
+// driverCount is how many job drivers are running.
+func (h *jobsHub) driverCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.driving)
+}
+
 func (h *jobsHub) wake() {
 	h.mu.Lock()
 	close(h.woken)

@@ -2085,6 +2085,10 @@ type settingsResponse struct {
 
 	// AIDisclosure is the one line saying what Explain sends and to whom.
 	AIDisclosure string `json:"aiDisclosure"`
+
+	// VaultIdleLockMinutes locks the vault after this many idle minutes; 0
+	// is off.
+	VaultIdleLockMinutes int `json:"vaultIdleLockMinutes"`
 }
 
 // placeholderNamePattern is the name shape chainlist's ${...} slot accepts. It
@@ -2100,9 +2104,10 @@ func settingsResponseFrom(c config.Config) settingsResponse {
 		RefRPCBase: c.RefRPCBase,
 		// Never nil: a nil slice serialises as JSON null, and the UI should be
 		// able to iterate the field without a guard.
-		ProviderKeysSet:     []string{},
-		UpdateNotifyEnabled: !c.UpdateNotifyDisabled,
-		AIDisclosure:        ai.Disclosure(c.AIProvider),
+		ProviderKeysSet:      []string{},
+		UpdateNotifyEnabled:  !c.UpdateNotifyDisabled,
+		AIDisclosure:         ai.Disclosure(c.AIProvider),
+		VaultIdleLockMinutes: c.VaultIdleLockMinutes,
 	}
 	for name, v := range c.ProviderKeys {
 		if strings.TrimSpace(v) != "" {
@@ -2144,6 +2149,9 @@ type settingsRequest struct {
 	// aiKey is a pointer — GET never echoes the values back, so a client
 	// re-PUTting what it last read would otherwise wipe every key it has.
 	ProviderKeys map[string]string `json:"providerKeys"`
+
+	// VaultIdleLockMinutes sets the idle lock, 0 (off) to 1440.
+	VaultIdleLockMinutes *int `json:"vaultIdleLockMinutes"`
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
@@ -2165,6 +2173,11 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 				"%q is not a provider key name — a name matches the ${...} slot the chain feed uses, so it may hold only letters, digits and underscores (for example INFURA_API_KEY)", name))
 			return
 		}
+	}
+
+	if req.VaultIdleLockMinutes != nil && !checkIdleLockMinutes(*req.VaultIdleLockMinutes) {
+		writeError(w, http.StatusBadRequest, "minutes must be between 0 (off) and 1440")
+		return
 	}
 
 	if req.AIProvider != nil && *req.AIProvider != "" && !ai.Known(*req.AIProvider) {
@@ -2216,6 +2229,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.UpdateNotifyEnabled != nil {
 			c.UpdateNotifyDisabled = !*req.UpdateNotifyEnabled
+		}
+		if req.VaultIdleLockMinutes != nil {
+			c.VaultIdleLockMinutes = *req.VaultIdleLockMinutes
 		}
 		for name, v := range req.ProviderKeys {
 			name = strings.TrimSpace(name)

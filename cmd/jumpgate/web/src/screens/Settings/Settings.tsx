@@ -27,6 +27,10 @@ const PROVIDERS: { value: api.AIProvider; label: string }[] = [
   { value: "ollama", label: "Ollama" },
 ];
 
+// IDLE_LOCK_HELP is the TUI's wording too (internal/tui/settings.go).
+const IDLE_LOCK_HELP =
+  "Locks the vault after this many idle minutes. Plans in progress keep it unlocked. 0 means never.";
+
 export function Settings() {
   const settingsQuery = useSettings();
   const putSettings = usePutSettings();
@@ -46,6 +50,8 @@ export function Settings() {
   // null = untouched this session; fall back to the loaded value. A missing
   // updateNotifyEnabled (older binary) reads as "on", matching the server.
   const [updateNotifyEnabled, setUpdateNotifyEnabled] = useState<boolean | null>(null);
+  // null = untouched this session; the typed text otherwise.
+  const [idleLock, setIdleLock] = useState<string | null>(null);
 
   const [aiKeyValue, setAiKeyValue] = useState("");
   const [keyTouched, setKeyTouched] = useState(false);
@@ -79,6 +85,8 @@ export function Settings() {
     // Only send the update toggle when it was touched this session, so a save
     // for an unrelated field leaves the stored value alone.
     if (updateNotifyEnabled !== null) body.updateNotifyEnabled = updateNotifyEnabled;
+    // The server checks the range (0 to 1440) and says why it refuses.
+    if (idleLock !== null) body.vaultIdleLockMinutes = Number(idleLock.trim() || "0");
     // Only send aiKey if the user actually touched the field this session —
     // omitting it preserves whatever key is already stored server-side.
     if (keyTouched) body.aiKey = aiKeyValue;
@@ -107,6 +115,7 @@ export function Settings() {
       setNewKeyValue("");
       setRefRpcBase(null);
       setUpdateNotifyEnabled(null);
+      setIdleLock(null);
       setSaved(true);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
@@ -271,6 +280,25 @@ export function Settings() {
                 release exists. Turn it off for &quot;don&apos;t prompt me&quot;: no background checks and no
                 notice — you check here whenever you want. It never installs anything on its own.
               </p>
+            </section>
+
+            <section className="pk-section">
+              <h2>Vault</h2>
+              <label>
+                Idle lock (minutes)
+                <input
+                  type="number"
+                  min={0}
+                  max={1440}
+                  step={1}
+                  value={idleLock ?? String(current.vaultIdleLockMinutes ?? 0)}
+                  onChange={(e) => {
+                    setIdleLock(e.target.value);
+                    setSaved(false);
+                  }}
+                />
+              </label>
+              <p className="muted small">{IDLE_LOCK_HELP}</p>
             </section>
 
             <details className="advanced">

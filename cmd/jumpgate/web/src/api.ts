@@ -1533,6 +1533,9 @@ export interface Settings {
   // newer release. An older binary behind a newer bundle omits it; the UI
   // treats a missing value as "on", matching the server default.
   updateNotifyEnabled?: boolean;
+  // vaultIdleLockMinutes: the vault locks after this many idle minutes; 0
+  // is off. An older binary omits it.
+  vaultIdleLockMinutes?: number;
 }
 
 export function getSettings(): Promise<Settings> {
@@ -1555,6 +1558,9 @@ export interface PutSettingsRequest {
   // updateNotifyEnabled toggles proactive update notices. Omit to leave it
   // unchanged, same rule as every other field here.
   updateNotifyEnabled?: boolean;
+  // vaultIdleLockMinutes sets the idle lock, 0 (off) to 1440. Omit to leave
+  // it unchanged.
+  vaultIdleLockMinutes?: number;
 }
 
 export function putSettings(body: PutSettingsRequest): Promise<Settings> {

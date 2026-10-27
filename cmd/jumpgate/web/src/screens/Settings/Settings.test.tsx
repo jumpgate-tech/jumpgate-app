@@ -216,4 +216,36 @@ describe("Settings", () => {
     expect(aiKeyInput()).toHaveAttribute("placeholder", "•••••••• (leave blank to keep)");
     expect(screen.getByText("Clear saved key")).toBeInTheDocument();
   });
+
+  it("saves the idle lock minutes", async () => {
+    vi.mocked(api.getSettings).mockResolvedValue({ ...BASE_SETTINGS, vaultIdleLockMinutes: 0 });
+    vi.mocked(api.putSettings).mockResolvedValue({ ...BASE_SETTINGS, vaultIdleLockMinutes: 15 });
+
+    renderScreen();
+    await screen.findByText("AI provider");
+
+    expect(
+      screen.getByText("Locks the vault after this many idle minutes. Plans in progress keep it unlocked. 0 means never."),
+    ).toBeInTheDocument();
+    const input = screen.getByText("Idle lock (minutes)").closest("label")!.querySelector("input")!;
+    expect(input).toHaveValue(0);
+    fireEvent.change(input, { target: { value: "15" } });
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() =>
+      expect(api.putSettings).toHaveBeenCalledWith(expect.objectContaining({ vaultIdleLockMinutes: 15 })),
+    );
+  });
+
+  it("leaves the idle lock alone when it was not touched", async () => {
+    vi.mocked(api.getSettings).mockResolvedValue({ ...BASE_SETTINGS, vaultIdleLockMinutes: 30 });
+    vi.mocked(api.putSettings).mockResolvedValue({ ...BASE_SETTINGS, vaultIdleLockMinutes: 30 });
+
+    renderScreen();
+    await screen.findByText("AI provider");
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => expect(api.putSettings).toHaveBeenCalled());
+    expect(vi.mocked(api.putSettings).mock.calls[0][0]).not.toHaveProperty("vaultIdleLockMinutes");
+  });
 });

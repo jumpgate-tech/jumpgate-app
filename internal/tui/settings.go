@@ -20,6 +20,14 @@ import (
 // A test keeps this list equal to the server's.
 var aiProviders = []string{"", "gemini", "groq", "ollama"}
 
+// idleLockChoices are the idle-lock minutes space cycles through, 0 being
+// off. A value set elsewhere (the web UI) is shown as it is and moves to
+// the first choice.
+var idleLockChoices = []int{0, 5, 15, 30, 60, 240}
+
+// idleLockHelp explains the idle lock, in the TUI and the web UI alike.
+const idleLockHelp = "Locks the vault after this many idle minutes. Plans in progress keep it unlocked. 0 means never."
+
 // Replies carry the screen's gen: one that started before the screen was
 // left or re-entered is dropped.
 type (
@@ -311,6 +319,29 @@ func (s *settingsScreen) items(a *App) []settingItem {
 				return nil
 			}},
 	)
+	items = append(items, settingItem{"VAULT", "Idle lock",
+		func(a *App) string {
+			switch {
+			case !s.settingsHas:
+				return "loading"
+			case s.settings.VaultIdleLockMinutes <= 0:
+				return "off"
+			}
+			return fmt.Sprintf("%d min", s.settings.VaultIdleLockMinutes)
+		},
+		func(a *App, s *settingsScreen) tea.Cmd {
+			if !s.settingsHas {
+				a.flash = "the vault settings are still loading"
+				return nil
+			}
+			next := idleLockChoices[0]
+			for i, m := range idleLockChoices {
+				if m == s.settings.VaultIdleLockMinutes {
+					next = idleLockChoices[(i+1)%len(idleLockChoices)]
+				}
+			}
+			return s.save(a, api.SettingsUpdate{VaultIdleLockMinutes: &next}, "")
+		}})
 	if a.o.OpenWeb != nil {
 		items = append(items, settingItem{"WEB APP", "Open the web app", func(*App) string { return "" },
 			func(a *App, s *settingsScreen) tea.Cmd {
@@ -472,6 +503,12 @@ func (s *settingsScreen) view(a *App, w, h int) string {
 				lines = append(lines, "    "+a.th.Dim.Render(d))
 				cursorLine = len(lines) - 1 // keep the disclosure in view with its item
 			}
+		}
+		if i == s.cursor && it.label == "Idle lock" {
+			// Two lines, so it fits an 80-column terminal.
+			first, rest, _ := strings.Cut(idleLockHelp, " Plans")
+			lines = append(lines, "    "+a.th.Dim.Render(first), "    "+a.th.Dim.Render("Plans"+rest))
+			cursorLine = len(lines) - 1
 		}
 	}
 	room := max(h-1, 1) // the rest is the foot line

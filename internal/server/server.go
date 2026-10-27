@@ -150,6 +150,9 @@ type Config struct {
 	// must not race the driver. Unexported, so no caller outside the
 	// package can turn the driver off.
 	noJobsDriver bool
+	// now is the server's clock; nil is time.Now. Tests only, so the idle
+	// lock (vaultidle.go) can be driven without waiting real minutes.
+	now func() time.Time
 }
 
 // Server is the jumpgate local HTTP server.
@@ -169,6 +172,10 @@ type Server struct {
 	relayAttached bool
 	relayH        http.Handler
 	relayKeys     KeyAdmin
+
+	// lastWrite is when the last authenticated POST, PUT or DELETE arrived,
+	// or the last unlock, in unix nanoseconds: the idle lock's clock (S9).
+	lastWrite atomic.Int64
 
 	// critical counts destructive operations in flight (clear, wipe). Shutdown
 	// waits for them; see criticalOp.
@@ -265,8 +272,9 @@ type Server struct {
 
 // New constructs a Server from the given Config.
 func New(cfg Config) *Server {
-	s := &Server{cfg: cfg, reg: newRegistry(), probes: newHostKeyProbes()}
+	s := &Server{cfg: cfg, reg: newRegistry(), probes: newHostKeyProbes(), now: cfg.now}
 	s.initKeys()
+	s.markActivity()
 	s.newExecutor = cfg.NewExecutor
 	if s.newExecutor == nil {
 		s.newExecutor = defaultNewExecutor
@@ -309,6 +317,7 @@ func New(cfg Config) *Server {
 	}
 	s.fleet = newFleetPoller(s)
 	s.reg.onRetire = s.fleet.retireStatus
+	go s.idleLoop(s.jobs.ctx, vaultIdleTick)
 	return s
 }
 
@@ -401,6 +410,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 			if tok, ok := strings.CutPrefix(authHeader, "Bearer "); ok && tokensEqual(tok, s.cfg.Token) {
+				s.noteRequest(r)
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -417,6 +427,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				writeErrorDetail(w, http.StatusForbidden, "cross-origin request refused", "", api.CodeForbidden)
 				return
 			}
+			s.noteRequest(r)
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -208,6 +208,7 @@ func (s *Server) unlockWith(open func(*vault.Vault) error) (api.VaultView, error
 	}
 	first := !s.vctl.unlocked
 	s.vctl.unlocked = true
+	s.markActivity() // an unlock starts the idle clock afresh
 	view := s.viewLocked()
 	s.vctl.mu.Unlock()
 	s.afterUnlock(first)
@@ -242,6 +243,11 @@ func (s *Server) afterUnlock(first bool) {
 func (s *Server) Lock() api.VaultView {
 	s.vctl.mu.Lock()
 	defer s.vctl.mu.Unlock()
+	return s.lockLocked()
+}
+
+// lockLocked is Lock; callers hold s.vctl.mu.
+func (s *Server) lockLocked() api.VaultView {
 	s.keys.mu.Lock()
 	v := s.keys.v
 	s.keys.ready = false

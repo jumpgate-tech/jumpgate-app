@@ -261,6 +261,9 @@ func (f *Fake) SaveSettings(_ context.Context, u api.SettingsUpdate) (api.Settin
 		if u.AIKey != nil {
 			f.SettingsV.AIKeySet = *u.AIKey != ""
 		}
+		if u.VaultIdleLockMinutes != nil {
+			f.SettingsV.VaultIdleLockMinutes = *u.VaultIdleLockMinutes
+		}
 	}
 	v := f.SettingsV
 	f.mu.Unlock()

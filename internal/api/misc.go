@@ -24,6 +24,8 @@ type Settings struct {
 	ProviderKeysSet     []string `json:"providerKeysSet"`
 	UpdateNotifyEnabled bool     `json:"updateNotifyEnabled"`
 	AIDisclosure        string   `json:"aiDisclosure"`
+	// VaultIdleLockMinutes: the vault locks after this many idle minutes; 0 is off.
+	VaultIdleLockMinutes int `json:"vaultIdleLockMinutes"`
 }
 
 // SettingsUpdate is the part of PUT /api/settings the TUI sends; a nil field
@@ -31,6 +33,8 @@ type Settings struct {
 type SettingsUpdate struct {
 	AIProvider *string `json:"aiProvider,omitempty"`
 	AIKey      *string `json:"aiKey,omitempty"`
+	// VaultIdleLockMinutes sets the idle lock, 0 (off) to 1440.
+	VaultIdleLockMinutes *int `json:"vaultIdleLockMinutes,omitempty"`
 }
 
 // ControllerView is GET /api/controller: the key this server signs with.
