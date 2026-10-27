@@ -59,6 +59,25 @@ func (c *Client) SystemInitKey(ctx context.Context, req api.SystemInitKey) error
 	return c.Do(ctx, http.MethodPost, "/api/system/init-key", rawJSON(body), nil)
 }
 
+// SystemSeal has the jumpgate service add a systemd-creds slot to its vault
+// (POST /api/system/seal) and returns the slot's 32-byte key, which the
+// caller clears. passphrase and the encoded body are cleared.
+func (c *Client) SystemSeal(ctx context.Context, passphrase []byte) ([]byte, error) {
+	defer clear(passphrase)
+	const pre, post = `{"passphrase":"`, `"}`
+	body := make([]byte, len(pre)+base64.StdEncoding.EncodedLen(len(passphrase))+len(post))
+	defer clear(body)
+	n := copy(body, pre)
+	base64.StdEncoding.Encode(body[n:], passphrase)
+	copy(body[len(body)-len(post):], post)
+	var v api.SystemSealed
+	if err := c.Do(ctx, http.MethodPost, "/api/system/seal", rawJSON(body), &v); err != nil {
+		clear(v.KEK)
+		return nil, err
+	}
+	return v.KEK, nil
+}
+
 // Lock drops the vault key from the server's memory.
 func (c *Client) Lock(ctx context.Context) (api.VaultView, error) {
 	var v api.VaultView

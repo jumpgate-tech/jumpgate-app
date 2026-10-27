@@ -18,6 +18,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/peercred"
 	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/testutil"
+	"github.com/valve-tech/jumpgate/internal/vault"
 )
 
 // systemServer starts a system-mode server (over TCP with a token, which the
@@ -186,6 +187,64 @@ func peerServer(t *testing.T, uid int, admin bool, adjust func(*Config)) (*httpt
 	}))
 	t.Cleanup(ts.Close)
 	return ts, s
+}
+
+// sealPost is POST /api/system/seal with pass, and the KEK it answered.
+func sealPost(t *testing.T, ts *httptest.Server, pass string) (int, api.Error, []byte) {
+	t.Helper()
+	body, _ := json.Marshal(api.SystemSeal{Passphrase: []byte(pass)})
+	res, err := http.Post(ts.URL+"/api/system/seal", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var e api.Error
+	var ok api.SystemSealed
+	if res.StatusCode == http.StatusOK {
+		_ = json.NewDecoder(res.Body).Decode(&ok)
+	} else {
+		_ = json.NewDecoder(res.Body).Decode(&e)
+	}
+	return res.StatusCode, e, ok.KEK
+}
+
+// initVault has the server create its vault key with passphrase pw.
+func initVault(t *testing.T, ts *httptest.Server) {
+	t.Helper()
+	if res, e := do(t, ts, "", "POST", "/api/system/init-key", `{"store":"vault","passphrase":"cHc="}`); res.StatusCode/100 != 2 {
+		t.Fatalf("init-key %d %+v", res.StatusCode, e)
+	}
+}
+
+func TestSealRouteNeedsTheUnlockedVaultAndItsPassphrase(t *testing.T) {
+	for _, uid := range []int{0, 1000} {
+		ts, s := peerServer(t, uid, true, nil)
+		initVault(t, ts)
+		if st, e, _ := sealPost(t, ts, "pw"); st != http.StatusServiceUnavailable || e.Code != api.CodeLocked {
+			t.Fatalf("uid %d locked: %d %+v, want 503 locked", uid, st, e)
+		}
+		if _, err := s.Unlock([]byte("pw")); err != nil {
+			t.Fatal(err)
+		}
+		if st, e, kek := sealPost(t, ts, "nope"); st != http.StatusForbidden || e.Code != api.CodeWrongPassphrase || kek != nil {
+			t.Fatalf("uid %d wrong passphrase: %d %+v", uid, st, e)
+		}
+		st, e, kek := sealPost(t, ts, "pw")
+		if st != http.StatusOK || len(kek) != 32 {
+			t.Fatalf("uid %d: %d %+v, kek %d bytes", uid, st, e, len(kek))
+		}
+		s.Lock()
+		if _, err := s.UnlockKEK(vault.SlotSystemdCreds, kek); err != nil {
+			t.Fatalf("uid %d: the served KEK does not open the vault: %v", uid, err)
+		}
+	}
+}
+
+func TestSealRouteIsForSocketPeersOnly(t *testing.T) {
+	ts, token, _ := systemServer(t, nil)
+	if res, _ := do(t, ts, token, "POST", "/api/system/seal", `{"passphrase":"cHc="}`); res.StatusCode != http.StatusNotFound {
+		t.Fatalf("over TCP: %d, want 404", res.StatusCode)
+	}
 }
 
 func TestRestartRouteOnlyWhenConfigured(t *testing.T) {

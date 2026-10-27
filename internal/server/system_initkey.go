@@ -28,6 +28,7 @@ func (s *Server) SetRestart(f func()) { s.cfg.Restart = f }
 
 func (s *Server) registerSystemRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/system/init-key", s.handleSystemInitKey)
+	mux.HandleFunc("POST /api/system/seal", s.handleSystemSeal)
 	mux.HandleFunc("POST /api/restart", func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Restart == nil {
 			writeError(w, http.StatusNotFound, "only the jumpgate service restarts over the API")

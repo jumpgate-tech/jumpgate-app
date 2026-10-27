@@ -17,6 +17,19 @@ type UnlockRequest struct {
 	Passphrase []byte `json:"passphrase"`
 }
 
+// SystemSeal is POST /api/system/seal: the vault passphrase, which proves
+// the caller could unlock anyway. It is never logged.
+type SystemSeal struct {
+	Passphrase []byte `json:"passphrase"`
+}
+
+// SystemSealed is POST /api/system/seal's answer: the 32-byte key of the
+// vault's new systemd-creds slot, for the CLI to seal with systemd-creds.
+// It is never logged or stored in the clear.
+type SystemSealed struct {
+	KEK []byte `json:"kek"`
+}
+
 // SecretValue is PUT /api/vault/secrets/{name}. Value is base64 in JSON so
 // both ends can clear it; it is never logged.
 type SecretValue struct {

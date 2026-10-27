@@ -116,8 +116,7 @@ func setupInstallService(ctx context.Context, args []string) int {
 		}
 		return nil
 	}
-	if err := run(fmt.Sprintf(`if [ -L /var/lib/jumpgate ] || [ -L %[1]s ]; then echo "refusing: a staging path is a symlink" >&2; false; fi && %[2]s`,
-		setupStagingDir, executor.QuoteArgv([]string{"install", "-d", "-o", "root", "-g", "root", "-m", "0700", setupStagingDir}))); err != nil {
+	if err := ensureStagingDir(run); err != nil {
 		return failed("staging dir: %v", err)
 	}
 	for _, f := range []struct{ dst, content string }{
@@ -139,18 +138,33 @@ func setupInstallService(ctx context.Context, args []string) int {
 	return 0
 }
 
+// ensureStagingDir makes the root-only staging dir, refusing a symlink on
+// the way to it.
+func ensureStagingDir(run func(string) error) error {
+	return run(fmt.Sprintf(`if [ -L /var/lib/jumpgate ] || [ -L %[1]s ]; then echo "refusing: a staging path is a symlink" >&2; false; fi && %[2]s`,
+		setupStagingDir, executor.QuoteArgv([]string{"install", "-d", "-o", "root", "-g", "root", "-m", "0700", setupStagingDir})))
+}
+
+// stagingName is a fresh random path in the staging dir.
+func stagingName() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("staging name: %w", err)
+	}
+	return setupStagingDir + "/" + hex.EncodeToString(b[:]), nil
+}
+
 // installFile stages content under a random name in the root-only staging
 // dir, then installs it at dst, root-owned and 0644.
 func installFile(ctx context.Context, ex executor.Executor, run func(string) error, dst, content string) error {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Errorf("staging name: %w", err)
+	staged, err := stagingName()
+	if err != nil {
+		return err
 	}
-	staged := setupStagingDir + "/" + hex.EncodeToString(b[:])
 	if err := ex.WriteFile(ctx, staged, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("stage: %w", err)
 	}
-	err := run(executor.QuoteArgv([]string{"install", "-D", "-o", "root", "-g", "root", "-m", "0644", staged, dst}))
+	err = run(executor.QuoteArgv([]string{"install", "-D", "-o", "root", "-g", "root", "-m", "0644", staged, dst}))
 	_ = run(executor.QuoteArgv([]string{"rm", "-f", staged}))
 	return err
 }
