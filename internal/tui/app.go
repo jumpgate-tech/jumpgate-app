@@ -150,6 +150,9 @@ type App struct {
 	// restarting: a restart is under way. A second one would race the first
 	// over which server is current, so R does nothing until it lands.
 	restarting bool
+	// vaultOpen: this TUI unlocked the vault and has not locked it since, so
+	// help lists the lock key.
+	vaultOpen bool
 }
 
 // New builds the root model.
@@ -381,6 +384,16 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.ctx, a.cancel = context.WithCancel(context.Background())
 		a.be, a.skew, a.srvVer, a.flash = msg.be, "", "", "the server restarted"
 		return a, tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), a.openScreen(a.active), loadGateways(a))
+	case unlockDoneMsg:
+		a.unlockDone(msg)
+		return a, nil
+	case lockDoneMsg:
+		if msg.err != nil {
+			a.flash = "lock: " + a.errText(msg.err)
+		} else {
+			a.flash, a.vaultOpen = "the vault is locked; jobs wait for unlock", false
+		}
+		return a, nil
 	case tea.KeyPressMsg:
 		a.flash = ""
 		return a, a.key(msg)
@@ -439,6 +452,11 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 		return tea.Quit
 	case key.Matches(k, globalKeys.Restart) && a.canRestart():
 		return a.restart()
+	case key.Matches(k, globalKeys.Unlock):
+		a.modal = newUnlock()
+		return nil
+	case key.Matches(k, globalKeys.Lock):
+		return a.lockVault()
 	}
 	return cur.update(a, k)
 }
@@ -529,11 +547,18 @@ func linkWord(r api.FleetRow) string {
 	if r.Error != nil && (r.Error.Code == api.CodeHostKey || r.Error.Code == api.CodeUnknownHost) {
 		return "HOSTKEY"
 	}
+	if rowLocked(r) {
+		return "locked"
+	}
 	if !r.Reachable && r.LastSeen != nil {
 		return "down"
 	}
 	return word
 }
+
+// rowLocked: the server could not read the box because the vault is locked,
+// which says nothing about the box itself.
+func rowLocked(r api.FleetRow) bool { return r.Error != nil && r.Error.Code == api.CodeLocked }
 
 // comingScreen holds a screen's place until its task replaces it.
 type comingScreen struct{ name string }

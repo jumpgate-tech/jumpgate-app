@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
+	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/relay"
 	"github.com/valve-tech/jumpgate/internal/secretenv"
 	"github.com/valve-tech/jumpgate/internal/server"
@@ -23,6 +25,12 @@ func cmdRelay(args []string) int {
 	ctx, stop := shutdownContext(context.Background())
 	defer stop()
 	return relayMain(ctx, args, os.Getenv, os.Stderr)
+}
+
+// looksLikeRef reports whether a token value is, or is meant as, a vault
+// reference.
+func looksLikeRef(tok string) bool {
+	return strings.HasPrefix(strings.TrimSpace(tok), config.SecretRefPrefix)
 }
 
 // relayMain is cmdRelay with its context, environment and log injected.
@@ -42,6 +50,10 @@ func relayMain(ctx context.Context, args []string, getenv func(string) string, l
 		if !errors.Is(err, flag.ErrHelp) {
 			fmt.Fprintf(logw, "jumpgate: relay: %v\n", err)
 		}
+		return exitCode("usage")
+	}
+	if looksLikeRef(o.RelayToken) || looksLikeRef(o.AdminToken) {
+		fmt.Fprintf(logw, "jumpgate: relay: the standalone relay never opens controller state; use %s_FILE or systemd LoadCredential=\n", envRelayToken)
 		return exitCode("usage")
 	}
 	if fset.NArg() > 0 {

@@ -336,6 +336,24 @@ func TestSettingsProviderChangeAndRefusal(t *testing.T) {
 	}
 }
 
+func TestSettingsShowsIdleLock(t *testing.T) {
+	f := tuitest.NewFake()
+	a := pick(t, settingsApp(t, f), "Idle lock")
+	fr := tuitest.Frame(a)
+	for _, want := range []string{"VAULT", "Idle lock", "off", "Plans in progress keep it unlocked. 0 means never."} {
+		if !strings.Contains(fr, want) {
+			t.Fatalf("frame lacks %q:\n%s", want, fr)
+		}
+	}
+	m := press(t, a, "space")
+	if f.LastUpdate.VaultIdleLockMinutes == nil || *f.LastUpdate.VaultIdleLockMinutes != 5 {
+		t.Fatalf("update %+v", f.LastUpdate)
+	}
+	if fr := tuitest.Frame(m); !strings.Contains(fr, "5 min") {
+		t.Fatalf("frame:\n%s", fr)
+	}
+}
+
 func TestSettingsSanitizeServerStrings(t *testing.T) {
 	f := tuitest.NewFake()
 	a := settingsApp(t, f)

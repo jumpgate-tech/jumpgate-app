@@ -244,11 +244,11 @@ func TestPairTakesTheTargetSlot(t *testing.T) {
 
 func TestEnsureTransportKeyIsStable(t *testing.T) {
 	testutil.Home(t)
-	a, err := ensureTransportKey()
+	a, err := ensureTransportKeyFile()
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := ensureTransportKey()
+	b, err := ensureTransportKeyFile()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestEnsureTransportKeyRefusesADanglingSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { _, err := ensureTransportKey(); done <- err }()
+	go func() { _, err := ensureTransportKeyFile(); done <- err }()
 	select {
 	case err := <-done:
 		if err == nil || !strings.Contains(err.Error(), path) {
@@ -304,7 +304,7 @@ func TestEnsureTransportKeyConcurrentFirstUseAgrees(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			lines[i], errs[i] = ensureTransportKey()
+			lines[i], errs[i] = ensureTransportKeyFile()
 		}(i)
 	}
 	close(start)
@@ -336,7 +336,7 @@ func TestEnsureTransportKeyKeepsAnExistingKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	pub, _ := ssh.NewPublicKey(priv.Public())
-	line, err := ensureTransportKey()
+	line, err := ensureTransportKeyFile()
 	if err != nil {
 		t.Fatal(err)
 	}

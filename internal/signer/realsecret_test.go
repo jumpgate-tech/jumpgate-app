@@ -87,12 +87,12 @@ func TestRealSecretLockedKeyringIsNotAbsence(t *testing.T) {
 func TestRealSecretServiceDefaultWithoutDBus(t *testing.T) {
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "")
 	t.Setenv("XDG_RUNTIME_DIR", "")
-	if got := DefaultStore(); got != StoreFile {
+	if got := DefaultStore(); got != StoreVault {
 		t.Fatalf("DefaultStore() with no D-Bus = %q, want file", got)
 	}
 	_, err := Create(context.Background(), StoreKeychain, "controller")
-	if !errors.Is(err, ErrNoKeychain) || !strings.Contains(err.Error(), "D-Bus") || !strings.Contains(err.Error(), "--store file") {
-		t.Fatalf("Create with no D-Bus = %v, want ErrNoKeychain naming D-Bus and --store file", err)
+	if !errors.Is(err, ErrNoKeychain) || !strings.Contains(err.Error(), "D-Bus") || !strings.Contains(err.Error(), "--store vault") {
+		t.Fatalf("Create with no D-Bus = %v, want ErrNoKeychain naming D-Bus and --store vault", err)
 	}
 }
 
@@ -104,7 +104,7 @@ func TestRealSecretServiceDefaultWithDBusButNoService(t *testing.T) {
 		t.Skip("needs a session bus with no Secret Service (scripts/test-secret-service.sh)")
 	}
 	start := time.Now()
-	if got := DefaultStore(); got != StoreFile {
+	if got := DefaultStore(); got != StoreVault {
 		t.Fatalf("DefaultStore() with no Secret Service = %q, want file", got)
 	}
 	if d := time.Since(start); d > probeTimeout+time.Second {
@@ -157,7 +157,7 @@ func gone(pid int) bool {
 }
 
 // D17: a secret-tool that never answers is cut off at toolTimeout with a
-// message naming --store file, and nothing it started is left running.
+// message naming --store vault, and nothing it started is left running.
 func TestRealSecretToolTimeoutKillsItsProcessGroup(t *testing.T) {
 	childPID := hungSecretTool(t)
 	old := toolTimeout
@@ -165,7 +165,7 @@ func TestRealSecretToolTimeoutKillsItsProcessGroup(t *testing.T) {
 	t.Cleanup(func() { toolTimeout = old })
 	start := time.Now()
 	_, err := Open(context.Background(), StoreKeychain, "controller")
-	if err == nil || !strings.Contains(err.Error(), "did not answer within") || !strings.Contains(err.Error(), "--store file") {
+	if err == nil || !strings.Contains(err.Error(), "did not answer within") || !strings.Contains(err.Error(), "--store vault") {
 		t.Fatalf("Open with a hung secret-tool = %v, want the timeout message", err)
 	}
 	if d := time.Since(start); d > 5*time.Second {
@@ -182,7 +182,7 @@ func TestRealSecretToolTimeoutKillsItsProcessGroup(t *testing.T) {
 func TestRealSecretServiceProbeTimesOut(t *testing.T) {
 	childPID := hungSecretTool(t)
 	start := time.Now()
-	if got := DefaultStore(); got != StoreFile {
+	if got := DefaultStore(); got != StoreVault {
 		t.Fatalf("DefaultStore() with a hung Secret Service = %q, want file", got)
 	}
 	if d := time.Since(start); d < probeTimeout || d > probeTimeout+3*time.Second {

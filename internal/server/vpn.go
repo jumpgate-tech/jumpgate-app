@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -11,6 +13,8 @@ import (
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/executor"
+	"github.com/valve-tech/jumpgate/internal/secrets"
+	"github.com/valve-tech/jumpgate/internal/vault"
 	"github.com/valve-tech/jumpgate/internal/vpn"
 )
 
@@ -107,7 +111,9 @@ func ifaceOf(v config.VPN) string {
 // display-only fields. A parse/validate failure is reported (Valid=false),
 // never fatal: an overlay that will not come up is still an overlay the
 // operator needs to see in order to fix or delete it.
-func vpnViewFrom(v config.VPN) vpnView {
+//
+// A config held in a locked vault cannot be parsed: the view says so.
+func (s *Server) vpnViewFrom(v config.VPN) vpnView {
 	view := vpnView{
 		ID:         v.ID,
 		Provider:   v.Provider,
@@ -118,7 +124,15 @@ func vpnViewFrom(v config.VPN) vpnView {
 		Endpoints:  []string{},
 		Overlay:    []string{},
 	}
-	cfg, err := vpn.ParseConfig(v.Config)
+	conf, err := s.secret(secrets.VPNName(v.ID), v.Config)
+	if errors.Is(err, vault.ErrLocked) {
+		view.Error = "locked: unlock to read"
+		return view
+	}
+	var cfg vpn.Config
+	if err == nil {
+		cfg, err = vpn.ParseConfig(conf)
+	}
 	if err == nil {
 		err = cfg.Validate()
 	}
@@ -241,7 +255,11 @@ func (s *Server) AutostartOverlays(ctx context.Context) []AutostartResult {
 // code). It is the non-HTTP twin of handleVPNUp + vpnExecutor, so autostart and
 // the API start an overlay by the exact same path.
 func (s *Server) bringUpOverlay(ctx context.Context, cfg config.Config, v config.VPN) error {
-	prov, err := vpn.NewStaticProvider(v.Provider, v.Config)
+	conf, err := s.secret(secrets.VPNName(v.ID), v.Config)
+	if err != nil {
+		return err
+	}
+	prov, err := vpn.NewStaticProvider(v.Provider, conf)
 	if err != nil {
 		return fmt.Errorf("stored config is not usable: %w", err)
 	}
@@ -278,7 +296,7 @@ func (s *Server) handleVPNList(w http.ResponseWriter, r *http.Request) {
 	// overlays yet" rather than choke on a null.
 	out := make([]vpnView, 0, len(cfg.VPNs))
 	for _, v := range cfg.VPNs {
-		out = append(out, vpnViewFrom(v))
+		out = append(out, s.vpnViewFrom(v))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -329,11 +347,27 @@ func (s *Server) handleVPNSave(w http.ResponseWriter, r *http.Request) {
 	// bad `.conf` does not half-apply — config itself stores bytes without
 	// judging them, so this is the layer that judges. Only when it is being set:
 	// an update that omits it keeps the stored (already-valid) one.
+	if req.Config != nil && strings.HasPrefix(strings.TrimSpace(*req.Config), config.SecretRefPrefix) {
+		writeError(w, http.StatusBadRequest, errRefValue.Error())
+		return
+	}
 	if req.Config != nil {
 		if _, err := vpn.NewStaticProvider(strings.TrimSpace(deref(req.Provider)), *req.Config); err != nil {
 			writeError(w, http.StatusBadRequest, "the WireGuard config is not usable: "+err.Error())
 			return
 		}
+	}
+
+	// The config goes into the vault before config.json names it (a locked
+	// vault refuses here, before anything is written).
+	storedConf := ""
+	if req.Config != nil && strings.TrimSpace(*req.Config) != "" {
+		ref, err := s.putSecret(secrets.VPNName(id), *req.Config)
+		if err != nil {
+			writeVaultError(w, err)
+			return
+		}
+		storedConf = ref
 	}
 
 	created := false
@@ -364,7 +398,7 @@ func (s *Server) handleVPNSave(w http.ResponseWriter, r *http.Request) {
 				c.VPNs[i].TargetID = strings.TrimSpace(*req.TargetID)
 			}
 			if req.Config != nil {
-				c.VPNs[i].Config = *req.Config
+				c.VPNs[i].Config = storedConf
 			}
 			if req.Autostart != nil {
 				c.VPNs[i].Autostart = *req.Autostart
@@ -382,7 +416,7 @@ func (s *Server) handleVPNSave(w http.ResponseWriter, r *http.Request) {
 			Provider:  strings.TrimSpace(deref(req.Provider)),
 			Interface: strings.TrimSpace(deref(req.Interface)),
 			TargetID:  strings.TrimSpace(deref(req.TargetID)),
-			Config:    *req.Config,
+			Config:    storedConf,
 			Autostart: req.Autostart != nil && *req.Autostart,
 		})
 		return nil
@@ -397,7 +431,7 @@ func (s *Server) handleVPNSave(w http.ResponseWriter, r *http.Request) {
 	if created {
 		status = http.StatusCreated
 	}
-	writeJSON(w, status, vpnViewFrom(v))
+	writeJSON(w, status, s.vpnViewFrom(v))
 }
 
 // ---------------------------------------------------------------------
@@ -412,12 +446,13 @@ func (s *Server) handleVPNSave(w http.ResponseWriter, r *http.Request) {
 // that an interface was removed.
 func (s *Server) handleVPNDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	old := ""
 	_, err := s.updateConfig(func(c *config.Config) error {
 		kept := c.VPNs[:0]
 		found := false
 		for _, v := range c.VPNs {
 			if v.ID == id {
-				found = true
+				found, old = true, v.Config
 				continue
 			}
 			kept = append(kept, v)
@@ -431,6 +466,10 @@ func (s *Server) handleVPNDelete(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErrorDetail(w, http.StatusNotFound, err.Error(), "", api.CodeVPNNotFound)
 		return
+	}
+	// After the reference is gone: a failure leaves an unreferenced entry.
+	if err := s.dropSecret(secrets.VPNName(id), old); err != nil {
+		log.Printf("jumpgate: vpn %s: forget its config in the vault: %v", id, err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -468,7 +507,12 @@ func (s *Server) handleVPNUp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	prov, err := vpn.NewStaticProvider(v.Provider, v.Config)
+	conf, err := s.secret(secrets.VPNName(v.ID), v.Config)
+	if err != nil {
+		writeVaultError(w, err)
+		return
+	}
+	prov, err := vpn.NewStaticProvider(v.Provider, conf)
 	if err != nil {
 		// A stored config that no longer parses (hand-edited config.json). 422:
 		// the request is well-formed, the stored state is not.

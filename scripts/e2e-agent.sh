@@ -50,7 +50,9 @@ fi
 docker exec -i "$name" sh -c 'cat >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys' < "$work/root.pub"
 
 # -p 1: both packages share the one container, and the server's module test
-# creates the node account the bootstrap migrate test must not see yet.
+# creates the node account the bootstrap migrate test must not see yet. The
+# server's vault test (a plan waits while locked) resets the box to a legacy
+# node, so the server package runs after the bootstrap one.
 JUMPGATE_E2E_PORT="$port" \
 JUMPGATE_E2E_ROOT_KEY="$work/root" \
 JUMPGATE_E2E_TRANSPORT_KEY="$work/transport" \

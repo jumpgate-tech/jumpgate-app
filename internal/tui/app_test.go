@@ -184,6 +184,9 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 	for n, b := range bindings(navKeys) {
 		all[n] = b
 	}
+	// Listed only when relevant: TestHelpListsTheVaultKeysWhenRelevant.
+	delete(all, "Unlock")
+	delete(all, "Lock")
 	for name, b := range all {
 		h := b.Help()
 		if !regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(h.Key) + `\s+` + regexp.QuoteMeta(h.Desc) + `$`).MatchString(fr) {

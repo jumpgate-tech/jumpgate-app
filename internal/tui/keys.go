@@ -10,7 +10,7 @@ import (
 // help screen lists every field here (help.go), so a key added here is
 // documented by adding it.
 var globalKeys = struct {
-	Screens, Focus, Panels, Help, Palette, Drawer, Back, Quit, ForceQuit, Restart key.Binding
+	Screens, Focus, Panels, Help, Palette, Drawer, Back, Quit, ForceQuit, Restart, Unlock, Lock key.Binding
 }{
 	Screens:   key.NewBinding(key.WithKeys("1", "2", "3", "4", "5"), key.WithHelp("1-5", "views")),
 	Focus:     key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "focus: tree, main, log (space expands a box)")),
@@ -22,6 +22,9 @@ var globalKeys = struct {
 	Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 	ForceQuit: key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit now")),
 	Restart:   key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restart the server")),
+	Unlock:    key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "unlock the vault")),
+	// ctrl+l, not L: L pairs this machine on the hosts view.
+	Lock: key.NewBinding(key.WithKeys("ctrl+l"), key.WithHelp("ctrl+l", "lock the vault")),
 }
 
 // navKeys move a cursor or switch tabs.

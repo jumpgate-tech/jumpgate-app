@@ -42,11 +42,12 @@ func (s *Server) registerKeyRoutes(mux *http.ServeMux) {
 // gateway that sells no keys has no store, and that must be a clear answer
 // rather than a nil dereference.
 func (s *Server) keyAdmin(w http.ResponseWriter) (KeyAdmin, bool) {
-	if s.cfg.Keys == nil {
+	k := s.keyStore()
+	if k == nil {
 		writeError(w, http.StatusNotImplemented, "this gateway has no key store configured")
 		return nil, false
 	}
-	return s.cfg.Keys, true
+	return k, true
 }
 
 func (s *Server) handleKeyList(w http.ResponseWriter, r *http.Request) {

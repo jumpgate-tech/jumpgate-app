@@ -33,6 +33,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/chainlist"
 	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/secrets"
 )
 
 // chainlistTimeout bounds the whole discovery — one feed fetch plus a bounded
@@ -165,7 +166,8 @@ func (s *Server) handleChainlist(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	keys := providerKeys(cfg)
+	// Locked: the defaults and plain keys alone.
+	keys, _ := s.providerKeys(cfg)
 
 	// Bounded by the request context, so a client that navigates away stops
 	// the probes rather than leaving them running against public endpoints.
@@ -231,9 +233,21 @@ func (s *Server) handleChainlist(w http.ResponseWriter, r *http.Request) {
 // the same zero-setup guarantee catalog.KnownSet makes. Every other placeholder
 // has no default and simply stays unresolved, because there is no such thing as
 // a demo Infura account.
-func providerKeys(cfg config.Config) map[string]string {
+//
+// A vault:NAME value is read from the vault. While the vault is locked those
+// keys are left out and the error is vault.ErrLocked; the map then holds the
+// plain keys and the defaults only.
+func (s *Server) providerKeys(cfg config.Config) (map[string]string, error) {
 	keys := make(map[string]string, len(cfg.ProviderKeys)+1)
+	var first error
 	for name, v := range cfg.ProviderKeys {
+		v, err := s.secret(secrets.ProviderName(strings.TrimSpace(name)), strings.TrimSpace(v))
+		if err != nil {
+			if first == nil {
+				first = err
+			}
+			continue
+		}
 		if v = strings.TrimSpace(v); v != "" {
 			keys[strings.TrimSpace(name)] = v
 		}
@@ -241,7 +255,41 @@ func providerKeys(cfg config.Config) map[string]string {
 	if keys[config.ValveKeyPlaceholder] == "" {
 		keys[config.ValveKeyPlaceholder] = catalog.DefaultValveKey
 	}
+	return keys, first
+}
+
+// literalProviderKeys is providerKeys for a config whose keys are already
+// resolved (keyedConfig): vault references are skipped, never read.
+func literalProviderKeys(cfg config.Config) map[string]string {
+	keys := make(map[string]string, len(cfg.ProviderKeys)+1)
+	for name, v := range cfg.ProviderKeys {
+		if v = strings.TrimSpace(v); v != "" && !config.IsSecretRef(v) {
+			keys[strings.TrimSpace(name)] = v
+		}
+	}
+	if keys[config.ValveKeyPlaceholder] == "" {
+		keys[config.ValveKeyPlaceholder] = catalog.DefaultValveKey
+	}
 	return keys
+}
+
+// keyedConfig is cfg with its provider keys read from the vault, for the
+// helpers that redact or dial with them. While locked the referenced keys
+// are missing, as in providerKeys.
+func (s *Server) keyedConfig(cfg config.Config) config.Config {
+	cfg.ProviderKeys, _ = s.providerKeys(cfg)
+	return cfg
+}
+
+// gatewayKeysReadable answers 503 locked (or the vault's error) when a
+// provider key cannot be read: without it a stored upstream URL that
+// carries the key could not be redacted, so no gateway view is sent.
+func (s *Server) gatewayKeysReadable(w http.ResponseWriter, cfg config.Config) bool {
+	if _, err := s.providerKeys(cfg); err != nil {
+		writeVaultError(w, err)
+		return false
+	}
+	return true
 }
 
 // redactKeys is the inverse of chainlist.Resolve: it puts the ${PLACEHOLDER}

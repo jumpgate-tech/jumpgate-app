@@ -21,7 +21,7 @@ import (
 func remotePaired(t *testing.T) config.Target {
 	t.Helper()
 	noAgent(t)
-	if _, err := ensureTransportKey(); err != nil {
+	if _, err := ensureTransportKeyFile(); err != nil {
 		t.Fatal(err)
 	}
 	agentKey, _ := signer.GenerateKey()

@@ -35,6 +35,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/logwatch"
 	"github.com/valve-tech/jumpgate/internal/monitor"
 	"github.com/valve-tech/jumpgate/internal/ops"
+	"github.com/valve-tech/jumpgate/internal/secrets"
 	"github.com/valve-tech/jumpgate/internal/setup"
 )
 
@@ -1749,6 +1750,11 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		writeErrorDetail(w, http.StatusConflict, "no AI provider is configured; set one in Settings first", "", api.CodeAIUnconfigured)
 		return
 	}
+	aiKey, err := s.secret(secrets.NameAIKey, cfg.AIKey)
+	if err != nil {
+		writeVaultError(w, err)
+		return
+	}
 
 	var req explainRequest
 	if r.Body != nil && r.ContentLength != 0 {
@@ -1802,7 +1808,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	redacted := !slices.Equal(sent, tail)
 	sent = ai.CapLines(sent)
 
-	provider, err := s.newAIProvider(cfg.AIProvider, cfg.AIKey, "")
+	provider, err := s.newAIProvider(cfg.AIProvider, aiKey, "")
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -2079,6 +2085,10 @@ type settingsResponse struct {
 
 	// AIDisclosure is the one line saying what Explain sends and to whom.
 	AIDisclosure string `json:"aiDisclosure"`
+
+	// VaultIdleLockMinutes locks the vault after this many idle minutes; 0
+	// is off.
+	VaultIdleLockMinutes int `json:"vaultIdleLockMinutes"`
 }
 
 // placeholderNamePattern is the name shape chainlist's ${...} slot accepts. It
@@ -2094,9 +2104,10 @@ func settingsResponseFrom(c config.Config) settingsResponse {
 		RefRPCBase: c.RefRPCBase,
 		// Never nil: a nil slice serialises as JSON null, and the UI should be
 		// able to iterate the field without a guard.
-		ProviderKeysSet:     []string{},
-		UpdateNotifyEnabled: !c.UpdateNotifyDisabled,
-		AIDisclosure:        ai.Disclosure(c.AIProvider),
+		ProviderKeysSet:      []string{},
+		UpdateNotifyEnabled:  !c.UpdateNotifyDisabled,
+		AIDisclosure:         ai.Disclosure(c.AIProvider),
+		VaultIdleLockMinutes: c.VaultIdleLockMinutes,
 	}
 	for name, v := range c.ProviderKeys {
 		if strings.TrimSpace(v) != "" {
@@ -2138,6 +2149,9 @@ type settingsRequest struct {
 	// aiKey is a pointer — GET never echoes the values back, so a client
 	// re-PUTting what it last read would otherwise wipe every key it has.
 	ProviderKeys map[string]string `json:"providerKeys"`
+
+	// VaultIdleLockMinutes sets the idle lock, 0 (off) to 1440.
+	VaultIdleLockMinutes *int `json:"vaultIdleLockMinutes"`
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
@@ -2161,17 +2175,54 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.VaultIdleLockMinutes != nil && !checkIdleLockMinutes(*req.VaultIdleLockMinutes) {
+		writeError(w, http.StatusBadRequest, "minutes must be between 0 (off) and 1440")
+		return
+	}
+
 	if req.AIProvider != nil && *req.AIProvider != "" && !ai.Known(*req.AIProvider) {
 		writeErrorDetail(w, http.StatusBadRequest, fmt.Sprintf("%q is not an AI provider", *req.AIProvider), "", api.CodeUnknownProvider)
 		return
 	}
 
+	// Secrets go into the vault first and config.json gets their references
+	// after, so a failure leaves at most an unreferenced vault entry, never
+	// a reference to nothing. A locked vault refuses before anything is
+	// written.
+	stored := map[string]string{}
+	if req.AIKey != nil && *req.AIKey != "" {
+		ref, err := s.putSecret(secrets.NameAIKey, *req.AIKey)
+		if err != nil {
+			writeVaultError(w, err)
+			return
+		}
+		stored[secrets.NameAIKey] = ref
+	}
+	for name, v := range req.ProviderKeys {
+		name, v = strings.TrimSpace(name), strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		ref, err := s.putSecret(secrets.ProviderName(name), v)
+		if err != nil {
+			writeVaultError(w, err)
+			return
+		}
+		stored[secrets.ProviderName(name)] = ref
+	}
+	type drop struct{ name, stored string }
+	var dropped []drop
 	cfg, err := s.updateConfig(func(c *config.Config) error {
 		if req.AIProvider != nil {
 			c.AIProvider = *req.AIProvider
 		}
 		if req.AIKey != nil {
-			c.AIKey = *req.AIKey
+			if *req.AIKey == "" {
+				dropped = append(dropped, drop{secrets.NameAIKey, c.AIKey})
+				c.AIKey = ""
+			} else {
+				c.AIKey = stored[secrets.NameAIKey]
+			}
 		}
 		if req.RefRPCBase != nil {
 			c.RefRPCBase = *req.RefRPCBase
@@ -2179,23 +2230,32 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		if req.UpdateNotifyEnabled != nil {
 			c.UpdateNotifyDisabled = !*req.UpdateNotifyEnabled
 		}
+		if req.VaultIdleLockMinutes != nil {
+			c.VaultIdleLockMinutes = *req.VaultIdleLockMinutes
+		}
 		for name, v := range req.ProviderKeys {
 			name = strings.TrimSpace(name)
 			v = strings.TrimSpace(v)
 			if v == "" {
+				dropped = append(dropped, drop{secrets.ProviderName(name), c.ProviderKeys[name]})
 				delete(c.ProviderKeys, name)
 				continue
 			}
 			if c.ProviderKeys == nil {
 				c.ProviderKeys = map[string]string{}
 			}
-			c.ProviderKeys[name] = v
+			c.ProviderKeys[name] = stored[secrets.ProviderName(name)]
 		}
 		return nil
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	for _, old := range dropped {
+		if err := s.dropSecret(old.name, old.stored); err != nil {
+			log.Printf("jumpgate: settings: forget a cleared secret: %v", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, settingsResponseFrom(cfg))

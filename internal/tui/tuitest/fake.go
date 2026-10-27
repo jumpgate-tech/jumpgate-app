@@ -56,6 +56,10 @@ type Fake struct {
 	SetModuleV    api.SetModuleResult
 	LastSetModule api.SetModule // what SetModule last received
 	SetupV        []api.SetupEvent
+
+	VaultV    api.VaultView // what Vault answers; Unlock and Lock change State
+	UnlockErr error         // what Unlock answers
+	Unlocks   [][]byte      // copies of every passphrase Unlock received
 }
 
 // NewFake is a Fake with empty data and open stream channels.
@@ -257,6 +261,9 @@ func (f *Fake) SaveSettings(_ context.Context, u api.SettingsUpdate) (api.Settin
 		if u.AIKey != nil {
 			f.SettingsV.AIKeySet = *u.AIKey != ""
 		}
+		if u.VaultIdleLockMinutes != nil {
+			f.SettingsV.VaultIdleLockMinutes = *u.VaultIdleLockMinutes
+		}
 	}
 	v := f.SettingsV
 	f.mu.Unlock()
@@ -279,6 +286,39 @@ func (f *Fake) SavePrefs(_ context.Context, p api.UIPrefs) (api.UIPrefs, error) 
 		f.PrefsV = p
 	}
 	return p, err
+}
+
+func (f *Fake) Vault(context.Context) (api.VaultView, error) {
+	f.mu.Lock()
+	v := f.VaultV
+	f.mu.Unlock()
+	return v, f.call("Vault")
+}
+
+// Unlock records a copy of the passphrase in Unlocks, clears the caller's
+// slice as the real client does, and answers UnlockErr or an unlocked vault.
+func (f *Fake) Unlock(_ context.Context, passphrase []byte) (api.VaultView, error) {
+	f.mu.Lock()
+	f.Unlocks = append(f.Unlocks, append([]byte(nil), passphrase...))
+	clear(passphrase)
+	err := f.UnlockErr
+	if err == nil {
+		f.VaultV.State = "unlocked"
+	}
+	v := f.VaultV
+	f.mu.Unlock()
+	if cerr := f.call("Unlock"); err == nil {
+		err = cerr
+	}
+	return v, err
+}
+
+func (f *Fake) Lock(context.Context) (api.VaultView, error) {
+	f.mu.Lock()
+	f.VaultV.State = "locked"
+	v := f.VaultV
+	f.mu.Unlock()
+	return v, f.call("Lock")
 }
 
 func (f *Fake) Controller(context.Context) (api.ControllerView, error) {

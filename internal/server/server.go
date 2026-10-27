@@ -33,6 +33,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/setup"
 	"github.com/valve-tech/jumpgate/internal/signer"
 	"github.com/valve-tech/jumpgate/internal/updatecheck"
+	"github.com/valve-tech/jumpgate/internal/vault"
 )
 
 // cookieName is the name of the cookie that carries the session token once
@@ -122,6 +123,17 @@ type Config struct {
 	// report it instead of telling the operator to create a key that exists.
 	SignerErr error
 
+	// Vault is the encrypted secret store. Nil means the server looks for
+	// the file at VaultPath on each vault request until it exists (S8).
+	Vault *vault.Vault
+	// VaultPath is where the vault file is; "" means secrets.VaultPath().
+	VaultPath string
+	// Unlocked runs after every unlock. It returns the controller signer,
+	// or nil when the controller key is not in the vault.
+	Unlocked func(v *vault.Vault) (signer.Signer, error)
+	// AfterUnlock runs after an unlock, once jobs are resumed.
+	AfterUnlock func(ctx context.Context)
+
 	// LoginDir is the directory login-link redirect files are written to
 	// (login.go), normally ~/.jumpgate/run/login. Every caller that serves
 	// browsers (the app, `jumpgate serve`) must set it: a browser opener is
@@ -138,11 +150,32 @@ type Config struct {
 	// must not race the driver. Unexported, so no caller outside the
 	// package can turn the driver off.
 	noJobsDriver bool
+	// now is the server's clock; nil is time.Now. Tests only, so the idle
+	// lock (vaultidle.go) can be driven without waiting real minutes.
+	now func() time.Time
 }
 
 // Server is the jumpgate local HTTP server.
 type Server struct {
 	cfg Config
+
+	// keys is the vault and the controller signer (vault.go); vctl
+	// serializes unlock and lock.
+	keys keyState
+	vctl vaultCtl
+	// bg counts the work each unlock starts (afterUnlock).
+	bg sync.WaitGroup
+
+	// relayMu guards a relay attached after start (AttachRelay), which
+	// takes the place of Config.Relay and Config.Keys.
+	relayMu       sync.RWMutex
+	relayAttached bool
+	relayH        http.Handler
+	relayKeys     KeyAdmin
+
+	// lastWrite is when the last authenticated POST, PUT or DELETE arrived,
+	// or the last unlock, in unix nanoseconds: the idle lock's clock (S9).
+	lastWrite atomic.Int64
 
 	// critical counts destructive operations in flight (clear, wipe). Shutdown
 	// waits for them; see criticalOp.
@@ -239,7 +272,9 @@ type Server struct {
 
 // New constructs a Server from the given Config.
 func New(cfg Config) *Server {
-	s := &Server{cfg: cfg, reg: newRegistry(), probes: newHostKeyProbes()}
+	s := &Server{cfg: cfg, reg: newRegistry(), probes: newHostKeyProbes(), now: cfg.now}
+	s.initKeys()
+	s.markActivity()
 	s.newExecutor = cfg.NewExecutor
 	if s.newExecutor == nil {
 		s.newExecutor = defaultNewExecutor
@@ -282,6 +317,7 @@ func New(cfg Config) *Server {
 	}
 	s.fleet = newFleetPoller(s)
 	s.reg.onRetire = s.fleet.retireStatus
+	go s.idleLoop(s.jobs.ctx, vaultIdleTick)
 	return s
 }
 
@@ -332,6 +368,7 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	s.registerAPIRoutes(mux)
+	s.registerVaultRoutes(mux)
 	s.registerKeyRoutes(mux)
 
 	uiHandler := http.FileServerFS(s.cfg.UI)
@@ -373,6 +410,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 			if tok, ok := strings.CutPrefix(authHeader, "Bearer "); ok && tokensEqual(tok, s.cfg.Token) {
+				s.noteRequest(r)
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -389,6 +427,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				writeErrorDetail(w, http.StatusForbidden, "cross-origin request refused", "", api.CodeForbidden)
 				return
 			}
+			s.noteRequest(r)
 			next.ServeHTTP(w, r)
 			return
 		}

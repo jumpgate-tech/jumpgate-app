@@ -18,6 +18,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/vault"
 )
 
 type pairRequest struct {
@@ -33,8 +34,9 @@ type pairRequest struct {
 // The host key must already be confirmed (the CLI does that with the
 // operator); an unconfirmed host is refused before anything runs on it.
 func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Signer == nil {
-		s.writeNoControllerKey(w)
+	sgn, serr := s.signer()
+	if sgn == nil {
+		writeNoControllerKey(w, serr)
 		return
 	}
 	var req pairRequest
@@ -147,8 +149,12 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 
 	transportKey := ""
 	if !local {
-		if transportKey, err = ensureTransportKey(); err != nil {
-			send(api.PairEvent{Step: "transport-key", Error: err.Error(), Code: api.CodeTransportKey})
+		if transportKey, err = s.ensureTransportKey(); err != nil {
+			code := api.CodeTransportKey
+			if errors.Is(err, vault.ErrLocked) {
+				code = api.CodeLocked
+			}
+			send(api.PairEvent{Step: "transport-key", Error: err.Error(), Code: code})
 			return
 		}
 	}
@@ -160,7 +166,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		addr, err = bootstrap.Run(ctx, bootstrap.Options{
 			Exec: priv, Local: local, LocalUID: os.Getuid(),
 			AgentBinary: agentbin.Reporting(func(line string) { send(api.PairEvent{Step: "upload", Line: line}) }),
-			Controller:  s.cfg.Signer.Address(), ControllerLabel: controllerLabel(), TransportKey: transportKey, Wire: t.Wire,
+			Controller:  sgn.Address(), ControllerLabel: controllerLabel(), TransportKey: transportKey, Wire: t.Wire,
 			Event: func(step, line string) { send(api.PairEvent{Step: step, Line: line}) },
 		})
 		if err != nil {
@@ -213,12 +219,17 @@ func (s *Server) verifyPairing(ctx context.Context, t config.Target) (uint64, *a
 	fail := func(err error, code api.Code, hint string) (uint64, *api.PairEvent) {
 		return 0, &api.PairEvent{Step: "verify", Error: err.Error(), Code: code, Hint: hint}
 	}
-	at, err := agentTarget(t)
+	at, err := s.agentTarget(t)
 	if err != nil {
 		return fail(err, api.CodeVerifyFailed, "")
 	}
+	sgn, serr := s.signer()
+	if sgn == nil {
+		_, e := apiErrorFor(&noControllerKey{serr})
+		return fail(serr, e.Code, e.Hint)
+	}
 	seqs := agentclient.NewMemorySeqStore()
-	client, err := agentclient.Dial(ctx, at, s.cfg.Signer, seqs)
+	client, err := agentclient.Dial(ctx, at, sgn, seqs)
 	switch {
 	case errors.Is(err, executor.ErrUnknownHost):
 		return fail(err, api.CodeUnknownHost, api.HintFor(api.CodeUnknownHost))

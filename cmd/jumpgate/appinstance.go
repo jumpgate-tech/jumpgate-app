@@ -14,6 +14,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/server"
 	"github.com/valve-tech/jumpgate/internal/signer"
+	"github.com/valve-tech/jumpgate/internal/vault"
 )
 
 // claimAppInstance takes the per-user single-instance lock for the tray/web
@@ -92,6 +93,9 @@ func loadServerConfig(stderr io.Writer) (config.Config, error) {
 	if cfg.Controller != nil && signer.Store(cfg.Controller.KeyStore) == signer.StoreFile {
 		keyFile = cfg.Controller.KeyRef
 	}
+	if w := plainSecretsWarning(cfg); w != "" {
+		fmt.Fprintf(stderr, "jumpgate: %s\n", w)
+	}
 	tightened, warnings, err := config.TightenState(keyFile)
 	for _, p := range tightened {
 		fmt.Fprintf(stderr, "jumpgate: other users could read or change %s; it is now restricted to you (if it holds a key, treat that key as exposed)\n", p)
@@ -102,16 +106,38 @@ func loadServerConfig(stderr io.Writer) (config.Config, error) {
 	return cfg, err
 }
 
+// plainSecretsWarning is the warning every start prints while any secret is
+// stored unencrypted: secretStore "file", a plain value in a secret field, or
+// a controller key file. Otherwise it is "".
+func plainSecretsWarning(cfg config.Config) string {
+	if cfg.SecretStore == config.SecretStoreFile || len(cfg.PlainSecrets()) > 0 ||
+		(cfg.Controller != nil && signer.Store(cfg.Controller.KeyStore) == signer.StoreFile) {
+		return "secrets are stored unencrypted; run `jumpgate vault migrate`"
+	}
+	return ""
+}
+
 // openControllerKey opens the controller key named in the config, or returns
 // nil when none has been made yet (the intent and pair routes then answer 503
 // no_controller_key). The key must be the identity config.json recorded: a
 // key with another address (a replaced keychain or 1Password item) is
-// signer.ErrAddressMismatch, never silently used.
-func openControllerKey(cfg config.Config) (signer.Signer, error) {
+// signer.ErrAddressMismatch, never silently used. A key in the vault opens
+// only through v unlocked: a nil or locked v is vault.ErrLocked (which also
+// matches signer.ErrVaultStore, so the server reads the key as vault-held).
+func openControllerKey(cfg config.Config, v *vault.Vault) (signer.Signer, error) {
 	if cfg.Controller == nil {
 		return nil, nil
 	}
-	k, err := signer.Open(context.Background(), signer.Store(cfg.Controller.KeyStore), cfg.Controller.KeyRef)
+	var k *signer.Key
+	var err error
+	if signer.Store(cfg.Controller.KeyStore) == signer.StoreVault {
+		if v == nil || v.Locked() {
+			return nil, fmt.Errorf("%w: %w", vault.ErrLocked, signer.ErrVaultStore)
+		}
+		k, err = signer.OpenVault(v, cfg.Controller.KeyRef)
+	} else {
+		k, err = signer.Open(context.Background(), signer.Store(cfg.Controller.KeyStore), cfg.Controller.KeyRef)
+	}
 	if err != nil {
 		return nil, err
 	}

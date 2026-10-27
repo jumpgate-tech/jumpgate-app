@@ -3,11 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/valve-tech/jumpgate/internal/api"
+	"github.com/valve-tech/jumpgate/internal/apiclient"
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
@@ -18,6 +21,8 @@ type homeDeps struct {
 	find func(context.Context) (daemon.Info, bool, error)
 	load func() (config.Config, error)
 	open func(context.Context, io.Writer) error
+	// vault reads the running server's vault state; it never starts one.
+	vault func(context.Context) (api.VaultView, error)
 }
 
 // termHome's open indirects through openWebApp at call time, so Task 8 can
@@ -26,6 +31,13 @@ var termHome = homeDeps{
 	find: daemon.Find,
 	load: config.Load,
 	open: func(ctx context.Context, w io.Writer) error { return openWebApp(ctx, w) },
+	vault: func(ctx context.Context) (api.VaultView, error) {
+		c, err := apiclient.Connect(ctx, apiclient.Options{})
+		if err != nil {
+			return api.VaultView{}, err
+		}
+		return c.Vault(ctx)
+	},
 }
 
 // stdoutIsTerminal reports whether stdout is a character device. A variable
@@ -114,6 +126,7 @@ func printOverview(ctx context.Context, out io.Writer) {
 		fmt.Fprintln(out, fitLine("  server:   unknown ", err))
 	case ok:
 		fmt.Fprintf(out, "  server:   running, pid %d, http://%s/\n", info.PID, info.HTTPAddr)
+		printVaultLine(ctx, out)
 	default:
 		fmt.Fprintln(out, "  server:   not running (it starts when a command needs it)")
 	}
@@ -136,6 +149,26 @@ func printOverview(ctx context.Context, out io.Writer) {
 	fmt.Fprintf(out, "  machines: %d (%d paired)\n", len(c.Targets), paired)
 	if len(c.Targets) == 0 {
 		fmt.Fprintln(out, "            add one: jumpgate hosts add NAME --ssh USER@HOST")
+	}
+}
+
+// printVaultLine is the running server's vault state, when it has a vault.
+// A server that cannot answer (an older version, say) prints nothing here.
+func printVaultLine(ctx context.Context, out io.Writer) {
+	if termHome.vault == nil {
+		return
+	}
+	v, err := termHome.vault(ctx)
+	if err != nil {
+		return
+	}
+	switch v.State {
+	case "locked":
+		fmt.Fprintln(out, "  vault:    locked: jobs wait for unlock; run `jumpgate unlock`")
+	case "unlocked":
+		fmt.Fprintln(out, "  vault:    unlocked")
+	case "unusable":
+		fmt.Fprintln(out, fitLine("  vault:    unusable: ", errors.New(safe(v.Reason))))
 	}
 }
 

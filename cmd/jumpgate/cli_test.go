@@ -717,7 +717,7 @@ func TestKeysInitRefusesAnExistingController(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	if code := cmdKeys([]string{"init", "--store", "file"}); code != 0 {
+	if code := cmdKeys([]string{"init", "--store", "file", "--insecure-plain"}); code != 0 {
 		t.Fatalf("first init exit %d", code)
 	}
 	c, err := config.Load()
@@ -725,10 +725,10 @@ func TestKeysInitRefusesAnExistingController(t *testing.T) {
 		t.Fatalf("config = %+v, %v", c, err)
 	}
 	before, _ := os.ReadFile(c.Controller.KeyRef)
-	if code := cmdKeys([]string{"init", "--store", "file"}); code == 0 {
+	if code := cmdKeys([]string{"init", "--store", "file", "--insecure-plain"}); code == 0 {
 		t.Fatal("second init succeeded")
 	}
-	if code := cmdKeys([]string{"init", "--store", "file", "--ref", filepath.Join(home, "other.key")}); code == 0 {
+	if code := cmdKeys([]string{"init", "--store", "file", "--insecure-plain", "--ref", filepath.Join(home, "other.key")}); code == 0 {
 		t.Fatal("init with a new ref replaced the controller")
 	}
 	if after, _ := os.ReadFile(c.Controller.KeyRef); string(after) != string(before) {
@@ -750,7 +750,7 @@ func TestKeysInitReportsAnExistingKey(t *testing.T) {
 	if err := os.WriteFile(ref, []byte(orig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if code := cmdKeys([]string{"init", "--store", "file", "--ref", ref}); code == 0 {
+	if code := cmdKeys([]string{"init", "--store", "file", "--insecure-plain", "--ref", ref}); code == 0 {
 		t.Fatal("init over an existing key succeeded")
 	}
 	if b, _ := os.ReadFile(ref); string(b) != orig {
@@ -857,10 +857,10 @@ func TestExitClasses(t *testing.T) {
 	if code := cmdKeys([]string{"show"}); code != 1 {
 		t.Errorf("keys show with no key: exit %d, want 1", code)
 	}
-	if code := cmdKeys([]string{"init", "--store", "file"}); code != 0 {
+	if code := cmdKeys([]string{"init", "--store", "file", "--insecure-plain"}); code != 0 {
 		t.Fatalf("init exit %d", code)
 	}
-	if code := cmdKeys([]string{"init", "--store", "file"}); code != 1 {
+	if code := cmdKeys([]string{"init", "--store", "file", "--insecure-plain"}); code != 1 {
 		t.Errorf("second keys init: exit %d, want 1", code)
 	}
 	if err := os.WriteFile(filepath.Join(home, ".jumpgate", "config.json"), []byte("{not json"), 0o600); err != nil {

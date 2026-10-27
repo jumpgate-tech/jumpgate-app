@@ -109,6 +109,18 @@ const (
 	// CodeModuleNotApplicable: the module does not run on that chain, client
 	// or gateway; the message is the module's own reason.
 	CodeModuleNotApplicable Code = "module_not_applicable"
+
+	// The encrypted vault (internal/vault).
+	// CodeLocked: the vault is locked; secrets and the vault-held key are unavailable.
+	CodeLocked Code = "locked"
+	// CodeWrongPassphrase: no key slot accepted the passphrase or key.
+	CodeWrongPassphrase Code = "wrong_passphrase"
+	// CodeVaultCorrupt: the vault file was changed or damaged.
+	CodeVaultCorrupt Code = "vault_corrupt"
+	// CodeVaultUnsafe: the vault file failed its integrity checks (mode, owner, link).
+	CodeVaultUnsafe Code = "vault_unsafe"
+	// CodeNoVault: there is no vault file.
+	CodeNoVault Code = "no_vault"
 )
 
 // Exit classes: the CLI's process exit statuses, published in the README.
@@ -193,6 +205,11 @@ var registry = map[Code]codeInfo{
 	CodeJobLogInvalid:       {"this job's history on the box does not verify against the box's agent key: do not act on it; inspect /var/lib/jumpgate/jobs on the box, and re-pair the box if its key changed", ExitSecurity},
 	CodeUnknownPlan:         {"this box's agent does not know that job's plan (it was downgraded?); re-pair the box to upgrade its agent", ExitFailed},
 	CodeModuleNotApplicable: {"Pick a chain and client the module supports; /api/catalog lists them.", ExitFailed},
+	CodeLocked:              {"unlock the vault: `jumpgate unlock` or the unlock prompt in the TUI or web app; plans wait at their next step until then", ExitUsage},
+	CodeWrongPassphrase:     {"that passphrase does not open the vault; try again, or use a recovery code", ExitFailed},
+	CodeVaultCorrupt:        {"the vault file was changed or damaged and jumpgate will not fall back to plain files; restore a backup: `jumpgate stop`, then `jumpgate vault restore FILE`", ExitSecurity},
+	CodeVaultUnsafe:         {"the vault file is not private to this user, is not a regular file, or is a link; jumpgate never fixes it itself: check who changed it, then fix it as the message says", ExitSecurity},
+	CodeNoVault:             {"create one with `jumpgate vault migrate` (moves existing secrets in) or `jumpgate vault init`", ExitUsage},
 	CodeJobKindNotAllowed:   {"this server starts only the jobs it knows (for example `jumpgate migrate-names HOST`); other node operations have their own commands", ExitUsage},
 }
 

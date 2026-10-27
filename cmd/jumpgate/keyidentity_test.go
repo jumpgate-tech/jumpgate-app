@@ -33,7 +33,7 @@ func fileController(t *testing.T) (ref, addr string) {
 func TestOpenControllerKeyRefusesAKeyWithAnotherAddress(t *testing.T) {
 	shortHome(t)
 	ref, _ := fileController(t)
-	_, err := openControllerKey(config.Config{Controller: &config.Controller{KeyStore: "file", KeyRef: ref, Address: otherAddress}})
+	_, err := openControllerKey(config.Config{Controller: &config.Controller{KeyStore: "file", KeyRef: ref, Address: otherAddress}}, nil)
 	if !errors.Is(err, signer.ErrAddressMismatch) {
 		t.Fatalf("err = %v, want ErrAddressMismatch", err)
 	}
@@ -45,7 +45,7 @@ func TestOpenControllerKeyRefusesAKeyWithAnotherAddress(t *testing.T) {
 func TestOpenControllerKeyAcceptsTheRecordedAddressInAnyCase(t *testing.T) {
 	shortHome(t)
 	ref, addr := fileController(t)
-	k, err := openControllerKey(config.Config{Controller: &config.Controller{KeyStore: "file", KeyRef: ref, Address: strings.ToLower(addr)}})
+	k, err := openControllerKey(config.Config{Controller: &config.Controller{KeyStore: "file", KeyRef: ref, Address: strings.ToLower(addr)}}, nil)
 	if err != nil || k == nil {
 		t.Fatalf("k = %v, err = %v", k, err)
 	}

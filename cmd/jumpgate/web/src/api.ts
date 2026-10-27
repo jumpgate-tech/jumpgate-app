@@ -1533,6 +1533,9 @@ export interface Settings {
   // newer release. An older binary behind a newer bundle omits it; the UI
   // treats a missing value as "on", matching the server default.
   updateNotifyEnabled?: boolean;
+  // vaultIdleLockMinutes: the vault locks after this many idle minutes; 0
+  // is off. An older binary omits it.
+  vaultIdleLockMinutes?: number;
 }
 
 export function getSettings(): Promise<Settings> {
@@ -1555,6 +1558,9 @@ export interface PutSettingsRequest {
   // updateNotifyEnabled toggles proactive update notices. Omit to leave it
   // unchanged, same rule as every other field here.
   updateNotifyEnabled?: boolean;
+  // vaultIdleLockMinutes sets the idle lock, 0 (off) to 1440. Omit to leave
+  // it unchanged.
+  vaultIdleLockMinutes?: number;
 }
 
 export function putSettings(body: PutSettingsRequest): Promise<Settings> {
@@ -1596,6 +1602,49 @@ export interface Update {
 // background call.
 export function getUpdate(refresh = false): Promise<Update> {
   return request<Update>(refresh ? "/api/update?refresh=1" : "/api/update");
+}
+
+// ---------------------------------------------------------------------
+// vault (internal/server/vault.go, internal/api/vault.go)
+// ---------------------------------------------------------------------
+
+export type VaultState = "none" | "locked" | "unlocked" | "unusable";
+
+// Vault mirrors api.VaultView. plain lists secret fields still stored
+// unencrypted in config.json.
+export interface Vault {
+  state: VaultState;
+  slots: string[];
+  plain?: string[];
+  reason?: string;
+}
+
+export function getVault(): Promise<Vault> {
+  return request<Vault>("/api/vault");
+}
+
+// toBase64 encodes the UTF-8 bytes of s: api.UnlockRequest.Passphrase is a
+// []byte, which encoding/json reads as base64.
+function toBase64(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  bytes.fill(0);
+  return btoa(bin);
+}
+
+// unlockVault sends the passphrase; it is never logged. A wrong one is an
+// ApiError with code "wrong_passphrase" (403).
+export function unlockVault(passphrase: string): Promise<Vault> {
+  return request<Vault>("/api/vault/unlock", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ passphrase: toBase64(passphrase) }),
+  });
+}
+
+export function lockVault(): Promise<Vault> {
+  return request<Vault>("/api/vault/lock", { method: "POST" });
 }
 
 // ---------------------------------------------------------------------

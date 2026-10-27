@@ -44,13 +44,14 @@ type Glyphs struct {
 	UpDown                                            string // the scroll keys in a footer
 	Info, OK, Warn, Fail                              string // activity-log severity marks
 	Open, Closed                                      string // an expanded / collapsed tree node
+	Mask                                              string // one typed character of a hidden field
 	Spark                                             []string
 	ASCII                                             bool
 }
 
 var (
-	unicodeGlyphs = Glyphs{Flag: "⚑", Full: "█", Empty: "░", Tick: "│", Ellipsis: "…", Sel: "▸", Sep: "·", Dash: "–", UpDown: "↑↓", Info: "·", OK: "✓", Warn: "▲", Fail: "✗", Open: "▾", Closed: "▹", Spark: strings.Split("▁▂▃▄▅▆▇█", "")}
-	asciiGlyphs   = Glyphs{Flag: "!", Full: "#", Empty: ".", Tick: "|", Ellipsis: "~", Sel: ">", Sep: "|", Dash: "-", UpDown: "up/dn", Info: "-", OK: "+", Warn: "!", Fail: "x", Open: "-", Closed: "+", Spark: []string{"_", ".", "-", "=", "#"}, ASCII: true}
+	unicodeGlyphs = Glyphs{Flag: "⚑", Full: "█", Empty: "░", Tick: "│", Ellipsis: "…", Sel: "▸", Sep: "·", Dash: "–", UpDown: "↑↓", Info: "·", OK: "✓", Warn: "▲", Fail: "✗", Open: "▾", Closed: "▹", Mask: "•", Spark: strings.Split("▁▂▃▄▅▆▇█", "")}
+	asciiGlyphs   = Glyphs{Flag: "!", Full: "#", Empty: ".", Tick: "|", Ellipsis: "~", Sel: ">", Sep: "|", Dash: "-", UpDown: "up/dn", Info: "-", OK: "+", Warn: "!", Fail: "x", Open: "-", Closed: "+", Mask: "*", Spark: []string{"_", ".", "-", "=", "#"}, ASCII: true}
 )
 
 // DetectGlyphs picks the glyph set: the preference when it names one, else

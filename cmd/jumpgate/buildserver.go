@@ -2,20 +2,165 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/valve-tech/jumpgate/cmd/jumpgate/web"
+	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
 	"github.com/valve-tech/jumpgate/internal/relay"
 	"github.com/valve-tech/jumpgate/internal/secretenv"
+	"github.com/valve-tech/jumpgate/internal/secrets"
 	"github.com/valve-tech/jumpgate/internal/server"
+	"github.com/valve-tech/jumpgate/internal/signer"
+	"github.com/valve-tech/jumpgate/internal/vault"
 )
+
+// credentialsDirEnv is where systemd puts a unit's credentials, and
+// vaultCredName the one holding the vault's 32-byte slot key.
+const (
+	credentialsDirEnv = "CREDENTIALS_DIRECTORY"
+	vaultCredName     = "jumpgate-vault-key"
+)
+
+// openStartVault opens ~/.jumpgate/vault, locked. No vault yet is nil: the
+// server finds one made later (S8). A vault that will not open is logged and
+// nil too; the server reports it as unusable.
+func openStartVault(logf func(string, ...any)) *vault.Vault {
+	p, err := secrets.VaultPath()
+	if err != nil {
+		logf("vault: %v", err)
+		return nil
+	}
+	v, err := vault.Open(p)
+	switch {
+	case errors.Is(err, vault.ErrNoVault):
+		return nil
+	case err != nil:
+		logf("vault %s cannot be opened: %v", p, err)
+		return nil
+	}
+	return v
+}
+
+// unlockedHook runs after every unlock: it moves plain secrets into the
+// vault (never under secretStore "file"), logs what moved by field and path
+// (never a value), and opens the controller key when the vault holds it. A
+// key kept elsewhere stays as it was (nil, nil).
+func unlockedHook(logf func(string, ...any)) func(*vault.Vault) (signer.Signer, error) {
+	return func(v *vault.Vault) (signer.Signer, error) {
+		cfg, err := config.Load()
+		if err != nil {
+			return nil, err
+		}
+		if cfg.SecretStore != config.SecretStoreFile {
+			rep, err := secrets.Migrate(v)
+			if err != nil {
+				logf("moving plain secrets into the vault stopped: %v; the next unlock or `jumpgate vault migrate` resumes it", err)
+			}
+			if len(rep.Moved) > 0 {
+				logf("moved into the vault: %s", strings.Join(rep.Moved, ", "))
+			}
+			if len(rep.Removed) > 0 {
+				logf("overwrote and removed the plain copies: %s", strings.Join(rep.Removed, ", "))
+			}
+			if len(rep.Conflicts) > 0 {
+				logf("left plain, the vault holds a different value: %s", strings.Join(rep.Conflicts, ", "))
+			}
+			if cfg, err = config.Load(); err != nil {
+				return nil, err
+			}
+		}
+		if cfg.Controller == nil || signer.Store(cfg.Controller.KeyStore) != signer.StoreVault {
+			return nil, nil
+		}
+		return openControllerKey(cfg, v)
+	}
+}
+
+// credentialKEK reads the vault's slot key from the systemd credential
+// $CREDENTIALS_DIRECTORY/jumpgate-vault-key: exactly 32 bytes, read through
+// readPrivateFile. ok is false when there is none or it is unusable.
+func credentialKEK(getenv func(string) string) ([]byte, bool) {
+	kek, err := readCredentialKEK(getenv)
+	return kek, err == nil && kek != nil
+}
+
+// readCredentialKEK is credentialKEK with the reason; nil, nil when no
+// credential directory is set.
+func readCredentialKEK(getenv func(string) string) ([]byte, error) {
+	dir := getenv(credentialsDirEnv)
+	if dir == "" {
+		return nil, nil
+	}
+	p := filepath.Join(dir, vaultCredName)
+	raw, err := readPrivateFile(p)
+	if err != nil {
+		clear(raw)
+		return nil, err
+	}
+	if len(raw) != 32 {
+		clear(raw)
+		return nil, fmt.Errorf("the credential %s is not a 32-byte key", p)
+	}
+	return raw, nil
+}
+
+// keystoreKEK is secrets.KeystoreKEK; a test seam.
+var keystoreKEK = secrets.KeystoreKEK
+
+// autoUnlock is the vault-auto-unlock task: it unlocks with the systemd
+// credential when one was passed, then with each keystore slot of v (an OS
+// key store item this user can read). A failure leaves the vault locked and
+// is logged; the passphrase still unlocks it.
+func autoUnlock(s *server.Server, v *vault.Vault, getenv func(string) string, logf func(string, ...any)) {
+	kek, err := readCredentialKEK(getenv)
+	switch {
+	case err != nil:
+		logf("vault stays locked: %v; the passphrase still works", err)
+	case kek == nil:
+	case s.VaultState().State == "unlocked":
+		clear(kek)
+		return
+	default:
+		if _, err := s.UnlockKEK(vault.SlotSystemdCreds, kek); err == nil {
+			logf("vault unlocked with the systemd credential %s", vaultCredName)
+			return
+		}
+		logf("vault stays locked: %v; the passphrase still works", err)
+	}
+	if v == nil {
+		return
+	}
+	for _, sl := range v.Slots() {
+		if sl.Kind != vault.SlotKeystore {
+			continue
+		}
+		if s.VaultState().State == "unlocked" {
+			return
+		}
+		kek, err := keystoreKEK(context.Background(), signer.Store(sl.Store), sl.Ref)
+		if err != nil {
+			logf("vault: the %s item %s did not open: %v; the passphrase still works", safe(sl.Store), safe(sl.Ref), err)
+			continue
+		}
+		if _, err := s.UnlockKEK(vault.SlotKeystore, kek); err != nil {
+			logf("vault stays locked: %v; the passphrase still works", err)
+			continue
+		}
+		logf("vault unlocked with the %s item %s", safe(sl.Store), safe(sl.Ref))
+		return
+	}
+}
 
 // serverOptions is everything that shapes the controller server. The web app
 // (runApp) and `jumpgate serve` fill it from the same flags and environment
@@ -198,6 +343,12 @@ type builtServer struct {
 // auto-started the server gets a clear answer instead of a server that never
 // appears. Everything else that is wrong (a corrupt config, a half-configured
 // relay) is fatal.
+//
+// A controller key kept in the vault is different: the server starts
+// `locked` (box routes answer 503 locked, distinct from no_controller_key)
+// and signs nothing until an unlock. Each unlock first moves any plain
+// secrets into the vault (secrets.Migrate), then opens the key. At start the
+// vault-auto-unlock task tries the systemd credential, if one was passed.
 func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtServer, error) {
 	logf := func(format string, a ...any) { fmt.Fprintf(logw, "jumpgate: "+format+"\n", a...) }
 	// opts already holds the tokens; drop them from the environment before
@@ -214,8 +365,20 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 	if err != nil {
 		return nil, err
 	}
-	sgn, keyErr := openControllerKey(cfg)
-	if keyErr != nil {
+	v := openStartVault(logf)
+	if v != nil || cfg.SecretStore == config.SecretStoreVault {
+		// Before the first unlock: a core file or a ptrace of this process
+		// would otherwise expose the data key.
+		if err := vault.DisableCoreDumps(); err != nil {
+			logf("%v", err)
+		}
+	}
+	sgn, keyErr := openControllerKey(cfg, v)
+	switch {
+	case errors.Is(keyErr, vault.ErrLocked):
+		logf("the controller key is in the vault, which is locked; box commands wait for `jumpgate unlock`")
+		sgn = nil
+	case keyErr != nil:
 		logf("controller key not loaded, box commands are unavailable: %v", keyErr)
 		sgn = nil
 	}
@@ -225,43 +388,58 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 		return nil, fmt.Errorf("embedded UI: %w", err)
 	}
 
-	relayOpts := relayBuildOptions(opts)
-	relayHandler, relayRuntime, err := relay.Build(relayOpts)
+	deferred, err := vaultTokens(opts)
 	if err != nil {
-		// A half-configured relay is fatal rather than quietly off. Serving
-		// unmetered traffic is worse than serving none: the operator sells
-		// access and would be giving it away with nothing to report it.
-		return nil, fmt.Errorf("relay: %w", err)
+		return nil, err
 	}
-	if w := relay.UnmeteredWarning(relayOpts); w != "" {
-		logf("%s", w)
+	var (
+		relayHandler http.Handler
+		relayRuntime relay.Runtime
+		keyAdmin     server.KeyAdmin
+		later        *vaultRelay
+	)
+	if deferred {
+		// The tokens are in the vault: the relay and key admin are built
+		// after the first unlock that can read them (vaultRelay.start).
+		later = &vaultRelay{opts: opts, logf: logf}
+		if opts.RelayBind != "" || opts.BillingSocket != "" {
+			logf("relay waits for the vault to be unlocked")
+		}
+	} else {
+		relayHandler, relayRuntime, keyAdmin, err = buildRelay(opts, logf)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	// Key management is the operator's surface and uses the ADMIN credential,
-	// which mints and revokes keys. The relay's credential cannot do either.
-	adminClient, err := relay.BuildAdmin(opts.BillingSocket, opts.AdminToken)
-	if err != nil {
-		return nil, fmt.Errorf("key store: %w", err)
+	hook := unlockedHook(logf)
+	unlocked := hook
+	if later != nil {
+		unlocked = func(v *vault.Vault) (signer.Signer, error) {
+			later.unlocked(v)
+			return hook(v)
+		}
 	}
-	// Assign only when non-nil. A nil *AdminClient inside a non-nil interface
-	// would pass every nil check and then panic on the first click, instead of
-	// answering the clean 501 a gateway with no key store should give.
-	var keyAdmin server.KeyAdmin
-	if adminClient != nil {
-		keyAdmin = adminClient
+	var s *server.Server
+	var afterUnlock func(context.Context)
+	if later != nil {
+		afterUnlock = func(ctx context.Context) { later.start(ctx, s) }
 	}
 
 	token := server.NewSessionToken()
-	s := server.New(server.Config{
-		Bind:      opts.Bind,
-		Token:     token,
-		UI:        uiFS,
-		Relay:     relayHandler,
-		Keys:      keyAdmin,
-		RelayBind: opts.RelayBind,
-		Signer:    sgn,
-		SignerErr: keyErr,
-		Shutdown:  shutdown,
+	s = server.New(server.Config{
+		Bind:        opts.Bind,
+		Token:       token,
+		UI:          uiFS,
+		Relay:       relayHandler,
+		Keys:        keyAdmin,
+		RelayBind:   opts.RelayBind,
+		Signer:      sgn,
+		SignerErr:   keyErr,
+		Vault:       v,
+		Unlocked:    unlocked,
+		AfterUnlock: afterUnlock,
+		Shutdown:    shutdown,
 		// Without it the mint API returns bare codes and `jumpgate open` can
 		// only print the link.
 		LoginDir: loginDir(),
@@ -271,7 +449,8 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 		srv: s, token: token, opts: opts, relay: relayHandler, keyAdmin: keyAdmin, signerErr: keyErr,
 		shape: daemon.Shape{
 			RelayBind: opts.RelayBind, BillingSocket: opts.BillingSocket, ERPCURL: opts.ERPCURL,
-			ERPCProject: opts.ERPCProject, Meter: opts.Meter, KeyAdmin: keyAdmin != nil,
+			ERPCProject: opts.ERPCProject, Meter: opts.Meter,
+			KeyAdmin: keyAdmin != nil || (deferred && opts.BillingSocket != "" && opts.AdminToken != ""),
 		},
 	}
 	// Warm the update check so the first UI poll is instant. It respects the
@@ -289,6 +468,11 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 			}
 		}
 	}})
+	if v != nil || os.Getenv(credentialsDirEnv) != "" {
+		b.background = append(b.background, backgroundTask{"vault-auto-unlock", func(context.Context) {
+			autoUnlock(s, v, os.Getenv, logf)
+		}})
+	}
 	if relayHandler != nil {
 		// The data plane runs beside the control plane on its own listener. A
 		// failure here is the relay's and must not be mistaken for the UI
@@ -303,6 +487,115 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 		b.background = append(b.background, backgroundTask{"relay-runtime", relayRuntime.Run})
 	}
 	return b, nil
+}
+
+// vaultTokens reports whether the relay or admin token is a vault reference.
+// A reference must name the token's own entry, so neither variable can reach
+// the controller key or any other secret.
+func vaultTokens(opts serverOptions) (bool, error) {
+	deferred := false
+	for _, tk := range []struct{ env, val, own string }{
+		{envRelayToken, opts.RelayToken, secrets.NameRelayToken},
+		{envAdminToken, opts.AdminToken, secrets.NameAdminToken},
+	} {
+		if !looksLikeRef(tk.val) {
+			continue
+		}
+		if tk.val != config.SecretRef(tk.own) {
+			return false, fmt.Errorf("%s: a vault reference here must be %s", tk.env, config.SecretRef(tk.own))
+		}
+		deferred = true
+	}
+	return deferred, nil
+}
+
+// buildRelay builds the data plane and key admin from opts, whose tokens are
+// plain values.
+func buildRelay(opts serverOptions, logf func(string, ...any)) (http.Handler, relay.Runtime, server.KeyAdmin, error) {
+	relayOpts := relayBuildOptions(opts)
+	relayHandler, relayRuntime, err := relay.Build(relayOpts)
+	if err != nil {
+		// A half-configured relay is fatal rather than quietly off. Serving
+		// unmetered traffic is worse than serving none: the operator sells
+		// access and would be giving it away with nothing to report it.
+		return nil, relay.Runtime{}, nil, fmt.Errorf("relay: %w", err)
+	}
+	if w := relay.UnmeteredWarning(relayOpts); w != "" {
+		logf("%s", w)
+	}
+	// Key management is the operator's surface and uses the ADMIN credential,
+	// which mints and revokes keys. The relay's credential cannot do either.
+	adminClient, err := relay.BuildAdmin(opts.BillingSocket, opts.AdminToken)
+	if err != nil {
+		return nil, relay.Runtime{}, nil, fmt.Errorf("key store: %w", err)
+	}
+	// Assign only when non-nil. A nil *AdminClient inside a non-nil interface
+	// would pass every nil check and then panic on the first click, instead of
+	// answering the clean 501 a gateway with no key store should give.
+	var keyAdmin server.KeyAdmin
+	if adminClient != nil {
+		keyAdmin = adminClient
+	}
+	return relayHandler, relayRuntime, keyAdmin, nil
+}
+
+// vaultRelay builds and attaches the relay whose tokens are in the vault,
+// after the first unlock that can read them. A failed attempt is logged and
+// tried again on the next unlock.
+type vaultRelay struct {
+	opts serverOptions
+	logf func(string, ...any)
+
+	mu   sync.Mutex
+	v    *vault.Vault
+	done bool
+}
+
+// unlocked records the vault an unlock opened.
+func (d *vaultRelay) unlocked(v *vault.Vault) {
+	d.mu.Lock()
+	d.v = v
+	d.mu.Unlock()
+}
+
+// start resolves the tokens, builds the relay, attaches it to s and starts
+// its listener and runtime on ctx. It does nothing once attached.
+func (d *vaultRelay) start(ctx context.Context, s *server.Server) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.done || d.v == nil {
+		return
+	}
+	o := d.opts
+	var err error
+	if o.RelayToken, err = secrets.Resolve(d.v, o.RelayToken); err == nil {
+		o.AdminToken, err = secrets.Resolve(d.v, o.AdminToken)
+	}
+	if err != nil {
+		d.logf("relay not started: its token: %v; the next unlock tries again", err)
+		return
+	}
+	h, rt, keys, err := buildRelay(o, d.logf)
+	if err != nil {
+		d.logf("relay not started: %v; the next unlock tries again", err)
+		return
+	}
+	if err := s.AttachRelay(h, keys); err != nil {
+		d.done = true
+		d.logf("relay not started: %v", err)
+		return
+	}
+	d.done = true
+	if h == nil {
+		return
+	}
+	go func() {
+		if err := s.ListenAndServeRelay(ctx); err != nil {
+			d.logf("relay data plane: %v", err)
+		}
+	}()
+	go rt.Run(ctx)
+	d.logf("metered RPC data plane on %s", o.RelayBind)
 }
 
 // start runs every background task in its own goroutine.

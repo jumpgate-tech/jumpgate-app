@@ -4,7 +4,7 @@ package signer
 
 import "errors"
 
-var errWinCredUnsupported = errors.New("signer: Windows Credential Manager exists only on Windows; use --store keychain or --store file")
+var errWinCredUnsupported = errors.New("signer: Windows Credential Manager exists only on Windows; use --store keychain or --store vault")
 
 type noCreds struct{}
 

@@ -132,7 +132,7 @@ func TestServerStartupTightensExistingSecrets(t *testing.T) {
 		}
 	}
 	// The key opens again once it is private.
-	if _, err := openControllerKey(cfg); err != nil {
+	if _, err := openControllerKey(cfg, nil); err != nil {
 		t.Fatalf("openControllerKey after startup: %v", err)
 	}
 }

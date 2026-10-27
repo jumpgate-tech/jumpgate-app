@@ -145,7 +145,9 @@ func authMethods(cfg SSHConfig, deadline time.Time) (methods []ssh.AuthMethod, r
 		agentConn = c
 		agentClient = agent.NewClient(c)
 	}
-	if cfg.KeyPath != "" {
+	if cfg.Signer != nil {
+		fileSigner = cfg.Signer
+	} else if cfg.KeyPath != "" {
 		keyBytes, err := os.ReadFile(cfg.KeyPath)
 		if err != nil {
 			release()

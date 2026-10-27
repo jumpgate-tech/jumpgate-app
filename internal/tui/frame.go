@@ -132,6 +132,9 @@ func (a *App) header(w int) string {
 	}
 	if a.fleetHas {
 		right = a.alertCount() + " " + a.gl.Sep + " " + right
+		if a.fleet.Locked {
+			right = a.th.Bad.Render("LOCKED: jobs wait for unlock") + " " + a.gl.Sep + " " + right
+		}
 	}
 	right += " "
 	left = truncate(left, max(w-lipgloss.Width(right)-1, 1), a.gl.Ellipsis)

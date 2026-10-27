@@ -80,7 +80,7 @@ type AgentPairing struct {
 // Controller is this machine's signing identity. The key itself is never here:
 // KeyRef names where it lives (a path, a keychain item, an op:// reference).
 type Controller struct {
-	KeyStore string `json:"keyStore"` // "file" | "keychain" | "wincred" | "1password"
+	KeyStore string `json:"keyStore"` // "file" | "keychain" | "wincred" | "1password" | "vault"
 	KeyRef   string `json:"keyRef"`
 	Address  string `json:"address"`
 }
@@ -170,7 +170,7 @@ type VPN struct {
 	TargetID string `json:"targetId,omitempty"`
 
 	// Config is the raw WireGuard `.conf` text, INCLUDING the interface private
-	// key. It is a secret and lives here for the same reason AIKey and
+	// key, or a `vault:` reference (SecretRef) to that text. It is a secret and lives here for the same reason AIKey and
 	// ProviderKeys do: config.json is written mode 0600, and — like those — the
 	// API never returns it (a settings response reports that an overlay is
 	// configured, never its bytes).
@@ -266,7 +266,7 @@ type Config struct {
 	Orphans []OrphanedContainer `json:"orphanedContainers,omitempty"`
 
 	AIProvider string `json:"aiProvider"` // ""|gemini|groq|ollama
-	AIKey      string `json:"aiKey"`
+	AIKey      string `json:"aiKey"`      // a value or a `vault:` reference (SecretRef)
 	RefRPCBase string `json:"refRpcBase"` // default: defaultRefRPCBase
 
 	// UpdateNotifyDisabled turns off proactive update notices. The zero value
@@ -295,6 +295,8 @@ type Config struct {
 	// "INFURA_API_KEY" — matching the ${NAME} slots the chain feed uses. Keyed
 	// by placeholder rather than by chain because a provider key is an account,
 	// not a chain.
+	//
+	// Each value is the key itself or a `vault:` reference (SecretRef).
 	//
 	// Secrets: stored here, never returned by the API. See settingsResponse,
 	// which reports which placeholders are set and never their values.
@@ -329,6 +331,66 @@ type Config struct {
 	// at /api/ui-prefs (internal/api.UIPrefs). Kept raw here so config does
 	// not depend on the API package.
 	UI json.RawMessage `json:"ui,omitempty"`
+
+	// SecretStore says where secrets live: SecretStoreVault (the encrypted
+	// vault; Save then refuses any plain secret value), SecretStoreFile
+	// (plain in this file), or empty (not chosen yet; plain values allowed).
+	SecretStore string `json:"secretStore,omitempty"`
+
+	// VaultIdleLockMinutes locks the vault after this many idle minutes.
+	// Zero means never.
+	VaultIdleLockMinutes int `json:"vaultIdleLockMinutes,omitempty"`
+}
+
+// Secret store choices for Config.SecretStore.
+const (
+	SecretStoreVault = "vault"
+	SecretStoreFile  = "file"
+)
+
+// SecretRefPrefix marks a secret field's value as a reference to a vault
+// entry rather than the secret itself.
+const SecretRefPrefix = "vault:"
+
+// SecretRef returns the reference to vault entry name.
+func SecretRef(name string) string { return SecretRefPrefix + name }
+
+// IsSecretRef reports whether s is a vault reference with a non-empty name.
+func IsSecretRef(s string) bool {
+	_, ok := SecretRefName(s)
+	return ok
+}
+
+// SecretRefName returns the vault entry name s refers to.
+func SecretRefName(s string) (name string, ok bool) {
+	name, ok = strings.CutPrefix(s, SecretRefPrefix)
+	if !ok || name == "" {
+		return "", false
+	}
+	return name, true
+}
+
+// PlainSecrets returns, sorted, the paths of secret fields that hold a plain
+// value rather than a vault reference: "aiKey", "providerKeys.<NAME>",
+// "vpns.<id>.config". Empty fields are not listed.
+func (c Config) PlainSecrets() []string {
+	var out []string
+	plain := func(v string) bool { return v != "" && !IsSecretRef(v) }
+	if plain(c.AIKey) {
+		out = append(out, "aiKey")
+	}
+	for name, v := range c.ProviderKeys {
+		if plain(v) {
+			out = append(out, "providerKeys."+name)
+		}
+	}
+	for _, v := range c.VPNs {
+		if plain(v.Config) {
+			out = append(out, "vpns."+v.ID+".config")
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ValveKeyPlaceholder is the ${NAME} slot valve's own endpoints carry, and so
@@ -573,6 +635,9 @@ func (c *Config) collapseValveKeys() {
 	c.ValveKeys = nil
 }
 
+// AddNotice records msg in Notices once; see notice.
+func (c *Config) AddNotice(msg string) { c.notice(msg) }
+
 // notice records a migration message once.
 //
 // The dedupe is the same guard the orphan record carries, for the same reason:
@@ -687,6 +752,10 @@ func ConfirmedHostsFile() (string, error) {
 // keys are different: if the configured key file or the transport key cannot
 // be made private, err names it and the server must not start, since a key
 // is never to be left open to other users and used anyway.
+//
+// The vault (~/.jumpgate/vault) and its lock file are never touched here: a
+// vault with loose permissions is refused when it is opened (vault_unsafe),
+// so the operator learns of it rather than having it silently fixed.
 func TightenState(keyFile string) (tightened []string, warnings []error, err error) {
 	dir, err := Dir()
 	if err != nil {
@@ -956,7 +1025,15 @@ func load() (Config, error) {
 // Save writes c to ~/.jumpgate/config.json, creating the directory if
 // needed. The write is atomic and owner-only (fsperm.WriteFilePrivate), since
 // the file may contain AI provider API keys and VPN private keys.
+//
+// With SecretStore == SecretStoreVault it refuses, writing nothing, while any
+// secret field still holds a plain value.
 func (c Config) Save() error {
+	if c.SecretStore == SecretStoreVault {
+		if plain := c.PlainSecrets(); len(plain) > 0 {
+			return fmt.Errorf("config: %s holds a plain secret but secretStore is %q; store it in the vault and save a %s reference", plain[0], SecretStoreVault, SecretRefPrefix)
+		}
+	}
 	dir, err := Dir()
 	if err != nil {
 		return err
