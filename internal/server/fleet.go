@@ -742,11 +742,12 @@ func (p *fleetPoller) history(id string) []api.DiskSample {
 // snapshot is the fleet as of now, in config order, with stale flags. It
 // never waits for a probe: a box being probed shows what is known so far.
 func (p *fleetPoller) snapshot() api.Fleet {
+	locked := p.s.keyLocked()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := p.now()
 	every := p.interval()
-	f := api.Fleet{At: now, IntervalSeconds: int(every / time.Second), Rows: []api.FleetRow{}}
+	f := api.Fleet{At: now, IntervalSeconds: int(every / time.Second), Rows: []api.FleetRow{}, Locked: locked}
 	for _, id := range p.order {
 		st := p.rows[id]
 		if st == nil {

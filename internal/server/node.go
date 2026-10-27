@@ -115,8 +115,9 @@ func (s *Server) sendIntent(ctx context.Context, cfg config.Config, t config.Tar
 	if onSendIntent != nil {
 		onSendIntent(t.ID, kind)
 	}
-	if s.cfg.Signer == nil {
-		return agentclient.Response{}, &noControllerKey{s.cfg.SignerErr}
+	sgn, serr := s.signer()
+	if sgn == nil {
+		return agentclient.Response{}, &noControllerKey{serr}
 	}
 	at, err := agentTarget(t)
 	if err != nil {
@@ -125,7 +126,7 @@ func (s *Server) sendIntent(ctx context.Context, cfg config.Config, t config.Tar
 	entry := s.reg.get(t.ID)
 	entry.intentMu.Lock()
 	defer entry.intentMu.Unlock()
-	client, err := agentclient.Dial(ctx, at, s.cfg.Signer, configSeqs{targetID: t.ID})
+	client, err := agentclient.Dial(ctx, at, sgn, configSeqs{targetID: t.ID})
 	if err != nil {
 		// A host-key failure keeps its type; every other dial failure is an
 		// outage of the transport, never a reason to try another one.
@@ -348,6 +349,9 @@ func classifyNodeError(err error) (int, api.Error) {
 		unknown *executor.UnknownHostError
 		op      *net.OpError
 	)
+	if status, e, ok := vaultError(err); ok {
+		return status, e
+	}
 	msg := err.Error()
 	switch {
 	case errors.Is(err, errJobLogInvalid):

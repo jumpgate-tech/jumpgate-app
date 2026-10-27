@@ -35,6 +35,8 @@ func TestExitClassesMatchTheCLITable(t *testing.T) {
 		CodeUnknownHost: ExitSecurity, CodeNoControllerKey: ExitUsage, CodeNotPaired: ExitUsage,
 		CodeAgentHTTP: ExitFailed, CodeRejected: ExitFailed, CodeTargetNotFound: ExitFailed,
 		CodeControllerKeyMismatch: ExitSecurity,
+		CodeLocked:                ExitUsage, CodeNoVault: ExitUsage, CodeWrongPassphrase: ExitFailed,
+		CodeVaultCorrupt: ExitSecurity, CodeVaultUnsafe: ExitSecurity,
 	} {
 		if got := c.Exit(); got != want {
 			t.Errorf("%s.Exit() = %d, want %d", c, got, want)

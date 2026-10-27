@@ -1,0 +1,313 @@
+package server
+
+import (
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"sync"
+
+	"github.com/valve-tech/jumpgate/internal/api"
+	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/secrets"
+	"github.com/valve-tech/jumpgate/internal/signer"
+	"github.com/valve-tech/jumpgate/internal/vault"
+)
+
+// maxUnlockBody bounds POST /api/vault/unlock.
+const maxUnlockBody = 4 << 10
+
+// keyState is the vault and the controller signer, which may live in it.
+// fromVault means the signer is vault-held: while the vault is locked,
+// signer() answers vault.ErrLocked and nothing is signed, with no fallback
+// to any other key store.
+type keyState struct {
+	mu        sync.RWMutex
+	v         *vault.Vault // nil until found (S8)
+	sgn       signer.Signer
+	fromVault bool
+	// ready: Config.Unlocked has run since the vault was last unlocked.
+	// Until then a vault-held key reads locked, even though the vault no
+	// longer is.
+	ready bool
+	err   error // why sgn is nil
+}
+
+// vaultCtl serializes the vault's state changes (open, unlock, lock), so an
+// unlock's signer is never installed after a lock that ran meanwhile.
+type vaultCtl struct {
+	mu       sync.Mutex
+	unlocked bool // this process has unlocked at least once
+}
+
+func (s *Server) initKeys() {
+	s.keys.v = s.cfg.Vault
+	s.keys.sgn, s.keys.err = s.cfg.Signer, s.cfg.SignerErr
+	s.keys.fromVault = s.cfg.Signer == nil && errors.Is(s.cfg.SignerErr, signer.ErrVaultStore)
+}
+
+// signer is the controller key to sign with. A nil signer comes with the
+// reason (nil when no key is recorded); vault.ErrLocked means the key is
+// held in the vault and the vault is locked.
+func (s *Server) signer() (signer.Signer, error) {
+	s.keys.mu.RLock()
+	v, sgn, fromVault, ready, err := s.keys.v, s.keys.sgn, s.keys.fromVault, s.keys.ready, s.keys.err
+	s.keys.mu.RUnlock()
+	if fromVault {
+		if v == nil || !ready || v.Locked() {
+			return nil, vault.ErrLocked
+		}
+		if sgn == nil {
+			if err == nil {
+				err = errNoController
+			}
+			return nil, err
+		}
+		return sgn, nil
+	}
+	if sgn != nil {
+		return sgn, nil
+	}
+	// A controller recorded in the vault but never opened: locked, never
+	// "no key" (which would send the operator to make a second one).
+	if c, lerr := config.Load(); lerr == nil && c.Controller != nil && c.Controller.KeyStore == string(signer.StoreVault) {
+		return nil, vault.ErrLocked
+	}
+	return nil, err
+}
+
+// keyLocked reports whether signing waits for an unlock.
+func (s *Server) keyLocked() bool {
+	_, err := s.signer()
+	return errors.Is(err, vault.ErrLocked)
+}
+
+// vaultPath is Config.VaultPath, or ~/.jumpgate/vault.
+func (s *Server) vaultPath() (string, error) {
+	if s.cfg.VaultPath != "" {
+		return s.cfg.VaultPath, nil
+	}
+	return secrets.VaultPath()
+}
+
+// openVaultLocked returns the vault, opening the file the first time it is
+// found. Callers hold s.vctl.mu.
+func (s *Server) openVaultLocked() (*vault.Vault, error) {
+	s.keys.mu.RLock()
+	v := s.keys.v
+	s.keys.mu.RUnlock()
+	if v != nil {
+		return v, nil
+	}
+	p, err := s.vaultPath()
+	if err != nil {
+		return nil, err
+	}
+	v, err = vault.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	s.keys.mu.Lock()
+	s.keys.v = v
+	s.keys.mu.Unlock()
+	return v, nil
+}
+
+// viewLocked describes the vault. A locked vault's file is checked again,
+// so a file made unsafe or replaced reads unusable, never locked. Callers
+// hold s.vctl.mu.
+func (s *Server) viewLocked() api.VaultView {
+	view := api.VaultView{Slots: []string{}, Plain: s.plainSecrets()}
+	v, err := s.openVaultLocked()
+	if err == nil && v.Locked() {
+		_, err = vault.Open(v.Path())
+	}
+	switch {
+	case errors.Is(err, vault.ErrNoVault):
+		view.State = "none"
+		return view
+	case err != nil:
+		view.State, view.Reason = "unusable", err.Error()
+		return view
+	case v.Locked():
+		view.State = "locked"
+	default:
+		view.State = "unlocked"
+	}
+	for _, sl := range v.Slots() {
+		view.Slots = append(view.Slots, string(sl.Kind))
+	}
+	return view
+}
+
+// VaultState is GET /api/vault: none, locked, unlocked or unusable.
+func (s *Server) VaultState() api.VaultView {
+	s.vctl.mu.Lock()
+	defer s.vctl.mu.Unlock()
+	return s.viewLocked()
+}
+
+// Unlock opens the vault with a passphrase, then loads the controller key
+// from it and resumes what waited. It clears passphrase.
+func (s *Server) Unlock(passphrase []byte) (api.VaultView, error) {
+	defer clear(passphrase)
+	return s.unlockWith(func(v *vault.Vault) error { return v.Unlock(passphrase) })
+}
+
+// UnlockKEK is Unlock with a slot key (a systemd credential, an OS key
+// store item) instead of a passphrase. It clears kek.
+func (s *Server) UnlockKEK(kind vault.SlotKind, kek []byte) (api.VaultView, error) {
+	defer clear(kek)
+	return s.unlockWith(func(v *vault.Vault) error { return v.UnlockKEK(kind, kek) })
+}
+
+func (s *Server) unlockWith(open func(*vault.Vault) error) (api.VaultView, error) {
+	s.vctl.mu.Lock()
+	v, err := s.openVaultLocked()
+	if err == nil {
+		err = open(v)
+	}
+	if err != nil {
+		view := s.viewLocked()
+		s.vctl.mu.Unlock()
+		return view, err
+	}
+	if s.cfg.Unlocked == nil {
+		s.keys.mu.Lock()
+		s.keys.ready = true
+		s.keys.mu.Unlock()
+	} else {
+		sgn, err := s.cfg.Unlocked(v)
+		s.keys.mu.Lock()
+		s.keys.ready = true
+		switch {
+		case err != nil:
+			// The vault opened but the key in it did not: sign nothing.
+			s.keys.sgn, s.keys.fromVault, s.keys.err = nil, true, err
+		case sgn != nil:
+			s.keys.sgn, s.keys.fromVault, s.keys.err = sgn, true, nil
+		}
+		s.keys.mu.Unlock()
+		if err != nil {
+			log.Printf("vault unlocked, but the controller key in it did not open: %v", err)
+		}
+	}
+	first := !s.vctl.unlocked
+	s.vctl.unlocked = true
+	view := s.viewLocked()
+	s.vctl.mu.Unlock()
+	s.afterUnlock(first)
+	return view, nil
+}
+
+// afterUnlock resumes this controller's jobs, brings up autostart overlays
+// (the first unlock only), runs Config.AfterUnlock, then refreshes the fleet.
+func (s *Server) afterUnlock(first bool) {
+	ctx := s.jobs.ctx
+	s.jobs.wake()
+	s.bg.Add(1)
+	go func() {
+		defer s.bg.Done()
+		s.jobs.sweep(ctx)
+		if first {
+			for _, r := range s.AutostartOverlays(ctx) {
+				if r.Err != nil {
+					log.Printf("vpn autostart %s: %v", r.ID, r.Err)
+				}
+			}
+		}
+		if s.cfg.AfterUnlock != nil {
+			s.cfg.AfterUnlock(ctx)
+		}
+		s.fleet.reload()
+	}()
+}
+
+// Lock drops the data key and every secret held in memory, and the
+// controller key when the vault held it.
+func (s *Server) Lock() api.VaultView {
+	s.vctl.mu.Lock()
+	defer s.vctl.mu.Unlock()
+	s.keys.mu.Lock()
+	v := s.keys.v
+	s.keys.ready = false
+	if s.keys.fromVault {
+		s.keys.sgn = nil
+	}
+	s.keys.mu.Unlock()
+	if v != nil {
+		v.Lock()
+	}
+	s.fleet.reload()
+	return s.viewLocked()
+}
+
+// vaultError maps a vault failure to its answer; ok is false for any other
+// error.
+func vaultError(err error) (status int, e api.Error, ok bool) {
+	if err == nil {
+		return 0, api.Error{}, false
+	}
+	msg := err.Error()
+	switch {
+	case errors.Is(err, vault.ErrLocked):
+		return http.StatusServiceUnavailable, api.Error{Message: "the vault is locked", Code: api.CodeLocked}, true
+	case errors.Is(err, vault.ErrWrongPassphrase), errors.Is(err, vault.ErrSlotRefused):
+		return http.StatusForbidden, api.Error{Message: msg, Code: api.CodeWrongPassphrase}, true
+	case errors.Is(err, vault.ErrCorrupt):
+		return http.StatusInternalServerError, api.Error{Message: msg, Code: api.CodeVaultCorrupt}, true
+	case errors.Is(err, vault.ErrUnsafeFile):
+		return http.StatusInternalServerError, api.Error{Message: msg, Code: api.CodeVaultUnsafe}, true
+	case errors.Is(err, vault.ErrNoVault):
+		return http.StatusConflict, api.Error{Message: msg, Code: api.CodeNoVault}, true
+	}
+	return 0, api.Error{}, false
+}
+
+func writeVaultError(w http.ResponseWriter, err error) {
+	if status, e, ok := vaultError(err); ok {
+		writeAPIError(w, status, e)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
+}
+
+func (s *Server) registerVaultRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/vault", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, s.VaultState())
+	})
+	mux.HandleFunc("POST /api/vault/unlock", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		var req api.UnlockRequest
+		// The body is a passphrase: it is never logged or echoed.
+		err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxUnlockBody)).Decode(&req)
+		defer clear(req.Passphrase)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "want {\"passphrase\": base64}")
+			return
+		}
+		if len(req.Passphrase) == 0 {
+			writeError(w, http.StatusBadRequest, "the passphrase is empty")
+			return
+		}
+		view, err := s.Unlock(req.Passphrase)
+		if err != nil {
+			writeVaultError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	})
+	mux.HandleFunc("POST /api/vault/lock", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, s.Lock())
+	})
+}
+
+// plainSecrets names the secret fields config.json still holds as plain
+// values.
+func (s *Server) plainSecrets() []string {
+	c, err := config.Load()
+	if err != nil {
+		return nil
+	}
+	return c.PlainSecrets()
+}

@@ -71,6 +71,9 @@ type Fleet struct {
 	At              time.Time  `json:"at"`
 	IntervalSeconds int        `json:"intervalSeconds"`
 	Rows            []FleetRow `json:"rows"`
+	// Locked: the vault holding the controller key is locked, so no box
+	// can be asked anything until someone unlocks it.
+	Locked bool `json:"locked,omitempty"`
 }
 
 // Row finds a box by id.

@@ -33,8 +33,9 @@ type pairRequest struct {
 // The host key must already be confirmed (the CLI does that with the
 // operator); an unconfirmed host is refused before anything runs on it.
 func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Signer == nil {
-		s.writeNoControllerKey(w)
+	sgn, serr := s.signer()
+	if sgn == nil {
+		writeNoControllerKey(w, serr)
 		return
 	}
 	var req pairRequest
@@ -160,7 +161,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		addr, err = bootstrap.Run(ctx, bootstrap.Options{
 			Exec: priv, Local: local, LocalUID: os.Getuid(),
 			AgentBinary: agentbin.Reporting(func(line string) { send(api.PairEvent{Step: "upload", Line: line}) }),
-			Controller:  s.cfg.Signer.Address(), ControllerLabel: controllerLabel(), TransportKey: transportKey, Wire: t.Wire,
+			Controller:  sgn.Address(), ControllerLabel: controllerLabel(), TransportKey: transportKey, Wire: t.Wire,
 			Event: func(step, line string) { send(api.PairEvent{Step: step, Line: line}) },
 		})
 		if err != nil {
@@ -217,8 +218,13 @@ func (s *Server) verifyPairing(ctx context.Context, t config.Target) (uint64, *a
 	if err != nil {
 		return fail(err, api.CodeVerifyFailed, "")
 	}
+	sgn, serr := s.signer()
+	if sgn == nil {
+		_, e := apiErrorFor(&noControllerKey{serr})
+		return fail(serr, e.Code, e.Hint)
+	}
 	seqs := agentclient.NewMemorySeqStore()
-	client, err := agentclient.Dial(ctx, at, s.cfg.Signer, seqs)
+	client, err := agentclient.Dial(ctx, at, sgn, seqs)
 	switch {
 	case errors.Is(err, executor.ErrUnknownHost):
 		return fail(err, api.CodeUnknownHost, api.HintFor(api.CodeUnknownHost))

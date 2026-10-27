@@ -16,6 +16,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/jobs"
+	"github.com/valve-tech/jumpgate/internal/vault"
 )
 
 // jobStartKinds are the kinds POST /api/jobs/{target} starts (ruling P7).
@@ -126,6 +127,10 @@ func (h *jobsHub) driveLoop(ctx context.Context, k jobKey) {
 		case intent.JobTerminal(rec.State):
 			h.finished(t, rec)
 			return
+		case h.s.keyLocked():
+			// The vault holding this controller's key is locked: wait at
+			// the boundary, signing nothing, until an unlock wakes us.
+			err = vault.ErrLocked
 		case !h.mine(rec):
 			return // adopted by another controller, or released
 		case rec.State == intent.JobWaiting:
@@ -151,6 +156,8 @@ func (h *jobsHub) driveLoop(ctx context.Context, k jobKey) {
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
+		case <-h.wakeup():
+			wait = jobsDriveEvery
 		}
 	}
 }

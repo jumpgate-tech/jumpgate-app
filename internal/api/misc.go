@@ -36,7 +36,8 @@ type SettingsUpdate struct {
 // ControllerView is GET /api/controller: the key this server signs with.
 // State is ok, missing (no key made), unopened (made but not loaded; Reason
 // says why), unrecorded (a key is loaded but this controller never recorded
-// one) or mismatch (loaded key is not the recorded one).
+// one), mismatch (loaded key is not the recorded one) or locked (the key is
+// held in the vault, which is locked).
 type ControllerView struct {
 	Recorded string `json:"recorded"`
 	Address  string `json:"address"`

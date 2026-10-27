@@ -101,13 +101,16 @@ type jobsHub struct {
 	settled  map[jobKey]bool
 	noDriver bool // Config.noJobsDriver: list and verify, never drive
 	stopped  bool
+	// woken is closed (and replaced) by wake, so drivers backing off while
+	// the vault was locked try again at once after an unlock.
+	woken chan struct{}
 }
 
 func newJobsHub(s *Server) *jobsHub {
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &jobsHub{s: s, ctx: ctx, cancel: cancel, boxes: map[string]*boxJobs{}, subs: map[chan api.JobsInbox]struct{}{},
 		marks: map[jobKey]logMark{}, driving: map[jobKey]context.CancelFunc{},
-		settled: map[jobKey]bool{}}
+		settled: map[jobKey]bool{}, woken: make(chan struct{})}
 	h.readJob = func(ctx context.Context, cfg config.Config, t config.Target, p intent.JobReadPayload) (intent.JobReadResult, error) {
 		return decodeResult[intent.JobReadResult](s.agentResult(ctx, cfg, t, intent.KindJobRead, p))
 	}
@@ -117,11 +120,27 @@ func newJobsHub(s *Server) *jobsHub {
 	return h
 }
 
+// wake ends every driver's current backoff wait.
+func (h *jobsHub) wake() {
+	h.mu.Lock()
+	close(h.woken)
+	h.woken = make(chan struct{})
+	h.mu.Unlock()
+}
+
+// wakeup is the channel the next wake closes.
+func (h *jobsHub) wakeup() <-chan struct{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.woken
+}
+
 func (h *jobsHub) me() (eip712.Address, bool) {
-	if h.s.cfg.Signer == nil {
+	sgn, _ := h.s.signer()
+	if sgn == nil {
 		return eip712.Address{}, false
 	}
-	return h.s.cfg.Signer.Address(), true
+	return sgn.Address(), true
 }
 
 // mine reports whether this controller's key holds r's lease.

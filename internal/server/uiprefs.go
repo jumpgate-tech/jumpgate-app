@@ -13,6 +13,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/vault"
 )
 
 // loadPrefs is the stored preferences with defaults filled in. A block that
@@ -67,19 +68,23 @@ func (s *Server) handleController(w http.ResponseWriter, r *http.Request) {
 	if cfg.Controller != nil {
 		v.Recorded, v.Store = cfg.Controller.Address, cfg.Controller.KeyStore
 	}
+	sgn, serr := s.signer()
 	switch {
-	case cfg.Controller == nil && s.cfg.Signer == nil:
+	case errors.Is(serr, vault.ErrLocked):
+		v.State = "locked"
+		v.Reason = "the controller key is in the vault, which is locked; run `jumpgate unlock`"
+	case cfg.Controller == nil && sgn == nil:
 		v.State = "missing"
-	case s.cfg.Signer == nil:
+	case sgn == nil:
 		v.State = "unopened"
 		v.Reason = "the server started without loading the key; run `jumpgate stop` and try again"
 		// Coordination: with the hotfix's Config.SignerErr, use its text here.
 	case cfg.Controller == nil:
-		v.Address = s.cfg.Signer.Address().Hex()
+		v.Address = sgn.Address().Hex()
 		v.State = "unrecorded"
 		v.Reason = "a signing key is loaded but config.json has no controller record; restore config.json from a backup (running `jumpgate keys init` would create a different key that your paired boxes won't accept)"
 	default:
-		v.Address = s.cfg.Signer.Address().Hex()
+		v.Address = sgn.Address().Hex()
 		if strings.EqualFold(v.Address, v.Recorded) {
 			v.State = "ok"
 		} else {

@@ -21,9 +21,14 @@ const maxIntentBody = 1 << 20
 var refHeadClient = &http.Client{Timeout: 5 * time.Second}
 
 // writeNoControllerKey answers a box route on a server with no signer, with
-// the reason the recorded key did not open (noControllerKeyError).
-func (s *Server) writeNoControllerKey(w http.ResponseWriter) {
-	writeAPIError(w, http.StatusServiceUnavailable, noControllerKeyError(s.cfg.SignerErr))
+// the reason the key did not open (noControllerKeyError), or 503 locked
+// while the vault holding it is locked.
+func writeNoControllerKey(w http.ResponseWriter, err error) {
+	if status, e, ok := vaultError(err); ok {
+		writeAPIError(w, status, e)
+		return
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, noControllerKeyError(err))
 }
 
 // jobKindHint names the routes and commands that run jobs, for a job kind
@@ -42,8 +47,8 @@ func isJobKind(kind string) bool {
 // by the server process; this route is why it must sit behind the Origin
 // check, since it makes the server sign.
 func (s *Server) handleIntent(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Signer == nil {
-		s.writeNoControllerKey(w)
+	if sg, err := s.signer(); sg == nil {
+		writeNoControllerKey(w, err)
 		return
 	}
 	cfg, err := s.loadConfig()
