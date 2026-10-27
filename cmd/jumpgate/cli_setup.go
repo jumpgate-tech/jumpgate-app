@@ -20,7 +20,33 @@ var (
 	// process, which is already root.
 	runPrivileged = func() executor.Executor { return executor.NewLocal() }
 	pathExists    = func(p string) bool { _, err := os.Lstat(p); return err == nil }
+	statOwner     = lstatOwner
 )
+
+// checkRootOwnedPath refuses a binary root would run that anyone but root
+// could replace: bin must be a regular file, not a symlink, and it and every
+// directory up to / must be root-owned and not group- or other-writable.
+func checkRootOwnedPath(bin string) error {
+	for p := bin; ; p = filepath.Dir(p) {
+		uid, mode, err := statOwner(p)
+		if err != nil {
+			return fmt.Errorf("%s: %v", p, err)
+		}
+		switch {
+		case mode&os.ModeSymlink != 0:
+			return fmt.Errorf("%s is a symlink; give the real path", p)
+		case p == bin && !mode.IsRegular():
+			return fmt.Errorf("%s is not a regular file", p)
+		case uid != 0:
+			return fmt.Errorf("%s is not owned by root (uid %d)", p, uid)
+		case mode.Perm()&0o022 != 0:
+			return fmt.Errorf("%s is writable by its group or others (%v)", p, mode.Perm())
+		}
+		if p == filepath.Dir(p) {
+			return nil
+		}
+	}
+}
 
 // setupStagingDir is root-only (0700), as the box modules use: a file bound
 // for a root-owned path waits here under a random name, then is installed.
@@ -68,6 +94,12 @@ func setupInstallService(ctx context.Context, args []string) int {
 	}
 	if !filepath.IsAbs(*bin) || strings.ContainsAny(*bin, " \t\n\"'\\%$") {
 		return failed("--bin must be an absolute path with no spaces, quotes or %% signs: %q", *bin)
+	}
+	// The unit runs this binary for every boot; whoever can replace it, or
+	// any directory above it, would run code as the service and then as
+	// root on the next install.
+	if err := checkRootOwnedPath(filepath.Clean(*bin)); err != nil {
+		return failed("refusing to point jumpgate.service at %s: %v. Install jumpgate root-owned (for example `sudo install -o root -g root -m 0755 jumpgate /usr/local/bin/jumpgate`) and pass --bin /usr/local/bin/jumpgate", *bin, err)
 	}
 
 	ex := runPrivileged()

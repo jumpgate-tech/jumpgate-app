@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io/fs"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -47,8 +48,56 @@ func setupSeams(t *testing.T, goos string, euid int, packaged bool) *privRecorde
 	hostGOOS, geteuid = goos, func() int { return euid }
 	runPrivileged = func() executor.Executor { return rec }
 	pathExists = func(p string) bool { return packaged && p == sysunit.PackageUnitPath }
-	t.Cleanup(func() { hostGOOS, geteuid, runPrivileged, pathExists = oldGOOS, oldEuid, oldPriv, oldExists })
+	oldStat := statOwner
+	statOwner = fakeTree(nil)
+	t.Cleanup(func() {
+		hostGOOS, geteuid, runPrivileged, pathExists, statOwner = oldGOOS, oldEuid, oldPriv, oldExists, oldStat
+	})
 	return rec
+}
+
+type fakeStat struct {
+	uid  int
+	mode os.FileMode
+}
+
+// fakeTree is a filesystem where every path is a root-owned 0755 directory,
+// a path ending in "jumpgate" is a root-owned 0755 file, and over replaces
+// either.
+func fakeTree(over map[string]fakeStat) func(string) (int, os.FileMode, error) {
+	return func(p string) (int, os.FileMode, error) {
+		if s, ok := over[p]; ok {
+			return s.uid, s.mode, nil
+		}
+		if strings.HasSuffix(p, "/jumpgate") {
+			return 0, 0o755, nil
+		}
+		return 0, os.ModeDir | 0o755, nil
+	}
+}
+
+func TestInstallServiceRefusesAnUnsafeBinary(t *testing.T) {
+	for name, over := range map[string]map[string]fakeStat{
+		"binary owned by a user":     {"/home/al/bin/jumpgate": {1000, 0o755}},
+		"binary group-writable":      {"/home/al/bin/jumpgate": {0, 0o775}},
+		"binary is a symlink":        {"/home/al/bin/jumpgate": {0, os.ModeSymlink | 0o777}},
+		"parent owned by a user":     {"/home/al/bin": {1000, os.ModeDir | 0o755}},
+		"grandparent world-writable": {"/home/al": {0, os.ModeDir | os.ModeSticky | 0o777}},
+		"parent is a symlink":        {"/home": {0, os.ModeSymlink | 0o777}},
+	} {
+		rec := setupSeams(t, "linux", 0, false)
+		statOwner = fakeTree(over)
+		_, stderr := captureStdio(t)
+		if code := cmdSetup([]string{"install-service", "--bin", "/home/al/bin/jumpgate"}); code != exitCode("failed") {
+			t.Fatalf("%s: exit %d, want failed", name, code)
+		}
+		if len(rec.cmds) != 0 || len(rec.writes) != 0 {
+			t.Fatalf("%s: did something: %v", name, rec.cmds)
+		}
+		if !strings.Contains(stderr(), "refusing to point jumpgate.service") {
+			t.Fatalf("%s: stderr %q", name, stderr())
+		}
+	}
 }
 
 // installedAt is the command that put a staged file at dst, and the staged
