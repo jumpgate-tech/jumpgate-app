@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/valve-tech/jumpgate/internal/api"
@@ -265,6 +266,10 @@ func vaultError(err error) (status int, e api.Error, ok bool) {
 }
 
 func writeVaultError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errRefValue) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if status, e, ok := vaultError(err); ok {
 		writeAPIError(w, status, e)
 		return
@@ -302,11 +307,32 @@ func (s *Server) registerVaultRoutes(mux *http.ServeMux) {
 	})
 }
 
+// errForeignRef is a field whose vault reference names another field's
+// entry (a hand-edited or injected config.json): it is never read or deleted.
+var errForeignRef = errors.New("this field's vault reference names another entry; jumpgate reads and deletes only the entry the field owns")
+
+// errRefValue refuses a client value that looks like a vault reference.
+var errRefValue = errors.New("a secret value may not start with \"" + config.SecretRefPrefix + "\"")
+
+// ownRef checks that a reference names exactly the entry its field owns
+// (want), so no field can reach the controller key, the transport key or
+// the tokens.
+func ownRef(want, stored string) error {
+	if n, ok := config.SecretRefName(stored); ok && n != want {
+		return errForeignRef
+	}
+	return nil
+}
+
 // secret is stored itself when it is a literal, or the value its vault:NAME
-// reference names. A vault not yet found or locked is vault.ErrLocked.
-func (s *Server) secret(stored string) (string, error) {
+// reference names, which must be name (the entry the field owns). A vault
+// not yet found or locked is vault.ErrLocked.
+func (s *Server) secret(name, stored string) (string, error) {
 	if !config.IsSecretRef(stored) {
 		return stored, nil
+	}
+	if err := ownRef(name, stored); err != nil {
+		return "", err
 	}
 	s.keys.mu.RLock()
 	v := s.keys.v
@@ -318,6 +344,9 @@ func (s *Server) secret(stored string) (string, error) {
 // returning the reference config.json keeps; otherwise it returns value, the
 // literal config.json keeps.
 func (s *Server) putSecret(name, value string) (stored string, err error) {
+	if strings.HasPrefix(strings.TrimSpace(value), config.SecretRefPrefix) {
+		return "", errRefValue
+	}
 	c, err := config.Load()
 	if err != nil {
 		return "", err
@@ -339,12 +368,14 @@ func (s *Server) putSecret(name, value string) (stored string, err error) {
 	return config.SecretRef(name), nil
 }
 
-// dropSecret deletes the vault entry a reference names; a literal, or an
-// entry already gone, is nothing to do.
-func (s *Server) dropSecret(stored string) error {
-	name, ok := config.SecretRefName(stored)
-	if !ok {
+// dropSecret deletes the vault entry a reference names, which must be name;
+// a literal, or an entry already gone, is nothing to do.
+func (s *Server) dropSecret(name, stored string) error {
+	if _, ok := config.SecretRefName(stored); !ok {
 		return nil
+	}
+	if err := ownRef(name, stored); err != nil {
+		return err
 	}
 	s.keys.mu.RLock()
 	v := s.keys.v

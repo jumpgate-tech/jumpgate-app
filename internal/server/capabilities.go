@@ -155,6 +155,9 @@ func (s *Server) handleGatewayCapabilities(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	if !s.gatewayKeysReadable(w, cfg) {
+		return
+	}
 	res, ok := s.sharedCapabilityProbe(r.Context(), cfg, gw)
 	if !ok {
 		// The caller went away while waiting on someone else's probe, so

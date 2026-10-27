@@ -1750,7 +1750,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		writeErrorDetail(w, http.StatusConflict, "no AI provider is configured; set one in Settings first", "", api.CodeAIUnconfigured)
 		return
 	}
-	aiKey, err := s.secret(cfg.AIKey)
+	aiKey, err := s.secret(secrets.NameAIKey, cfg.AIKey)
 	if err != nil {
 		writeVaultError(w, err)
 		return
@@ -2197,14 +2197,15 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		stored[secrets.ProviderName(name)] = ref
 	}
-	var dropped []string
+	type drop struct{ name, stored string }
+	var dropped []drop
 	cfg, err := s.updateConfig(func(c *config.Config) error {
 		if req.AIProvider != nil {
 			c.AIProvider = *req.AIProvider
 		}
 		if req.AIKey != nil {
 			if *req.AIKey == "" {
-				dropped = append(dropped, c.AIKey)
+				dropped = append(dropped, drop{secrets.NameAIKey, c.AIKey})
 				c.AIKey = ""
 			} else {
 				c.AIKey = stored[secrets.NameAIKey]
@@ -2220,7 +2221,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			name = strings.TrimSpace(name)
 			v = strings.TrimSpace(v)
 			if v == "" {
-				dropped = append(dropped, c.ProviderKeys[name])
+				dropped = append(dropped, drop{secrets.ProviderName(name), c.ProviderKeys[name]})
 				delete(c.ProviderKeys, name)
 				continue
 			}
@@ -2236,7 +2237,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, old := range dropped {
-		if err := s.dropSecret(old); err != nil {
+		if err := s.dropSecret(old.name, old.stored); err != nil {
 			log.Printf("jumpgate: settings: forget a cleared secret: %v", err)
 		}
 	}

@@ -124,7 +124,7 @@ func (s *Server) vpnViewFrom(v config.VPN) vpnView {
 		Endpoints:  []string{},
 		Overlay:    []string{},
 	}
-	conf, err := s.secret(v.Config)
+	conf, err := s.secret(secrets.VPNName(v.ID), v.Config)
 	if errors.Is(err, vault.ErrLocked) {
 		view.Error = "locked: unlock to read"
 		return view
@@ -255,7 +255,7 @@ func (s *Server) AutostartOverlays(ctx context.Context) []AutostartResult {
 // code). It is the non-HTTP twin of handleVPNUp + vpnExecutor, so autostart and
 // the API start an overlay by the exact same path.
 func (s *Server) bringUpOverlay(ctx context.Context, cfg config.Config, v config.VPN) error {
-	conf, err := s.secret(v.Config)
+	conf, err := s.secret(secrets.VPNName(v.ID), v.Config)
 	if err != nil {
 		return err
 	}
@@ -347,6 +347,10 @@ func (s *Server) handleVPNSave(w http.ResponseWriter, r *http.Request) {
 	// bad `.conf` does not half-apply — config itself stores bytes without
 	// judging them, so this is the layer that judges. Only when it is being set:
 	// an update that omits it keeps the stored (already-valid) one.
+	if req.Config != nil && strings.HasPrefix(strings.TrimSpace(*req.Config), config.SecretRefPrefix) {
+		writeError(w, http.StatusBadRequest, errRefValue.Error())
+		return
+	}
 	if req.Config != nil {
 		if _, err := vpn.NewStaticProvider(strings.TrimSpace(deref(req.Provider)), *req.Config); err != nil {
 			writeError(w, http.StatusBadRequest, "the WireGuard config is not usable: "+err.Error())
@@ -464,7 +468,7 @@ func (s *Server) handleVPNDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// After the reference is gone: a failure leaves an unreferenced entry.
-	if err := s.dropSecret(old); err != nil {
+	if err := s.dropSecret(secrets.VPNName(id), old); err != nil {
 		log.Printf("jumpgate: vpn %s: forget its config in the vault: %v", id, err)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -503,7 +507,7 @@ func (s *Server) handleVPNUp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	conf, err := s.secret(v.Config)
+	conf, err := s.secret(secrets.VPNName(v.ID), v.Config)
 	if err != nil {
 		writeVaultError(w, err)
 		return

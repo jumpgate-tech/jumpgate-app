@@ -494,6 +494,9 @@ func (s *Server) handleGatewayList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.gatewayKeysReadable(w, cfg) {
+		return
+	}
 	views := make([]gatewayView, 0, len(cfg.Gateways))
 	// One engine probe per TARGET, not per gateway: two gateways on one
 	// machine share one docker, and probing twice would be two round trips
@@ -515,6 +518,9 @@ func (s *Server) handleGatewayList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGatewayGet(w http.ResponseWriter, r *http.Request) {
 	cfg, gw, ok := s.gateway(w, r)
 	if !ok {
+		return
+	}
+	if !s.gatewayKeysReadable(w, cfg) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.gatewayViewFor(r, cfg, gw, map[string]dockerView{}))
@@ -2016,6 +2022,9 @@ func (s *Server) provisionGateway(cfg config.Config, gw config.Gateway) (string,
 	keys, kerr := s.providerKeys(cfg)
 	if errors.Is(kerr, vault.ErrLocked) {
 		return "", &provisionError{status: http.StatusServiceUnavailable, code: api.CodeLocked, msg: "the vault is locked"}
+	}
+	if kerr != nil {
+		return "", &provisionError{status: http.StatusInternalServerError, code: api.CodeInternal, msg: "a provider key could not be read: " + kerr.Error()}
 	}
 	resolved, problems := resolveGateway(cfg, gw)
 	if len(resolved.Networks) == 0 {

@@ -33,6 +33,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/catalog"
 	"github.com/valve-tech/jumpgate/internal/chainlist"
 	"github.com/valve-tech/jumpgate/internal/config"
+	"github.com/valve-tech/jumpgate/internal/secrets"
 )
 
 // chainlistTimeout bounds the whole discovery — one feed fetch plus a bounded
@@ -240,7 +241,7 @@ func (s *Server) providerKeys(cfg config.Config) (map[string]string, error) {
 	keys := make(map[string]string, len(cfg.ProviderKeys)+1)
 	var first error
 	for name, v := range cfg.ProviderKeys {
-		v, err := s.secret(strings.TrimSpace(v))
+		v, err := s.secret(secrets.ProviderName(strings.TrimSpace(name)), strings.TrimSpace(v))
 		if err != nil {
 			if first == nil {
 				first = err
@@ -278,6 +279,17 @@ func literalProviderKeys(cfg config.Config) map[string]string {
 func (s *Server) keyedConfig(cfg config.Config) config.Config {
 	cfg.ProviderKeys, _ = s.providerKeys(cfg)
 	return cfg
+}
+
+// gatewayKeysReadable answers 503 locked (or the vault's error) when a
+// provider key cannot be read: without it a stored upstream URL that
+// carries the key could not be redacted, so no gateway view is sent.
+func (s *Server) gatewayKeysReadable(w http.ResponseWriter, cfg config.Config) bool {
+	if _, err := s.providerKeys(cfg); err != nil {
+		writeVaultError(w, err)
+		return false
+	}
+	return true
 }
 
 // redactKeys is the inverse of chainlist.Resolve: it puts the ${PLACEHOLDER}
