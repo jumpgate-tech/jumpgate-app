@@ -17,11 +17,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/jobs/jobstest"
+	"github.com/valve-tech/jumpgate/internal/signer"
 )
 
 // upgradeRig gives r an agent binary (a temp file holding "old") and counts
@@ -55,10 +57,135 @@ func (r *rig) sendUpgrade(t *testing.T, pl intent.AgentUpgradePayload, body io.R
 	return r.verified(t, out)
 }
 
+// noNew checks nothing but the binary itself was left next to it: no .new
+// and no staged temp file.
 func noNew(t *testing.T, bin string) {
 	t.Helper()
 	if _, err := os.Stat(bin + ".new"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("%s.new left behind: %v", bin, err)
+	}
+	ents, _ := os.ReadDir(filepath.Dir(bin))
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), ".jumpgate-upgrade-") {
+			t.Fatalf("staged file %s left behind", e.Name())
+		}
+	}
+}
+
+// envelopeFrom signs an intent of kind from k at seq, for a second
+// controller enrolled on the rig.
+func (r *rig) envelopeFrom(t *testing.T, k *signer.Key, seq uint64, kind string, payload any) intent.Envelope {
+	t.Helper()
+	body, _ := json.Marshal(payload)
+	n, _ := intent.NewNonce()
+	i := intent.Intent{Agent: r.agentKey.Address(), Controller: k.Address(), Seq: seq, Nonce: n,
+		IssuedAt: uint64(r.now.Unix()), Expiry: uint64(r.now.Unix() + 120), Kind: kind, PayloadHash: intent.Hash(body)}
+	sig, err := k.SignTypedData(context.Background(), i.TypedData())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return intent.Envelope{Intent: i.JSON(), Payload: body, Sigs: []string{sig.Hex()}}
+}
+
+// hookReader serves data, then runs atEnd once when it is read past it.
+type hookReader struct {
+	r     io.Reader
+	atEnd func()
+	once  sync.Once
+}
+
+func (h *hookReader) Read(p []byte) (int, error) {
+	n, err := h.r.Read(p)
+	if err == io.EOF {
+		h.once.Do(h.atEnd)
+	}
+	return n, err
+}
+
+// Two controllers upgrading at once: the gate takes one upgrade at a time,
+// so the second is refused busy while the first streams, and the binary is
+// the first one's, whole.
+func TestConcurrentUpgradesTakeTurns(t *testing.T) {
+	r := newRig(t, false)
+	bin, restarts := upgradeRig(t, r)
+	other, _ := signer.GenerateKey()
+	enroll(t, r, other, TierRoutine)
+
+	var second intent.ReceiptEnvelope
+	first := &hookReader{r: strings.NewReader("first"), atEnd: func() {
+		env := r.envelopeFrom(t, other, 1, intent.KindAgentUpgrade, upgradePayload([]byte("second")))
+		ctx, _ := withUpgradeBody(context.Background(), strings.NewReader("second"))
+		done := make(chan struct{})
+		go func() { defer close(done); second = r.a.Handle(ctx, env) }()
+		<-done
+	}}
+	rc, res := r.sendUpgrade(t, upgradePayload([]byte("first")), first)
+	if got := ok[intent.AgentUpgradeResult](t)(rc, res); !got.Upgraded {
+		t.Fatalf("first %+v", got)
+	}
+	rc2, res2 := r.verified(t, second)
+	if got := rejection(t, rc2, res2).Code; got != intent.ReasonBusy {
+		t.Fatalf("second: %s", got)
+	}
+	fileIs(t, bin, "first")
+	noNew(t, bin)
+	if restarts.Load() != 1 {
+		t.Fatalf("restarts %d", restarts.Load())
+	}
+}
+
+// Many upgrades racing from different controllers never leave a torn or
+// staged file: the binary is exactly one of the bodies sent.
+func TestRacingUpgradesLeaveOneWholeBinary(t *testing.T) {
+	r := newRig(t, false)
+	bin, _ := upgradeRig(t, r)
+	var keys []*signer.Key
+	for range 6 {
+		k, _ := signer.GenerateKey()
+		enroll(t, r, k, TierRoutine)
+		keys = append(keys, k)
+	}
+	var wg sync.WaitGroup
+	bodies := map[string]bool{}
+	for i, k := range keys {
+		body := strings.Repeat(string(rune('a'+i)), 4096)
+		bodies[body] = true
+		env := r.envelopeFrom(t, k, 1, intent.KindAgentUpgrade, upgradePayload([]byte(body)))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, up := withUpgradeBody(context.Background(), strings.NewReader(body))
+			r.a.Handle(ctx, env)
+			up.afterReceipt(r.a)
+		}()
+	}
+	wg.Wait()
+	got, _ := os.ReadFile(bin)
+	if !bodies[string(got)] {
+		t.Fatalf("binary is none of the bodies sent (%d bytes)", len(got))
+	}
+	noNew(t, bin)
+}
+
+// A job that starts while the binary streams stops the swap: the old binary
+// stays, nothing staged is left and the gate does not restart.
+func TestUpgradeRechecksJobsBeforeTheSwap(t *testing.T) {
+	r, _ := jobsRig(t)
+	bin, restarts := upgradeRig(t, r)
+	other, _ := signer.GenerateKey()
+	enroll(t, r, other, TierRoutine)
+	body := &hookReader{r: strings.NewReader("new"), atEnd: func() {
+		env := r.envelopeFrom(t, other, 1, jobstest.TestKind, map[string]string{})
+		_ = ok[intent.JobRecord](t)(r.verified(t, r.a.Handle(context.Background(), env)))
+	}}
+	rc, res := r.sendUpgrade(t, upgradePayload([]byte("new")), body)
+	if got := rejection(t, rc, res).Code; got != intent.ReasonJobActive {
+		t.Fatalf("code %s: %s", got, res)
+	}
+	fileIs(t, bin, "old")
+	noNew(t, bin)
+	if restarts.Load() != 0 {
+		t.Fatal("restarted")
 	}
 }
 

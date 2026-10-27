@@ -63,6 +63,9 @@ type Agent struct {
 
 	mu   sync.Mutex
 	busy map[eip712.Address]bool
+
+	// upgradeMu admits one agent.upgrade at a time on the whole gate.
+	upgradeMu sync.Mutex
 }
 
 // New builds an agent. A broken replay record does not stop construction: the

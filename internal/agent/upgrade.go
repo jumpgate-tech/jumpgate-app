@@ -49,9 +49,16 @@ func withUpgradeBody(ctx context.Context, body io.Reader) (context.Context, *upg
 // afterReceipt restarts the agent when the upgrade installed a new binary.
 // The route calls it only once the receipt is written.
 func (u *upgradeBody) afterReceipt(a *Agent) {
-	if u.upgraded.Load() && a.cfg.Restart != nil {
-		a.cfg.Restart()
+	if !u.upgraded.Load() || a.cfg.Restart == nil {
+		return
 	}
+	// A job that started after the swap keeps the gate running; the new
+	// binary takes over at the next restart.
+	if rej := a.upgradeJobCheck(); rej != nil {
+		a.logf("upgrade installed; not restarting: %s", rej.Message)
+		return
+	}
+	a.cfg.Restart()
 }
 
 // upgrade runs an admitted agent.upgrade. Everything that can refuse is
@@ -80,16 +87,20 @@ func (a *Agent) upgrade(ctx context.Context, payload []byte) ([]byte, uint8, *Re
 	if a.cfg.BinaryPath == "" {
 		return nil, 0, reject(intent.ReasonValidation, "this gate has no binary path to upgrade")
 	}
-	if a.cfg.JobsUnavailable != nil {
-		return nil, 0, reject(intent.ReasonJobActive, fmt.Sprintf("the job store could not be opened (%v), so a job may be running; fix the store and restart the gate", a.cfg.JobsUnavailable))
+	// One upgrade at a time on the whole gate, whichever controller sent
+	// it: Handle's per-controller claim does not cover two controllers.
+	if !a.upgradeMu.TryLock() {
+		return nil, 0, reject(intent.ReasonBusy, "another upgrade is running on this gate")
 	}
-	if j, busy, err := a.activeJob(); err != nil {
-		return nil, 0, reject(intent.ReasonJobActive, err.Error())
-	} else if busy {
-		return nil, 0, reject(intent.ReasonJobActive, fmt.Sprintf("job %s (%s) is %s; upgrade once it ends", j.ID, j.Kind, j.State))
+	defer a.upgradeMu.Unlock()
+	if rej := a.upgradeJobCheck(); rej != nil {
+		return nil, 0, rej
 	}
 
-	installed, err := a.install(up.r, pl.Size, want)
+	installed, rej, err := a.install(up.r, pl.Size, want)
+	if rej != nil {
+		return nil, 0, rej
+	}
 	if err != nil {
 		return failed(err)
 	}
@@ -97,63 +108,91 @@ func (a *Agent) upgrade(ctx context.Context, payload []byte) ([]byte, uint8, *Re
 	return mustJSON(intent.AgentUpgradeResult{Upgraded: installed, From: buildinfo.Version(), To: pl.Version}), intent.StatusOK, nil
 }
 
-// install streams exactly size bytes of body to BinaryPath.new, checks them
-// against want, and renames them over BinaryPath. It reports false, with
-// nothing changed, when the binary is the one already installed.
-func (a *Agent) install(body io.Reader, size int64, want []byte) (bool, error) {
+// upgradeJobCheck refuses an upgrade while a job may be running: one that is
+// active, or a job store that did not open.
+func (a *Agent) upgradeJobCheck() *Reject {
+	if a.cfg.JobsUnavailable != nil {
+		return reject(intent.ReasonJobActive, fmt.Sprintf("the job store could not be opened (%v), so a job may be running; fix the store and restart the gate", a.cfg.JobsUnavailable))
+	}
+	if j, busy, err := a.activeJob(); err != nil {
+		return reject(intent.ReasonJobActive, err.Error())
+	} else if busy {
+		return reject(intent.ReasonJobActive, fmt.Sprintf("job %s (%s) is %s; upgrade once it ends", j.ID, j.Kind, j.State))
+	}
+	return nil
+}
+
+// install streams exactly size bytes of body to a temp file of its own in
+// the binary's directory, checks them against want, checks again that no job
+// started meanwhile, and renames that exact file over BinaryPath. Any
+// failure removes the temp file and leaves the old binary. It reports false,
+// with nothing changed, when the binary is the one already installed. The
+// caller holds upgradeMu.
+func (a *Agent) install(body io.Reader, size int64, want []byte) (bool, *Reject, error) {
 	bin := a.cfg.BinaryPath
-	staged := bin + ".new"
-	if err := os.Remove(staged); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return false, err
+	// A .new from an older gate's upgrade is stale; only this gate's lock
+	// holder ever writes beside the binary now.
+	if err := os.Remove(bin + ".new"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, nil, err
 	}
-	f, err := os.OpenFile(staged, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
+	f, err := os.CreateTemp(filepath.Dir(bin), ".jumpgate-upgrade-*")
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
-	done := false
+	staged := f.Name()
+	closed, renamed := false, false
 	defer func() {
-		if !done {
+		if !closed {
 			f.Close()
+		}
+		if !renamed {
 			os.Remove(staged)
 		}
 	}()
+	if err := f.Chmod(0o700); err != nil {
+		return false, nil, err
+	}
 	h := sha256.New()
 	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(body, size))
 	if err != nil {
-		return false, fmt.Errorf("reading the binary: %w", err)
+		return false, nil, fmt.Errorf("reading the binary: %w", err)
 	}
 	if n < size {
-		return false, fmt.Errorf("the binary is short: %d of %d bytes arrived", n, size)
+		return false, nil, fmt.Errorf("the binary is short: %d of %d bytes arrived", n, size)
 	}
 	if m, _ := io.ReadFull(body, make([]byte, 1)); m > 0 {
-		return false, fmt.Errorf("the binary is longer than its declared %d bytes", size)
+		return false, nil, fmt.Errorf("the binary is longer than its declared %d bytes", size)
 	}
 	got := h.Sum(nil)
-	if !strings.EqualFold(hex.EncodeToString(got), hex.EncodeToString(want)) {
-		return false, fmt.Errorf("sha256 mismatch: got %x, want %x", got, want)
+	if hex.EncodeToString(got) != hex.EncodeToString(want) {
+		return false, nil, fmt.Errorf("sha256 mismatch: got %x, want %x", got, want)
 	}
 	if cur, err := fileSHA256(bin); err == nil && hex.EncodeToString(cur) == hex.EncodeToString(got) {
-		return false, nil
-	}
-	if err := f.Chmod(0o755); err != nil {
-		return false, err
+		return false, nil, nil
 	}
 	if err := f.Sync(); err != nil {
-		return false, err
+		return false, nil, err
 	}
-	done = true
+	closed = true
 	if err := f.Close(); err != nil {
-		os.Remove(staged)
-		return false, err
+		return false, nil, err
+	}
+	// The binary may have streamed for minutes: a job that started meanwhile
+	// owns the box until it ends.
+	if rej := a.upgradeJobCheck(); rej != nil {
+		return false, rej, nil
+	}
+	if err := os.Chmod(staged, 0o755); err != nil {
+		return false, nil, err
 	}
 	if err := os.Rename(staged, bin); err != nil {
-		os.Remove(staged)
-		return false, err
+		return false, nil, err
 	}
-	// The rename is done and the new binary is in place; a failed directory
-	// sync only risks the old one coming back after a power cut.
+	renamed = true
+	// The new binary is in place; a failed directory sync only risks the
+	// old one coming back after a power cut.
 	_ = fsatomic.SyncDir(filepath.Dir(bin))
-	return true, nil
+	return true, nil, nil
 }
 
 func fileSHA256(path string) ([]byte, error) {
