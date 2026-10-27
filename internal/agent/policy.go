@@ -48,6 +48,9 @@ var DefaultRequirements = map[string][]Tier{
 	intent.KindLogsSince:     {TierRoutine},
 	intent.KindServiceAction: {TierRoutine},
 	intent.KindModulesRead:   {TierRoutine},
+	// agent.upgrade is routine, like re-pairing a pushed box; a box can
+	// require approval for it in policy.json.
+	intent.KindAgentUpgrade: {TierRoutine},
 
 	intent.KindJobList:          {TierRoutine},
 	intent.KindJobRead:          {TierRoutine},

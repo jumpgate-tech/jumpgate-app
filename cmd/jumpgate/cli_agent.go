@@ -355,6 +355,14 @@ func agentRun(stateDir, configDir string) error {
 		ReplayPath: filepath.Join(stateDir, "replay.json"),
 		NodePath:   filepath.Join(configDir, "node.json"),
 		NamesPath:  filepath.Join(configDir, "names.json"),
+		// agent.upgrade replaces this binary, then asks systemd for a
+		// restart without waiting on it (it would wait on this process).
+		BinaryPath: bootstrap.BinaryPath,
+		Restart: func() {
+			if _, err := ex.Run(context.Background(), "systemctl --no-block restart jumpgate-agent.service", nil); err != nil {
+				fmt.Fprintf(os.Stderr, "jumpgate agent: restart after upgrade: %v\n", err)
+			}
+		},
 	})
 	// The policy only sets the socket mode here; Handle re-reads it for every
 	// intent. An unreadable policy keeps the stricter 0660.

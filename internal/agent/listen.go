@@ -175,6 +175,14 @@ func Serve(ctx context.Context, a *Agent, ln net.Listener) error {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(a.Handle(r.Context(), env))
 	})
+	mux.HandleFunc("POST /v1/upgrade", func(w http.ResponseWriter, r *http.Request) {
+		if allowed, _ := r.Context().Value(peerKey{}).(bool); !allowed {
+			w.Header().Set("Connection", "close")
+			http.Error(w, "not allowed on this socket", http.StatusForbidden)
+			return
+		}
+		serveUpgrade(a, w, r)
+	})
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,

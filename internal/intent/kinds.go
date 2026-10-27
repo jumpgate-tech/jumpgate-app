@@ -13,6 +13,9 @@ const (
 	// KindModulesRead reads the box's box modules. Like agent.info it needs
 	// no node.json, so a bootnode-only box reports status.
 	KindModulesRead = "modules.read"
+	// KindAgentUpgrade replaces the box's agent binary. It is sent to
+	// /v1/upgrade with the binary as the request body, never to /v1/intent.
+	KindAgentUpgrade = "agent.upgrade"
 )
 
 // Reason codes carried by a rejected receipt's result. They are stable: the
@@ -60,6 +63,20 @@ type (
 		Cursor string `json:"cursor"`
 		N      int    `json:"n"`
 	}
+	// AgentUpgradePayload describes the binary an agent.upgrade streams.
+	AgentUpgradePayload struct {
+		Arch    string `json:"arch"`
+		Version string `json:"version"`
+		SHA256  string `json:"sha256"` // hex
+		Size    int64  `json:"size"`
+	}
+	// AgentUpgradeResult answers agent.upgrade. Upgraded is false when the
+	// binary sent is the one already installed.
+	AgentUpgradeResult struct {
+		Upgraded bool   `json:"upgraded"`
+		From     string `json:"from"`
+		To       string `json:"to"`
+	}
 	ServiceActionPayload struct {
 		Service string `json:"service"` // "exec" | "beacon"
 		Action  string `json:"action"`  // "start" | "stop" | "restart"
@@ -69,6 +86,7 @@ type (
 // AgentInfo answers agent.info.
 type AgentInfo struct {
 	Version      string   `json:"version"`
+	Arch         string   `json:"arch"` // runtime.GOARCH of the agent binary
 	Address      string   `json:"address"`
 	LastSeq      uint64   `json:"lastSeq"` // for the asking controller
 	PlanVersions []string `json:"planVersions"`

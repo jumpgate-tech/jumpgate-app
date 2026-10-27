@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -71,7 +72,7 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, env intent.Envelo
 	if i.Kind == intent.KindAgentInfo {
 		w, notSetUp := a.loadNode()
 		info := intent.AgentInfo{
-			Version: buildinfo.Version(), Address: a.Address().Hex(), LastSeq: a.replay.LastSeq(i.Controller),
+			Version: buildinfo.Version(), Arch: runtime.GOARCH, Address: a.Address().Hex(), LastSeq: a.replay.LastSeq(i.Controller),
 			PlanVersions: jobs.Versions(), Signers: len(p.Signers), SetUp: notSetUp == nil,
 		}
 		switch {
@@ -84,6 +85,9 @@ func (a *Agent) dispatch(ctx context.Context, i intent.Intent, env intent.Envelo
 			info.SetUpError = &intent.Rejection{Code: notSetUp.Code, Message: notSetUp.Message}
 		}
 		return mustJSON(info), intent.StatusOK, nil
+	}
+	if i.Kind == intent.KindAgentUpgrade {
+		return a.upgrade(ctx, payload)
 	}
 	// modules.read reads the box modules' sidecars, not node.json: a box
 	// may run modules and no node.

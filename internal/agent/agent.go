@@ -47,6 +47,12 @@ type Config struct {
 	// Log takes what the agent reports outside any answer, such as a failed
 	// reconcile pass; nil discards it.
 	Log io.Writer
+	// BinaryPath is the agent binary agent.upgrade replaces
+	// (/usr/local/lib/jumpgate/jumpgate); empty refuses agent.upgrade.
+	BinaryPath string
+	// Restart restarts the agent after an upgrade, once the receipt is
+	// written; nil does nothing.
+	Restart func()
 }
 
 // Agent handles intents. It is safe for concurrent use.
