@@ -496,9 +496,24 @@ func vaultRekdf(args []string) int {
 			return failed("vault rekdf: %v", err)
 		}
 	}
-	if err := v.Rekdf(keep, next, p); err != nil { // clears both
+	changed := next != nil
+	dropped, err := v.Rekey(keep, next, p) // clears both
+	if err != nil {
 		return vaultFail("vault rekdf", err)
 	}
 	fmt.Printf("the primary passphrase slot now uses argon2id m=%d t=%d p=%d\n", p.Memory, p.Time, p.Threads)
+	for _, s := range dropped {
+		switch s.Kind {
+		case vault.SlotPassphrase:
+			fmt.Println("recovery code removed; run `jumpgate vault add-recovery`")
+		case vault.SlotSystemdCreds:
+			fmt.Println("the sealed key no longer opens the vault; run `jumpgate vault seal` again")
+		case vault.SlotKeystore:
+			fmt.Printf("the %s slot was removed; set up %s again\n", s.Store, s.Store)
+		}
+	}
+	if changed {
+		fmt.Println("copies taken before this change still open with the old credentials; destroy them.")
+	}
 	return 0
 }

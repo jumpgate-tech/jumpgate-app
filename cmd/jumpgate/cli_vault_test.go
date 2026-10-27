@@ -372,6 +372,41 @@ func TestExistingShortPassphraseStillUnlocks(t *testing.T) {
 	}
 }
 
+// A passphrase change rotates the data key; rekdf says which slots went and
+// that older copies still open with the old credentials.
+func TestVaultRekdfReportsDroppedSlots(t *testing.T) {
+	testutil.Home(t)
+	stdout, stderr := captureStdio(t)
+	p := placeVault(t)
+	v := openAt(t, p, []byte(vaulttest.Passphrase))
+	if _, err := v.AddRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	kek := bytes.Repeat([]byte{7}, 32)
+	if err := v.AddKEKSlot(vault.Slot{Kind: vault.SlotSystemdCreds, Cred: "jumpgate-vault-key"}, kek); err != nil {
+		t.Fatal(err)
+	}
+	kek = bytes.Repeat([]byte{8}, 32)
+	if err := v.AddKEKSlot(vault.Slot{Kind: vault.SlotKeystore, Store: "keychain", Ref: "r"}, kek); err != nil {
+		t.Fatal(err)
+	}
+	v.Lock()
+	useFakeTTY(t, vaulttest.Passphrase, "a brand new passphrase", "a brand new passphrase")
+	if code := cmdVault([]string{"rekdf", "--new-passphrase"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr())
+	}
+	for _, want := range []string{
+		"recovery code removed; run `jumpgate vault add-recovery`",
+		"run `jumpgate vault seal` again",
+		"set up keychain again",
+		"copies taken before this change still open with the old credentials; destroy them",
+	} {
+		if !strings.Contains(stdout(), want) {
+			t.Errorf("no %q in %q", want, stdout())
+		}
+	}
+}
+
 func TestVaultRekdfKeepsTheEntries(t *testing.T) {
 	testutil.Home(t)
 	_, stderr := captureStdio(t)
