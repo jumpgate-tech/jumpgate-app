@@ -1,0 +1,26 @@
+{
+  "modules": [
+    {
+      "id": "watch",
+      "name": "Watch",
+      "summary": "alerts",
+      "siteUrl": "https://example.org",
+      "docsStep": "",
+      "placement": "box",
+      "resources": {
+        "ramBytes": 0,
+        "diskBytes": 0
+      },
+      "applies": [
+        {
+          "chainId": 1,
+          "client": "geth",
+          "ok": true,
+          "beta": false
+        }
+      ],
+      "methods": null,
+      "public": null
+    }
+  ]
+}

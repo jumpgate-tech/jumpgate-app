@@ -2,12 +2,15 @@
   "modules": [
     {
       "id": "watch",
+      "instance": "1",
       "served": true,
       "active": true,
       "accepting": true,
       "count": 2,
       "size": 0,
-      "headBlock": 0
+      "headBlock": 0,
+      "note": "n",
+      "error": "e"
     }
   ],
   "gateStale": false,

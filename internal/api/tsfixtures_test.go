@@ -80,7 +80,7 @@ func TestWriteTSFixtures(t *testing.T) {
 		"loghits":          []LogHit{{Unit: "geth", Line: "peer dropped", At: at, Signature: "peer-drop", Severity: "warn", Explain: "a peer left", LearnURL: "https://example.org/peers"}},
 		"serviceresult":    ServiceResult{Active: true},
 		"gateways":         []GatewaySummary{{ID: "g1", Label: "main", BaseURL: "https://rpc.example", Networks: []GatewayNetwork{{ChainID: 1, Name: "mainnet", URL: "https://rpc.example/1"}}, Tier: "free"}},
-		"modulesview":      ModulesView{Modules: []ModuleStatus{{ID: "watch", Served: true, Active: true, Accepting: true, Count: 2}}, GateStale: false, Message: ""},
+		"modulesview":      ModulesView{Modules: []ModuleStatus{{ID: "watch", Instance: "1", Note: "n", Error: "e", Served: true, Active: true, Accepting: true, Count: 2}}, GateStale: false, Message: ""},
 		"agentcheck":       AgentCheck{Agent: "0xdef", Version: "0.6.0", ChainID: 1, SetUp: true, Signers: 1, Controllers: 1, ElapsedMs: 42},
 		"sshcommand":       SSHCommand{Argv: []string{"ssh", "-p", "22", "root@10.0.0.2"}, Display: "ssh root@10.0.0.2"},
 		"hostkeyprobe":     HostKeyProbe{Hops: []HostKeyHop{{HostPort: "10.0.0.2:22", Fingerprint: "SHA256:abc", KeyType: "ssh-ed25519", State: HostKeyUnknown, ProbeID: "p1", Error: "x"}}, AllConfirmed: false},
@@ -88,7 +88,13 @@ func TestWriteTSFixtures(t *testing.T) {
 		"pairevent":        PairEvent{Step: "install", Line: "installing", Error: "x", Code: CodeUnreachable, Hint: "h", Done: true, Agent: "0xdef"},
 		"pairinginfo":      PairingInfo{Controller: "0xabc", TransportKey: "ssh-ed25519 AAAA jumpgate", System: false, ServiceUID: -1, Scope: "self"},
 		"agentupgrade":     AgentUpgradeView{Upgraded: true, From: "v0.5.0", To: "v0.6.0"},
-		"error":            Error{Message: "wrong passphrase", Code: CodeBadRequest, Hint: "try again"},
+		"catalog": struct {
+			Modules []CatalogModule `json:"modules"`
+		}{Modules: []CatalogModule{{ID: "watch", Name: "Watch", Summary: "alerts", SiteURL: "https://example.org", Placement: "box", Applies: []ModuleApplies{{ChainID: 1, Client: "geth", OK: true}}}}},
+		"setmodule":       SetModule{Enabled: true, Public: "read", ChainID: 1, Port: 30303, ExtIP: "1.2.3.4", Upstreams: []string{"main=https://rpc.example"}},
+		"setmoduleresult": SetModuleResult{Status: "saved-gateways-failed", Gateways: []string{"g1"}, Failed: []GatewayFailed{{ID: "g2", Error: "down"}}},
+		"setupevent":      SetupEvent{StepID: "pull", Line: "pulling", Done: true, Err: "x"},
+		"error":           Error{Message: "wrong passphrase", Code: CodeBadRequest, Hint: "try again"},
 	}
 
 	dir := os.Getenv("JUMPGATE_TS_FIXTURES")

@@ -152,3 +152,9 @@ export async function* pair(c: Conn, id: string, req: { sudo: boolean; installed
     reader.releaseLock();
   }
 }
+
+export const catalog = (c: Conn) => request<{ modules: T.CatalogModule[] }>(c, "GET", "/api/catalog");
+export const listModules = (c: Conn, id: string) => request<T.ModulesView>(c, "GET", tgt(id, "/modules"));
+export const setModule = (c: Conn, id: string, mod: string, body: T.SetModule) =>
+  request<T.SetModuleResult>(c, "PUT", tgt(id, `/modules/${e(mod)}`), body);
+export const watchSetup = (c: Conn, id: string, s: AbortSignal, o?: StreamOpts) => stream<T.SetupEvent>(c, tgt(id, "/setup/stream"), s, o);

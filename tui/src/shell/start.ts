@@ -8,6 +8,7 @@ import { FleetScreen } from "../screens/fleet.ts";
 import { JobsScreen } from "../screens/jobs.ts";
 import { KeysScreen } from "../screens/keys.ts";
 import { HostsScreen } from "../screens/hosts.ts";
+import { ModulesScreen } from "../screens/modules.ts";
 import { NodeScreen } from "../screens/node.ts";
 import { VaultScreen } from "../screens/vault.ts";
 import { App } from "./app.ts";
@@ -18,6 +19,7 @@ export function mountApp(renderer: CliRenderer, args: Args, version = VERSION): 
   app.add(new ConnectScreen(app, { discover: () => discover(process.env, args.socket) }));
   app.add(new FleetScreen(app));
   app.add(new HostsScreen(app));
+  app.add(new ModulesScreen(app));
   app.add(new JobsScreen(app));
   app.add(new VaultScreen(app));
   app.add(new KeysScreen(app));

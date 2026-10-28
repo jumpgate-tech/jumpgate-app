@@ -233,7 +233,7 @@ export interface GatewaySummary {
 }
 
 export interface ModulesView {
-  modules: { id: string; served: boolean; active: boolean }[];
+  modules: ModuleStatus[];
   gateStale: boolean;
   message: string;
 }
@@ -304,4 +304,45 @@ export interface GateUpgrade {
   upgraded: boolean;
   from: string;
   to: string;
+}
+
+export interface CatalogModule {
+  id: string;
+  name: string;
+  summary: string;
+  placement: string;
+  applies: { chainId: number; client: string; ok: boolean }[];
+}
+
+export interface ModuleStatus {
+  id: string;
+  instance?: string;
+  served: boolean;
+  active: boolean;
+  accepting: boolean;
+  count: number;
+  note?: string;
+  error?: string;
+}
+
+export interface SetModule {
+  enabled: boolean;
+  public?: string;
+  chainId?: number;
+  port?: number;
+  extIp?: string;
+  upstreams?: string[];
+}
+
+export interface SetModuleResult {
+  status: string;
+  gateways?: string[];
+  failed?: { id: string; error: string }[];
+}
+
+export interface SetupEvent {
+  stepId: string;
+  line?: string;
+  done?: boolean;
+  err?: string;
 }
