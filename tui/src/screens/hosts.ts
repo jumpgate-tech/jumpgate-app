@@ -221,7 +221,9 @@ export class HostsScreen implements Screen {
       const cmd = await api.sshCommand(this.app.conn, t.id);
       const bad = checkSSHArgv(cmd.argv);
       if (bad) return this.app.fail(`ssh ${t.id}`, { message: `refusing the server's ssh command: ${bad}` });
-      await this.app.runArgv(localSSH(cmd.argv, this.app.platform), `ssh ${t.id}`);
+      const ssh = this.app.opts.bins?.ssh;
+      if (!ssh) return this.app.fail(`ssh ${t.id}`, { message: "ssh was not found on an absolute PATH entry; set JUMPGATE_SSH" });
+      await this.app.runArgv(localSSH(cmd.argv, ssh), `ssh ${t.id}`);
     } catch (e) {
       this.app.fail(`ssh ${t.id}`, e);
     }

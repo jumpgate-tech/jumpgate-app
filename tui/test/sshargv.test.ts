@@ -35,6 +35,5 @@ const bad: [string, string[]][] = [
 for (const [name, argv] of bad) test(`refuses ${name}`, () => expect(checkSSHArgv(argv)).not.toBeNull());
 
 test("the local ssh runs by name, never the server's argv[0]", () => {
-  expect(localSSH(["/tmp/evil", "-p", "22"], "linux")).toEqual(["ssh", "-p", "22"]);
-  expect(localSSH(["C:\\x\\ssh.exe", "-p", "22"], "win32")).toEqual(["ssh.exe", "-p", "22"]);
+  expect(localSSH(["/tmp/evil", "-p", "22"], "/usr/bin/ssh")).toEqual(["/usr/bin/ssh", "-p", "22"]);
 });

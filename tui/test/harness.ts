@@ -44,7 +44,7 @@ export async function mount(
   const fake = fakeServer({ ...baseRoutes(), ...o.routes });
   const conn: Conn = { socket: fake.socket, token: TOKEN, system: false };
   const t = await createTestRenderer({ width: o.width ?? 100, height: o.height ?? 30 });
-  const app = new App(t.renderer, { myVersion: "0.0.1", streamOpts: { delay: () => 5 }, runningEveryMs: 60_000, modalGuardMs: 0, ...o.app });
+  const app = new App(t.renderer, { myVersion: "0.0.1", streamOpts: { delay: () => 5 }, runningEveryMs: 60_000, modalGuardMs: 0, bins: { jumpgate: "/opt/jg/jumpgate", ssh: "/usr/bin/ssh" }, ...o.app });
   for (const s of screens(app)) app.add(s);
   if (o.attach !== false) app.attach(conn);
   const frame = async () => {

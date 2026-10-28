@@ -18,6 +18,7 @@ import { AlertsScreen } from "../screens/alerts.ts";
 import { NodeScreen } from "../screens/node.ts";
 import { VaultScreen } from "../screens/vault.ts";
 import { App, type AppOptions } from "./app.ts";
+import { resolveBins } from "../bins.ts";
 
 /** mountApp registers every screen on renderer. */
 export function mountApp(renderer: CliRenderer, args: Args, version = VERSION, opts: Partial<AppOptions> = {}): App {
@@ -36,12 +37,17 @@ export function mountApp(renderer: CliRenderer, args: Args, version = VERSION, o
   app.add(new SettingsScreen(app));
   app.add(new SetupScreen(app));
   app.add(new NodeScreen(app), false);
+  if (opts.bins) {
+    app.log(`jumpgate: ${opts.bins.jumpgate ?? "not found (set JUMPGATE_BIN to an absolute path)"}`);
+    app.log(`ssh: ${opts.bins.ssh ?? "not found (set JUMPGATE_SSH to an absolute path)"}`);
+  }
   return app;
 }
 
 export async function start(args: Args): Promise<number> {
+  const bins = resolveBins();
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
-  const app = mountApp(renderer, args);
+  const app = mountApp(renderer, args, VERSION, { bins });
   app.go("connect");
   await app.done;
   return 0;

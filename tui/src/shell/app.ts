@@ -11,6 +11,7 @@ import { clip, sanitizeLine } from "../text.ts";
 import { Activity } from "./activity.ts";
 import { confirmModal, helpModal, SecretModal, ShowOnce, TextModal, TypedConfirm, type Modal } from "./confirm.ts";
 import { runArgv, runJumpgate, type RunOpts } from "../shellout.ts";
+import type { Bins } from "../bins.ts";
 import { drawerLines, minimizedLine } from "./drawer.ts";
 import type { Key } from "./keys.ts";
 import { layoutFor, MIN_H, MIN_W, type Rect } from "./layout.ts";
@@ -48,6 +49,8 @@ export interface AppOptions {
   streamOpts?: StreamOpts;
   /** How often to re-read /api/jobs/running, in ms. */
   runningEveryMs?: number;
+  /** bins are jumpgate and ssh, resolved to absolute paths at startup. */
+  bins?: Bins;
   /** run replaces runJumpgate (tests record argv). */
   run?: (args: string[], o: RunOpts) => Promise<number>;
   /** runArgv replaces shellout.runArgv. */
@@ -224,7 +227,8 @@ export class App {
   }
 
   async run(args: string[], o: Omit<RunOpts, "renderer"> = {}): Promise<number> {
-    const code = await (this.opts.run ?? runJumpgate)(args, { ...o, renderer: this.renderer });
+    const code = await (this.opts.run ?? runJumpgate)(args, { ...o, bin: this.opts.bins?.jumpgate, renderer: this.renderer });
+    if (code === 127 && !this.opts.bins?.jumpgate) this.log("FAIL jumpgate was not found: set JUMPGATE_BIN to its absolute path");
     this.log(`jumpgate ${args.join(" ")}: exit ${code}${code === 0 ? "" : " FAIL"}`);
     void this.refreshVault();
     return code;

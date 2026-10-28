@@ -71,7 +71,7 @@ export class ConnectScreen implements Screen {
     this.st = { s: "starting" };
     this.app.log("starting jumpgate serve");
     const run = join(this.d.home, "run");
-    const code = await this.d.run(["serve", "--no-open"], { detach: { log: join(run, "server.log"), cwd: run } });
+    const code = await this.d.run(["serve", "--no-open"], { bin: this.app.opts.bins?.jumpgate, detach: { log: join(run, "server.log"), cwd: run } });
     if (code !== 0) {
       this.st = { s: "error", kind: "not_running", msg: `jumpgate serve did not start (exit ${code})` };
       return this.app.render();

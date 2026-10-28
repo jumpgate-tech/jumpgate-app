@@ -100,7 +100,7 @@ test("add this machine, upgrade, remove, forget a key, ssh, rename legacy names"
   await say(m!, "alpha");
   await m!.waitFor(() => m!.fake.requests.some((r) => r.method === "DELETE"));
   expect(rec.calls).toEqual([{ args: ["hosts", "add", "here", "--local"] }]);
-  expect(argvs).toEqual([fixture("sshcommand").argv]);
+  expect(argvs).toEqual([["/usr/bin/ssh", ...fixture("sshcommand").argv.slice(1)]]);
   expect(JSON.parse(m!.fake.requests.find((r) => r.path === "/api/hostkeys/forget")!.body)).toEqual({ hostPort: "10.0.0.2:22", fingerprint: "SHA256:abc" });
   expect(JSON.parse(m!.fake.requests.find((r) => r.path === "/api/jobs/alpha")!.body)).toEqual({ kind: "node.migrate-names" });
 });

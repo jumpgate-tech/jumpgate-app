@@ -121,5 +121,5 @@ export function checkSSHArgv(argv: string[]): string | null {
   return null;
 }
 
-/** localSSH is the argv the TUI runs: the local ssh by name, the checked arguments. */
-export const localSSH = (argv: string[], platform: string = process.platform) => [platform === "win32" ? "ssh.exe" : "ssh", ...argv.slice(1)];
+/** localSSH is the argv the TUI runs: the local ssh, resolved at startup, with the checked arguments. */
+export const localSSH = (argv: string[], ssh: string) => [ssh, ...argv.slice(1)];
