@@ -1,5 +1,5 @@
 {
-  "controller": "0xabc",
+  "controller": "0x00000000000000000000000000000000000000ab",
   "transportKey": "ssh-ed25519 AAAA jumpgate",
   "system": false,
   "serviceUid": -1,

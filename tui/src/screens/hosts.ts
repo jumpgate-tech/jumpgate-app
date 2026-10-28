@@ -5,6 +5,7 @@ import * as api from "../api/client.ts";
 import type { PairingInfo, SSHView, TargetView } from "../api/types.ts";
 import { maskText } from "../maskurl.ts";
 import { checkSSHArgv, localSSH } from "../sshargv.ts";
+import { shq } from "../shq.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
 import { sanitizeLine, wrap } from "../text.ts";
@@ -12,18 +13,21 @@ import { Pick } from "./pick.ts";
 
 const NAME = /^[A-Za-z0-9._-]+$/;
 const RELEASE = /^v[0-9]+\.[0-9]+\.[0-9]+$/;
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
 /** inviteLines formats `jumpgate hosts invite NAME` exactly as the CLI does. */
 export function inviteLines(version: string, info: PairingInfo, name: string): string[] {
   if (!RELEASE.test(version)) return [`FAIL this controller is a development build (${version}); an invite needs a released version`];
   if (info.scope === "self") return ["FAIL this controller is self-only (self_only)"];
+  if (!ADDRESS.test(info.controller)) return ["FAIL the server gave no valid controller address"];
+  if (!NAME.test(name)) return [`FAIL ${sanitizeLine(name)} is not a host name`];
   const key = info.transportKey.trim();
   if (!key || /[\r\n]/.test(key)) return ["FAIL the server gave no usable transport key"];
   return [
     "on the box, as root:",
     "curl -fsSL https://jumpgate.app/install.sh | sh -s -- --agent \\",
-    `  --version ${version} --controller ${info.controller} --transport-key '${key.replaceAll("'", `'"'"'`)}'`,
-    `then: jumpgate hosts add ${name} --ssh jumpgate@HOST --installed <address printed on the box>`,
+    `  --version ${shq(version)} --controller ${shq(info.controller)} --transport-key ${shq(key)}`,
+    `then: jumpgate hosts add ${shq(name)} --ssh jumpgate@HOST --installed <address printed on the box>`,
   ];
 }
 

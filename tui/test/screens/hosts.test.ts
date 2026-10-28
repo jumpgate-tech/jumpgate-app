@@ -104,13 +104,16 @@ test("add this machine, upgrade, remove, forget a key, ssh, rename legacy names"
 });
 
 test("invite prints the CLI's lines", () => {
-  const lines = inviteLines("v0.6.0", { controller: "0xabc", transportKey: "ssh-ed25519 AAAA it's", system: false }, "beta");
+  const A = "0x" + "ab".repeat(20);
+  const lines = inviteLines("v0.6.0", { controller: A, transportKey: "ssh-ed25519 AAAA it's", system: false }, "beta");
   expect(lines).toEqual([
     "on the box, as root:",
     "curl -fsSL https://jumpgate.app/install.sh | sh -s -- --agent \\",
-    `  --version v0.6.0 --controller 0xabc --transport-key 'ssh-ed25519 AAAA it'"'"'s'`,
+    `  --version v0.6.0 --controller ${A} --transport-key 'ssh-ed25519 AAAA it'"'"'s'`,
     "then: jumpgate hosts add beta --ssh jumpgate@HOST --installed <address printed on the box>",
   ]);
+  expect(inviteLines("v0.6.0", { controller: "0xab; id", transportKey: "k", system: false }, "b")[0]).toContain("no valid controller");
+  expect(inviteLines("v0.6.0 $(id)", { controller: A, transportKey: "k", system: false }, "b")[0]).toContain("development build");
   expect(inviteLines("dev", { controller: "0xabc", transportKey: "k", system: false }, "b")[0]).toContain("development build");
   expect(inviteLines("v0.6.0", { controller: "0xabc", transportKey: "k", system: false, scope: "self" }, "b")[0]).toContain("self-only");
 });
@@ -120,7 +123,7 @@ test("i shows the invite for a named box", async () => {
   await m!.press("i");
   await typeText(m!, "gamma");
   await m!.press("return");
-  expect(await m!.waitFor("--controller 0xabc")).toContain("on the box, as root:");
+  expect(await m!.waitFor("--controller 0x0000")).toContain("on the box, as root:");
 });
 
 test("a server ssh argv of another shape is refused and never run", async () => {

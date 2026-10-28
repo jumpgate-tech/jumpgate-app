@@ -86,7 +86,7 @@ func TestWriteTSFixtures(t *testing.T) {
 		"hostkeyprobe":     HostKeyProbe{Hops: []HostKeyHop{{HostPort: "10.0.0.2:22", Fingerprint: "SHA256:abc", KeyType: "ssh-ed25519", State: HostKeyUnknown, ProbeID: "p1", Error: "x"}}, AllConfirmed: false},
 		"recordedhostkeys": RecordedHostKeys{HostPort: "10.0.0.2:22", Keys: []RecordedHostKey{{Fingerprint: "SHA256:abc", KeyType: "ssh-ed25519", Store: HostKeyStoreJumpgate}}},
 		"pairevent":        PairEvent{Step: "install", Line: "installing", Error: "x", Code: CodeUnreachable, Hint: "h", Done: true, Agent: "0xdef"},
-		"pairinginfo":      PairingInfo{Controller: "0xabc", TransportKey: "ssh-ed25519 AAAA jumpgate", System: false, ServiceUID: -1, Scope: "self"},
+		"pairinginfo":      PairingInfo{Controller: "0x00000000000000000000000000000000000000ab", TransportKey: "ssh-ed25519 AAAA jumpgate", System: false, ServiceUID: -1, Scope: "self"},
 		"agentupgrade":     AgentUpgradeView{Upgraded: true, From: "v0.5.0", To: "v0.6.0"},
 		"catalog": struct {
 			Modules []CatalogModule `json:"modules"`
