@@ -112,9 +112,8 @@ export class ShowOnce implements Modal {
   }
   lines(w: number): string[] {
     const v = this.value ?? "";
-    return [...sanitizeLine(v).match(new RegExp(`.{1,${Math.max(10, w)}}`, "g")) ?? [""], "", "Copy it now; it is shown once. [any key] close"].map((l) =>
-      clip(l, w),
-    );
+    const body = v.split("\n").flatMap((l) => sanitizeLine(l).match(new RegExp(`.{1,${Math.max(10, w)}}`, "g")) ?? [""]);
+    return [...body, "", "Copy it now; it is shown once. [any key] close"].map((l) => clip(l, w));
   }
   key() {
     this.value = null;

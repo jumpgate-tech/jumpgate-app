@@ -346,3 +346,23 @@ export interface SetupEvent {
   done?: boolean;
   err?: string;
 }
+
+export interface VPNView {
+  id: string;
+  provider: string;
+  interface: string;
+  targetId: string;
+  autostart: boolean;
+  configured: boolean;
+}
+
+export interface VPNServerView {
+  id: string;
+  targetId: string;
+  interface: string;
+  address: string;
+  listenPort: number;
+  publicKey: string;
+  endpoint: string;
+  peers: { name: string; publicKey: string; allowedIp: string }[];
+}

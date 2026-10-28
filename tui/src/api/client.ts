@@ -180,3 +180,60 @@ export const diagnostics = (c: Conn, id: string) => request<unknown>(c, "GET", t
 export const diagnosticsLatest = (c: Conn, id: string) => request<unknown>(c, "GET", tgt(id, "/diagnostics/latest"));
 export const explain = (c: Conn, id: string, lines: string[]) => request<{ text: string; sentExcerpt: string[]; provider: string; local: boolean }>(c, "POST", tgt(id, "/explain"), { lines });
 export const intent = (c: Conn, id: string, kind: string, payload: unknown = {}) => request<unknown>(c, "POST", tgt(id, `/intent/${e(kind)}`), payload);
+
+/**
+ * jsonWithSecretString builds `{...fields, "<field>": "<value as a JSON string>"}`
+ * as bytes, escaping value byte by byte, so a secret that the server reads as a
+ * string (a WireGuard config) never becomes a JS string here.
+ */
+export function jsonWithSecretString(fields: Record<string, unknown>, field: string, value: Uint8Array): Uint8Array {
+  const enc = new TextEncoder();
+  const lead = Object.entries(fields).map(([k, v]) => `${JSON.stringify(k)}:${JSON.stringify(v)},`).join("");
+  const pre = enc.encode(`{${lead}${JSON.stringify(field)}:"`);
+  const post = enc.encode(`"}`);
+  const out = new Uint8Array(pre.length + value.length * 6 + post.length);
+  out.set(pre);
+  let o = pre.length;
+  const hex = enc.encode("0123456789abcdef");
+  for (const b of value) {
+    if (b === 0x22 || b === 0x5c) (out[o++] = 0x5c), (out[o++] = b);
+    else if (b < 0x20) {
+      out.set([0x5c, 0x75, 0x30, 0x30, hex[b >> 4]!, hex[b & 15]!], o);
+      o += 6;
+    } else out[o++] = b;
+  }
+  out.set(post, o);
+  o += post.length;
+  const body = out.slice(0, o);
+  out.fill(0);
+  return body;
+}
+
+// VPN (I).
+const vpn = (id: string, rest = "") => `/api/vpns/${e(id)}${rest}`;
+const vsrv = (id: string, rest = "") => `/api/vpn-servers/${e(id)}${rest}`;
+export const vpns = (c: Conn) => request<T.VPNView[]>(c, "GET", "/api/vpns");
+/** saveVPN sends the config bytes (they hold a private key) and zeroes them. */
+export async function saveVPN(c: Conn, v: { id: string; provider: string; interface: string; targetId: string; autostart: boolean }, config: Uint8Array): Promise<unknown> {
+  const body = jsonWithSecretString(v, "config", config);
+  try {
+    return await request(c, "POST", "/api/vpns", body);
+  } finally {
+    body.fill(0);
+    config.fill(0);
+  }
+}
+export const deleteVPN = (c: Conn, id: string) => request(c, "DELETE", vpn(id));
+export const vpnUpDown = (c: Conn, id: string, up: boolean) => request<unknown>(c, "POST", vpn(id, up ? "/up" : "/down"));
+export const vpnStatus = (c: Conn, id: string) => request<unknown>(c, "GET", vpn(id, "/status"));
+export const vpnServers = (c: Conn) => request<T.VPNServerView[]>(c, "GET", "/api/vpn-servers");
+export const vpnServer = (c: Conn, id: string) => request<T.VPNServerView>(c, "GET", vsrv(id));
+export const createVPNServer = (c: Conn, req: Record<string, unknown>) => request<unknown>(c, "POST", "/api/vpn-servers", req);
+export const deleteVPNServer = (c: Conn, id: string) => request(c, "DELETE", vsrv(id));
+export const vpnServerUpDown = (c: Conn, id: string, up: boolean) => request<unknown>(c, "POST", vsrv(id, up ? "/up" : "/down"));
+export const vpnServerStatus = (c: Conn, id: string) => request<unknown>(c, "GET", vsrv(id, "/status"));
+export const setVPNEndpoint = (c: Conn, id: string, endpointHost: string) => request<unknown>(c, "POST", vsrv(id, "/endpoint"), { endpointHost });
+/** addPeer's reply holds the device's private key in config: show it once, never keep it. */
+export const addPeer = (c: Conn, id: string, req: { name: string; fullTunnel: boolean }) =>
+  request<{ name: string; publicKey: string; allowedIp: string; config: string }>(c, "POST", vsrv(id, "/peers"), req);
+export const removePeer = (c: Conn, id: string, publicKey: string) => request(c, "POST", vsrv(id, "/peers/remove"), { publicKey });

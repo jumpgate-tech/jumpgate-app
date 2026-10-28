@@ -66,6 +66,22 @@ export const ROUTES = [
   "GET /api/targets/{id}/diagnostics/latest",
   "POST /api/targets/{id}/explain",
   "POST /api/targets/{id}/intent/{kind}",
+  "GET /api/vpns",
+  "POST /api/vpns",
+  "DELETE /api/vpns/{id}",
+  "POST /api/vpns/{id}/up",
+  "POST /api/vpns/{id}/down",
+  "GET /api/vpns/{id}/status",
+  "GET /api/vpn-servers",
+  "GET /api/vpn-servers/{id}",
+  "POST /api/vpn-servers",
+  "DELETE /api/vpn-servers/{id}",
+  "POST /api/vpn-servers/{id}/up",
+  "POST /api/vpn-servers/{id}/down",
+  "GET /api/vpn-servers/{id}/status",
+  "POST /api/vpn-servers/{id}/endpoint",
+  "POST /api/vpn-servers/{id}/peers",
+  "POST /api/vpn-servers/{id}/peers/remove",
 ] as const;
 
 export type Route = (typeof ROUTES)[number];
