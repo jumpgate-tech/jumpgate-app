@@ -139,8 +139,8 @@ tty() {
 }
 want() { case "$out" in *"$1"*) ;; *) fail "$2: output lacks '$1'" ;; esac; }
 status_ok() { # NAME TARGET
-  local i
-  for i in $(seq 1 20); do
+  local _
+  for _ in $(seq 1 20); do
     admin "$1" "jumpgate status $2" >"$work/status.out"
     # A signed not_set_up is an answer: socket, admission and signature worked.
     { [ "$rc" = 0 ] || grep -q "no node is set up" "$work/status.out"; } && return 0
@@ -198,8 +198,8 @@ done
 tunnel() {
   docker exec -d "$B" ssh -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes \
     -N -L "$2:127.0.0.1:8799" "$1@a"
-  local i
-  for i in $(seq 1 20); do
+  local _
+  for _ in $(seq 1 20); do
     docker exec "$B" curl -s -o /dev/null "http://127.0.0.1:$2/" && return 0
     sleep 1
   done
@@ -239,6 +239,7 @@ gate="$(printf '%s\n' "$out" | grep -o -- '--installed 0x[0-9a-fA-F]*' | head -1
 
 tty "$A" 'yes\n' "jumpgate hosts add b --ssh jumpgate@b --installed 0x0000000000000000000000000000000000000001"
 [ "$rc" != 0 ] || fail "pull-mismatch: exit 0"
+# shellcheck disable=SC2016 # backticks are literal text in the message
 want 'is not the one `jumpgate agent setup` printed' pull-mismatch # installed_mismatch
 ok pull-mismatch
 
