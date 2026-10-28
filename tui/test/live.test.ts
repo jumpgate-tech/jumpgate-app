@@ -33,6 +33,7 @@ test.skipIf(!home || !passFile)("live: connect, unlock, fleet, jobs", async () =
 
   app.go("vault");
   app.handleKey(key("u"));
+  await Bun.sleep(200); // keys typed within 150 ms of a modal opening are flushed
   for (const c of pass) app.handleKey(key(c, { seq: c }));
   const prompt = await frame();
   save("unlock prompt", prompt);
