@@ -249,3 +249,9 @@ export interface SSHCommand {
   argv: string[];
   display: string;
 }
+
+export interface SettingsUpdate {
+  aiProvider?: string;
+  aiKey?: string;
+  vaultIdleLockMinutes?: number;
+}

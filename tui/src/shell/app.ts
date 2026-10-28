@@ -9,7 +9,8 @@ import { maskText } from "../maskurl.ts";
 import { redact } from "../secret.ts";
 import { clip, sanitizeLine } from "../text.ts";
 import { Activity } from "./activity.ts";
-import { confirmModal, helpModal, SecretModal, ShowOnce, type Modal } from "./confirm.ts";
+import { confirmModal, helpModal, SecretModal, ShowOnce, TextModal, type Modal } from "./confirm.ts";
+import { runJumpgate, type RunOpts } from "../shellout.ts";
 import { drawerLines, minimizedLine } from "./drawer.ts";
 import type { Key } from "./keys.ts";
 import { layoutFor, MIN_H, MIN_W, type Rect } from "./layout.ts";
@@ -46,6 +47,10 @@ export interface AppOptions {
   streamOpts?: StreamOpts;
   /** How often to re-read /api/jobs/running, in ms. */
   runningEveryMs?: number;
+  /** run replaces runJumpgate (tests record argv). */
+  run?: (args: string[], o: RunOpts) => Promise<number>;
+  /** platform replaces process.platform (Linux-only actions). */
+  platform?: string;
 }
 
 const GLOBAL_KEYS = [
@@ -169,6 +174,32 @@ export class App {
         }),
       ),
     );
+  }
+
+  askText(prompt: string, initial = ""): Promise<string | null> {
+    return new Promise((resolve) =>
+      this.open(
+        new TextModal(prompt, initial, (v) => {
+          this.close();
+          resolve(v);
+        }),
+      ),
+    );
+  }
+
+  get platform(): string {
+    return this.opts.platform ?? process.platform;
+  }
+
+  /**
+   * run executes `jumpgate <args>` with the renderer suspended; the child owns
+   * the terminal. args is fixed by the caller and never holds a secret.
+   */
+  async run(args: string[], o: Omit<RunOpts, "renderer"> = {}): Promise<number> {
+    const code = await (this.opts.run ?? runJumpgate)(args, { ...o, renderer: this.renderer });
+    this.log(`jumpgate ${args.join(" ")}: exit ${code}${code === 0 ? "" : " FAIL"}`);
+    void this.refreshVault();
+    return code;
   }
 
   showOnce(title: string, value: string): Promise<void> {

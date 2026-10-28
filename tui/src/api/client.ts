@@ -84,3 +84,17 @@ export const prefs = (c: Conn) => request<T.UIPrefs>(c, "GET", "/api/ui-prefs");
 export const savePrefs = (c: Conn, p: T.UIPrefs) => request<T.UIPrefs>(c, "PUT", "/api/ui-prefs", p);
 
 export type { SSEMsg };
+
+export const settings = (c: Conn) => request<T.Settings>(c, "GET", "/api/settings");
+export const saveSettings = (c: Conn, u: T.SettingsUpdate) => request<T.Settings>(c, "PUT", "/api/settings", u);
+
+/** putVaultSecret stores value as name; value and the body are zeroed before it returns. */
+export async function putVaultSecret(c: Conn, name: "relay-token" | "admin-token", value: Uint8Array): Promise<void> {
+  const body = secretBody("value", value);
+  try {
+    await request(c, "PUT", `/api/vault/secrets/${e(name)}`, body);
+  } finally {
+    body.fill(0);
+    value.fill(0);
+  }
+}

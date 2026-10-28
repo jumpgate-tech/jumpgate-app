@@ -27,6 +27,9 @@ export const ROUTES = [
   "POST /api/jobs/{target}/{job}/adopt",
   "GET /api/ui-prefs",
   "PUT /api/ui-prefs",
+  "GET /api/settings",
+  "PUT /api/settings",
+  "PUT /api/vault/secrets/{name}",
 ] as const;
 
 export type Route = (typeof ROUTES)[number];

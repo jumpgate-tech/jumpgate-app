@@ -15,6 +15,8 @@ export interface RunOpts {
   env?: Env;
   /** Start in the background, with stdout/stderr appended to log (0600). */
   detach?: { log: string; cwd?: string };
+  /** After the child exits, wait for Enter before the dashboard redraws (it may have printed a one-time secret). */
+  pause?: boolean;
 }
 
 export const jumpgateBin = (env: Env = process.env) => env.JUMPGATE_BIN || "jumpgate";
@@ -37,7 +39,12 @@ export async function runJumpgate(args: string[], o: RunOpts = {}): Promise<numb
   await o.renderer?.suspend();
   try {
     const p = Bun.spawn(argv, { stdio: ["inherit", "inherit", "inherit"], env: { ...process.env, ...env } });
-    return await p.exited;
+    const code = await p.exited;
+    if (o.pause) {
+      const w = Bun.spawn(["sh", "-c", "printf '\\nCopy what you need now, then press Enter to return to the dashboard. '; read _"], { stdio: ["inherit", "inherit", "inherit"] });
+      await w.exited;
+    }
+    return code;
   } catch {
     return 127;
   } finally {

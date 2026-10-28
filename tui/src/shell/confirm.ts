@@ -125,3 +125,29 @@ export class ShowOnce implements Modal {
 export function helpModal(lines: string[], done: () => void): Modal {
   return { title: "keys", takesText: false, lines: () => lines, key: () => done() };
 }
+
+/** TextModal reads one plain (non-secret) line: a path, a name, a number. */
+export class TextModal implements Modal {
+  readonly title = "input";
+  readonly takesText = true;
+  private text: string;
+  constructor(
+    private readonly prompt: string,
+    initial: string,
+    private readonly done: (v: string | null) => void,
+  ) {
+    this.text = initial;
+  }
+  get value(): string {
+    return this.text;
+  }
+  lines(w: number): string[] {
+    return [clip(`${this.prompt}: ${sanitizeLine(this.text)}_`, w), "", "[enter] ok   [esc] cancel"];
+  }
+  key(k: Key) {
+    if (k.name === "return") this.done(this.text);
+    else if (k.name === "escape") this.done(null);
+    else if (k.name === "backspace") this.text = [...this.text].slice(0, -1).join("");
+    else this.text += printable(k);
+  }
+}

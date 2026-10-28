@@ -3,7 +3,7 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Conn } from "../src/api/http.ts";
-import { App, type Screen } from "../src/shell/app.ts";
+import { App, type AppOptions, type Screen } from "../src/shell/app.ts";
 import { key, type Key } from "../src/shell/keys.ts";
 import { fakeServer, json, sseResponse, type Fake, type Handler } from "./fake.ts";
 
@@ -39,12 +39,12 @@ export interface Mounted {
 
 export async function mount(
   screens: (app: App) => Screen[],
-  o: { width?: number; height?: number; routes?: Record<string, Handler>; attach?: boolean } = {},
+  o: { width?: number; height?: number; routes?: Record<string, Handler>; attach?: boolean; app?: Partial<AppOptions> } = {},
 ): Promise<Mounted> {
   const fake = fakeServer({ ...baseRoutes(), ...o.routes });
   const conn: Conn = { socket: fake.socket, token: TOKEN, system: false };
   const t = await createTestRenderer({ width: o.width ?? 100, height: o.height ?? 30 });
-  const app = new App(t.renderer, { myVersion: "0.0.1", streamOpts: { delay: () => 5 }, runningEveryMs: 60_000 });
+  const app = new App(t.renderer, { myVersion: "0.0.1", streamOpts: { delay: () => 5 }, runningEveryMs: 60_000, ...o.app });
   for (const s of screens(app)) app.add(s);
   if (o.attach !== false) app.attach(conn);
   const frame = async () => {
@@ -59,7 +59,10 @@ export async function mount(
     conn,
     frame,
     async press(...keys) {
-      for (const k of keys) app.handleKey(typeof k === "string" ? key(k) : k);
+      for (const k of keys) {
+        app.handleKey(typeof k === "string" ? key(k) : k);
+        await Bun.sleep(1);
+      }
       await Bun.sleep(1);
       return frame();
     },
@@ -81,3 +84,18 @@ export async function mount(
 }
 
 export const dummy = (id: string, body: string[] = [`${id} body`]): Screen => ({ id, title: id, view: () => body });
+
+/** recorder is a fake runJumpgate that records each argv and its options. */
+export function recorder(code = 0) {
+  const calls: { args: string[]; pause?: boolean; detach?: boolean }[] = [];
+  const run = async (args: string[], o: { pause?: boolean; detach?: unknown }) => {
+    calls.push({ args, ...(o.pause ? { pause: true } : {}), ...(o.detach ? { detach: true } : {}) });
+    return code;
+  };
+  return { calls, run };
+}
+
+export const typeText = (m: Mounted, s: string) => {
+  for (const c of s) m.app.handleKey(key(c === " " ? "space" : c, { seq: c }));
+  return m.frame();
+};
