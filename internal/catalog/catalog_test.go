@@ -363,6 +363,22 @@ func TestRustBuildCmd_CargoEnvSourcing_NoSubshell(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			// The PATH every form runs with, minus any directory holding a real
+			// cargo: a host with Rust installed (GitHub's macOS runners put
+			// ~/.cargo/bin on PATH) would otherwise let the subshell form find
+			// cargo without the env file, and the discriminator below would fail.
+			var keep []string
+			for _, d := range filepath.SplitList(os.Getenv("PATH")) {
+				if _, err := os.Stat(filepath.Join(d, "cargo")); err == nil {
+					continue
+				}
+				keep = append(keep, d)
+			}
+			noCargo := strings.Join(keep, string(os.PathListSeparator))
+			if strings.Contains(noCargo, "'") {
+				t.Skipf("PATH holds a quote: %q", noCargo)
+			}
+
 			exe := executor.NewLocal()
 			// A bound on every command: a stalled exec must fail this test, not
 			// hang the suite until the package timeout.
@@ -371,7 +387,7 @@ func TestRustBuildCmd_CargoEnvSourcing_NoSubshell(t *testing.T) {
 
 			// Property 1: the recipe's literal brace-group form keeps the PATH
 			// edit alive past the sourcing statement, so cargo resolves.
-			newForm := fmt.Sprintf(`export HOME='%s'; { . "$HOME/.cargo/env" 2>/dev/null || true; } && cargo --version`, tmp)
+			newForm := fmt.Sprintf(`export HOME='%s' PATH='%s'; { . "$HOME/.cargo/env" 2>/dev/null || true; } && cargo --version`, tmp, noCargo)
 			res, err := exe.Run(ctx, newForm, nil)
 			if err != nil {
 				t.Fatalf("brace-group form run error: %v", err)
@@ -383,7 +399,7 @@ func TestRustBuildCmd_CargoEnvSourcing_NoSubshell(t *testing.T) {
 			// Discriminator: under the identical scratch HOME, the OLD
 			// parenthesized-subshell form must fail, proving this test actually
 			// distinguishes the two forms rather than passing regardless.
-			oldForm := fmt.Sprintf(`export HOME='%s'; (. "$HOME/.cargo/env" 2>/dev/null || true) && cargo --version`, tmp)
+			oldForm := fmt.Sprintf(`export HOME='%s' PATH='%s'; (. "$HOME/.cargo/env" 2>/dev/null || true) && cargo --version`, tmp, noCargo)
 			res2, err := exe.Run(ctx, oldForm, nil)
 			if err != nil {
 				t.Fatalf("subshell form run error: %v", err)
@@ -395,7 +411,7 @@ func TestRustBuildCmd_CargoEnvSourcing_NoSubshell(t *testing.T) {
 			// Property 2: short-circuiting is preserved — if the step before the
 			// brace group fails, the brace group and everything after it (here,
 			// `echo RAN`) must never execute.
-			shortCircuit := fmt.Sprintf(`export HOME='%s'; false && { . "$HOME/.cargo/env" 2>/dev/null || true; } && echo RAN`, tmp)
+			shortCircuit := fmt.Sprintf(`export HOME='%s' PATH='%s'; false && { . "$HOME/.cargo/env" 2>/dev/null || true; } && echo RAN`, tmp, noCargo)
 			res3, err := exe.Run(ctx, shortCircuit, nil)
 			if err != nil {
 				t.Fatalf("short-circuit run error: %v", err)
