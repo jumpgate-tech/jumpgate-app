@@ -89,7 +89,7 @@ expect_signed_answer() { # user home
 echo "== (a) root, no sudo on the box"
 fresh_box root
 docker exec "$name" mv /usr/bin/sudo /usr/bin/sudo.off
-as root /root jumpgate keys init --store file
+as root /root jumpgate keys init --store file --insecure-plain
 # No -t: as root the CLI needs no terminal, the server runs the steps.
 as root /root jumpgate hosts add me --local
 expect_paired root /root
@@ -108,7 +108,7 @@ docker exec -i -u alice "$name" sh -c 'umask 077 && mkdir -p /home/alice/.jumpga
 {"targets": [{"id": "me", "mode": "local",
   "wire": {"ChainID": 369, "ExecID": "reth", "BeaconID": "lighthouse", "DataDir": "/var/lib/jumpgate-e2e/369"}}]}
 JSON
-as alice /home/alice jumpgate keys init --store file
+as alice /home/alice jumpgate keys init --store file --insecure-plain
 # -t gives the CLI a terminal on stdin, which non-root local pairing requires.
 docker exec -t -u alice -e HOME=/home/alice "$name" jumpgate hosts add me --local
 expect_paired alice /home/alice
