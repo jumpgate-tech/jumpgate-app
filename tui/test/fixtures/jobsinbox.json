@@ -1,0 +1,59 @@
+{
+  "at": "2026-10-28T12:00:00Z",
+  "jobs": [
+    {
+      "target": "alpha",
+      "id": "j1",
+      "kind": "node.upgrade",
+      "title": "Upgrade the node",
+      "state": "needs-decision",
+      "step": 1,
+      "steps": [
+        {
+          "id": "s0",
+          "title": "Stop",
+          "state": "done"
+        },
+        {
+          "id": "s1",
+          "title": "Swap binary",
+          "state": "asking"
+        }
+      ],
+      "attempt": 1,
+      "question": {
+        "id": "q1",
+        "prompt": "Swap the binary now?",
+        "options": [
+          {
+            "id": "go",
+            "label": "Go",
+            "detail": "swap and restart"
+          }
+        ],
+        "tier": "confirm",
+        "askedAt": "2026-10-28T12:00:00Z",
+        "signable": true
+      },
+      "lease": {
+        "owner": "0xabc",
+        "label": "this controller",
+        "heartbeatAt": "2026-10-28T12:00:00Z",
+        "fresh": true,
+        "mine": true
+      },
+      "createdAt": "2026-10-28T12:00:00Z",
+      "updatedAt": "2026-10-28T12:00:00Z",
+      "driving": true
+    }
+  ],
+  "errors": [
+    {
+      "target": "beta",
+      "error": {
+        "error": "unreachable",
+        "code": "unreachable"
+      }
+    }
+  ]
+}

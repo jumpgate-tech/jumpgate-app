@@ -1,0 +1,29 @@
+{
+  "fleetColumns": [
+    "host",
+    "link",
+    "network",
+    "sync",
+    "lag",
+    "peers",
+    "disk",
+    "firewall"
+  ],
+  "hostTabs": [
+    "overview",
+    "storage",
+    "endpoints",
+    "security",
+    "logs",
+    "services"
+  ],
+  "chains": [],
+  "refreshSeconds": 15,
+  "units": "GB",
+  "compact": false,
+  "showEstimates": true,
+  "bell": false,
+  "mouse": false,
+  "glyphs": "auto",
+  "drawer": "auto"
+}

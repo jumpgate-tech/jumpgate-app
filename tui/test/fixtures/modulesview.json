@@ -1,0 +1,15 @@
+{
+  "modules": [
+    {
+      "id": "watch",
+      "served": true,
+      "active": true,
+      "accepting": true,
+      "count": 2,
+      "size": 0,
+      "headBlock": 0
+    }
+  ],
+  "gateStale": false,
+  "message": ""
+}

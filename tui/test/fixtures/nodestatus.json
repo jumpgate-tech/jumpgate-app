@@ -1,0 +1,23 @@
+{
+  "at": "2026-10-28T12:00:00Z",
+  "exec": {
+    "active": true,
+    "syncing": false,
+    "head": 21000000,
+    "distance": 1,
+    "peers": 50,
+    "state": "synced"
+  },
+  "beacon": {
+    "active": true,
+    "syncing": true,
+    "head": 10500000,
+    "distance": 2,
+    "peers": 80,
+    "state": "syncing"
+  },
+  "refHead": 21000003,
+  "headLag": 3,
+  "overall": "syncing",
+  "diskUsedPct": 61.5
+}

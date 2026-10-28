@@ -1,0 +1,25 @@
+[
+  {
+    "id": "g1",
+    "label": "main",
+    "placement": {
+      "targetId": ""
+    },
+    "status": {
+      "State": ""
+    },
+    "baseUrl": "https://rpc.example",
+    "networks": [
+      {
+        "chainId": 1,
+        "name": "mainnet",
+        "url": "https://rpc.example/1"
+      }
+    ],
+    "tier": "free",
+    "config": {
+      "Networks": null,
+      "Modules": null
+    }
+  }
+]

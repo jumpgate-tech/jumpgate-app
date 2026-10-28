@@ -1,0 +1,11 @@
+{
+  "aiProvider": "anthropic",
+  "aiKeySet": true,
+  "refRpcBase": "https://rpc.example",
+  "providerKeysSet": [
+    "anthropic"
+  ],
+  "updateNotifyEnabled": true,
+  "aiDisclosure": "logs are sent",
+  "vaultIdleLockMinutes": 30
+}
