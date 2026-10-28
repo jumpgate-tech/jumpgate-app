@@ -176,6 +176,8 @@ type Server struct {
 	// serializes unlock and lock.
 	keys keyState
 	vctl vaultCtl
+	// passBackoff slows wrong passphrases per peer uid (unlock_backoff.go).
+	passBackoff passBackoff
 	// bg counts the work each unlock starts (afterUnlock).
 	bg sync.WaitGroup
 

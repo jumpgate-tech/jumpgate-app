@@ -32,7 +32,8 @@ func sealKEK() ([]byte, error) {
 // could not already open, and a member who can reach an unlocked service
 // without knowing the passphrase does not get a lasting key from it.
 func (s *Server) handleSystemSeal(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.socketPeer(w, r); !ok {
+	peer, ok := s.socketPeer(w, r)
+	if !ok {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -45,6 +46,9 @@ func (s *Server) handleSystemSeal(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Passphrase) == 0 {
 		writeError(w, http.StatusBadRequest, "the passphrase is empty")
+		return
+	}
+	if s.passBackedOff(w, "vault seal", peer.UID) {
 		return
 	}
 	s.vctl.mu.Lock()
@@ -65,7 +69,9 @@ func (s *Server) handleSystemSeal(w http.ResponseWriter, r *http.Request) {
 		writeVaultError(w, err)
 		return
 	}
-	if err := chk.Unlock(req.Passphrase); err != nil {
+	err = chk.Unlock(req.Passphrase)
+	s.passResult("vault seal", peer.UID, err)
+	if err != nil {
 		writeVaultError(w, err)
 		return
 	}

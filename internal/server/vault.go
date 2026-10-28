@@ -314,7 +314,12 @@ func (s *Server) registerVaultRoutes(mux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "the passphrase is empty")
 			return
 		}
+		uid := s.requestUID(r)
+		if s.passBackedOff(w, "vault unlock", uid) {
+			return
+		}
 		view, err := s.Unlock(req.Passphrase)
+		s.passResult("vault unlock", uid, err)
 		if err != nil {
 			writeVaultError(w, err)
 			return
