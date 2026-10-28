@@ -4,6 +4,7 @@
 import * as api from "../api/client.ts";
 import type { CheckItem, DiskView, Endpoints, LogHit, NodeStatus } from "../api/types.ts";
 import { maskText, maskURL } from "../maskurl.ts";
+import { isLogHit, isLogHits, isNodeStatus } from "../api/guards.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
 import { na, sanitizeLine } from "../text.ts";
@@ -107,7 +108,9 @@ export class NodeScreen implements Screen {
     load("firewall", api.firewall(c, id), (v) => (this.firewall = v));
     void (async () => {
       for await (const m of api.watchStatus(c, id, ac.signal, this.app.opts.streamOpts)) {
-        if (m.kind === "event" && m.event === "message") (this.status = m.data), (this.statusStale = false);
+        if (m.kind === "event" && m.event === "message") {
+          if (isNodeStatus(m.data)) (this.status = m.data), (this.statusStale = false);
+        }
         else if (m.kind === "state" && (m.state === "retrying" || m.state === "failed")) this.statusStale = true;
         this.app.render();
       }
@@ -115,8 +118,8 @@ export class NodeScreen implements Screen {
     void (async () => {
       for await (const m of api.watchLogs(c, id, ac.signal, 200, this.app.opts.streamOpts)) {
         if (m.kind !== "event") continue;
-        if (m.event === "reset") this.logs = Array.isArray(m.data) ? m.data : [];
-        else if (m.event === "message" && !Array.isArray(m.data)) this.logs.push(m.data);
+        if (m.event === "reset") this.logs = isLogHits(m.data) ? m.data : [];
+        else if (m.event === "message" && isLogHit(m.data)) this.logs.push(m.data);
         if (this.logs.length > LOG_MAX) this.logs.splice(0, this.logs.length - LOG_MAX);
         if (this.section === "logs") this.app.render();
       }

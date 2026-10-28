@@ -2,6 +2,7 @@
 // config editor (msgboard, el-bootnode, cl-bootnode, watch, private-send,
 // checkpointz). A change that starts setup follows the setup stream.
 import * as api from "../api/client.ts";
+import { isSetupEvent } from "../api/guards.ts";
 import type { CatalogModule, ModulesView, SetModule } from "../api/types.ts";
 import { maskText } from "../maskurl.ts";
 import type { App, Screen } from "../shell/app.ts";
@@ -122,7 +123,7 @@ export class ModulesScreen implements Screen {
   private async followSetup(id: string): Promise<void> {
     const ac = new AbortController();
     for await (const m of api.watchSetup(this.app.conn, id, ac.signal, this.app.opts.streamOpts)) {
-      if (m.kind !== "event") continue;
+      if (m.kind !== "event" || !isSetupEvent(m.data)) continue;
       const ev = m.data;
       if (ev.err) {
         this.app.fail(`setup ${id}`, { message: ev.err });

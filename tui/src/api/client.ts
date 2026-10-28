@@ -2,6 +2,7 @@
 // has its pattern in ROUTES (src/api/routes.ts), which CI checks against Go.
 import { open, request, type Conn } from "./http.ts";
 import { parseSSE, stream, type SSEMsg, type StreamOpts } from "./sse.ts";
+import { isPairEvent } from "./guards.ts";
 import type * as T from "./types.ts";
 
 const e = encodeURIComponent;
@@ -148,11 +149,13 @@ export async function* pair(c: Conn, id: string, req: { sudo: boolean; installed
         return;
       }
       for (const ev of evs) {
+        let v: unknown;
         try {
-          yield JSON.parse(ev.data) as T.PairEvent;
+          v = JSON.parse(ev.data);
         } catch {
-          /* skipped */
+          continue;
         }
+        if (isPairEvent(v)) yield v;
       }
     }
   } finally {

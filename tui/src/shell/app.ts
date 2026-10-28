@@ -11,6 +11,7 @@ import { clip, sanitizeLine } from "../text.ts";
 import { Activity } from "./activity.ts";
 import { confirmModal, helpModal, SecretModal, ShowOnce, TextModal, TypedConfirm, type Modal } from "./confirm.ts";
 import { runArgv, runJumpgate, type RunOpts } from "../shellout.ts";
+import { isFleet, isJobsInbox } from "../api/guards.ts";
 import type { Bins } from "../bins.ts";
 import { drawerLines, minimizedLine } from "./drawer.ts";
 import type { Key } from "./keys.ts";
@@ -262,11 +263,11 @@ export class App {
     );
     this.refreshRunning();
     this.timers.push(setInterval(() => this.refreshRunning(), this.opts.runningEveryMs ?? 5000));
-    void this.follow(api.watchFleet(conn, s, this.opts.streamOpts), "fleet", (f) => this.set({ fleet: f, fleetStale: false }), () => this.set({ fleetStale: true }));
+    void this.follow(api.watchFleet(conn, s, this.opts.streamOpts), "fleet", (f) => this.set({ fleet: f, fleetStale: false }), () => this.set({ fleetStale: true }), isFleet);
     void this.follow(api.watchJobs(conn, s, this.opts.streamOpts), "jobs", (i) => {
       this.set({ inbox: i, inboxStale: false });
       this.refreshRunning();
-    }, () => this.set({ inboxStale: true }));
+    }, () => this.set({ inboxStale: true }), isJobsInbox);
     this.render();
   }
 
@@ -277,11 +278,14 @@ export class App {
     this.timers = [];
   }
 
-  private async follow<T>(it: AsyncGenerator<api.SSEMsg<T>>, what: string, value: (v: T) => void, stale: () => void) {
+  private async follow<T>(it: AsyncGenerator<api.SSEMsg<T>>, what: string, value: (v: T) => void, stale: () => void, ok: (v: unknown) => boolean) {
     try {
       for await (const m of it) {
         if (m.kind === "event") {
-          if (m.event === "message") value(m.data);
+          if (m.event === "message") {
+            if (ok(m.data)) value(m.data);
+            else this.log(`${what}: dropped a frame that was not the expected shape`);
+          }
           else if (m.event === "error") this.fail(what, { message: (m.data as { error?: string })?.error ?? "stream error" });
         } else if (m.state === "retrying" || m.state === "failed") {
           stale();

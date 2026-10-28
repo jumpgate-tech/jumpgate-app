@@ -6,6 +6,7 @@ import type { JobDetail, JobOutputLine, JobView } from "../api/types.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
 import { maskText } from "../maskurl.ts";
+import { isJobOutput } from "../api/guards.ts";
 import { sanitizeLine } from "../text.ts";
 
 const OUT_MAX = 500;
@@ -79,7 +80,7 @@ export class JobsScreen implements Screen {
     );
     void (async () => {
       for await (const m of api.watchJobOutput(this.app.conn, j.target, j.id, ac.signal, this.app.opts.streamOpts)) {
-        if (m.kind !== "event" || m.event !== "message" || !Array.isArray(m.data)) continue;
+        if (m.kind !== "event" || m.event !== "message" || !isJobOutput(m.data)) continue;
         this.output.push(...m.data);
         if (this.output.length > OUT_MAX) this.output.splice(0, this.output.length - OUT_MAX);
         this.app.render();

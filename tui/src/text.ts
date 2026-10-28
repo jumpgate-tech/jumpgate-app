@@ -29,8 +29,9 @@ function skipEscape(s: string, i: number): number {
   return i;
 }
 
-/** sanitize drops escape sequences and control characters, keeping \t and \n. */
-export function sanitize(s: string): string {
+/** sanitize drops escape sequences and control characters, keeping \t and \n. A non-string is coerced first. */
+export function sanitize(v: unknown): string {
+  const s = typeof v === "string" ? v : v === undefined || v === null ? "" : String(v);
   let out = "";
   for (let i = 0; i < s.length; ) {
     const cp = s.codePointAt(i)!;
@@ -55,7 +56,7 @@ export function sanitize(s: string): string {
 }
 
 /** sanitizeLine is sanitize with line breaks and tabs turned into spaces. */
-export const sanitizeLine = (s: string) => sanitize(s).replace(/[\n\t\r]/g, " ");
+export const sanitizeLine = (s: unknown) => sanitize(s).replace(/[\n\t\r]/g, " ");
 
 /** clip cuts s to w columns (one per code point), marking a cut with "…". */
 export function clip(s: string, w: number): string {

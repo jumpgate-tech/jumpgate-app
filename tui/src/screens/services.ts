@@ -2,6 +2,7 @@
 // shown as plain key: value lines. Destructive actions need the service's
 // name typed back, as the server itself checks.
 import * as api from "../api/client.ts";
+import { isSetupEvent } from "../api/guards.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
 import { sanitizeLine, wrap } from "../text.ts";
@@ -159,7 +160,7 @@ export class ServicesScreen implements Screen {
       this.app.log(`setup ${id}: started`);
       const ac = new AbortController();
       for await (const m of api.watchSetup(this.app.conn, id, ac.signal, this.app.opts.streamOpts)) {
-        if (m.kind !== "event") continue;
+        if (m.kind !== "event" || !isSetupEvent(m.data)) continue;
         if (m.data.err) {
           this.app.fail(`setup ${id}`, { message: m.data.err });
           break;
