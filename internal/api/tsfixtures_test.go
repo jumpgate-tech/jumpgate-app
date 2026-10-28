@@ -82,7 +82,7 @@ func TestWriteTSFixtures(t *testing.T) {
 		"gateways":         []GatewaySummary{{ID: "g1", Label: "main", BaseURL: "https://rpc.example", Networks: []GatewayNetwork{{ChainID: 1, Name: "mainnet", URL: "https://rpc.example/1"}}, Tier: "free"}},
 		"modulesview":      ModulesView{Modules: []ModuleStatus{{ID: "watch", Instance: "1", Note: "n", Error: "e", Served: true, Active: true, Accepting: true, Count: 2}}, GateStale: false, Message: ""},
 		"agentcheck":       AgentCheck{Agent: "0xdef", Version: "0.6.0", ChainID: 1, SetUp: true, Signers: 1, Controllers: 1, ElapsedMs: 42},
-		"sshcommand":       SSHCommand{Argv: []string{"ssh", "-p", "22", "root@10.0.0.2"}, Display: "ssh root@10.0.0.2"},
+		"sshcommand":       SSHCommand{Argv: []string{"ssh", "-p", "22", "-o", SSHOptStrictHostKeyChecking, "-o", SSHOptKnownHostsPrefix + "/home/u/.jumpgate/confirmed_hosts", "-o", SSHOptGlobalKnownHosts, "-o", SSHOptProxyJump, "-o", SSHOptProxyCommand, "-l", "root", "--", "10.0.0.2"}, Display: "ssh root@10.0.0.2"},
 		"hostkeyprobe":     HostKeyProbe{Hops: []HostKeyHop{{HostPort: "10.0.0.2:22", Fingerprint: "SHA256:abc", KeyType: "ssh-ed25519", State: HostKeyUnknown, ProbeID: "p1", Error: "x"}}, AllConfirmed: false},
 		"recordedhostkeys": RecordedHostKeys{HostPort: "10.0.0.2:22", Keys: []RecordedHostKey{{Fingerprint: "SHA256:abc", KeyType: "ssh-ed25519", Store: HostKeyStoreJumpgate}}},
 		"pairevent":        PairEvent{Step: "install", Line: "installing", Error: "x", Code: CodeUnreachable, Hint: "h", Done: true, Agent: "0xdef"},

@@ -98,7 +98,7 @@ test("add this machine, upgrade, remove, forget a key, ssh, rename legacy names"
   await m!.press("D", "y");
   await m!.waitFor(() => m!.fake.requests.some((r) => r.method === "DELETE"));
   expect(rec.calls).toEqual([{ args: ["hosts", "add", "here", "--local"] }]);
-  expect(argvs).toEqual([["ssh", "-p", "22", "root@10.0.0.2"]]);
+  expect(argvs).toEqual([fixture("sshcommand").argv]);
   expect(JSON.parse(m!.fake.requests.find((r) => r.path === "/api/hostkeys/forget")!.body)).toEqual({ hostPort: "10.0.0.2:22", fingerprint: "SHA256:abc" });
   expect(JSON.parse(m!.fake.requests.find((r) => r.path === "/api/jobs/alpha")!.body)).toEqual({ kind: "node.migrate-names" });
 });
@@ -121,4 +121,16 @@ test("i shows the invite for a named box", async () => {
   await typeText(m!, "gamma");
   await m!.press("return");
   expect(await m!.waitFor("--controller 0xabc")).toContain("on the box, as root:");
+});
+
+test("a server ssh argv of another shape is refused and never run", async () => {
+  const { argvs } = await hosts();
+  const evil = { argv: [...fixture("sshcommand").argv.slice(0, -2), "-oLocalCommand=id", "--", "10.0.0.2"], display: "x" };
+  m!.fake.routes["GET /api/fleet/alpha/ssh"] = () => json(evil);
+  await m!.press("x");
+  await m!.waitFor(() => m!.app.activity.all().some((l) => l.includes("refusing the server's ssh")));
+  m!.fake.routes["GET /api/fleet/alpha/ssh"] = () => json({ ...fixture("sshcommand"), argv: ["/tmp/evil", ...fixture("sshcommand").argv.slice(1)] });
+  await m!.press("x");
+  await Bun.sleep(30);
+  expect(argvs).toEqual([]);
 });

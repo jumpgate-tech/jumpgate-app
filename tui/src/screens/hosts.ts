@@ -4,6 +4,7 @@
 import * as api from "../api/client.ts";
 import type { PairingInfo, SSHView, TargetView } from "../api/types.ts";
 import { maskText } from "../maskurl.ts";
+import { checkSSHArgv, localSSH } from "../sshargv.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
 import { sanitizeLine, wrap } from "../text.ts";
@@ -213,7 +214,9 @@ export class HostsScreen implements Screen {
   private async ssh(t: TargetView): Promise<void> {
     try {
       const cmd = await api.sshCommand(this.app.conn, t.id);
-      await this.app.runArgv(cmd.argv, `ssh ${t.id}`);
+      const bad = checkSSHArgv(cmd.argv);
+      if (bad) return this.app.fail(`ssh ${t.id}`, { message: `refusing the server's ssh command: ${bad}` });
+      await this.app.runArgv(localSSH(cmd.argv, this.app.platform), `ssh ${t.id}`);
     } catch (e) {
       this.app.fail(`ssh ${t.id}`, e);
     }
