@@ -1,0 +1,86 @@
+// One typed function per server route the dashboard calls. Every path here
+// has its pattern in ROUTES (src/api/routes.ts), which CI checks against Go.
+import { request, type Conn } from "./http.ts";
+import { stream, type SSEMsg, type StreamOpts } from "./sse.ts";
+import type * as T from "./types.ts";
+
+const e = encodeURIComponent;
+const tgt = (id: string, rest = "") => `/api/targets/${e(id)}${rest}`;
+const flt = (id: string, rest = "") => `/api/fleet/${e(id)}${rest}`;
+const job = (target: string, id: string, rest = "") => `/api/jobs/${e(target)}/${e(id)}${rest}`;
+
+const B64 = new TextEncoder().encode("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/");
+
+/**
+ * secretBody builds `{"<field>":"<base64 of value>"}` as bytes, never as a
+ * string, so the caller can zero it. Go decodes a []byte field from base64.
+ */
+export function secretBody(field: string, value: Uint8Array): Uint8Array {
+  const pre = new TextEncoder().encode(`{"${field}":"`);
+  const post = new TextEncoder().encode(`"}`);
+  const n = Math.ceil(value.length / 3) * 4;
+  const out = new Uint8Array(pre.length + n + post.length);
+  out.set(pre, 0);
+  let o = pre.length;
+  for (let i = 0; i < value.length; i += 3) {
+    const a = value[i]!;
+    const b = i + 1 < value.length ? value[i + 1]! : 0;
+    const c = i + 2 < value.length ? value[i + 2]! : 0;
+    out[o++] = B64[a >> 2]!;
+    out[o++] = B64[((a & 3) << 4) | (b >> 4)]!;
+    out[o++] = i + 1 < value.length ? B64[((b & 15) << 2) | (c >> 6)]! : 61;
+    out[o++] = i + 2 < value.length ? B64[c & 63]! : 61;
+  }
+  out.set(post, o);
+  return out;
+}
+
+export const health = (c: Conn) => request<{ ok: boolean }>(c, "GET", "/api/health");
+export const version = (c: Conn) => request<{ version: string }>(c, "GET", "/api/version");
+
+export const vault = (c: Conn) => request<T.VaultView>(c, "GET", "/api/vault");
+
+/** unlock sends pass to the server; pass and the encoded body are zeroed before it returns. */
+export async function unlock(c: Conn, pass: Uint8Array): Promise<T.VaultView> {
+  const body = secretBody("passphrase", pass);
+  try {
+    return await request<T.VaultView>(c, "POST", "/api/vault/unlock", body);
+  } finally {
+    body.fill(0);
+    pass.fill(0);
+  }
+}
+export const lock = (c: Conn) => request<T.VaultView>(c, "POST", "/api/vault/lock");
+
+export const fleet = (c: Conn) => request<T.Fleet>(c, "GET", "/api/fleet");
+export const watchFleet = (c: Conn, s: AbortSignal, o?: StreamOpts) => stream<T.Fleet>(c, "/api/fleet/stream", s, o);
+export const fleetOne = (c: Conn, id: string) => request<T.FleetRow>(c, "GET", flt(id));
+export const targets = (c: Conn) => request<T.TargetView[]>(c, "GET", "/api/targets");
+export const watchStatus = (c: Conn, id: string, s: AbortSignal, o?: StreamOpts) =>
+  stream<T.NodeStatus>(c, flt(id, "/status/stream"), s, o);
+export const disk = (c: Conn, id: string) => request<T.DiskView>(c, "GET", flt(id, "/disk"));
+export const measureDisk = (c: Conn, id: string) => request<T.DiskView>(c, "POST", flt(id, "/disk/measure"));
+export const endpoints = (c: Conn, id: string) => request<T.Endpoints>(c, "GET", tgt(id, "/endpoints"));
+export const firewall = (c: Conn, id: string) => request<T.CheckItem[]>(c, "GET", tgt(id, "/firewall"));
+export const logs = (c: Conn, id: string, n = 200) => request<T.LogHit[]>(c, "GET", tgt(id, `/logs?n=${n}`));
+/** watchLogs: the first "reset" event carries LogHit[]; later events are one LogHit. */
+export const watchLogs = (c: Conn, id: string, s: AbortSignal, backlog = 200, o?: StreamOpts) =>
+  stream<T.LogHit | T.LogHit[]>(c, tgt(id, `/logs/stream?backlog=${backlog}`), s, o);
+export type ServiceAction = "start" | "stop" | "restart";
+export const serviceAction = (c: Conn, id: string, svc: string, action: ServiceAction) =>
+  request<T.ServiceResult>(c, "POST", tgt(id, `/services/${e(svc)}/${e(action)}`));
+
+export const jobs = (c: Conn) => request<T.JobsInbox>(c, "GET", "/api/jobs");
+export const watchJobs = (c: Conn, s: AbortSignal, o?: StreamOpts) => stream<T.JobsInbox>(c, "/api/jobs/stream", s, o);
+export const runningJobs = (c: Conn) => request<T.RunningJobs>(c, "GET", "/api/jobs/running");
+export const jobDetail = (c: Conn, target: string, id: string) => request<T.JobDetail>(c, "GET", job(target, id));
+export const watchJobOutput = (c: Conn, target: string, id: string, s: AbortSignal, o?: StreamOpts) =>
+  stream<T.JobOutputLine[]>(c, job(target, id, "/output/stream"), s, o);
+export const decide = (c: Conn, target: string, id: string, d: T.JobDecision) =>
+  request<T.JobView>(c, "POST", job(target, id, "/decide"), d);
+export const adopt = (c: Conn, target: string, id: string) => request<T.JobView>(c, "POST", job(target, id, "/adopt"));
+
+export const prefs = (c: Conn) => request<T.UIPrefs>(c, "GET", "/api/ui-prefs");
+export const savePrefs = (c: Conn, p: T.UIPrefs) => request<T.UIPrefs>(c, "PUT", "/api/ui-prefs", p);
+
+export type { SSEMsg };
