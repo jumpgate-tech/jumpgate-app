@@ -48,3 +48,12 @@ test("a fleet/stream update replaces the rows, and Enter opens node detail", asy
   expect(opened).toBe("beta");
   expect(await m.frame()).toContain("> Fleet");
 });
+
+test("a row's alert and error mask credentials", async () => {
+  const f = fixture("fleet");
+  f.rows[0].alertMessage = "gate at https://u:SECRET@h down";
+  f.rows[0].error.error = "dial u:SECRET@h";
+  m = await mount((app) => [new FleetScreen(app)], { routes: { "GET /api/fleet/stream": () => sseResponse([`data: ${JSON.stringify(f)}\n\n`], true) } });
+  const fr = await m.waitFor("alpha");
+  expect(fr).not.toContain("SECRET");
+});

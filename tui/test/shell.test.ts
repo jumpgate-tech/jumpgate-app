@@ -157,3 +157,12 @@ test("control bytes in a server error reach no pane", async () => {
   expect(f).toContain("FAIL x: boom");
   expect(f).not.toContain("pwned");
 });
+
+test("a server error with a credential URL is masked in the flash and the activity", async () => {
+  m = await mount(() => [dummy("Fleet")]);
+  m.app.fail("x", { message: "upstream https://u:SECRET@rpc.example failed", hint: "check u:SECRET@h" });
+  const f = await m.frame();
+  expect(f).not.toContain("SECRET");
+  expect(m.app.flash).not.toContain("SECRET");
+  expect(m.app.activity.all().join("\n")).not.toContain("SECRET");
+});

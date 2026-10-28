@@ -79,3 +79,62 @@ export function maskURL(s: string): string {
   });
   return scheme + auth + out.join("/") + query + frag;
 }
+
+export const MAX_MASK_TEXT = 4096; // bytes of UTF-8, as in Go
+
+const SPACE = " \t\n\r\v\f";
+const isSpace = (c: string) => SPACE.includes(c);
+const asciiOnly = (t: string) => /^[\x00-\x7f]*$/.test(t);
+
+/**
+ * maskText: a port of maskText in internal/tui/maskurl.go. It masks every
+ * word that could carry a credential (URLs, user:pass, @ and % forms, non-
+ * ASCII look-alikes) and the words around them, failing closed.
+ */
+export function maskText(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  const cut = bytes.length > MAX_MASK_TEXT;
+  if (cut) {
+    let n = MAX_MASK_TEXT;
+    while (n > 0 && (bytes[n]! & 0xc0) === 0x80) n--;
+    s = new TextDecoder().decode(bytes.subarray(0, n));
+  }
+  const parts: string[] = [];
+  const words: number[] = [];
+  let start = 0;
+  for (let i = 0; i <= s.length; i++) {
+    if (i === s.length || (i > start && isSpace(s[i]!) !== isSpace(s[start]!))) {
+      if (i > start) {
+        if (!isSpace(s[start]!)) words.push(parts.length);
+        parts.push(s.slice(start, i));
+      }
+      start = i;
+    }
+  }
+  const mask = new Array<boolean>(words.length).fill(false);
+  let open = -1;
+  words.forEach((p, w) => {
+    if (p > 0 && !isSpace(parts[p]![0]!) && /[\n\r]/.test(parts[p - 1]!)) open = -1;
+    const t = parts[p]!;
+    const ascii = asciiOnly(t);
+    mask[w] = mask[w] || !ascii || /[@:/%\\=?#&]/.test(t);
+    const at = !ascii || /[@%]/.test(t);
+    if (at) for (let k = Math.max(w - 2, 0); k < w; k++) mask[k] = true;
+    if (at && open >= 0) {
+      for (let k = open; k < w; k++) mask[k] = true;
+      open = -1;
+    }
+    if (t.includes("://")) {
+      if (w + 1 < words.length) mask[w + 1] = true;
+      if (open < 0) open = w + 1;
+    }
+  });
+  if (cut) {
+    if (open >= 0) for (let k = open; k < words.length; k++) mask[k] = true;
+    for (let k = Math.max(words.length - 2, 0); k < words.length; k++) mask[k] = true;
+  }
+  words.forEach((p, w) => {
+    if (mask[w]) parts[p] = "***";
+  });
+  return parts.join("") + (cut ? "…" : "");
+}

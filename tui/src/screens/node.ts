@@ -3,7 +3,7 @@
 // selected service (e/b pick exec or beacon) after a confirm.
 import * as api from "../api/client.ts";
 import type { CheckItem, DiskView, Endpoints, LogHit, NodeStatus } from "../api/types.ts";
-import { maskURL } from "../maskurl.ts";
+import { maskText, maskURL } from "../maskurl.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
 import { na, sanitizeLine } from "../text.ts";
@@ -48,7 +48,7 @@ export function endpointLines(e: Endpoints | undefined): string[] {
     `beacon  ${sanitizeLine(maskURL(e.BeaconHTTP))}  ${r(e.BeaconReachable)}`,
     `chain   ${e.ChainIDMatches ? "matches" : "FAIL does not match"}`,
     `access  ${sanitizeLine(e.Access)}`,
-    ...(e.TunnelHint ? [`tunnel  ${sanitizeLine(e.TunnelHint)}`] : []),
+    ...(e.TunnelHint ? [`tunnel  ${maskText(sanitizeLine(e.TunnelHint))}`] : []),
   ];
 }
 
@@ -56,8 +56,8 @@ export function firewallLines(items: CheckItem[] | undefined): string[] {
   if (!items) return ["firewall n/a"];
   if (!items.length) return ["no checks"];
   return items.flatMap((i) => [
-    `[${i.Status.padEnd(7)}] ${sanitizeLine(i.Title)}${i.Detail ? ` - ${sanitizeLine(i.Detail)}` : ""}`,
-    ...(i.Fix && i.Status !== "pass" ? [`          fix: ${sanitizeLine(i.Fix)}`] : []),
+    `[${i.Status.padEnd(7)}] ${sanitizeLine(i.Title)}${i.Detail ? ` - ${maskText(sanitizeLine(i.Detail))}` : ""}`,
+    ...(i.Fix && i.Status !== "pass" ? [`          fix: ${maskText(sanitizeLine(i.Fix))}`] : []),
   ]);
 }
 
@@ -150,7 +150,7 @@ export class NodeScreen implements Screen {
         body = this.logs.length ? this.logs.slice(-Math.max(1, h - head.length)).map(logLine) : ["no log lines yet"];
         break;
     }
-    if (e) body = [`FAIL ${sanitizeLine(e)}`, ...body.filter((l) => !l.endsWith("n/a"))];
+    if (e) body = [`FAIL ${maskText(sanitizeLine(e))}`, ...body.filter((l) => !l.endsWith("n/a"))];
     return [...head, ...body];
   }
 

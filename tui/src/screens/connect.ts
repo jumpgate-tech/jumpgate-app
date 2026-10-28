@@ -4,7 +4,8 @@ import { discover as realDiscover, DiscoverError, jumpgateHome } from "../api/di
 import type { Conn } from "../api/http.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
-import { wrap } from "../text.ts";
+import { maskText } from "../maskurl.ts";
+import { sanitizeLine, wrap } from "../text.ts";
 import { runJumpgate, type RunOpts } from "../shellout.ts";
 
 export interface ConnectDeps {
@@ -111,7 +112,7 @@ export class ConnectScreen implements Screen {
       }
       case "error":
         if (st.kind === "not_running") return [st.msg === "No jumpgate server is running." ? "No jumpgate server is running. [s] start it" : `${st.msg}  [s] start it`, "", "[r] look again"];
-        return [st.msg, "", "[r] look again"];
+        return [st.kind === "other" ? maskText(sanitizeLine(st.msg)) : st.msg, "", "[r] look again"];
     }
   }
 

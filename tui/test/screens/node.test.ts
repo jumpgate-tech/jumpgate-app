@@ -54,3 +54,10 @@ test("node detail: tabs, masked endpoints, sanitized logs, a confirmed restart",
   await m.waitFor(() => m!.app.activity.all().some((l) => l.endsWith("restart beacon on alpha: active")));
   expect(await m.press("escape")).toContain("> Fleet");
 });
+
+test("check Detail and Fix, the tunnel hint and errors mask credentials", () => {
+  const items = [{ ID: "rpc", Title: "RPC", Why: "", Status: "fail", Detail: "found https://u:SECRET@h/x", Fix: "set url=https://h/key/SECRET" }];
+  expect(firewallLines(items).join("\n")).not.toContain("SECRET");
+  const e = { ...fixture("endpoints"), TunnelHint: "ssh -L 1:h:2 u:SECRET@h" };
+  expect(endpointLines(e).join("\n")).not.toContain("SECRET");
+});

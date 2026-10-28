@@ -5,6 +5,7 @@ import * as api from "../api/client.ts";
 import type { JobDetail, JobOutputLine, JobView } from "../api/types.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
+import { maskText } from "../maskurl.ts";
 import { sanitizeLine } from "../text.ts";
 
 const OUT_MAX = 500;
@@ -21,7 +22,7 @@ export function inboxLines(jobs: JobView[], sel: number, stale: boolean): string
 export function detailLines(j: JobView, opt: number): string[] {
   const out = [`${sanitizeLine(j.title)} (${sanitizeLine(j.kind)}) on ${sanitizeLine(j.target)}`, `state ${sanitizeLine(j.state)}  lease ${j.lease.mine ? "this controller" : sanitizeLine(j.lease.label ?? "n/a")}${j.lease.fresh ? "" : " (stale)"}`, ""];
   for (const s of j.steps) out.push(`[${sanitizeLine(s.state).padEnd(7)}] ${sanitizeLine(s.title)}`);
-  if (j.error) out.push("", `FAIL ${sanitizeLine(j.error)}`);
+  if (j.error) out.push("", `FAIL ${maskText(sanitizeLine(j.error))}`);
   const q = j.question;
   if (q) {
     out.push("", `? ${sanitizeLine(q.prompt)}`);
@@ -92,7 +93,7 @@ export class JobsScreen implements Screen {
     if (!inbox) return ["Waiting for jobs..."];
     const j = this.current();
     if (!j) {
-      const errs = inbox.errors.map((e) => `FAIL ${sanitizeLine(e.target)}: ${sanitizeLine(e.error.error)}`);
+      const errs = inbox.errors.map((e) => `FAIL ${sanitizeLine(e.target)}: ${maskText(sanitizeLine(e.error.error))}`);
       return [...inboxLines(this.jobs(), this.sel, this.app.state.inboxStale), ...(errs.length ? ["", ...errs] : [])];
     }
     const top = detailLines(j, this.opt);

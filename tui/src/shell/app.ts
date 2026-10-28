@@ -5,6 +5,7 @@ import * as api from "../api/client.ts";
 import type { ApiError, Conn } from "../api/http.ts";
 import type { StreamOpts } from "../api/sse.ts";
 import type { DrawerPref, Fleet, JobsInbox, RunningJobs, UIPrefs, VaultView } from "../api/types.ts";
+import { maskText } from "../maskurl.ts";
 import { redact } from "../secret.ts";
 import { clip, sanitizeLine } from "../text.ts";
 import { Activity } from "./activity.ts";
@@ -133,7 +134,8 @@ export class App {
   fail(what: string, e: unknown): void {
     const err = e as Partial<ApiError>;
     const msg = typeof err?.message === "string" ? err.message : String(e);
-    const line = `FAIL ${what}: ${redact(msg)}${err?.hint ? ` (${redact(err.hint)})` : ""}`;
+    const clean = (s: string) => maskText(sanitizeLine(redact(s)));
+    const line = `FAIL ${what}: ${clean(msg)}${err?.hint ? ` (${clean(err.hint)})` : ""}`;
     this.flash = sanitizeLine(line);
     this.log(line);
   }

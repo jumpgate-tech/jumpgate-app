@@ -3,6 +3,7 @@ import type { Fleet, FleetRow } from "../api/types.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
 import { boxHealth } from "../shell/statusbar.ts";
+import { maskText } from "../maskurl.ts";
 import { pad, sanitizeLine } from "../text.ts";
 
 const COLS = [
@@ -51,8 +52,8 @@ export class FleetScreen implements Screen {
     const out = ["  " + head, ...rows.map((r, i) => (i === this.sel ? "> " : "  ") + r)];
     if (f.locked) out.push("", "The vault is locked: values may be stale. Unlock it on the Vault screen.");
     const r = f.rows[this.sel];
-    if (r?.alertMessage) out.push("", `! ${sanitizeLine(r.id)}: ${sanitizeLine(r.alertMessage)}`);
-    if (r?.error) out.push("", `FAIL ${sanitizeLine(r.id)}: ${sanitizeLine(r.error.error)}`);
+    if (r?.alertMessage) out.push("", `! ${sanitizeLine(r.id)}: ${maskText(sanitizeLine(r.alertMessage))}`);
+    if (r?.error) out.push("", `FAIL ${sanitizeLine(r.id)}: ${maskText(sanitizeLine(r.error.error))}`);
     return out;
   }
 

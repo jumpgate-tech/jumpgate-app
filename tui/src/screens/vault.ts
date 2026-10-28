@@ -4,6 +4,7 @@ import { ApiError } from "../api/http.ts";
 import { redact, withSecret } from "../secret.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
+import { maskText } from "../maskurl.ts";
 import { na, sanitizeLine, wrap } from "../text.ts";
 
 export class VaultScreen implements Screen {
@@ -53,7 +54,7 @@ export class VaultScreen implements Screen {
       this.app.log("vault unlocked");
     } catch (e) {
       const ra = e instanceof ApiError && e.retryAfter ? ` (try again in ${e.retryAfter} s)` : "";
-      this.note = `FAIL ${redact((e as Error).message)}${ra}`;
+      this.note = `FAIL ${maskText(sanitizeLine(redact((e as Error).message)))}${ra}`;
       this.app.fail("unlock", e);
     } finally {
       this.busy = false;
@@ -69,7 +70,7 @@ export class VaultScreen implements Screen {
       this.app.set({ vault: v });
       this.app.log("vault locked");
     } catch (e) {
-      this.note = `FAIL ${redact((e as Error).message)}`;
+      this.note = `FAIL ${maskText(sanitizeLine(redact((e as Error).message)))}`;
       this.app.fail("lock", e);
     }
   }
