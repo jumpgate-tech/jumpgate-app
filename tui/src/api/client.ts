@@ -282,3 +282,4 @@ export async function saveAIKey(c: Conn, key: Uint8Array): Promise<T.Settings> {
   }
 }
 export const update = (c: Conn, refresh = false) => request<unknown>(c, "GET", `/api/update${refresh ? "?refresh=1" : ""}`);
+export const shutdown = (c: Conn) => request(c, "POST", "/api/shutdown");
