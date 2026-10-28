@@ -55,7 +55,7 @@ func TestWriteTSFixtures(t *testing.T) {
 		Attempt: 1,
 		Question: &JobQuestion{
 			ID: "q1", Prompt: "Swap the binary now?", Tier: "confirm", AskedAt: at, Signable: true,
-			Options: []JobOption{{ID: "go", Label: "Go", Detail: "swap and restart"}},
+			Options: []JobOption{{ID: "go", Label: "Go", Detail: "swap and restart"}, {ID: "abort", Label: "Stop the job here"}},
 		},
 		Lease:     JobLease{Owner: "0xabc", Label: "this controller", HeartbeatAt: &at, Fresh: true, Mine: true},
 		CreatedAt: at, UpdatedAt: at, Error: "", Driving: true,
@@ -68,7 +68,7 @@ func TestWriteTSFixtures(t *testing.T) {
 		"jobsinbox":      JobsInbox{At: at, Jobs: []JobView{job}, Errors: []JobsError{{Target: "beta", Error: Error{Message: "unreachable", Code: CodeUnreachable}}}},
 		"jobdetail":      JobDetail{Job: job, Log: []JobLogLine{{Index: 0, Kind: "step", At: at, Text: "stopped the node"}}},
 		"jobview":        job,
-		"jobdecision":    JobDecision{Decision: "approve", Option: "go"},
+		"jobdecision":    JobDecision{Decision: "q1", Option: "go"},
 		"runningjobs":    RunningJobs{At: at, Jobs: []RunningJob{{Target: "alpha", ID: "j1", Kind: "node.upgrade", State: "needs-decision", Step: 1, Total: 2, NeedsDecision: true}}},
 		"joboutput":      []JobOutputLine{{Unit: "geth", Line: "imported block", At: at}},
 		"settings":       Settings{AIProvider: "anthropic", AIKeySet: true, RefRPCBase: "https://rpc.example", ProviderKeysSet: []string{"anthropic"}, UpdateNotifyEnabled: true, AIDisclosure: "logs are sent", VaultIdleLockMinutes: 30},

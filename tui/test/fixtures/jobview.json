@@ -26,6 +26,10 @@
         "id": "go",
         "label": "Go",
         "detail": "swap and restart"
+      },
+      {
+        "id": "abort",
+        "label": "Stop the job here"
       }
     ],
     "tier": "confirm",
