@@ -380,9 +380,9 @@ func TestRustBuildCmd_CargoEnvSourcing_NoSubshell(t *testing.T) {
 			}
 
 			exe := executor.NewLocal()
-			// A bound on every command: a stalled exec must fail this test, not
+			// A bound on all three commands (a busy macOS runner took 37s for them): a stalled exec must fail this test, not
 			// hang the suite until the package timeout.
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 
 			// Property 1: the recipe's literal brace-group form keeps the PATH
