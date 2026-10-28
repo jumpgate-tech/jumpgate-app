@@ -36,6 +36,31 @@ jobs:
       - name: Verify web/dist is committed and reproducible
         run: git diff --exit-code cmd/jumpgate/web/dist
 
+  # The OpenTUI dashboard (tui/), and its fixtures against the Go api types.
+  tui:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+      - name: Fixtures match the Go api types
+        run: |
+          JUMPGATE_TS_FIXTURES="$GITHUB_WORKSPACE/tui/test/fixtures" go test -count=1 -run TSFixtures ./internal/api
+          git diff --exit-code tui/test/fixtures
+      - name: Test and build
+        working-directory: tui
+        run: |
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun test
+          bun run check-routes
+          bun run build
+          ./dist/jumpgate-tui --version
+
   # The controller is supported on all three desktop OSes, so its tests run on
   # all three. bash on Windows is Git Bash, present on every hosted image.
   go:
