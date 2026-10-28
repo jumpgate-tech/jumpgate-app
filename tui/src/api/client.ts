@@ -87,6 +87,7 @@ export const savePrefs = (c: Conn, p: T.UIPrefs) => request<T.UIPrefs>(c, "PUT",
 export type { SSEMsg };
 
 export const settings = (c: Conn) => request<T.Settings>(c, "GET", "/api/settings");
+export type SettingsUpdateT = T.SettingsUpdate;
 export const saveSettings = (c: Conn, u: T.SettingsUpdate) => request<T.Settings>(c, "PUT", "/api/settings", u);
 
 /** putVaultSecret stores value as name; value and the body are zeroed before it returns. */
@@ -269,3 +270,15 @@ export const chain = (c: Conn, chainId: number) => request<unknown>(c, "GET", `/
 export const docker = (c: Conn) => request<unknown>(c, "GET", "/api/docker");
 export const startDocker = (c: Conn) => request<unknown>(c, "POST", "/api/docker/start");
 export const host = (c: Conn) => request<unknown>(c, "GET", "/api/host");
+
+/** saveAIKey sets the AI provider key, write-only; the bytes and the body are zeroed. */
+export async function saveAIKey(c: Conn, key: Uint8Array): Promise<T.Settings> {
+  const body = jsonWithSecretString({}, "aiKey", key);
+  try {
+    return await request<T.Settings>(c, "PUT", "/api/settings", body);
+  } finally {
+    body.fill(0);
+    key.fill(0);
+  }
+}
+export const update = (c: Conn, refresh = false) => request<unknown>(c, "GET", `/api/update${refresh ? "?refresh=1" : ""}`);

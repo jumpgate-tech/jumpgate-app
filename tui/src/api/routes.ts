@@ -106,6 +106,7 @@ export const ROUTES = [
   "GET /api/docker",
   "POST /api/docker/start",
   "GET /api/host",
+  "GET /api/update",
 ] as const;
 
 export type Route = (typeof ROUTES)[number];

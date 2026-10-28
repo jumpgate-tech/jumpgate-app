@@ -12,6 +12,7 @@ import { ModulesScreen } from "../screens/modules.ts";
 import { ServicesScreen } from "../screens/services.ts";
 import { VPNScreen } from "../screens/vpn.ts";
 import { GatewaysScreen } from "../screens/gateways.ts";
+import { SettingsScreen } from "../screens/settings.ts";
 import { NodeScreen } from "../screens/node.ts";
 import { VaultScreen } from "../screens/vault.ts";
 import { App } from "./app.ts";
@@ -29,6 +30,7 @@ export function mountApp(renderer: CliRenderer, args: Args, version = VERSION): 
   app.add(new JobsScreen(app));
   app.add(new VaultScreen(app));
   app.add(new KeysScreen(app));
+  app.add(new SettingsScreen(app));
   app.add(new NodeScreen(app), false);
   return app;
 }
