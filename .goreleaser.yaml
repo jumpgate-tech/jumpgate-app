@@ -66,12 +66,15 @@ checksum:
   extra_files:
     - glob: ./internal/agentbin/embedded/jumpgate-linux-amd64
     - glob: ./internal/agentbin/embedded/jumpgate-linux-arm64
+    - glob: ./packaging/install/install.sh
 
 release:
-  # The raw agents, for anyone who wants to verify or install one by hand.
+  # The raw gates, for anyone who wants to verify or install one by hand, and
+  # install.sh, so the checksums and provenance jobs cover it.
   extra_files:
     - glob: ./internal/agentbin/embedded/jumpgate-linux-amd64
     - glob: ./internal/agentbin/embedded/jumpgate-linux-arm64
+    - glob: ./packaging/install/install.sh
     - glob: ./internal/agentbin/embedded/SHA256SUMS
       name_template: agents-SHA256SUMS
 
