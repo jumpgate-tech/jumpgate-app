@@ -74,3 +74,25 @@ export const pad = (s: string, w: number) => {
 /** unknown: n/a for a missing value; never 0. */
 export const na = (v: unknown, fmt: (x: never) => string = String as never): string =>
   v === undefined || v === null ? "n/a" : fmt(v as never);
+
+/** wrap breaks s into lines of at most w columns, at spaces where it can. */
+export function wrap(s: string, w: number): string[] {
+  if (w <= 0) return [s];
+  const out: string[] = [];
+  for (const para of s.split("\n")) {
+    let line = "";
+    for (const word of para.split(" ")) {
+      let wd = word;
+      while ([...wd].length > w) {
+        if (line) out.push(line), (line = "");
+        out.push([...wd].slice(0, w).join(""));
+        wd = [...wd].slice(w).join("");
+      }
+      if (!line) line = wd;
+      else if ([...line].length + 1 + [...wd].length <= w) line += " " + wd;
+      else out.push(line), (line = wd);
+    }
+    out.push(line);
+  }
+  return out;
+}

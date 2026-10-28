@@ -23,3 +23,9 @@ test("na never shows 0 for unknown", () => {
   expect(na(null)).toBe("n/a");
   expect(na(0)).toBe("0");
 });
+
+import { wrap } from "../src/text.ts";
+test("wrap breaks at spaces and splits long words", () => {
+  expect(wrap("aa bb cc", 5)).toEqual(["aa bb", "cc"]);
+  expect(wrap("abcdefg", 3)).toEqual(["abc", "def", "g"]);
+});
