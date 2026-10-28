@@ -15,6 +15,7 @@ import { drawerLines, minimizedLine } from "./drawer.ts";
 import type { Key } from "./keys.ts";
 import { layoutFor, MIN_H, MIN_W, type Rect } from "./layout.ts";
 import { statusLine } from "./statusbar.ts";
+import { alertLine, alerts } from "./alerts.ts";
 
 export interface Screen {
   id: string;
@@ -280,8 +281,16 @@ export class App {
     api.runningJobs(this.state.conn).then((r) => this.set({ running: r }), () => {});
   }
 
+  private seenAlerts = new Set<string>();
+
   set(p: Partial<AppState>): void {
     Object.assign(this.state, p);
+    if (p.fleet) {
+      // New alerts reach the activity pane once each; one that clears may come back.
+      const now = new Set(alerts(p.fleet, new Date()).map(alertLine));
+      for (const a of now) if (!this.seenAlerts.has(a)) this.activity.add(`alert ${a}`);
+      this.seenAlerts = now;
+    }
     this.render();
   }
 

@@ -14,6 +14,7 @@ import { VPNScreen } from "../screens/vpn.ts";
 import { GatewaysScreen } from "../screens/gateways.ts";
 import { SettingsScreen } from "../screens/settings.ts";
 import { SetupScreen } from "../screens/setup.ts";
+import { AlertsScreen } from "../screens/alerts.ts";
 import { NodeScreen } from "../screens/node.ts";
 import { VaultScreen } from "../screens/vault.ts";
 import { App, type AppOptions } from "./app.ts";
@@ -23,6 +24,7 @@ export function mountApp(renderer: CliRenderer, args: Args, version = VERSION, o
   const app = new App(renderer, { myVersion: version, ...opts });
   app.add(new ConnectScreen(app, { discover: () => discover(process.env, args.socket) }));
   app.add(new FleetScreen(app));
+  app.add(new AlertsScreen(app));
   app.add(new HostsScreen(app));
   app.add(new ModulesScreen(app));
   app.add(new ServicesScreen(app));

@@ -70,6 +70,7 @@ export interface FleetRow {
   error: ApiErrorBody | null;
   statusError: ProbeError | null;
   diskError: ProbeError | null;
+  firewallError?: ProbeError | null;
   stale: { status: boolean; disk: boolean; firewall: boolean };
   alertCount: number;
   alertMessage?: string;

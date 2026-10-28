@@ -22,7 +22,7 @@ export const samples: Record<string, unknown> = {
     rows: [{
       id: "a", link: "agent", thisMachine: true, reachable: true, lastSeen: at, chainId: 1, network: "n", agent: "v",
       status: nodestatus, disk: diskview, firewall: { pass: 1, warn: 1, fail: 1, unknown: 1, grade: "A" },
-      jobs: { running: 1, needsDecision: 1 }, error: err, statusError: { ...err, at }, diskError: { ...err, at },
+      jobs: { running: 1, needsDecision: 1 }, error: err, statusError: { ...err, at }, diskError: { ...err, at }, firewallError: { ...err, at },
       stale: { status: true, disk: true, firewall: true }, alertCount: 1, alertMessage: "m",
     }],
   } satisfies T.Fleet,
