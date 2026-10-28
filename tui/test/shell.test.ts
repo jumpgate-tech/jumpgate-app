@@ -146,3 +146,14 @@ test("SecretModal zeroes its buffer and never shows the text", () => {
   expect(new TextDecoder().decode(got!)).toBe("hunter");
   expect((s as any).buf.every((b: number) => b === 0)).toBe(true);
 });
+
+test("control bytes in a server error reach no pane", async () => {
+  const evil = "boom\x1b]0;pwned\x07 \x1b[2J\x1b[31mred \u009b6n \u009d8;;x\u009c end";
+  m = await mount(() => [{ id: "Fleet", title: "Fleet", view: () => [evil] }]);
+  m.app.fail("x", { message: evil, hint: evil });
+  const f = await m.frame();
+  expect(m.app.flash).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+  expect(f).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
+  expect(f).toContain("FAIL x: boom");
+  expect(f).not.toContain("pwned");
+});

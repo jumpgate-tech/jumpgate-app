@@ -6,7 +6,7 @@ import type { ApiError, Conn } from "../api/http.ts";
 import type { StreamOpts } from "../api/sse.ts";
 import type { DrawerPref, Fleet, JobsInbox, RunningJobs, UIPrefs, VaultView } from "../api/types.ts";
 import { redact } from "../secret.ts";
-import { clip } from "../text.ts";
+import { clip, sanitizeLine } from "../text.ts";
 import { Activity } from "./activity.ts";
 import { confirmModal, helpModal, SecretModal, ShowOnce, type Modal } from "./confirm.ts";
 import { drawerLines, minimizedLine } from "./drawer.ts";
@@ -134,7 +134,7 @@ export class App {
     const err = e as Partial<ApiError>;
     const msg = typeof err?.message === "string" ? err.message : String(e);
     const line = `FAIL ${what}: ${redact(msg)}${err?.hint ? ` (${redact(err.hint)})` : ""}`;
-    this.flash = line;
+    this.flash = sanitizeLine(line);
     this.log(line);
   }
 
@@ -324,7 +324,7 @@ export class App {
     const border = box.border ? 2 : 0;
     const iw = Math.max(0, r.w - border);
     const ih = Math.max(0, r.h - border);
-    text.content = lines.slice(0, ih).map((l) => clip(l, iw)).join("\n");
+    text.content = lines.slice(0, ih).map((l) => clip(sanitizeLine(l), iw)).join("\n");
   }
 
   render(): void {
