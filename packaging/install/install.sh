@@ -197,7 +197,9 @@ main() {
 		(cd "$tmp" && awk -v f="$1" '$2 == f || $2 == "*" f' checksums.txt | sumcheck >/dev/null 2>&1) ||
 			die "checksum mismatch for $1 against the release's checksums.txt; nothing was installed"
 		if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-			gh attestation verify "$tmp/$1" --repo "$repo" >/dev/null ||
+			gh attestation verify "$tmp/$1" --repo "$repo" \
+				--signer-workflow "$repo/.github/workflows/release.yml" \
+				--source-ref "refs/tags/$tag" >/dev/null ||
 				die "build provenance check failed for $1; nothing was installed"
 			say "build provenance verified (gh attestation verify)"
 		elif [ "$require_provenance" = 1 ]; then

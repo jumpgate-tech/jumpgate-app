@@ -153,6 +153,20 @@ run_as root sh /install.sh --version v0.0.1 --yes --require-provenance
 want provenance provenance
 ok "provenance required"
 
+echo "== 3b with gh signed in, provenance pins the workflow and the tag"
+fresh_box ghprov
+# A stand-in gh: signed in, every attestation passes, its arguments logged.
+docker exec "$name" sh -c 'printf "%s\n" "#!/bin/sh" "echo \"\$*\" >>/tmp/gh.log" "exit 0" >/usr/local/bin/gh && chmod 0755 /usr/local/bin/gh'
+run_as root sh /install.sh --version v0.0.1 --yes --require-provenance
+[ "$rc" = 0 ] || fail "gh provenance: exit $rc"
+want "build provenance verified" "gh provenance"
+out="$(docker exec "$name" cat /tmp/gh.log)"
+want "attestation verify" "gh provenance"
+want "--repo jumpgate-tech/jumpgate-app" "gh provenance"
+want "--signer-workflow jumpgate-tech/jumpgate-app/.github/workflows/release.yml" "gh provenance"
+want "--source-ref refs/tags/v0.0.1" "gh provenance"
+ok "provenance pins the signer workflow and the tag"
+
 echo "== 4 pinned and latest, as root"
 fresh_box pin
 run_as root sh /install.sh --version 0.0.1 --yes
