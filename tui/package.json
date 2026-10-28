@@ -1,0 +1,15 @@
+{
+  "name": "jumpgate-tui",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.3",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "check-routes": "bun run scripts/check-routes.ts",
+    "build": "bun build src/main.ts --compile --minify --outfile dist/jumpgate-tui"
+  },
+  "dependencies": { "@opentui/core": "0.6.2" },
+  "devDependencies": { "@types/bun": "1.4.3", "typescript": "5.9.3" }
+}
