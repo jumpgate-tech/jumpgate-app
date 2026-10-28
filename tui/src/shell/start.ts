@@ -16,11 +16,11 @@ import { SettingsScreen } from "../screens/settings.ts";
 import { SetupScreen } from "../screens/setup.ts";
 import { NodeScreen } from "../screens/node.ts";
 import { VaultScreen } from "../screens/vault.ts";
-import { App } from "./app.ts";
+import { App, type AppOptions } from "./app.ts";
 
-/** mountApp registers the slice's screens on renderer. */
-export function mountApp(renderer: CliRenderer, args: Args, version = VERSION): App {
-  const app = new App(renderer, { myVersion: version });
+/** mountApp registers every screen on renderer. */
+export function mountApp(renderer: CliRenderer, args: Args, version = VERSION, opts: Partial<AppOptions> = {}): App {
+  const app = new App(renderer, { myVersion: version, ...opts });
   app.add(new ConnectScreen(app, { discover: () => discover(process.env, args.socket) }));
   app.add(new FleetScreen(app));
   app.add(new HostsScreen(app));

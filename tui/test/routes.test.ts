@@ -35,7 +35,15 @@ test("a renamed Go route fails the check", () => {
   expect(check(["GET /api/vault"], new Set(["GET /api/vault2"])).missing).toEqual(["GET /api/vault"]);
 });
 
-test("check-routes exits 0", () => {
-  const r = Bun.spawnSync(["bun", "run", "scripts/check-routes.ts"], { cwd: join(import.meta.dir, "..") });
+test("check-routes --strict exits 0: every Go route is used or allowlisted with a reason", () => {
+  const r = Bun.spawnSync(["bun", "run", "scripts/check-routes.ts", "--strict"], { cwd: join(import.meta.dir, "..") });
+  expect(r.stderr.toString()).toBe("");
   expect(r.exitCode).toBe(0);
+});
+
+test("an unused, unlisted Go route fails strict; a stale allowlist entry fails", () => {
+  const have = new Set(["GET /a", "GET /b"]);
+  expect(check(["GET /a"], have).unused).toEqual(["GET /b"]);
+  expect(check(["GET /a"], have, new Map([["GET /b", "why"]])).unused).toEqual([]);
+  expect(check(["GET /a"], have, new Map([["GET /a", "why"], ["GET /gone", "why"]])).stale).toEqual(["GET /a", "GET /gone"]);
 });

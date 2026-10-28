@@ -38,7 +38,7 @@ export class ModulesScreen implements Screen {
 
   view(w: number): string[] {
     const out: string[] = ["catalog:"];
-    out.push(...(this.cat ? this.cat.map((c) => `  ${c.id.padEnd(14)} ${sanitizeLine(c.name).padEnd(16)} ${sanitizeLine(c.placement).padEnd(8)} ${sanitizeLine(c.summary)}`) : ["  n/a"]));
+    out.push(...(this.cat ? this.cat.map((c) => `  ${c.id.padEnd(14)} ${clean(c.name).padEnd(16)} ${clean(c.placement).padEnd(8)} ${clean(c.summary)}`) : ["  n/a"]));
     out.push("");
     if (!this.box) {
       out.push("boxes ([enter] open):", ...(this.boxPick.lines(this.boxes()).length ? this.boxPick.lines(this.boxes()) : ["  none"]));

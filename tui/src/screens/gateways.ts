@@ -37,7 +37,7 @@ export class GatewaysScreen implements Screen {
   view(w: number, h: number): string[] {
     const gws = this.list?.gateways ?? [];
     const rows = gws.map(
-      (g) => `${g.id.padEnd(14)} ${sanitizeLine(g.label ?? "").padEnd(14)} ${sanitizeLine(g.status?.State ?? "n/a").padEnd(10)} ${maskValue(g.baseUrl ?? "")}`,
+      (g) => `${g.id.padEnd(14)} ${maskValue(g.label ?? "").padEnd(14)} ${sanitizeLine(g.status?.State ?? "n/a").padEnd(10)} ${maskValue(g.baseUrl ?? "")}`,
     );
     const out = [...(this.list ? (rows.length ? this.pick.lines(rows) : ["no gateways"]) : ["loading..."])];
     for (const o of this.list?.orphans ?? [])

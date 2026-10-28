@@ -33,7 +33,7 @@ export class VaultScreen implements Screen {
       `state  ${na(v?.state, sanitizeLine)}`,
       `slots  ${v ? v.slots.map(sanitizeLine).join(", ") || "none" : "n/a"}`,
     ];
-    if (v?.reason) lines.push(`reason ${sanitizeLine(v.reason)}`);
+    if (v?.reason) lines.push(`reason ${maskText(sanitizeLine(v.reason))}`);
     if (v?.plain?.length) lines.push(`plain  ${v.plain.map(sanitizeLine).join(", ")} (not in the vault yet)`);
     const idle = this.idle === undefined ? "n/a" : this.idle === 0 ? "off" : `${this.idle} min`;
     lines.push(`idle lock ${idle}`);

@@ -7,7 +7,7 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "check-routes": "bun run scripts/check-routes.ts",
+    "check-routes": "bun run scripts/check-routes.ts --strict",
     "build": "bun build src/main.ts --compile --minify --outfile dist/jumpgate-tui"
   },
   "dependencies": { "@opentui/core": "0.6.2" },
