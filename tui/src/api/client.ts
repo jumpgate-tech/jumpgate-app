@@ -237,3 +237,35 @@ export const setVPNEndpoint = (c: Conn, id: string, endpointHost: string) => req
 export const addPeer = (c: Conn, id: string, req: { name: string; fullTunnel: boolean }) =>
   request<{ name: string; publicKey: string; allowedIp: string; config: string }>(c, "POST", vsrv(id, "/peers"), req);
 export const removePeer = (c: Conn, id: string, publicKey: string) => request(c, "POST", vsrv(id, "/peers/remove"), { publicKey });
+
+// Gateways, RPC and customer keys (H).
+const gw = (gid: string, rest = "") => `/api/gateways/${e(gid)}${rest}`;
+export interface GatewayList {
+  gateways: { id: string; label?: string; status?: { State?: string }; baseUrl?: string; tier?: string }[];
+  orphans?: { containerName: string; targetId: string; mergedInto: string }[];
+}
+export const gateways = (c: Conn) => request<GatewayList>(c, "GET", "/api/gateways");
+export const gateway = (c: Conn, gid: string) => request<unknown>(c, "GET", gw(gid));
+export const createGateway = (c: Conn, id: string, targetId: string) => request<unknown>(c, "POST", "/api/gateways", { id, placement: { targetId } });
+export const deleteGateway = (c: Conn, gid: string) => request(c, "DELETE", gw(gid));
+export const gatewayAction = (c: Conn, gid: string, action: "start" | "stop" | "restart") => request<unknown>(c, "POST", gw(gid, `/${action}`));
+export const putGatewayConfig = (c: Conn, gid: string, cfg: unknown) => request<unknown>(c, "PUT", gw(gid, "/config"), cfg);
+export const provisionGateway = (c: Conn, gid: string) => request<unknown>(c, "POST", gw(gid, "/provision"));
+export const wipeGateway = (c: Conn, gid: string, confirm: string) => request<unknown>(c, "POST", gw(gid, "/wipe"), { Confirm: confirm });
+export const setGatewayModule = (c: Conn, gid: string, mod: string, enabled: boolean) => request<unknown>(c, "PUT", gw(gid, `/modules/${e(mod)}`), { enabled });
+export const trustCert = (c: Conn, gid: string) => request<unknown>(c, "POST", gw(gid, "/trust-cert"));
+export const tlsVerify = (c: Conn, gid: string) => request<unknown>(c, "GET", gw(gid, "/tls/verify"));
+export const capabilities = (c: Conn, gid: string) => request<unknown>(c, "GET", gw(gid, "/capabilities"));
+export const knownSet = (c: Conn, gid: string, chainId: number) => request<unknown>(c, "GET", gw(gid, `/knownset/${chainId}`));
+export const analytics = (c: Conn, gid: string) => request<unknown>(c, "GET", gw(gid, "/analytics"));
+export const traffic = (c: Conn, gid: string) => request<unknown>(c, "GET", gw(gid, "/traffic"));
+export const customerKeys = (c: Conn, gid: string) => request<unknown>(c, "GET", gw(gid, "/keys"));
+/** createCustomerKey's reply holds the raw key once: show it once, never keep it. */
+export const createCustomerKey = (c: Conn, gid: string, label: string) => request<{ id: string; key: string }>(c, "POST", gw(gid, "/keys"), { label });
+export const revokeCustomerKey = (c: Conn, gid: string, keyId: string) => request<unknown>(c, "POST", gw(gid, `/keys/${e(keyId)}/revoke`));
+export const dismissOrphan = (c: Conn, name: string) => request(c, "DELETE", `/api/orphans/${e(name)}`);
+export const chainlist = (c: Conn) => request<unknown>(c, "GET", "/api/chainlist");
+export const chain = (c: Conn, chainId: number) => request<unknown>(c, "GET", `/api/chainlist/${chainId}`);
+export const docker = (c: Conn) => request<unknown>(c, "GET", "/api/docker");
+export const startDocker = (c: Conn) => request<unknown>(c, "POST", "/api/docker/start");
+export const host = (c: Conn) => request<unknown>(c, "GET", "/api/host");
