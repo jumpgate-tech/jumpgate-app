@@ -15,6 +15,7 @@ import (
 
 	"github.com/valve-tech/jumpgate/internal/secretenv"
 	"github.com/valve-tech/jumpgate/internal/secrets"
+	"github.com/valve-tech/jumpgate/internal/sysunit"
 	"github.com/valve-tech/jumpgate/internal/vault"
 )
 
@@ -99,6 +100,14 @@ func vaultSeal(args []string) int {
 	}
 	if *tpm2 == *hostKey {
 		return usage("vault seal needs exactly one of --tpm2 and --allow-host-key; " + use)
+	}
+	// The jumpgate service's vault is the service's: it adds the slot, and
+	// this process seals the key for jumpgate.service.
+	if c, ok := findServiceClient(context.Background()); ok {
+		if *out != credstoreOut {
+			return usage("--out does not apply to the jumpgate service: its credential is always %s", sysunit.SealCredPath)
+		}
+		return sealSystem(context.Background(), os.Stdout, c, *tpm2, *hostKey, *fromStdin)
 	}
 	path, err := secrets.VaultPath()
 	if err != nil {

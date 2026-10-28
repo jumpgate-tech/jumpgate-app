@@ -30,12 +30,13 @@ var (
 func tuiOptions(c *apiclient.Client, exe, host string) tui.Options {
 	cur := c
 	return tui.Options{
-		Backend:  c,
-		Self:     exe,
-		Hostname: host,
-		Bell:     func() { fmt.Fprint(os.Stderr, "\a") },
-		Location: time.Local,
-		OpenWeb:  func(ctx context.Context) error { return openWebApp(ctx, io.Discard) },
+		Backend:       c,
+		Self:          exe,
+		Hostname:      host,
+		Bell:          func() { fmt.Fprint(os.Stderr, "\a") },
+		Location:      time.Local,
+		OpenWeb:       func(ctx context.Context) error { return openWebApp(ctx, io.Discard) },
+		SystemService: c.Info().System,
 		Restart: func(ctx context.Context) (tui.Backend, error) {
 			nc, err := apiclient.Restart(ctx, cur)
 			if err != nil {

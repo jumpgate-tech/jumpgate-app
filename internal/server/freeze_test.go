@@ -43,6 +43,9 @@ var frozenTargetRoutes = []string{
 	// it sits beside .../setup, and its status beside it.
 	"GET /api/targets/{id}/modules",
 	"PUT /api/targets/{id}/modules/{module}",
+	// Server-install plan, Task 18: replacing a paired box's gate acts on
+	// the pairing, beside .../pair; it is not a legacy executor operation.
+	"POST /api/targets/{id}/agent/upgrade",
 }
 
 func TestLegacyTargetRoutesAreFrozen(t *testing.T) {

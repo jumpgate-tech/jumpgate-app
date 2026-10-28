@@ -54,6 +54,10 @@ type loginCode struct {
 	// file is the redirect file that carries the code, removed with it; ""
 	// for a code minted without one.
 	file string
+	// uid is who may redeem the code (root always may); -1 is the
+	// server's own uid. The jumpgate service mints for the socket peer
+	// that asked (D8).
+	uid int
 }
 
 // LoginLink is a minted login code, its URL, and the owner-only redirect
@@ -68,9 +72,10 @@ type LoginLink struct {
 
 // NewLoginCode mints a code that signs one browser in, once, within
 // loginCodeTTL. It is 128 bits from crypto/rand, hex-encoded.
-func (s *Server) NewLoginCode() string { return s.addLoginCode("") }
+func (s *Server) NewLoginCode() string { return s.addLoginCode("", -1) }
 
-func (s *Server) addLoginCode(file string) string {
+// addLoginCode mints a code for uid; -1 means the server's own uid.
+func (s *Server) addLoginCode(file string, uid int) string {
 	code := NewSessionToken()
 	now := s.clock()
 	s.codes.mu.Lock()
@@ -82,16 +87,20 @@ func (s *Server) addLoginCode(file string) string {
 		}
 		s.codes.list = append(s.codes.list[:0], s.codes.list[n-maxLoginCodes+1:]...)
 	}
-	s.codes.list = append(s.codes.list, loginCode{code: code, expires: now.Add(loginCodeTTL), file: file})
+	s.codes.list = append(s.codes.list, loginCode{code: code, expires: now.Add(loginCodeTTL), file: file, uid: uid})
 	return code
 }
 
 // NewLoginLink mints a login code and writes the owner-only redirect file
 // that carries it. The file is removed when the code is redeemed, expires or
 // is retired, and stale ones are swept when a server starts.
-func (s *Server) NewLoginLink() (LoginLink, error) {
+func (s *Server) NewLoginLink() (LoginLink, error) { return s.NewLoginLinkFor(-1) }
+
+// NewLoginLinkFor is NewLoginLink for a code only uid (or root) may redeem;
+// -1 is the server's own uid.
+func (s *Server) NewLoginLinkFor(uid int) (LoginLink, error) {
 	if s.cfg.LoginDir == "" {
-		code := s.NewLoginCode()
+		code := s.addLoginCode("", uid)
 		return LoginLink{Code: code, URL: LoginURL(s.cfg.Bind, code)}, nil
 	}
 	if s.cfg.Bind == "" {
@@ -101,7 +110,7 @@ func (s *Server) NewLoginLink() (LoginLink, error) {
 	if err != nil {
 		return LoginLink{}, fmt.Errorf("login link file: %w", err)
 	}
-	code := s.addLoginCode(file)
+	code := s.addLoginCode(file, uid)
 	link := LoginLink{Code: code, URL: LoginURL(s.cfg.Bind, code), File: file}
 	_, werr := io.WriteString(f, redirectPage(link.URL))
 	if cerr := f.Close(); werr == nil {
@@ -236,8 +245,20 @@ func (s *Server) redeemLoginCode(code string) bool {
 // redeem is redeemLoginCode that also reports whether code was one already
 // redeemed (and not yet expired).
 func (s *Server) redeem(code string) (ok, reused bool) {
+	ok, reused, _ = s.redeemAs(code, 0)
+	return ok, reused
+}
+
+// redeemFor is redeem by a peer of uid. foreign means the code exists but
+// belongs to another uid; it is then NOT consumed, so its owner's browser
+// still signs in. Root (uid 0) may redeem any code.
+func (s *Server) redeemFor(code string, uid int) (ok, reused, foreign bool) {
+	return s.redeemAs(code, uid)
+}
+
+func (s *Server) redeemAs(code string, uid int) (ok, reused, foreign bool) {
 	if code == "" {
-		return false, false
+		return false, false, false
 	}
 	now := s.clock()
 	s.codes.mu.Lock()
@@ -245,19 +266,26 @@ func (s *Server) redeem(code string) (ok, reused bool) {
 	found := matchCode(s.codes.list, code)
 	if found < 0 {
 		i := matchCode(s.codes.spent, code)
-		return false, i >= 0 && now.Before(s.codes.spent[i].expires)
+		return false, i >= 0 && now.Before(s.codes.spent[i].expires), false
 	}
 	c := s.codes.list[found]
+	owner := c.uid
+	if owner < 0 {
+		owner = s.selfUID
+	}
+	if uid != 0 && uid != owner && now.Before(c.expires) {
+		return false, false, true
+	}
 	s.codes.list = append(s.codes.list[:found], s.codes.list[found+1:]...)
 	removeLoginFile(c.file)
 	if !now.Before(c.expires) {
-		return false, false
+		return false, false, false
 	}
 	s.codes.spent = append(s.codes.spent, loginCode{code: c.code, expires: c.expires})
 	if n := len(s.codes.spent); n > maxLoginCodes {
 		s.codes.spent = append(s.codes.spent[:0], s.codes.spent[n-maxLoginCodes:]...)
 	}
-	return true, false
+	return true, false, false
 }
 
 // matchCode is the index of code in list, compared against every entry in
@@ -296,14 +324,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// a torn read); only tables that cannot be read at all, or that list no
 	// connections whatsoever (WSL1, gVisor), let the login through, with a
 	// warning.
+	peer := 0 // root's view: any code; used where the peer cannot be read
 	if s.peerUID != nil {
 		switch uid, v := s.peerUID(r); v {
 		case peerFound:
-			if uid != s.selfUID && uid != 0 {
-				log.Printf("jumpgate: WARNING: refused a login link from another local user (uid %d)", uid)
-				http.Error(w, "this jumpgate login link belongs to another user", http.StatusForbidden)
-				return
-			}
+			// Each code names the uid that may redeem it: the server's own
+			// for a per-user server, the asking socket peer's for the
+			// service (D8). redeemFor leaves another uid's code unconsumed.
+			peer = uid
 		case peerMissing:
 			log.Printf("jumpgate: WARNING: refused a login link whose client socket /proc/net/tcp does not list (from %s); run `jumpgate open` again", r.RemoteAddr)
 			http.Error(w, "jumpgate could not confirm this login link comes from you; run `jumpgate open` again", http.StatusForbidden)
@@ -319,7 +347,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	ok, reused := s.redeem(r.URL.Query().Get("code"))
+	ok, reused, foreign := s.redeemFor(r.URL.Query().Get("code"), peer)
+	// On a per-user server every code is the server's, so any other user
+	// is refused, whether or not the code exists.
+	if foreign || (!ok && !s.cfg.System && peer != 0 && peer != s.selfUID) {
+		refuseForeignLogin(w, peer)
+		return
+	}
 	if !ok {
 		if reused {
 			log.Printf("jumpgate: WARNING: a login link was used twice (from %s); if you did not open it twice, another local program may have signed in before your browser, so restart jumpgate to replace the session token", r.RemoteAddr)
@@ -339,6 +373,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, redirectPage("/"))
+}
+
+// refuseForeignLogin answers a login link presented by a local user it does
+// not belong to.
+func refuseForeignLogin(w http.ResponseWriter, uid int) {
+	log.Printf("jumpgate: WARNING: refused a login link from another local user (uid %d)", uid)
+	http.Error(w, "this jumpgate login link belongs to another user", http.StatusForbidden)
 }
 
 // loopbackPeer reports whether a request's remote address is a loopback IP.

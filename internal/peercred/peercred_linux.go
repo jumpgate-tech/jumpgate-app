@@ -1,6 +1,6 @@
 //go:build linux
 
-package agent
+package peercred
 
 import (
 	"errors"
@@ -11,26 +11,26 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func peerCred(c net.Conn) (int, []int, error) {
+func Of(c net.Conn) (Cred, error) {
 	uc, ok := c.(*net.UnixConn)
 	if !ok {
-		return 0, nil, errors.New("not a unix socket")
+		return Cred{}, errors.New("not a unix socket")
 	}
 	raw, err := uc.SyscallConn()
 	if err != nil {
-		return 0, nil, err
+		return Cred{}, err
 	}
 	var cred *unix.Ucred
 	var serr error
 	if err := raw.Control(func(fd uintptr) {
 		cred, serr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
 	}); err != nil {
-		return 0, nil, err
+		return Cred{}, err
 	}
 	if serr != nil {
-		return 0, nil, serr
+		return Cred{}, serr
 	}
-	return int(cred.Uid), groupsOf(int(cred.Uid), int(cred.Gid)), nil
+	return Cred{UID: int(cred.Uid), GIDs: groupsOf(int(cred.Uid), int(cred.Gid))}, nil
 }
 
 // groupsOf lists a uid's primary and supplementary groups from /etc/group

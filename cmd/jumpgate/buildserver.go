@@ -89,7 +89,7 @@ func unlockedHook(logf func(string, ...any)) func(*vault.Vault) (signer.Signer, 
 
 // credentialKEK reads the vault's slot key from the systemd credential
 // $CREDENTIALS_DIRECTORY/jumpgate-vault-key: exactly 32 bytes, read through
-// readPrivateFile. ok is false when there is none or it is unusable.
+// readSystemdCredential. ok is false when there is none or it is unusable.
 func credentialKEK(getenv func(string) string) ([]byte, bool) {
 	kek, err := readCredentialKEK(getenv)
 	return kek, err == nil && kek != nil
@@ -103,7 +103,7 @@ func readCredentialKEK(getenv func(string) string) ([]byte, error) {
 		return nil, nil
 	}
 	p := filepath.Join(dir, vaultCredName)
-	raw, err := readPrivateFile(p)
+	raw, err := readSystemdCredential(p)
 	if err != nil {
 		clear(raw)
 		return nil, err
@@ -177,6 +177,11 @@ type serverOptions struct {
 	// listing, where any local user reads it.
 	RelayToken string // JUMPGATE_RELAY_TOKEN
 	AdminToken string // JUMPGATE_ADMIN_TOKEN
+	// System is `serve --system`: the jumpgate service under systemd, with
+	// the peer-credential admin socket (serve_system.go). AdminGID is
+	// jumpgate-admin's gid, resolved by the system start, not a flag.
+	System   bool
+	AdminGID int
 }
 
 // Environment variables that default the server flags. They are how a server
@@ -309,6 +314,7 @@ func parseServeArgs(args []string, getenv func(string) string) (serverOptions, e
 	if err != nil {
 		return serverOptions{}, err
 	}
+	fset.BoolVar(&opts.System, "system", false, "run as the jumpgate service under systemd (Linux): an admin socket for jumpgate-admin in "+daemon.SystemDir)
 	if err := fset.Parse(args); err != nil {
 		return serverOptions{}, err
 	}
@@ -442,7 +448,9 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 		Shutdown:    shutdown,
 		// Without it the mint API returns bare codes and `jumpgate open` can
 		// only print the link.
-		LoginDir: loginDir(),
+		LoginDir: serverLoginDir(opts),
+		System:   opts.System,
+		AdminGID: opts.AdminGID,
 	})
 
 	b := &builtServer{
@@ -487,6 +495,16 @@ func buildServer(opts serverOptions, shutdown func(), logw io.Writer) (*builtSer
 		b.background = append(b.background, backgroundTask{"relay-runtime", relayRuntime.Run})
 	}
 	return b, nil
+}
+
+// serverLoginDir is where login-link redirect files go. The jumpgate
+// service writes none: its files would be private to the service user, not
+// to the operator who asked, so system-mode links are only printed.
+func serverLoginDir(opts serverOptions) string {
+	if opts.System {
+		return ""
+	}
+	return loginDir()
 }
 
 // vaultTokens reports whether the relay or admin token is a vault reference.

@@ -127,7 +127,7 @@ func TestPairLocalForegroundRunsBootstrapThroughSudo(t *testing.T) {
 	agent := eip712.Address{0x01}
 	prompted, got, _ := stubForeground(t, nil, nil, agent)
 
-	addr, code := pairLocalForeground(context.Background(), io.Discard, config.Target{ID: "me", Mode: "local"})
+	addr, code := pairFromConfig(io.Discard, config.Target{ID: "me", Mode: "local"})
 	if code != 0 || addr != agent.Hex() {
 		t.Fatalf("pairLocalForeground = %q, %d", addr, code)
 	}
@@ -153,7 +153,7 @@ func TestPairLocalForegroundPassesTheTargetsWire(t *testing.T) {
 	withController(t)
 	_, got, _ := stubForeground(t, nil, nil, eip712.Address{0x01})
 	wire := &catalog.WireConfig{ChainID: 369, ExecID: "reth"}
-	if _, code := pairLocalForeground(context.Background(), io.Discard, config.Target{ID: "me", Mode: "local", Wire: wire}); code != 0 {
+	if _, code := pairFromConfig(io.Discard, config.Target{ID: "me", Mode: "local", Wire: wire}); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	if got.Wire != wire {
@@ -166,7 +166,7 @@ func TestPairLocalForegroundAsksForTheSudoPassword(t *testing.T) {
 	withController(t)
 	prompted, _, ran := stubForeground(t, errors.New("a password is required"), nil, eip712.Address{0x01})
 	var out bytes.Buffer
-	if _, code := pairLocalForeground(context.Background(), &out, config.Target{ID: "me", Mode: "local"}); code != 0 {
+	if _, code := pairFromConfig(&out, config.Target{ID: "me", Mode: "local"}); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	if !*prompted || !*ran || !strings.Contains(out.String(), "sudo may ask for your password") {
@@ -196,7 +196,7 @@ func TestPairLocalForegroundStopsWhenSudoIsRefused(t *testing.T) {
 	withController(t)
 	stderr := captureStderr(t)
 	_, _, ran := stubForeground(t, errors.New("a password is required"), errors.New("user is not in the sudoers file"), eip712.Address{})
-	if _, code := pairLocalForeground(context.Background(), io.Discard, config.Target{ID: "me", Mode: "local"}); code != 1 {
+	if _, code := pairFromConfig(io.Discard, config.Target{ID: "me", Mode: "local"}); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
 	if *ran {
@@ -217,7 +217,7 @@ func TestPairLocalForegroundFailureSaysHowToFinish(t *testing.T) {
 	runBootstrap = func(context.Context, bootstrap.Options) (eip712.Address, error) {
 		return eip712.Address{}, errors.New("preflight: not systemd")
 	}
-	if _, code := pairLocalForeground(context.Background(), io.Discard, config.Target{ID: "me", Mode: "local"}); code != 1 {
+	if _, code := pairFromConfig(io.Discard, config.Target{ID: "me", Mode: "local"}); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
 	if got := stderr(); !strings.Contains(got, "saved but not paired") {
@@ -237,7 +237,7 @@ func TestPairedMessageAdvisesOnRootSSHOnlyAfterSSH(t *testing.T) {
 func TestPairLocalForegroundNeedsAControllerKey(t *testing.T) {
 	localSeams(t, "linux", 1000, true)
 	_, _, ran := stubForeground(t, nil, nil, eip712.Address{})
-	if _, code := pairLocalForeground(context.Background(), io.Discard, config.Target{ID: "me", Mode: "local"}); code != exitCode("no_controller_key") {
+	if _, code := pairFromConfig(io.Discard, config.Target{ID: "me", Mode: "local"}); code != exitCode("no_controller_key") {
 		t.Fatalf("exit %d, want %d", code, exitCode("no_controller_key"))
 	}
 	if *ran {

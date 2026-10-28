@@ -145,6 +145,15 @@ type Config struct {
 	// link (fail-safe: no browser is opened on it).
 	LoginDir string
 
+	// System is `jumpgate serve --system`, the jumpgate service: a request
+	// on the admin socket (ServeUnixSystem) is admitted by its peer's kernel
+	// credentials instead of the token. AdminGID is jumpgate-admin's gid.
+	System   bool
+	AdminGID int
+	// Restart makes the jumpgate service exit so systemd starts it again
+	// (POST /api/restart, D15). Set only by serve --system; nil answers 404.
+	Restart func()
+
 	// noJobsDriver keeps the jobs hub listing and verifying but never
 	// driving. Tests only (ruling P5): a test that inspects a job mid-way
 	// must not race the driver. Unexported, so no caller outside the
@@ -159,10 +168,16 @@ type Config struct {
 type Server struct {
 	cfg Config
 
+	// loadAgent gives the gate binary for a box's arch, for hosts upgrade
+	// (a seam; agentbin.Load by default).
+	loadAgent func(arch string) ([]byte, error)
+
 	// keys is the vault and the controller signer (vault.go); vctl
 	// serializes unlock and lock.
 	keys keyState
 	vctl vaultCtl
+	// passBackoff slows wrong passphrases per peer uid (unlock_backoff.go).
+	passBackoff passBackoff
 	// bg counts the work each unlock starts (afterUnlock).
 	bg sync.WaitGroup
 
@@ -276,8 +291,12 @@ func New(cfg Config) *Server {
 	s.initKeys()
 	s.markActivity()
 	s.newExecutor = cfg.NewExecutor
+	s.loadAgent = defaultLoadAgent
 	if s.newExecutor == nil {
 		s.newExecutor = defaultNewExecutor
+	}
+	if cfg.System {
+		s.newExecutor = systemExecutor(s.newExecutor)
 	}
 	s.newAIProvider = cfg.NewAIProvider
 	if s.newAIProvider == nil {
@@ -359,7 +378,13 @@ func (s *Server) Handler() http.Handler {
 	// authenticated socket; the code, not the token, goes to the browser.
 	mux.HandleFunc("POST /api/login-code", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		link, err := s.NewLoginLink()
+		// Over the service's admin socket the code is the asking peer's
+		// (D8): only that uid's browser, or root's, may redeem it.
+		uid := -1
+		if c, ok := peerFrom(r.Context()); ok {
+			uid = c.UID
+		}
+		link, err := s.NewLoginLinkFor(uid)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -370,6 +395,7 @@ func (s *Server) Handler() http.Handler {
 	s.registerAPIRoutes(mux)
 	s.registerVaultRoutes(mux)
 	s.registerKeyRoutes(mux)
+	s.registerSystemRoutes(mux)
 
 	uiHandler := http.FileServerFS(s.cfg.UI)
 	mux.Handle("/", uiHandler)
@@ -390,6 +416,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if r.URL.Path == "/login" && r.Method == http.MethodGet {
 			s.handleLogin(w, r)
 			return
+		}
+
+		// The system socket admits by peer credentials; TCP requests carry
+		// none and fall through to the token and cookie checks.
+		if s.cfg.System {
+			if c, ok := peerFrom(r.Context()); ok && admitPeer(c, s.selfUID, s.cfg.AdminGID) {
+				s.noteRequest(r)
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
 
 		// ?token= stays for one caller only: the tray's in-process webview

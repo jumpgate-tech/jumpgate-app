@@ -17,6 +17,9 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("HOME", home)
 	os.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
+	// Nor may a jumpgate service installed on this machine answer for one.
+	SystemDir = home + "/no-system"
+	SystemUnitPaths = nil
 	code := m.Run()
 	os.RemoveAll(home)
 	os.Exit(code)

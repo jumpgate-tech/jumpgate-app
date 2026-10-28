@@ -52,12 +52,14 @@ type ControllerView struct {
 
 // AgentCheck is POST /api/fleet/{id}/check: a signed agent.info round trip.
 type AgentCheck struct {
-	Agent     string `json:"agent"`
-	Version   string `json:"version"`
-	ChainID   int    `json:"chainId"`
-	SetUp     bool   `json:"setUp"`
-	Signers   int    `json:"signers"`
-	ElapsedMs int64  `json:"elapsedMs"`
+	Agent   string `json:"agent"`
+	Version string `json:"version"`
+	ChainID int    `json:"chainId"`
+	SetUp   bool   `json:"setUp"`
+	Signers int    `json:"signers"`
+	// Controllers is how many controllers the box trusts (routine signers).
+	Controllers int   `json:"controllers"`
+	ElapsedMs   int64 `json:"elapsedMs"`
 }
 
 // SSHCommand is GET /api/fleet/{id}/ssh: an interactive shell's argv.

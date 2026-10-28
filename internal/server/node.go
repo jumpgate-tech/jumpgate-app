@@ -112,6 +112,12 @@ var onSendIntent func(target, kind string)
 // answer. It is the only way the server reaches an agent: one intent per
 // target at a time, because the sequence lives in config.
 func (s *Server) sendIntent(ctx context.Context, cfg config.Config, t config.Target, kind string, payload any) (agentclient.Response, error) {
+	return s.sendAgent(ctx, t, kind, payload, nil)
+}
+
+// sendAgent is sendIntent with an optional blob: a non-nil blob is uploaded
+// with the intent (agentclient.Upload), as agent.upgrade's binary.
+func (s *Server) sendAgent(ctx context.Context, t config.Target, kind string, payload any, blob []byte) (agentclient.Response, error) {
 	if onSendIntent != nil {
 		onSendIntent(t.ID, kind)
 	}
@@ -136,7 +142,12 @@ func (s *Server) sendIntent(ctx context.Context, cfg config.Config, t config.Tar
 		return agentclient.Response{}, err
 	}
 	defer client.Close()
-	res, err := client.Do(ctx, kind, payload)
+	var res agentclient.Response
+	if blob != nil {
+		res, err = client.Upload(ctx, kind, payload, blob)
+	} else {
+		res, err = client.Do(ctx, kind, payload)
+	}
 	if err != nil && !isAgentErr(err) {
 		err = &localError{err}
 	}
@@ -368,6 +379,8 @@ func classifyNodeError(err error) (int, api.Error) {
 		return http.StatusBadGateway, api.Error{Message: fail.msg, Code: api.CodeAgentFailed}
 	case errors.Is(err, errNotSetUp):
 		return http.StatusConflict, api.Error{Message: msg, Code: api.CodeTargetNotSetUp}
+	case errors.Is(err, errServiceNoLogin):
+		return http.StatusConflict, api.Error{Message: msg, Code: api.CodeServiceNoLogin}
 	case errors.As(err, &nokey):
 		return http.StatusServiceUnavailable, noControllerKeyError(nokey.cause)
 	case errors.Is(err, errNoController):

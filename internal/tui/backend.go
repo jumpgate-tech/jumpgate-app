@@ -75,11 +75,14 @@ type Options struct {
 	OpenWeb func(ctx context.Context) error
 	// Restart stops the server and returns a backend for a fresh one (spec
 	// D30); nil hides the action.
-	Restart  func(ctx context.Context) (Backend, error)
-	GOOS     string              // "" : runtime.GOOS
-	Getenv   func(string) string // nil: os.Getenv
-	Hostname string              // the default name when pairing this machine
-	Now      func() time.Time    // nil: time.Now
+	Restart func(ctx context.Context) (Backend, error)
+	// SystemService says the server is the jumpgate service: systemd
+	// restarts it, and it comes back locked.
+	SystemService bool
+	GOOS          string              // "" : runtime.GOOS
+	Getenv        func(string) string // nil: os.Getenv
+	Hostname      string              // the default name when pairing this machine
+	Now           func() time.Time    // nil: time.Now
 	// Location is the zone log times are shown in; nil: time.Local.
 	Location *time.Location
 }

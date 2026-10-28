@@ -55,3 +55,6 @@ func readPrivateFile(path string) ([]byte, error) {
 	// The token is one short line; bound the read anyway.
 	return io.ReadAll(io.LimitReader(f, 64<<10))
 }
+
+// readSystemdCredential is readPrivateFile: there is no systemd on Windows.
+func readSystemdCredential(path string) ([]byte, error) { return readPrivateFile(path) }

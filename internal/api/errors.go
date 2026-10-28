@@ -121,6 +121,18 @@ const (
 	CodeVaultUnsafe Code = "vault_unsafe"
 	// CodeNoVault: there is no vault file.
 	CodeNoVault Code = "no_vault"
+
+	// The jumpgate service (serve --system).
+	// CodeKeyPathRefused: a client named an SSH key file for the service to read.
+	CodeKeyPathRefused Code = "key_path_refused"
+	// CodeServiceNoLogin: the service never logs in to a box over SSH itself.
+	CodeServiceNoLogin Code = "service_no_login"
+	// CodeInstalledMismatch: the agent on the host is not the one the CLI named.
+	CodeInstalledMismatch Code = "installed_mismatch"
+	// CodeControllerExists: setup server asked for a key the controller already has.
+	CodeControllerExists Code = "controller_exists"
+	// CodeSelfOnly: a self-only controller drives only the machine it runs on.
+	CodeSelfOnly Code = "self_only"
 )
 
 // Exit classes: the CLI's process exit statuses, published in the README.
@@ -203,13 +215,18 @@ var registry = map[Code]codeInfo{
 	CodeJobState:            {"the job moved on since you looked; reload it", ExitFailed},
 	CodeApprovalUnavailable: {"this decision needs an approval-tier signature (a hardware or browser wallet), which this jumpgate cannot make yet", ExitUsage},
 	CodeJobLogInvalid:       {"this job's history on the box does not verify against the box's agent key: do not act on it; inspect /var/lib/jumpgate/jobs on the box, and re-pair the box if its key changed", ExitSecurity},
-	CodeUnknownPlan:         {"this box's agent does not know that job's plan (it was downgraded?); re-pair the box to upgrade its agent", ExitFailed},
+	CodeUnknownPlan:         {"this box's gate does not know that job's plan (it was downgraded?); run `jumpgate hosts upgrade NAME`", ExitFailed},
 	CodeModuleNotApplicable: {"Pick a chain and client the module supports; /api/catalog lists them.", ExitFailed},
 	CodeLocked:              {"unlock the vault: `jumpgate unlock` or the unlock prompt in the TUI or web app; plans wait at their next step until then", ExitUsage},
 	CodeWrongPassphrase:     {"that passphrase does not open the vault; try again, or use a recovery code", ExitFailed},
 	CodeVaultCorrupt:        {"the vault file was changed or damaged and jumpgate will not fall back to plain files; restore a backup: `jumpgate stop`, then `jumpgate vault restore FILE`", ExitSecurity},
 	CodeVaultUnsafe:         {"the vault file is not private to this user, is not a regular file, or is a link; jumpgate never fixes it itself: check who changed it, then fix it as the message says", ExitSecurity},
 	CodeNoVault:             {"create one with `jumpgate vault migrate` (moves existing secrets in) or `jumpgate vault init`", ExitUsage},
+	CodeKeyPathRefused:      {"the jumpgate service never reads your SSH keys; leave out --key: `jumpgate hosts add` runs the root steps in your own shell", ExitUsage},
+	CodeServiceNoLogin:      {"the jumpgate service reaches boxes only through their gates; pair the box, or use `jumpgate ssh NAME` for a shell", ExitFailed},
+	CodeInstalledMismatch:   {"the gate answering on this host is not the one `jumpgate agent setup` printed; check the address and the host", ExitSecurity},
+	CodeControllerExists:    {"this controller already has a key; run `jumpgate unlock`", ExitFailed},
+	CodeSelfOnly:            {"this controller was set up with --self-only and pairs only this machine; to pair other boxes, set up a controller without --self-only", ExitFailed},
 	CodeJobKindNotAllowed:   {"this server starts only the jobs it knows (for example `jumpgate migrate-names HOST`); other node operations have their own commands", ExitUsage},
 }
 
@@ -277,7 +294,8 @@ var rejectionHints = map[string]string{
 	intent.ReasonClockSkew:        "the clocks disagree by more than 60s; enable NTP on this machine and the box",
 	intent.ReasonBadSignature:     "the box could not verify this controller's signature; re-pair it",
 	intent.ReasonUnauthorizedKind: "this controller is not enrolled on the box for that; pair it",
-	intent.ReasonUnknownKind:      "the box runs an older agent; re-pair it to upgrade the agent",
+	intent.ReasonUnknownKind:      "the box runs an older gate; run `jumpgate hosts upgrade NAME`",
+	intent.ReasonScopeLocal:       "this controller is enrolled on the box for local use only (--self-only); it cannot reach the box through a tunnel",
 	intent.ReasonStaleSeq:         "another process is using this controller key against this box",
 	intent.ReasonReplayedNonce:    "the same intent was sent twice; retry",
 	intent.ReasonBusy:             "another request from this controller is still running on the box",
@@ -289,7 +307,7 @@ var rejectionHints = map[string]string{
 	intent.ReasonJobNotFound:      "no such job on this box; `jumpgate jobs HOST` lists them",
 	intent.ReasonJobActive:        "one job runs at a time on a box; wait for it, or decide it in the jobs inbox",
 	intent.ReasonLeaseHeld:        "another controller drives this job; watch it, or adopt it once its lease is stale (90 s without a heartbeat)",
-	intent.ReasonUnknownPlan:      "this box's agent does not know that job's plan (it was downgraded?); re-pair the box to upgrade its agent",
+	intent.ReasonUnknownPlan:      "this box's gate does not know that job's plan (it was downgraded?); run `jumpgate hosts upgrade NAME`",
 	intent.ReasonJobState:         "the job moved on since this request was made; reload it",
 }
 

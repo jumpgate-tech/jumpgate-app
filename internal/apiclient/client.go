@@ -216,7 +216,11 @@ func sendVia(ctx context.Context, base, token string, hc *http.Client, method, p
 	for k, vs := range header {
 		req.Header[k] = vs
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	// The jumpgate service admits by peer credentials and has no token to
+	// send; an empty bearer would only be refused.
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -271,6 +275,9 @@ var (
 // server on record is not the one c talks to (daemon.Stop acts on whatever
 // server.json names), and when the old server has not exited in time.
 func Restart(ctx context.Context, c *Client) (*Client, error) {
+	if c.Info().System {
+		return restartService(ctx, c)
+	}
 	if c.opts.Exe == "" {
 		return nil, errors.New("this client was not started with an executable, so it cannot start a server")
 	}
@@ -301,4 +308,30 @@ func Restart(ctx context.Context, c *Client) (*Client, error) {
 		}
 	}
 	return Connect(ctx, Options{Start: true, Exe: c.opts.Exe})
+}
+
+// restartService is Restart for the jumpgate service: it asks the service
+// to exit (POST /api/restart), and systemd starts a new one. It never stops
+// or starts a server itself; it waits for system.json to name another PID
+// and returns a client of that one, which comes back locked.
+func restartService(ctx context.Context, c *Client) (*Client, error) {
+	old := c.Info().PID
+	if err := c.Do(ctx, http.MethodPost, "/api/restart", nil, nil); err != nil {
+		return nil, err
+	}
+	for deadline := time.Now().Add(restartWait); ; {
+		if info, ok, _ := daemonFind(ctx); ok && info.System && info.PID != old {
+			n := New(info)
+			n.opts = c.opts
+			return n, nil
+		}
+		if !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("the jumpgate service did not come back within %s; see `journalctl -u jumpgate.service`", restartWait)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }

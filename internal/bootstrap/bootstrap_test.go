@@ -667,3 +667,16 @@ func TestAFailedStepSaysWhatWasLeftInPlace(t *testing.T) {
 		}
 	}
 }
+
+func TestBootstrapPassesScopeLocal(t *testing.T) {
+	box := freshBox()
+	o := opts(t, box)
+	o.Local, o.LocalUID, o.Scope, o.TransportKey = true, 991, "local", ""
+	if _, err := Run(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(box.cmds, "\n")
+	if !strings.Contains(all, "--scope local") {
+		t.Fatalf("enroll never passed --scope local:\n%s", all)
+	}
+}

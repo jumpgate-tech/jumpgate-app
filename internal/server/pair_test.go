@@ -483,15 +483,6 @@ func TestPairInstalledMustBeAnAddress(t *testing.T) {
 	}
 }
 
-func TestPairInstalledOnlyAppliesToLocalTargets(t *testing.T) {
-	d := startPairTestSSHD(t, nil)
-	ts, token := pairServer(t, d)
-	res := postPair(t, ts, token, `{"installed":"0x0000000000000000000000000000000000000001"}`)
-	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status %d, want 400", res.StatusCode)
-	}
-}
-
 // linuxBoxExec passes bootstrap's preflight as an amd64 systemd box and
 // fails every later command, so a pairing gets as far as choosing the agent
 // binary and stops at the upload.
@@ -534,5 +525,27 @@ func TestPairStreamNamesTheAgentSource(t *testing.T) {
 	want := `"line":"agent binary for linux/amd64: dev override ~/.jumpgate/agents"`
 	if !strings.Contains(string(stream), want) {
 		t.Fatalf("stream does not name the agent source (%s):\n%s", want, stream)
+	}
+}
+
+// D11: a self-only controller pairs only its own machine.
+func TestPairRefusesARemoteBoxUnderSelfOnly(t *testing.T) {
+	var ran atomic.Bool
+	d := startPairTestSSHD(t, func(s gliderssh.Session) { ran.Store(true); _ = s.Exit(0) })
+	ts, token := pairServer(t, d)
+	if _, err := config.Update(func(c *config.Config) error {
+		c.Controller = &config.Controller{Address: "0x00000000000000000000000000000000000000cc", Scope: "self"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res := postPair(t, ts, token, `{}`)
+	var out map[string]string
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	if res.StatusCode != http.StatusConflict || out["code"] != "self_only" || !strings.Contains(out["error"], "--self-only") {
+		t.Fatalf("status %d: %v", res.StatusCode, out)
+	}
+	if ran.Load() {
+		t.Fatal("a command ran on the box")
 	}
 }

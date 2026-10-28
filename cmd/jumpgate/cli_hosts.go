@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -19,18 +20,29 @@ import (
 	"github.com/valve-tech/jumpgate/internal/bootstrap"
 	"github.com/valve-tech/jumpgate/internal/config"
 	"github.com/valve-tech/jumpgate/internal/daemon"
+	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 func cmdHosts(args []string) int {
 	if len(args) == 0 {
-		return usage("usage: jumpgate hosts add|list|forget-key")
+		return usage("usage: jumpgate hosts add|list|invite|upgrade|forget-key")
 	}
 	switch args[0] {
 	case "list":
 		return hostsList(context.Background(), os.Stdout)
 	case "add":
 		return hostsAdd(args[1:])
+	case "invite":
+		if len(args) != 2 {
+			return usage("usage: jumpgate hosts invite NAME")
+		}
+		return hostsInvite(context.Background(), os.Stdout, args[1])
+	case "upgrade":
+		if len(args) != 2 {
+			return usage("usage: jumpgate hosts upgrade NAME")
+		}
+		return hostsUpgrade(context.Background(), os.Stdout, args[1])
 	case "forget-key":
 		return hostsForgetKey(context.Background(), args[1:], newConsentReader(os.Stdin), os.Stdout, os.Stderr)
 	}
@@ -39,6 +51,77 @@ func cmdHosts(args []string) int {
 
 // hostsList prints every target from the server, which is the one reader and
 // writer of config.json (the CLI used to read the file itself).
+// releaseVersion is a released controller's version; an invite pins the box
+// to the same release, and a development build has none to pin.
+var releaseVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// inviteName is a host name safe to print into a command line.
+var inviteName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// hostsInvite prints the one-liner that pull-pairs a box to this controller
+// (run as root on the box), pinned to this controller's release, and the
+// hosts add that attaches it afterwards. Everything printed is public: the
+// controller address and the tunnel key's public half.
+func hostsInvite(ctx context.Context, out io.Writer, name string) int {
+	if !inviteName.MatchString(name) {
+		return usage("hosts invite: %q is not a host name (letters, digits, '.', '_' and '-')", name)
+	}
+	c, err := connect(ctx)
+	if err != nil {
+		return failed("%v", err)
+	}
+	version := c.Info().Version
+	if !releaseVersion.MatchString(version) {
+		return failed("this controller is a development build (%s); an invite needs a released version", version)
+	}
+	info, err := c.PairingInfo(ctx, "")
+	var e *api.Error
+	if errors.As(err, &e) {
+		return reportServerErrorFrom(os.Stderr, "hosts invite", c.Info(), *e)
+	}
+	if err != nil {
+		return failed("pairing info: %v", err)
+	}
+	if info.Scope == "self" {
+		return reportServerError(os.Stderr, "hosts invite", apiError{Message: "this controller is self-only (self_only)", Code: api.CodeSelfOnly})
+	}
+	if _, err := eip712.ParseAddress(info.Controller); err != nil {
+		return failed("controller address from the server: %v", err)
+	}
+	key := strings.TrimSpace(info.TransportKey)
+	if key == "" || strings.ContainsAny(key, "\r\n") {
+		return failed("the server gave no usable transport key")
+	}
+	fmt.Fprintln(out, "on the box, as root:")
+	fmt.Fprintln(out, `curl -fsSL https://jumpgate.app/install.sh | sh -s -- --agent \`)
+	fmt.Fprintf(out, "  --version %s --controller %s --transport-key '%s'\n", version, info.Controller, strings.ReplaceAll(key, "'", `'"'"'`))
+	fmt.Fprintf(out, "then: jumpgate hosts add %s --ssh jumpgate@HOST --installed <address printed on the box>\n", name)
+	return 0
+}
+
+// hostsUpgrade sends this controller's gate to a paired box over the pairing
+// and reports the versions before and after.
+func hostsUpgrade(ctx context.Context, out io.Writer, name string) int {
+	c, err := connect(ctx)
+	if err != nil {
+		return failed("%v", err)
+	}
+	v, err := c.UpgradeAgent(ctx, name)
+	var e *api.Error
+	if errors.As(err, &e) {
+		return reportServerErrorFrom(os.Stderr, "hosts upgrade", c.Info(), *e)
+	}
+	if err != nil {
+		return failed("hosts upgrade: %v", err)
+	}
+	if v.Upgraded {
+		fmt.Fprintf(out, "%s: gate %s -> %s\n", name, v.From, v.To)
+	} else {
+		fmt.Fprintf(out, "%s: gate already %s\n", name, v.To)
+	}
+	return 0
+}
+
 func hostsList(ctx context.Context, w io.Writer) int {
 	c, err := connect(ctx)
 	if err != nil {
@@ -63,7 +146,7 @@ func hostsList(ctx context.Context, w io.Writer) int {
 }
 
 func hostsAdd(args []string) int {
-	const usageText = "usage: jumpgate hosts add NAME (--ssh USER@HOST[:PORT] [--key PATH] [--jump USER@HOST[:PORT]] [--sudo] | --local)"
+	const usageText = "usage: jumpgate hosts add NAME (--ssh USER@HOST[:PORT] [--key PATH] [--jump USER@HOST[:PORT]] [--sudo] | --local | --ssh jumpgate@HOST --installed ADDR)"
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		return usage(usageText)
 	}
@@ -74,8 +157,17 @@ func hostsAdd(args []string) int {
 	jumpArg := fset.String("jump", "", "jump host user@host[:port]")
 	sudo := fset.Bool("sudo", false, "run setup commands through sudo -n")
 	local := fset.Bool("local", false, "pair this machine")
+	installedArg := fset.String("installed", "", "the gate address `jumpgate agent setup` printed on the box")
 	if err := fset.Parse(args[1:]); err != nil || (*local == (*sshArg != "")) {
 		return usage("give exactly one of --ssh or --local")
+	}
+	if *installedArg != "" {
+		if *local {
+			return usage("--installed names a gate on another box; it needs --ssh, not --local")
+		}
+		if _, err := eip712.ParseAddress(*installedArg); err != nil {
+			return usage("--installed: %v", err)
+		}
 	}
 	if *local {
 		if err := bootstrap.LocalSupported(hostGOOS); err != nil {
@@ -95,6 +187,7 @@ func hostsAdd(args []string) int {
 
 	ctx := context.Background()
 	target := api.AddTarget{ID: name, Mode: "local"}
+	var login executor.SSHConfig // the operator's own login, with their key
 	if !*local {
 		keyPath := *key
 		if keyPath != "" {
@@ -127,6 +220,7 @@ func hostsAdd(args []string) int {
 		if err != nil {
 			return failed("%v", err)
 		}
+		login = cfg
 		view := sshViewOf(cfg)
 		target = api.AddTarget{ID: name, Mode: "ssh", SSH: &view}
 	}
@@ -138,6 +232,35 @@ func hostsAdd(args []string) int {
 		return failed("%v", err)
 	}
 	apiclient.WarnSkew(os.Stderr, c)
+	system := serverIsSystem(c)
+	if target.SSH != nil {
+		// A self-only controller drives only this machine. The server
+		// refuses at pair time, but a push runs bootstrap here first, so
+		// refuse before a host key is trusted or the box is touched.
+		// A server without /api/pairing-info predates --self-only.
+		info, err := c.PairingInfo(ctx, "")
+		var e *api.Error
+		switch {
+		case errors.As(err, &e) && e.Status == http.StatusNotFound:
+		case errors.As(err, &e):
+			return reportServerErrorFrom(os.Stderr, "add "+name, c.Info(), *e)
+		case err != nil:
+			return failed("pairing info: %v", err)
+		}
+		if err == nil && info.Scope == "self" {
+			return reportServerErrorFrom(os.Stderr, "add "+name, c.Info(), api.Error{Message: "this controller is self-only (self_only)", Code: api.CodeSelfOnly})
+		}
+	}
+	if system && target.SSH != nil {
+		// The service never reads a key file the operator names; the key is
+		// used only here, by this process.
+		if target.SSH.Jump != nil {
+			return reportServerErrorFrom(os.Stderr, "add "+name, c.Info(), api.Error{
+				Message: "a jumpgate service cannot pair a box behind a jump host yet (" + string(api.CodeSSHJumpUnsupported) + ")",
+				Code:    api.CodeSSHJumpUnsupported})
+		}
+		target.SSH.KeyPath = ""
+	}
 	if target.SSH != nil {
 		if code := confirmHostKeys(ctx, c, *target.SSH, newConsentReader(os.Stdin), os.Stdout, os.Stderr); code != 0 {
 			return code
@@ -152,16 +275,43 @@ func hostsAdd(args []string) int {
 		// re-paired or an interrupted pairing finished.
 		fmt.Printf("target %s already exists; pairing it again\n", name)
 	}
-	if *local && geteuid() != 0 {
-		cfg, err := config.Load()
-		if err != nil {
-			return failed("%v", err)
+	if *installedArg != "" {
+		// The agent was installed on the box by `jumpgate agent setup`; the
+		// server only verifies it over the tunnel and records it.
+		return streamPair(c, name, api.PairRequest{Installed: *installedArg}, false)
+	}
+	if system && !*local {
+		// Push: bootstrap runs over the operator's own SSH login, here.
+		addr, code := pairRemoteForeground(ctx, os.Stdout, c, name, login, *sudo)
+		if code != 0 {
+			return code
 		}
-		t, ok := findTargetByID(cfg, name)
-		if !ok {
-			return failed("target %s is not in config.json after adding it", name)
+		return streamPair(c, name, api.PairRequest{Installed: addr}, false)
+	}
+	// Against the jumpgate service this always runs here, as root too: the
+	// service runs as its own user and never as root.
+	if *local && (system || geteuid() != 0) {
+		var (
+			f    pairingFacts
+			code int
+		)
+		if system {
+			f, code = factsFromServer(ctx, c, name)
+		} else {
+			cfg, err := config.Load()
+			if err != nil {
+				return failed("%v", err)
+			}
+			t, ok := findTargetByID(cfg, name)
+			if !ok {
+				return failed("target %s is not in config.json after adding it", name)
+			}
+			f, code = factsFromConfig(t)
 		}
-		addr, code := pairLocalForeground(ctx, os.Stdout, t)
+		if code != 0 {
+			return code
+		}
+		addr, code := pairLocalForeground(ctx, os.Stdout, f)
 		if code != 0 {
 			return code
 		}

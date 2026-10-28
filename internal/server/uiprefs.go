@@ -116,7 +116,7 @@ func (s *Server) handleFleetCheck(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(raw, &info)
 	writeJSON(w, http.StatusOK, api.AgentCheck{
 		Agent: info.Address, Version: info.Version, ChainID: info.ChainID, SetUp: info.SetUp,
-		Signers: info.Signers, ElapsedMs: time.Since(start).Milliseconds(),
+		Signers: info.Signers, Controllers: info.Controllers, ElapsedMs: time.Since(start).Milliseconds(),
 	})
 }
 

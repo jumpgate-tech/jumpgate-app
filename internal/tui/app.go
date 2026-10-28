@@ -189,7 +189,10 @@ func New(o Options) *App {
 		// Offer R only where it works; otherwise the banner still says why
 		// some requests may fail.
 		a.skew = fmt.Sprintf("server %s, this jumpgate %s: the versions differ", server, mine)
-		if o.Restart != nil {
+		switch {
+		case o.Restart != nil && o.SystemService:
+			a.skew = fmt.Sprintf("server %s, this jumpgate %s: press R to restart now (you will need to unlock)", server, mine)
+		case o.Restart != nil:
 			a.skew = fmt.Sprintf("server %s, this jumpgate %s: press R to restart the server", server, mine)
 		}
 	}

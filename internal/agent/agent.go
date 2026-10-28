@@ -15,6 +15,7 @@ import (
 	"github.com/valve-tech/jumpgate/internal/executor"
 	"github.com/valve-tech/jumpgate/internal/intent"
 	"github.com/valve-tech/jumpgate/internal/jobs"
+	"github.com/valve-tech/jumpgate/internal/peercred"
 	"github.com/valve-tech/jumpgate/internal/signer"
 )
 
@@ -47,6 +48,12 @@ type Config struct {
 	// Log takes what the agent reports outside any answer, such as a failed
 	// reconcile pass; nil discards it.
 	Log io.Writer
+	// BinaryPath is the agent binary agent.upgrade replaces
+	// (/usr/local/lib/jumpgate/jumpgate); empty refuses agent.upgrade.
+	BinaryPath string
+	// Restart restarts the agent after an upgrade, once the receipt is
+	// written; nil does nothing.
+	Restart func()
 }
 
 // Agent handles intents. It is safe for concurrent use.
@@ -57,6 +64,9 @@ type Agent struct {
 
 	mu   sync.Mutex
 	busy map[eip712.Address]bool
+
+	// upgradeMu admits one agent.upgrade at a time on the whole gate.
+	upgradeMu sync.Mutex
 }
 
 // New builds an agent. A broken replay record does not stop construction: the
@@ -129,6 +139,10 @@ func (a *Agent) Handle(ctx context.Context, env intent.Envelope) intent.ReceiptE
 		return a.answerReject(i, reqHash, reject(intent.ReasonUnauthorizedKind, err.Error()))
 	}
 	if err := policy.Authorise(i.Kind, i.Controller, signers); err != nil {
+		return a.answerReject(i, reqHash, asReject(err))
+	}
+	peer, havePeer := ctx.Value(credKey{}).(peercred.Cred)
+	if err := policy.CheckScope(i.Controller, peer, havePeer); err != nil {
 		return a.answerReject(i, reqHash, asReject(err))
 	}
 

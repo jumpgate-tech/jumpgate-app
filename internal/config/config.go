@@ -83,6 +83,9 @@ type Controller struct {
 	KeyStore string `json:"keyStore"` // "file" | "keychain" | "wincred" | "1password" | "vault"
 	KeyRef   string `json:"keyRef"`
 	Address  string `json:"address"`
+	// Scope is "self" for a controller that manages only its own machine
+	// (`setup server --self-only`), else "".
+	Scope string `json:"scope,omitempty"`
 }
 
 // GatewayPlacement is WHERE a gateway runs. It is a property OF the gateway,

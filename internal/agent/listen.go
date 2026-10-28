@@ -10,11 +10,10 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/user"
-	"strconv"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/intent"
+	"github.com/valve-tech/jumpgate/internal/peercred"
 )
 
 // Listen opens the agent socket. A stale socket from a previous run is
@@ -80,15 +79,11 @@ func ApplySocketMode(path string, p Policy) error {
 
 // JumpgateGID is the jumpgate group's id, or -1 when the group is absent.
 func JumpgateGID() int {
-	g, err := user.LookupGroup("jumpgate")
-	if err != nil {
+	gid, ok := peercred.GroupID("jumpgate")
+	if !ok {
 		return -1
 	}
-	n, err := strconv.Atoi(g.Gid)
-	if err != nil {
-		return -1
-	}
-	return n
+	return gid
 }
 
 // peerAllowed: the agent's own uid (root in production), a uid enrolled for
@@ -115,15 +110,18 @@ func peerAllowed(p Policy, uid int, gids []int, jumpgateGID int) bool {
 
 type peerKey struct{}
 
+// credKey holds the connection's peer credentials, for CheckScope.
+type credKey struct{}
+
 // peerGate decides whether a connection's peer may use the socket. It is a
 // variable so a test can stand in for a second uid.
 var peerGate = func(a *Agent, c net.Conn, jumpgateGID int) bool {
-	uid, gids, err := peerCred(c)
+	cred, err := peercred.Of(c)
 	if err != nil {
 		return false
 	}
 	p, _ := LoadPolicy(a.cfg.PolicyPath)
-	return peerAllowed(p, uid, gids, jumpgateGID)
+	return peerAllowed(p, cred.UID, cred.GIDs, jumpgateGID)
 }
 
 // gatedListener closes a refused peer's connection inside Accept, before
@@ -180,11 +178,23 @@ func Serve(ctx context.Context, a *Agent, ln net.Listener) error {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(a.Handle(r.Context(), env))
 	})
+	mux.HandleFunc("POST /v1/upgrade", func(w http.ResponseWriter, r *http.Request) {
+		if allowed, _ := r.Context().Value(peerKey{}).(bool); !allowed {
+			w.Header().Set("Connection", "close")
+			http.Error(w, "not allowed on this socket", http.StatusForbidden)
+			return
+		}
+		serveUpgrade(a, w, r)
+	})
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
-			return context.WithValue(ctx, peerKey{}, peerGate(a, c, gid))
+			ctx = context.WithValue(ctx, peerKey{}, peerGate(a, c, gid))
+			if cred, err := peercred.Of(c); err == nil {
+				ctx = context.WithValue(ctx, credKey{}, cred)
+			}
+			return ctx
 		},
 	}
 	go func() {

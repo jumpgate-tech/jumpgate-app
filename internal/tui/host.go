@@ -46,6 +46,13 @@ type (
 		e   api.Endpoints
 		err error
 	}
+	// trustMsg is the Security tab's signed agent.info round trip.
+	trustMsg struct {
+		id          string
+		gen         uint64
+		controllers int
+		err         error
+	}
 	firewallMsg struct {
 		id    string
 		gen   uint64
@@ -90,6 +97,7 @@ type hostScreen struct {
 	fw         []api.CheckItem
 	fwHas      bool
 	fwErr      error
+	trustedBy  int          // controllers the box trusts, from CheckAgent; 0 unknown
 	logs       []api.LogHit // sanitized on arrival, at most logKeep
 	logsConn   apiclient.ConnState
 	logsErr    error
@@ -190,10 +198,13 @@ func (h *hostScreen) load(a *App, tab string) tea.Cmd {
 	case "logs":
 		return h.watchLogs(be.WatchLogs(ctx, id, logBacklog))
 	case "security":
-		return func() tea.Msg {
+		return tea.Batch(func() tea.Msg {
 			items, err := be.Firewall(ctx, id)
 			return firewallMsg{id: id, gen: gen, items: items, err: err}
-		}
+		}, func() tea.Msg {
+			c, err := be.CheckAgent(ctx, id)
+			return trustMsg{id: id, gen: gen, controllers: c.Controllers, err: err}
+		})
 	}
 	return nil
 }
@@ -242,6 +253,16 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			h.epsErr = msg.err
 		} else {
 			h.eps, h.epsHas, h.epsErr = msg.e, true, nil
+		}
+		return nil
+	case trustMsg:
+		if msg.id != h.id || !h.current(msg.gen) {
+			return nil
+		}
+		// An unpaired box or a failed check says nothing: the line is
+		// only ever a fact the box signed.
+		if msg.err == nil {
+			h.trustedBy = msg.controllers
 		}
 		return nil
 	case firewallMsg:

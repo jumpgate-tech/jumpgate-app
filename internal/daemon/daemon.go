@@ -43,6 +43,13 @@ type Info struct {
 	// can tell the operator which of its own options are not in effect. Nil
 	// from a server older than the field.
 	Shape *Shape `json:"shape,omitempty"`
+
+	// System is true for the jumpgate service, found through system.json
+	// (FindSystem); it then has no Token. ServiceUID is the service's uid
+	// and Lock its vault state. None of them is ever in server.json.
+	System     bool   `json:"-"`
+	ServiceUID int    `json:"-"`
+	Lock       string `json:"-"`
 }
 
 // Shape records the options that shape a running server. It carries no
@@ -134,7 +141,13 @@ func (i Info) Client() *http.Client {
 // Find reports a running server. Neither the file nor its pid is trusted: a
 // server is running only if the lock is held and its socket answers
 // /api/health with the token. A file failing either test is stale and removed.
+//
+// The jumpgate service comes first: when FindSystem finds it, or finds it
+// but may not use it, that is the answer, and no per-user server is looked at.
 func Find(ctx context.Context) (Info, bool, error) {
+	if info, ok, err := FindSystem(ctx); ok || err != nil {
+		return info, ok, err
+	}
 	dir, err := RunDir()
 	if err != nil {
 		return Info{}, false, err
@@ -203,6 +216,11 @@ func EnsureRunning(ctx context.Context, exe string, warn io.Writer) (Info, error
 		}
 		return info, err
 	}
+	// A second controller beside an installed service would hold its own
+	// keys and its own view of the fleet. Never start one.
+	if serviceInstalled() {
+		return Info{}, ErrServiceNotRunning
+	}
 	dir, err := RunDir()
 	if err != nil {
 		return Info{}, err
@@ -241,6 +259,9 @@ func Stop(ctx context.Context) error {
 	}
 	if !ok {
 		return errors.New("daemon: no jumpgate server is running")
+	}
+	if info.System {
+		return ErrServiceManaged
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, BaseURL+"/api/shutdown", nil)
 	req.Header.Set("Authorization", "Bearer "+info.Token)

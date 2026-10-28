@@ -4,7 +4,7 @@ FROM ${BASE}
 ENV DEBIAN_FRONTEND=noninteractive \
     container=docker
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      systemd systemd-sysv openssh-server sudo procps ca-certificates \
+      systemd systemd-sysv openssh-server sudo procps ca-certificates curl dpkg-dev \
     && rm -rf /var/lib/apt/lists/* \
     && systemctl enable ssh \
     && mkdir -p /root/.ssh && chmod 700 /root/.ssh

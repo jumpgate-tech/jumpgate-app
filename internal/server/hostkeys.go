@@ -160,6 +160,12 @@ func (s *Server) handleHostKeyProbe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, `want {"ssh": {"Host", "User", "Port", "KeyPath", "jump"}} with a host and user on every hop`)
 		return
 	}
+	if s.cfg.System && req.SSH.Jump != nil {
+		// Capturing through a jump host authenticates to it, with a key
+		// file the client names: the service never reads one.
+		writeErrorDetail(w, http.StatusConflict, "the jumpgate service does not reach boxes through a jump host", "", api.CodeSSHJumpUnsupported)
+		return
+	}
 	check, algos, err := config.StrictHostKey()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

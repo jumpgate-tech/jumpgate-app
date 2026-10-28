@@ -24,6 +24,9 @@ func cmdServe(args []string) int {
 		}
 		return usage("serve: %v", err)
 	}
+	if opts.System {
+		return cmdServeSystem(opts)
+	}
 	if warning := bindWarningLine(opts.Bind); warning != "" {
 		fmt.Fprintln(os.Stderr, warning)
 	}

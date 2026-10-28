@@ -36,6 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      digest: ${{ steps.collect.outputs.digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -52,6 +54,28 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The files goreleaser just published, as this run built them. Later
+      # jobs take them from this artifact, never back from the Release, and
+      # check them against the digest in this job's outputs.
+      - name: Collect the release files
+        id: collect
+        run: |
+          set -euo pipefail
+          mkdir release
+          cp dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/checksums.txt release/
+          cp internal/agentbin/embedded/jumpgate-linux-amd64 internal/agentbin/embedded/jumpgate-linux-arm64 release/
+          cp packaging/install/install.sh release/
+          cp internal/agentbin/embedded/SHA256SUMS release/agents-SHA256SUMS
+          (cd release && sha256sum -c --strict checksums.txt)
+          digest="$(cd release && sha256sum -- * | LC_ALL=C sort -k2 | sha256sum | cut -c1-64)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "release files digest $digest"
+      - name: Upload the release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-binaries
+          path: release/*
+          if-no-files-found: error
 
   # ---- goreleaser dry run (manual runs only) -------------------------------
   # `binaries` is skipped on workflow_dispatch, so without this the goreleaser
@@ -149,6 +173,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
     steps:
       - name: Download desktop artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -156,6 +182,13 @@ jobs:
           pattern: jumpgate-*
           path: desktop
           merge-multiple: true
+      - name: Record the desktop digest
+        id: digest
+        run: |
+          set -euo pipefail
+          digest="$(cd desktop && sha256sum -- * | LC_ALL=C sort -k2 | sha256sum | cut -c1-64)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "desktop files digest $digest"
       - name: Attach to Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
@@ -166,40 +199,72 @@ jobs:
   # ---- unified checksums covering headless binaries AND desktop apps -------
   # goreleaser only checksums the headless jumpgate_* binaries; the desktop
   # apps the landing page links to are attached afterward. This job merges
-  # both sets into one checksums.txt so every download is verifiable.
+  # both sets into one checksums.txt so every download is verifiable. Both
+  # sets come from this run's artifacts, checked against the digests the
+  # building jobs recorded, never back from the Release.
   checksums:
     needs: [binaries, desktop, attach]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      digest: ${{ steps.merge.outputs.digest }}
     steps:
+      - name: Download the release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-binaries
+          path: release
       - name: Download desktop artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: jumpgate-*
           path: desktop
           merge-multiple: true
+      - name: Check the artifacts against the recorded digests
+        env:
+          WANT_RELEASE: ${{ needs.binaries.outputs.digest }}
+          WANT_DESKTOP: ${{ needs.attach.outputs.digest }}
+        run: |
+          set -euo pipefail
+          check() { # dir want
+            local got
+            got="$(cd "$1" && sha256sum -- * | LC_ALL=C sort -k2 | sha256sum | cut -c1-64)"
+            if [ -z "$2" ] || [ "$got" != "$2" ]; then echo "$1: digest $got, want ${2:-nothing}" >&2; exit 1; fi
+          }
+          check release "$WANT_RELEASE"
+          check desktop "$WANT_DESKTOP"
       - name: Build and publish a unified checksums.txt
+        id: merge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          # goreleaser already published checksums.txt for the headless binaries
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p checksums.txt -O goreleaser.txt
+          mkdir merged
           # add the desktop apps (the files the landing buttons link to), bare filenames
-          ( cd desktop && sha256sum * ) | sort -k2 > desktop.txt
-          cat goreleaser.txt desktop.txt | sort -k2 -u > checksums.txt
-          echo "=== unified checksums.txt ==="; cat checksums.txt
-          gh release upload "$TAG" checksums.txt -R "$GITHUB_REPOSITORY" --clobber
+          ( cd desktop && sha256sum -- * ) | sort -k2 > desktop.txt
+          cat release/checksums.txt desktop.txt | sort -k2 -u > merged/checksums.txt
+          echo "=== unified checksums.txt ==="; cat merged/checksums.txt
+          echo "digest=$(sha256sum merged/checksums.txt | cut -c1-64)" >> "$GITHUB_OUTPUT"
+          gh release upload "$TAG" merged/checksums.txt -R "$GITHUB_REPOSITORY" --clobber
+      - name: Upload the unified checksums
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-checksums
+          path: merged/checksums.txt
+          if-no-files-found: error
 
   # ---- build provenance, after the unified checksums.txt is final ----------
   # Attests every published file (archives, bundles, raw agents and the merged
-  # checksums.txt). Verify a download with:
-  #   gh attestation verify <file> --repo jumpgate-tech/jumpgate-app
+  # checksums.txt), taken from this run's artifacts and checked against the
+  # digests the building jobs recorded. Verify a download with:
+  #   gh attestation verify <file> --repo jumpgate-tech/jumpgate-app \
+  #     --signer-workflow jumpgate-tech/jumpgate-app/.github/workflows/release.yml \
+  #     --source-ref refs/tags/<tag>
   provenance:
-    needs: [checksums]
+    needs: [binaries, attach, checksums]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -207,16 +272,160 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Download the release assets
+      - name: Download the release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-binaries
+          path: release
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: jumpgate-*
+          path: desktop
+          merge-multiple: true
+      - name: Download the unified checksums
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-checksums
+          path: merged
+      - name: Check the artifacts and assemble the subjects
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          WANT_RELEASE: ${{ needs.binaries.outputs.digest }}
+          WANT_DESKTOP: ${{ needs.attach.outputs.digest }}
+          WANT_SUMS: ${{ needs.checksums.outputs.digest }}
         run: |
           set -euo pipefail
+          check() { # dir want
+            local got
+            got="$(cd "$1" && sha256sum -- * | LC_ALL=C sort -k2 | sha256sum | cut -c1-64)"
+            if [ -z "$2" ] || [ "$got" != "$2" ]; then echo "$1: digest $got, want ${2:-nothing}" >&2; exit 1; fi
+          }
+          check release "$WANT_RELEASE"
+          check desktop "$WANT_DESKTOP"
+          got="$(sha256sum merged/checksums.txt | cut -c1-64)"
+          if [ -z "$WANT_SUMS" ] || [ "$got" != "$WANT_SUMS" ]; then echo "checksums.txt: digest $got, want ${WANT_SUMS:-nothing}" >&2; exit 1; fi
           mkdir dist
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D dist
+          cp release/* desktop/* dist/
+          cp merged/checksums.txt dist/checksums.txt
+          (cd dist && sha256sum -c --strict checksums.txt)
           ls -l dist
       - name: Attest build provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: dist/*
+
+  # ---- the signed apt and dnf repository at pkg.jumpgate.app ---------------
+  # Off until the maintainer sets the variable PKG_REPO_ENABLED=true; the
+  # packages environment requires a maintainer's approval and holds the
+  # signing key and the R2 token (scoped to the jumpgate-pkg bucket). The
+  # key lives only in a tmpfs keyring that the last step removes.
+  packages:
+    needs: [binaries, checksums, provenance]
+    if: startsWith(github.ref, 'refs/tags/v') && vars.PKG_REPO_ENABLED == 'true'
+    environment: packages
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install the repository tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y aptly createrepo-c rpm gnupg
+      - name: Download the release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-binaries
+          path: release
+      - name: Download the unified checksums
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-checksums
+          path: merged
+      # The packages come from this run's artifact, not the Release. Nothing
+      # is signed until each one matches the recorded digests, the attested
+      # checksums.txt and build provenance from this workflow at this tag and
+      # commit, and carries the tag's version. All of it runs before the key
+      # exists.
+      - name: Verify the packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          WANT_RELEASE: ${{ needs.binaries.outputs.digest }}
+          WANT_SUMS: ${{ needs.checksums.outputs.digest }}
+        run: |
+          set -euo pipefail
+          got="$(cd release && sha256sum -- * | LC_ALL=C sort -k2 | sha256sum | cut -c1-64)"
+          if [ -z "$WANT_RELEASE" ] || [ "$got" != "$WANT_RELEASE" ]; then echo "release files: digest $got, want ${WANT_RELEASE:-nothing}" >&2; exit 1; fi
+          got="$(sha256sum merged/checksums.txt | cut -c1-64)"
+          if [ -z "$WANT_SUMS" ] || [ "$got" != "$WANT_SUMS" ]; then echo "checksums.txt: digest $got, want ${WANT_SUMS:-nothing}" >&2; exit 1; fi
+          mkdir pkgs
+          shopt -s nullglob
+          files=(release/*.deb release/*.rpm)
+          [ "${#files[@]}" -gt 0 ] || { echo "no packages in the release" >&2; exit 1; }
+          cp "${files[@]}" merged/checksums.txt pkgs/
+          cd pkgs
+          attest() {
+            gh attestation verify "$1" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA"
+          }
+          attest checksums.txt
+          # nfpm writes a prerelease (v1.2.3-rc.1) as 1.2.3~rc.1 in both formats.
+          want="${TAG#v}"
+          want="${want/-/\~}"
+          for f in *.deb *.rpm; do
+            grep -E "^[0-9a-f]{64}  $f\$" checksums.txt > "$f.sha256" || { echo "$f is not in checksums.txt" >&2; exit 1; }
+            sha256sum -c "$f.sha256"
+            rm "$f.sha256"
+            attest "$f"
+            case "$f" in
+            *.deb) v="$(dpkg-deb -f "$f" Version)" ;;
+            *) v="$(rpm -qp --nosignature --qf '%{VERSION}' "$f")" ;;
+            esac
+            [ "$v" = "$want" ] || { echo "$f has version $v; the tag $TAG wants $want" >&2; exit 1; }
+          done
+          rm checksums.txt
+          ls -l
+      - name: Import the signing key
+        env:
+          PKG_SIGNING_KEY: ${{ secrets.PKG_SIGNING_KEY }}
+          PKG_SIGNING_PASSPHRASE: ${{ secrets.PKG_SIGNING_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          GNUPGHOME="$(mktemp -d /dev/shm/gnupg.XXXXXX)"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          gpg --batch --import <<<"$PKG_SIGNING_KEY"
+          printf '%s\n' "$PKG_SIGNING_PASSPHRASE" > "$GNUPGHOME/passphrase"
+          echo "PKG_SIGNING_PASSPHRASE_FILE=$GNUPGHOME/passphrase" >> "$GITHUB_ENV"
+          fpr="$(gpg --batch --with-colons --list-secret-keys | awk -F: '/^fpr:/ {print $10; exit}')"
+          echo "PKG_KEY_ID=$fpr" >> "$GITHUB_ENV"
+      - name: Build the repository
+        run: scripts/build-pkg-repo.sh --in pkgs --out repo --key-id "$PKG_KEY_ID"
+      - name: Sync to R2, packages before the indexes that name them
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2: https://4d950372162cef595726db63c21035ab.r2.cloudflarestorage.com
+        run: |
+          set -euo pipefail
+          s3() { aws s3 --endpoint-url "$R2" "$@"; }
+          s3 sync repo/apt/pool/ s3://jumpgate-pkg/apt/pool/
+          s3 sync repo/rpm/ s3://jumpgate-pkg/rpm/ --exclude 'repodata/*'
+          s3 sync repo/apt/dists/ s3://jumpgate-pkg/apt/dists/
+          s3 sync repo/rpm/repodata/ s3://jumpgate-pkg/rpm/repodata/
+          s3 cp repo/jumpgate.asc s3://jumpgate-pkg/jumpgate.asc
+          s3 cp repo/jumpgate.repo s3://jumpgate-pkg/jumpgate.repo
+      - name: Remove the signing keyring
+        if: always()
+        run: |
+          if [ -n "${GNUPGHOME:-}" ]; then
+            gpgconf --kill gpg-agent || true
+            rm -rf "$GNUPGHOME"
+          fi

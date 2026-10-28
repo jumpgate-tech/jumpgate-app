@@ -374,3 +374,15 @@ func TestRunningAgentReloadsRepairedReplayState(t *testing.T) {
 		t.Fatalf("repaired record not reloaded: %s", res)
 	}
 }
+
+func TestAgentInfoCountsRoutineSigners(t *testing.T) {
+	r := newRig(t, false)
+	second, _ := signer.GenerateKey()
+	approver, _ := signer.GenerateKey()
+	enroll(t, r, second, TierRoutine)
+	enroll(t, r, approver, TierApproval)
+	info := ok[intent.AgentInfo](t)(r.send(t, intent.KindAgentInfo, struct{}{}, nil))
+	if info.Controllers != 2 {
+		t.Fatalf("controllers %d, want 2", info.Controllers)
+	}
+}

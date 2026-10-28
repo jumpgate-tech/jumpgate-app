@@ -52,6 +52,10 @@ func (h *hostScreen) viewSecurity(a *App, w, hgt int) string {
 		}
 	}
 	head := fmt.Sprintf(" %s  %d checks, %d to fix %s %s scroll", a.th.Title.Render("FIREWALL"), len(h.fw), toFix, a.gl.Sep, a.gl.UpDown)
-	// The blank line and the head take two rows.
-	return "\n" + truncate(head, w, a.gl.Ellipsis) + "\n" + strings.Join(window(lines, &h.scroll, hgt-2, w, a.gl.Ellipsis), "\n")
+	top, rows := "\n", 2 // the blank line and the head
+	if h.trustedBy > 1 {
+		top += truncate(fmt.Sprintf(" trusted by %d controllers", h.trustedBy), w, a.gl.Ellipsis) + "\n"
+		rows++
+	}
+	return top + truncate(head, w, a.gl.Ellipsis) + "\n" + strings.Join(window(lines, &h.scroll, hgt-rows, w, a.gl.Ellipsis), "\n")
 }

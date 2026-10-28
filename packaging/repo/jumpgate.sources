@@ -1,0 +1,5 @@
+Types: deb
+URIs: https://pkg.jumpgate.app/apt
+Suites: stable
+Components: main
+Signed-By: /usr/share/keyrings/jumpgate-archive-keyring.gpg

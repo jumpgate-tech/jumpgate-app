@@ -26,6 +26,7 @@ var subcommands = map[string]func(args []string) int{
 	"endpoints": cmdIntent("endpoints", intent.KindEndpointsRead), "firewall": cmdIntent("firewall", intent.KindFirewallRead),
 	"logs": cmdLogs, "service": cmdService, "ssh": cmdSSH, "help": cmdHelp, "open": cmdOpen, "home": cmdHome, "tui": cmdTUI,
 	"jobs": cmdJobs, "migrate-names": cmdMigrateNames, "unlock": cmdUnlock, "lock": cmdLock, "vault": cmdVault,
+	"setup": cmdSetup,
 }
 
 func main() {
@@ -154,7 +155,9 @@ func mustRequest(ctx context.Context, info daemon.Info, path string, body []byte
 	if err != nil {
 		panic(err) // the URL is a constant plus a path segment built by this program
 	}
-	req.Header.Set("Authorization", "Bearer "+info.Token)
+	if info.Token != "" { // the jumpgate service admits by peer credentials
+		req.Header.Set("Authorization", "Bearer "+info.Token)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	return req
 }

@@ -10,11 +10,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/agent"
 	"github.com/valve-tech/jumpgate/internal/agentclient"
+	"github.com/valve-tech/jumpgate/internal/bootstrap"
 	"github.com/valve-tech/jumpgate/internal/buildinfo"
 	"github.com/valve-tech/jumpgate/internal/eip712"
 	"github.com/valve-tech/jumpgate/internal/executor"
@@ -34,7 +37,7 @@ func cmdAgent(args []string) int {
 		return failed("`jumpgate agent` runs on the Linux boxes jumpgate manages, not on Windows")
 	}
 	if len(args) == 0 {
-		return usage("usage: jumpgate agent init|enroll|run|watch|reset-replay|job-step|job-abandon")
+		return usage("usage: jumpgate agent setup|init|enroll|run|watch|reset-replay|job-step|job-abandon")
 	}
 	fset := flag.NewFlagSet("agent "+args[0], flag.ContinueOnError)
 	state := fset.String("state-dir", defaultStateDir, "agent state directory")
@@ -51,6 +54,9 @@ func cmdAgent(args []string) int {
 	fset.String("step", "", "step id (job-step)")
 	fset.String("attempt", "", "attempt (job-step)")
 	watchConfig := fset.String("config", "", "watch: the health watch's config.json")
+	controller := fset.String("controller", "", "setup: the controller address to enroll")
+	scope := fset.String("scope", "", "enroll: local admits the controller only from this box, never through the tunnel")
+	transportKey := fset.String("transport-key", "", "setup: the controller's tunnel key, an authorized_keys line")
 	if err := fset.Parse(args[1:]); err != nil {
 		return exitCode("usage")
 	}
@@ -64,10 +70,15 @@ func cmdAgent(args []string) int {
 	}
 	var err error
 	switch args[0] {
+	case "setup":
+		if fset.NArg() != 0 {
+			return usage("usage: jumpgate agent setup --controller ADDR --transport-key KEY [--label L]")
+		}
+		return agentSetup(context.Background(), os.Stdout, *controller, *transportKey, *label)
 	case "init":
 		err = agentInit(os.Stdout, *state, *conf, *resetReplay)
 	case "enroll":
-		err = agentEnroll(*conf, agentclient.DefaultSocket, *address, *tier, *label, *localUID)
+		err = agentEnroll(*conf, agentclient.DefaultSocket, *address, *tier, *label, *localUID, *scope)
 	case "run":
 		err = agentRun(*state, *conf)
 	case "watch":
@@ -100,6 +111,57 @@ func cmdAgent(args []string) int {
 		fmt.Fprintln(os.Stderr, "jumpgate agent:", err)
 		return 1
 	}
+	return 0
+}
+
+// selfBinary is the agent source for `agent setup`: this binary, which is
+// already on the box and checked by whoever installed it.
+var selfBinary = func(arch string) ([]byte, error) {
+	if arch != runtime.GOARCH {
+		return nil, fmt.Errorf("this jumpgate is built for %s, the box is %s", runtime.GOARCH, arch)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(exe)
+}
+
+// agentSetup is pull pairing (`jumpgate agent setup`): run as root on the
+// box, it installs and enrolls the gate for controller, with the controller's
+// tunnel key, the same steps a push runs over SSH. The controller then
+// attaches the box with `hosts add … --installed ADDR`, checking that the
+// gate answering is the one printed here.
+func agentSetup(ctx context.Context, out io.Writer, controller, transportKey, label string) int {
+	const use = "usage: jumpgate agent setup --controller ADDR --transport-key KEY [--label L]"
+	addr, err := eip712.ParseAddress(controller)
+	if err != nil {
+		return usage("--controller: %v; %s", err, use)
+	}
+	transportKey = strings.TrimSpace(transportKey)
+	if transportKey == "" || strings.ContainsAny(transportKey, "\r\n") {
+		return usage("--transport-key needs the controller's key, one authorized_keys line (`jumpgate hosts invite NAME` prints it); %s", use)
+	}
+	if geteuid() != 0 {
+		return failed("setting up the gate on this box needs root; run it with sudo")
+	}
+	if label == "" {
+		label = "pull"
+	}
+	agentAddr, err := runBootstrap(ctx, bootstrap.Options{
+		Exec: newLocalExecutor(), AgentBinary: selfBinary,
+		Controller: addr, ControllerLabel: label, TransportKey: transportKey,
+		Event: func(step, line string) { fmt.Fprintf(out, "[%s] %s\n", step, line) },
+	})
+	if err != nil {
+		return failed("gate setup failed: %v", err)
+	}
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "HOST"
+	}
+	fmt.Fprintf(out, "gate address %s\n", agentAddr.Hex())
+	fmt.Fprintf(out, "on the controller, run: jumpgate hosts add NAME --ssh jumpgate@%s --installed %s\n", host, agentAddr.Hex())
 	return 0
 }
 
@@ -144,7 +206,7 @@ func agentInit(out io.Writer, stateDir, configDir string, resetReplay bool) erro
 // nothing, including its tier. A running agent's socket is re-chmodded to the
 // new policy's mode (R23) so an enrolled local uid can connect at once; an
 // empty socketPath skips that.
-func agentEnroll(configDir, socketPath, address, tier, label string, localUID int) error {
+func agentEnroll(configDir, socketPath, address, tier, label string, localUID int, scope string) error {
 	a, err := eip712.ParseAddress(address)
 	if err != nil {
 		return err
@@ -152,12 +214,19 @@ func agentEnroll(configDir, socketPath, address, tier, label string, localUID in
 	if tier != string(agent.TierRoutine) && tier != string(agent.TierApproval) {
 		return fmt.Errorf("tier must be routine or approval")
 	}
+	if scope != "" && scope != agent.ScopeLocal {
+		return fmt.Errorf("scope must be local (or left out)")
+	}
 	path := filepath.Join(configDir, "policy.json")
 	p, err := agent.LoadPolicy(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	p.AddSigner(agent.SignerEntry{Address: a.Hex(), Tier: agent.Tier(tier), Label: label})
+	p.AddSigner(agent.SignerEntry{Address: a.Hex(), Tier: agent.Tier(tier), Label: label, Scope: scope})
+	// --scope local narrows an existing entry; leaving it out never widens.
+	if scope == agent.ScopeLocal {
+		p.NarrowScope(a.Hex())
+	}
 	if localUID >= 0 {
 		p.AddLocalUID(localUID)
 	}
@@ -294,6 +363,14 @@ func agentRun(stateDir, configDir string) error {
 		ReplayPath: filepath.Join(stateDir, "replay.json"),
 		NodePath:   filepath.Join(configDir, "node.json"),
 		NamesPath:  filepath.Join(configDir, "names.json"),
+		// agent.upgrade replaces this binary, then asks systemd for a
+		// restart without waiting on it (it would wait on this process).
+		BinaryPath: bootstrap.BinaryPath,
+		Restart: func() {
+			if _, err := ex.Run(context.Background(), "systemctl --no-block restart jumpgate-agent.service", nil); err != nil {
+				fmt.Fprintf(os.Stderr, "jumpgate agent: restart after upgrade: %v\n", err)
+			}
+		},
 	})
 	// The policy only sets the socket mode here; Handle re-reads it for every
 	// intent. An unreadable policy keeps the stricter 0660.
