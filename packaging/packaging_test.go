@@ -185,3 +185,18 @@ func TestPostinstNeverEnablesOrRestartsAManualService(t *testing.T) {
 		t.Errorf("sh -n %s: %v\n%s", path, err, out)
 	}
 }
+
+// The dnf repo file checks signatures on packages and metadata, and a dnf
+// run fails rather than silently carrying on without the repository (and
+// its updates) when pkg.jumpgate.app cannot be reached.
+func TestDnfRepoFile(t *testing.T) {
+	s := read(t, "repo/jumpgate.repo")
+	for _, want := range []string{
+		"baseurl=https://pkg.jumpgate.app/rpm", "gpgcheck=1", "repo_gpgcheck=1",
+		"gpgkey=https://pkg.jumpgate.app/jumpgate.asc", "skip_if_unavailable=False",
+	} {
+		if !strings.Contains(s, want+"\n") {
+			t.Errorf("packaging/repo/jumpgate.repo lacks %q", want)
+		}
+	}
+}
