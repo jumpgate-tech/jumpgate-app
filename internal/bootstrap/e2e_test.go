@@ -444,3 +444,91 @@ func TestE2ELocalStrangerIsRefused(t *testing.T) {
 	}
 	t.Logf("uid %d connected but was refused: %v", os.Getuid(), err)
 }
+
+// TestE2EScopeLocalRefusesAGroupPeer proves --self-only on the box: a
+// controller enrolled with Scope "local" is refused when its intent arrives
+// as user jumpgate, which is exactly the uid a tunnelled connection arrives
+// as, and which the peer gate admits by group. scripts/e2e-agent.sh runs it
+// twice inside the box: JUMPGATE_E2E_SCOPE_PHASE=pair as alice (a non-root
+// sudoer), then JUMPGATE_E2E_SCOPE_PHASE=send as user jumpgate. The pair
+// phase leaves the controller key and the gate address under
+// /opt/jumpgate-e2e, world-readable: a throwaway key, for this test only.
+func TestE2EScopeLocalRefusesAGroupPeer(t *testing.T) {
+	const keyFile, agentFile = "/opt/jumpgate-e2e/scope.key", "/opt/jumpgate-e2e/scope.agent"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	switch phase := e2eEnv(t, "JUMPGATE_E2E_SCOPE_PHASE"); phase {
+	case "pair":
+		agents := e2eAgents(t)
+		uid := os.Getuid()
+		if uid == 0 {
+			t.Fatal("run the pair phase as a non-root sudoer")
+		}
+		ex := executor.Sudo(executor.NewLocal())
+		defer ex.Close()
+		controller, _ := signer.GenerateKey()
+		agentAddr, err := Run(ctx, Options{
+			Exec: ex, Local: true, LocalUID: uid, Scope: "local",
+			Controller: controller.Address(), ControllerLabel: "e2e-scope",
+			AgentBinary: agents,
+			Event:       func(step, line string) { t.Logf("[%s] %s", step, line) },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The enrolled uid itself is served: scope_local is about the peer.
+		c, err := agentclient.Dial(ctx, agentclient.Target{Local: true, Agent: agentAddr}, controller, agentclient.NewMemorySeqStore())
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := c.Do(ctx, intent.KindAgentInfo, struct{}{})
+		c.Close()
+		if err != nil || res.Status != intent.StatusOK {
+			t.Fatalf("agent.info from the enrolled uid: %+v %v", res, err)
+		}
+		for f, v := range map[string][]byte{keyFile: []byte(hex.EncodeToString(controller.Bytes())), agentFile: []byte(agentAddr.Hex())} {
+			if err := ex.WriteFile(ctx, f, v, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	case "send":
+		if u, err := user.Current(); err != nil || u.Username != "jumpgate" {
+			t.Fatalf("run the send phase as user jumpgate, not %v (%v)", u, err)
+		}
+		keyHex, err := os.ReadFile(keyFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		addrText, err := os.ReadFile(agentFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := hex.DecodeString(strings.TrimSpace(string(keyHex)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		controller, err := signer.KeyFromBytes(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		agentAddr, err := eip712.ParseAddress(strings.TrimSpace(string(addrText)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := agentclient.Dial(ctx, agentclient.Target{Local: true, Agent: agentAddr}, controller, agentclient.NewMemorySeqStore())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		res, err := c.Do(ctx, intent.KindStatusRead, struct{}{})
+		if err != nil {
+			t.Fatalf("status.read as jumpgate: %v; want a signed scope_local rejection", err)
+		}
+		if res.Status != intent.StatusRejected || !strings.Contains(string(res.Result), intent.ReasonScopeLocal) {
+			t.Fatalf("status.read as jumpgate: status %d result %s; want rejected with %s", res.Status, res.Result, intent.ReasonScopeLocal)
+		}
+		t.Logf("refused as jumpgate: %s", res.Result)
+	default:
+		t.Fatalf("JUMPGATE_E2E_SCOPE_PHASE=%q: want pair or send", phase)
+	}
+}

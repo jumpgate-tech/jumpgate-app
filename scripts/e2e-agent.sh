@@ -79,3 +79,14 @@ docker exec -u alice -w /home/alice \
   -e JUMPGATE_E2E_AGENTS=/opt/jumpgate-e2e/agents \
   -e JUMPGATE_E2E_STRANGER=bob \
   "$name" /opt/jumpgate-e2e/bootstrap.test -test.run '^TestE2ELocalPairAndPeerGate$' -test.v -test.count=1
+
+# --self-only on the box: alice enrolls a local-scoped controller, then the
+# same signed intent sent as user jumpgate (the uid every tunnelled
+# connection arrives as, admitted by group) gets scope_local.
+docker exec -u alice -w /home/alice \
+  -e JUMPGATE_E2E_AGENTS=/opt/jumpgate-e2e/agents \
+  -e JUMPGATE_E2E_SCOPE_PHASE=pair \
+  "$name" /opt/jumpgate-e2e/bootstrap.test -test.run '^TestE2EScopeLocalRefusesAGroupPeer$' -test.v -test.count=1
+docker exec -u jumpgate -w / \
+  -e JUMPGATE_E2E_SCOPE_PHASE=send \
+  "$name" /opt/jumpgate-e2e/bootstrap.test -test.run '^TestE2EScopeLocalRefusesAGroupPeer$' -test.v -test.count=1
