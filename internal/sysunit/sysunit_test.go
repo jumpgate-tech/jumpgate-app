@@ -22,6 +22,7 @@ func TestUnitCarriesTheSpecsHardening(t *testing.T) {
 		"SupplementaryGroups=jumpgate-admin", "Environment=HOME=/var/lib/jumpgate-ctl",
 		"StateDirectory=jumpgate-ctl", "StateDirectoryMode=0700", "RuntimeDirectory=jumpgate-ctl", "RuntimeDirectoryMode=0750",
 		"UMask=0077", "LimitCORE=0", "NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes",
+		"CapabilityBoundingSet=", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK", "ProtectKernelTunables=yes", "ProtectKernelModules=yes", "ProtectKernelLogs=yes", "ProtectControlGroups=yes", "RestrictSUIDSGID=yes", "LockPersonality=yes", "MemoryDenyWriteExecute=yes", "SystemCallFilter=@system-service", "PrivateDevices=yes",
 		"Restart=on-failure",
 		"[Install]", "WantedBy=multi-user.target",
 	} {

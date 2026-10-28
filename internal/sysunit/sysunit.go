@@ -21,6 +21,10 @@ const Sysusers = "g jumpgate-admin -\nu jumpgate-ctl - \"jumpgate controller\" /
 // Unit is jumpgate.service running bin. systemd allows no comment after a
 // value, so every setting stands alone on its line.
 //
+// The service is an unprivileged Go server that spawns ssh: it needs no
+// capability, device, kernel knob or address family beyond these, and
+// never maps writable code.
+//
 // SupplementaryGroups lets the service, not root, give its socket and
 // runtime directory to jumpgate-admin: only a member may chgrp to a group.
 func Unit(bin string) string {
@@ -45,6 +49,17 @@ func Unit(bin string) string {
 		"ProtectSystem=strict\n" +
 		"ProtectHome=yes\n" +
 		"PrivateTmp=yes\n" +
+		"CapabilityBoundingSet=\n" +
+		"RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK\n" +
+		"ProtectKernelTunables=yes\n" +
+		"ProtectKernelModules=yes\n" +
+		"ProtectKernelLogs=yes\n" +
+		"ProtectControlGroups=yes\n" +
+		"RestrictSUIDSGID=yes\n" +
+		"LockPersonality=yes\n" +
+		"MemoryDenyWriteExecute=yes\n" +
+		"SystemCallFilter=@system-service\n" +
+		"PrivateDevices=yes\n" +
 		"Restart=on-failure\n" +
 		"\n" +
 		"[Install]\n" +
