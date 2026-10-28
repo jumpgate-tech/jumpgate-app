@@ -46,3 +46,40 @@ test("a 4xx ends the stream as failed, with no retry", async () => {
   expect(last?.kind === "state" && last.state).toBe("failed");
   expect(f.requests.length).toBe(1);
 });
+
+test("an oversized event is dropped and the parser flags overflow", () => {
+  const p = parseSSE(100);
+  expect(p.push(`data: ${"x".repeat(50)}\n\n`).length).toBe(1);
+  expect(p.push(`data: ${"x".repeat(60)}\ndata: ${"y".repeat(60)}\n\n`)).toEqual([]);
+  expect(p.overflowed).toBe(true);
+  const q = parseSSE(100);
+  q.push("data: " + "z".repeat(200)); // no newline: the buffer itself overflows
+  expect(q.overflowed).toBe(true);
+});
+
+test("many small events in one chunk parse with a moving offset", () => {
+  const p = parseSSE();
+  const chunk = Array.from({ length: 5000 }, (_, i) => `data: ${i}\n\n`).join("");
+  expect(p.push(chunk).length).toBe(5000);
+});
+
+test("stream: an oversized event reconnects; the next connection's events arrive", async () => {
+  let n = 0;
+  f = fakeServer({ "GET /api/jobs/stream": () => sseResponse([n++ ? `data: {"ok":true}\n\n` : `data: "${"x".repeat(500)}"\n\n`]) });
+  const ac = new AbortController();
+  const seen: SSEMsg<any>[] = [];
+  for await (const m of stream<any>({ socket: f.socket, token: null, system: true }, "/api/jobs/stream", ac.signal, { delay: () => 5, max: 100 })) {
+    seen.push(m);
+    if (m.kind === "event") ac.abort();
+  }
+  expect(seen.some((m) => m.kind === "state" && m.state === "retrying" && m.error?.code === "too_large")).toBe(true);
+  expect(seen.filter((m) => m.kind === "event").map((m) => (m as any).data)).toEqual([{ ok: true }]);
+});
+
+import { pair } from "../src/api/client.ts";
+test("pair: an oversized event ends the stream with an error, not a crash", async () => {
+  f = fakeServer({ "POST /api/targets/b/pair": () => sseResponse([`data: {"line":"${"x".repeat(500)}"}\n\n`, `data: {"done":true}\n\n`]) });
+  const evs = [];
+  for await (const e of pair({ socket: f.socket, token: null, system: true }, "b", { sudo: false }, undefined, 100)) evs.push(e);
+  expect(evs).toEqual([{ error: "the pairing stream sent an event larger than 1 MiB; it was dropped", code: "too_large" }]);
+});

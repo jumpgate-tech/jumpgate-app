@@ -132,16 +132,22 @@ export const startJob = (c: Conn, target: string, kind: string, inputs?: unknown
   request<T.JobView>(c, "POST", `/api/jobs/${e(target)}`, inputs === undefined ? { kind } : { kind, inputs });
 
 /** pair starts pairing id; the reply is an SSE stream of PairEvent that ends with done or error. */
-export async function* pair(c: Conn, id: string, req: { sudo: boolean; installed?: string }, signal?: AbortSignal): AsyncGenerator<T.PairEvent> {
+export async function* pair(c: Conn, id: string, req: { sudo: boolean; installed?: string }, signal?: AbortSignal, max?: number): AsyncGenerator<T.PairEvent> {
   const res = await open(c, "POST", tgt(id, "/pair"), req, signal);
-  const p = parseSSE();
+  const p = parseSSE(max);
   const dec = new TextDecoder();
   const reader = res.body!.getReader();
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) return;
-      for (const ev of p.push(dec.decode(value, { stream: true }))) {
+      const evs = p.push(dec.decode(value, { stream: true }));
+      if (p.overflowed) {
+        await reader.cancel().catch(() => {});
+        yield { error: "the pairing stream sent an event larger than 1 MiB; it was dropped", code: "too_large" };
+        return;
+      }
+      for (const ev of evs) {
         try {
           yield JSON.parse(ev.data) as T.PairEvent;
         } catch {
