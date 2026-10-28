@@ -113,8 +113,13 @@ func TestIdleLockLocksAfterNMinutes(t *testing.T) {
 	}
 	r.advance(time.Minute)
 	r.waitLocked(t)
-	if !strings.Contains(logs.String(), "vault locked after 5 minutes idle") {
-		t.Fatalf("log %q", logs.String())
+	// The loop logs just after it locks, so the line can trail the lock.
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(logs.String(), "vault locked after 5 minutes idle") {
+		if time.Now().After(deadline) {
+			t.Fatalf("log %q", logs.String())
+		}
+		time.Sleep(vaultIdleTick)
 	}
 }
 
