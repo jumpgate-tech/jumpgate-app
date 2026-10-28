@@ -13,9 +13,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -365,4 +367,28 @@ func TestUpgradeEnvelopeHeaderIsCapped(t *testing.T) {
 	}
 	fileIs(t, bin, "new")
 	waitFor(t, func() bool { return restarts.Load() == 1 })
+}
+
+// The restart may kill the gate the moment it is asked for, so the whole
+// receipt must be on the wire by then: a Content-Length response, written in
+// full, not a chunked one whose last chunk only the handler's return sends.
+func TestUpgradeReceiptIsCompleteBeforeTheRestart(t *testing.T) {
+	r := newRig(t, false)
+	_, _ = upgradeRig(t, r)
+	rec := httptest.NewRecorder()
+	var atRestart, length string
+	r.a.cfg.Restart = func() {
+		atRestart, length = rec.Body.String(), rec.Header().Get("Content-Length")
+	}
+	env := r.envelope(t, intent.KindAgentUpgrade, upgradePayload([]byte("new")))
+	hb, _ := json.Marshal(env)
+	req := httptest.NewRequest("POST", "http://agent/v1/upgrade", strings.NewReader("new"))
+	req.Header.Set(UpgradeEnvelopeHeader, base64.RawURLEncoding.EncodeToString(hb))
+	serveUpgrade(r.a, rec, req)
+	if atRestart == "" {
+		t.Fatal("no restart, or nothing written before it")
+	}
+	if length != strconv.Itoa(len(atRestart)) {
+		t.Fatalf("Content-Length %q for a %d-byte receipt at restart", length, len(atRestart))
+	}
 }

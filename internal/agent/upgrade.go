@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -224,8 +225,18 @@ func serveUpgrade(a *Agent, w http.ResponseWriter, r *http.Request) {
 		env = intent.Envelope{}
 	}
 	ctx, up := withUpgradeBody(r.Context(), http.MaxBytesReader(w, r.Body, maxUpgrade+1))
+	// The restart can stop this process as soon as it is asked for, so the
+	// receipt goes out whole, with its length, before it: a chunked answer
+	// would end only when this handler returns.
+	b, err := json.Marshal(a.Handle(ctx, env))
+	if err != nil {
+		http.Error(w, "encode the receipt", http.StatusInternalServerError)
+		return
+	}
+	b = append(b, '\n')
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(a.Handle(ctx, env))
+	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
+	_, _ = w.Write(b)
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
