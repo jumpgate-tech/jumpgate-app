@@ -20,3 +20,14 @@ func TestHelpListsEveryCommand(t *testing.T) {
 		}
 	}
 }
+
+// The v0.7.0 subcommands that live under keys, vault, hosts and setup.
+func TestHelpListsTheServerAndVaultSubcommands(t *testing.T) {
+	var b strings.Builder
+	printHelp(&b)
+	for _, name := range []string{"keys export", "vault seal", "vault put", "hosts upgrade", "setup server"} {
+		if !strings.Contains(b.String(), "\n  "+name) {
+			t.Errorf("help does not list %q", name)
+		}
+	}
+}
