@@ -48,9 +48,11 @@ func (s *Server) handleSystemSeal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "the passphrase is empty")
 		return
 	}
-	if s.passBackedOff(w, "vault seal", peer.UID) {
+	done, ok := s.passBegin(w, "vault seal", peer.UID)
+	if !ok {
 		return
 	}
+	defer done(errPassUnchecked)
 	s.vctl.mu.Lock()
 	defer s.vctl.mu.Unlock()
 	v, err := s.openVaultLocked()
@@ -69,8 +71,8 @@ func (s *Server) handleSystemSeal(w http.ResponseWriter, r *http.Request) {
 		writeVaultError(w, err)
 		return
 	}
-	err = chk.Unlock(req.Passphrase)
-	s.passResult("vault seal", peer.UID, err)
+	err = s.checkPassphrase(func() error { return chk.Unlock(req.Passphrase) })
+	done(err)
 	if err != nil {
 		writeVaultError(w, err)
 		return

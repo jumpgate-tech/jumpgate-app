@@ -315,11 +315,13 @@ func (s *Server) registerVaultRoutes(mux *http.ServeMux) {
 			return
 		}
 		uid := s.requestUID(r)
-		if s.passBackedOff(w, "vault unlock", uid) {
+		done, ok := s.passBegin(w, "vault unlock", uid)
+		if !ok {
 			return
 		}
-		view, err := s.Unlock(req.Passphrase)
-		s.passResult("vault unlock", uid, err)
+		var view api.VaultView
+		err = s.checkPassphrase(func() (e error) { view, e = s.Unlock(req.Passphrase); return e })
+		done(err)
 		if err != nil {
 			writeVaultError(w, err)
 			return
