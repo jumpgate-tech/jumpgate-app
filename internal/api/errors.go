@@ -166,23 +166,23 @@ var registry = map[Code]codeInfo{
 
 	CodeTargetNotFound:  {"run `jumpgate hosts list` to see the names this controller knows", ExitFailed},
 	CodeTargetExists:    {"", ExitFailed},
-	CodeTargetNotSetUp:  {"set the node up first (the web app's setup wizard), or pair the box so its own agent answers", ExitFailed},
+	CodeTargetNotSetUp:  {"set the node up first (the web app's setup wizard), or pair the box so its own gate answers", ExitFailed},
 	CodeUnreachable:     {"check that the box is up and reachable over SSH", ExitUnreachable},
 	CodeHostKey:         {"the box's SSH host key does not match the one on record: possibly a man-in-the-middle, or the box was rebuilt. Check the key on the box's console; only if it legitimately changed, forget the old one (`jumpgate hosts forget-key NAME`, or ssh-keygen -R if it is in ~/.ssh/known_hosts) and confirm the new one", ExitSecurity},
 	CodeUnknownHost:     {"nobody has confirmed this box's SSH host key; compare its fingerprint with the box's console and confirm it (`jumpgate hosts add`, or Hosts in the TUI)", ExitSecurity},
-	CodeBadReceipt:      {"the answer was not signed by this box's paired agent; do not trust this box until you re-pair it", ExitSecurity},
-	CodeAgentHTTP:       {"the agent socket refused the request before reading it: this connection is not allowed on the socket (the tunnel user is not in the jumpgate group, or a local uid is not enrolled), or the request was too large", ExitFailed},
+	CodeBadReceipt:      {"the answer was not signed by this box's paired gate; do not trust this box until you re-pair it", ExitSecurity},
+	CodeAgentHTTP:       {"the gate's socket refused the request before reading it: this connection is not allowed on the socket (the tunnel user is not in the jumpgate group, or a local uid is not enrolled), or the request was too large", ExitFailed},
 	CodeNotPaired:       {"pair this box first with `jumpgate hosts add`", ExitUsage},
 	CodeNoControllerKey: {"run `jumpgate keys init`, then `jumpgate stop` so the server restarts with the key", ExitUsage},
 	CodeControllerKeyMismatch: {"the key store holds a different key than the controller identity your boxes trust. " +
 		"Restore the original key (keychain item, 1Password item or key file), then run `jumpgate stop`; do not re-pair boxes to the new key unless you meant to replace the controller", ExitSecurity},
 	CodeRejected:    {"", ExitFailed},
-	CodeAgentFailed: {"the agent ran the request and it failed on the box; the message is the box's", ExitFailed},
-	CodeLocalUnsupported: {"this computer cannot do that itself: node setup, services, logs, diagnostics and the VPN need a POSIX shell, and the jumpgate agent runs only on Linux. " +
+	CodeAgentFailed: {"the gate ran the request and it failed on the box; the message is the box's", ExitFailed},
+	CodeLocalUnsupported: {"this computer cannot do that itself: node setup, services, logs, diagnostics and the VPN need a POSIX shell, and the gate runs only on Linux. " +
 		"Add a Linux machine with `jumpgate hosts add NAME --ssh` for those. The Docker gateway and devnet do run here", ExitFailed},
 	CodeInvalidPrefs:       {"", ExitUsage},
 	CodeNoSSH:              {"this target has no SSH address: it is this machine", ExitFailed},
-	CodeSSHJumpUnsupported: {"this box is reached through a jump host. jumpgate verifies jump hosts itself when it connects, but cannot yet hand you a plain ssh command that verifies them too; use the TUI or the agent actions (jumpgate status, logs, service) instead", ExitFailed},
+	CodeSSHJumpUnsupported: {"this box is reached through a jump host. jumpgate verifies jump hosts itself when it connects, but cannot yet hand you a plain ssh command that verifies them too; use the TUI or the gate actions (jumpgate status, logs, service) instead", ExitFailed},
 	CodeLocalNeedsTerminal: {"run `jumpgate hosts add NAME --local` in a terminal (it asks for your sudo password there), or run jumpgate as root", ExitFailed},
 
 	CodeProbeExpired:        {"probe the host again; a probe is good for 5 minutes and one confirmation", ExitFailed},
@@ -214,7 +214,7 @@ var registry = map[Code]codeInfo{
 	CodeJobsUnsupported:     {"durable jobs need a Linux box with systemd; the message says what is missing", ExitFailed},
 	CodeJobState:            {"the job moved on since you looked; reload it", ExitFailed},
 	CodeApprovalUnavailable: {"this decision needs an approval-tier signature (a hardware or browser wallet), which this jumpgate cannot make yet", ExitUsage},
-	CodeJobLogInvalid:       {"this job's history on the box does not verify against the box's agent key: do not act on it; inspect /var/lib/jumpgate/jobs on the box, and re-pair the box if its key changed", ExitSecurity},
+	CodeJobLogInvalid:       {"this job's history on the box does not verify against the box's gate key: do not act on it; inspect /var/lib/jumpgate/jobs on the box, and re-pair the box if its key changed", ExitSecurity},
 	CodeUnknownPlan:         {"this box's gate does not know that job's plan (it was downgraded?); run `jumpgate hosts upgrade NAME`", ExitFailed},
 	CodeModuleNotApplicable: {"Pick a chain and client the module supports; /api/catalog lists them.", ExitFailed},
 	CodeLocked:              {"unlock the vault: `jumpgate unlock` or the unlock prompt in the TUI or web app; plans wait at their next step until then", ExitUsage},
@@ -289,7 +289,7 @@ func CodeForStatus(status int) Code {
 // rejectionHints turns each signed rejection reason into one line an operator
 // can act on. They used to live in the CLI; the server now sends them.
 var rejectionHints = map[string]string{
-	intent.ReasonWrongAgent:       "this box's agent identity changed since pairing; re-pair it",
+	intent.ReasonWrongAgent:       "this box's gate identity changed since pairing; re-pair it",
 	intent.ReasonExpired:          "the intent expired before the box checked it; check both clocks (enable NTP)",
 	intent.ReasonClockSkew:        "the clocks disagree by more than 60s; enable NTP on this machine and the box",
 	intent.ReasonBadSignature:     "the box could not verify this controller's signature; re-pair it",

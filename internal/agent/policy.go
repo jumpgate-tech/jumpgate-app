@@ -200,7 +200,7 @@ func (p Policy) Authorise(kind string, controller eip712.Address, signers []eip7
 		req, ok = DefaultRequirements[kind]
 	}
 	if !ok {
-		return reject(intent.ReasonUnknownKind, fmt.Sprintf("this agent does not know %q", kind))
+		return reject(intent.ReasonUnknownKind, fmt.Sprintf("this gate does not know %q", kind))
 	}
 	req = append(append([]Tier{}, req...), extra...)
 	if tier, enrolled := p.tierOf(controller); !enrolled || tier != TierRoutine {

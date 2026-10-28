@@ -205,7 +205,7 @@ func TestASecondAgentCannotOpenTheJobStore(t *testing.T) {
 	}
 	defer m.Close()
 	_, err = openJobManager(state, conf, k, executor.NewLocal())
-	if !errors.Is(err, jobs.ErrStoreInUse) || !strings.Contains(err.Error(), "another jumpgate agent") {
+	if !errors.Is(err, jobs.ErrStoreInUse) || !strings.Contains(err.Error(), "another gate is already running") {
 		t.Fatalf("a second manager: %v", err)
 	}
 }
@@ -1073,7 +1073,7 @@ func TestHostsListComesFromTheServer(t *testing.T) {
 	if code := hostsList(context.Background(), &out); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if !strings.Contains(out.String(), "box") || !strings.Contains(out.String(), "agent 0xabc") {
+	if !strings.Contains(out.String(), "box") || !strings.Contains(out.String(), "gate 0xabc") {
 		t.Fatalf("output %q", out.String())
 	}
 }

@@ -226,7 +226,7 @@ func TestPairLocalForegroundFailureSaysHowToFinish(t *testing.T) {
 }
 
 func TestPairedMessageAdvisesOnRootSSHOnlyAfterSSH(t *testing.T) {
-	if m := pairedMessage("0x01", true); strings.Contains(m, "PermitRootLogin") || !strings.Contains(m, "paired: agent 0x01") {
+	if m := pairedMessage("0x01", true); strings.Contains(m, "PermitRootLogin") || !strings.Contains(m, "paired: gate 0x01") {
 		t.Fatalf("local: %q", m)
 	}
 	if m := pairedMessage("0x01", false); !strings.Contains(m, "PermitRootLogin") {

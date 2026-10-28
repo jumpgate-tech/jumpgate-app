@@ -293,7 +293,7 @@ func agentJobAbandon(out io.Writer, stateDir, id string) error {
 		Dir: filepath.Join(stateDir, "jobs"), Key: k, Runner: jobs.DefaultRunner(executor.NewLocal()), Version: buildinfo.Version(),
 	}, id)
 	if errors.Is(err, jobs.ErrStoreInUse) {
-		return fmt.Errorf("the running agent holds the job store; stop the agent (systemctl stop jumpgate-agent), run job-abandon again, then start it: %w", err)
+		return fmt.Errorf("the running gate holds the job store; stop the gate (systemctl stop jumpgate-agent), run job-abandon again, then start it: %w", err)
 	}
 	if err != nil {
 		return err
@@ -334,7 +334,7 @@ func openJobManager(stateDir, configDir string, k signer.Signer, ex executor.Exe
 		StepArgv: func(a jobs.StepArgs) []string { return jobs.StepArgv(self, stateDir, configDir, a) },
 	})
 	if errors.Is(err, jobs.ErrStoreInUse) {
-		return nil, fmt.Errorf("another jumpgate agent is already running on this box: %w", err)
+		return nil, fmt.Errorf("another gate is already running on this box: %w", err)
 	}
 	return mgr, err
 }

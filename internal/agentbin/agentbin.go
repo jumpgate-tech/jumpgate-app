@@ -71,7 +71,7 @@ var (
 // otherwise an error saying how to get one.
 func Load(arch string) ([]byte, Source, error) {
 	if arch != "amd64" && arch != "arm64" {
-		return nil, "", fmt.Errorf("agentbin: no agent for linux/%s; the jumpgate agent runs on linux/amd64 and linux/arm64", arch)
+		return nil, "", fmt.Errorf("agentbin: no gate for linux/%s; the gate runs on linux/amd64 and linux/arm64", arch)
 	}
 	dev, err := devDir()
 	if err != nil {
@@ -103,11 +103,11 @@ func Load(arch string) ([]byte, Source, error) {
 		// The bytes read are checked, not just the build: they are what goes
 		// to the box.
 		if !buildinfo.IsStaticELF(bytes.NewReader(b)) {
-			return nil, "", fmt.Errorf("agentbin: this binary is not a statically linked executable, so it cannot be the agent for linux/%s; run scripts/build-agents.sh", arch)
+			return nil, "", fmt.Errorf("agentbin: this binary is not a statically linked executable, so it cannot be the gate for linux/%s; run scripts/build-agents.sh", arch)
 		}
 		return b, SourceSelf, nil
 	}
-	return nil, "", fmt.Errorf("agentbin: this build of jumpgate carries no agent for linux/%s. Use a release build (they embed both agents), or for development run scripts/build-agents.sh, which writes them to %s", arch, dev)
+	return nil, "", fmt.Errorf("agentbin: this build of jumpgate carries no gate for linux/%s. Use a release build (they embed both gates), or for development run scripts/build-agents.sh, which writes them to %s", arch, dev)
 }
 
 // devDir is ~/.jumpgate/agents, where scripts/build-agents.sh writes by
@@ -179,7 +179,7 @@ func readPrivate(f *os.File) ([]byte, error) {
 func extractFrom(fsys fs.FS, arch, cacheDir string) ([]byte, error) {
 	name := "jumpgate-linux-" + arch
 	damaged := func(err error) error {
-		return fmt.Errorf("agentbin: the embedded agent for linux/%s is damaged: %v", arch, err)
+		return fmt.Errorf("agentbin: the embedded gate for linux/%s is damaged: %v", arch, err)
 	}
 	sums, err := fs.ReadFile(fsys, "embedded/SHA256SUMS")
 	if err != nil {
@@ -187,7 +187,7 @@ func extractFrom(fsys fs.FS, arch, cacheDir string) ([]byte, error) {
 	}
 	f, err := fsys.Open("embedded/" + name + ".gz")
 	if err != nil {
-		return nil, fmt.Errorf("agentbin: embedded agent for linux/%s: %w", arch, err)
+		return nil, fmt.Errorf("agentbin: embedded gate for linux/%s: %w", arch, err)
 	}
 	defer f.Close()
 	zr, err := gzip.NewReader(f)

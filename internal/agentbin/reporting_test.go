@@ -20,7 +20,7 @@ func TestReportingNamesTheSource(t *testing.T) {
 	if err != nil || !bytes.Equal(got, body) {
 		t.Fatalf("got %q, %v; want %q", got, err, body)
 	}
-	if line := "agent binary for linux/arm64: " + string(SourceDevDir); len(lines) != 1 || lines[0] != line {
+	if line := "gate binary for linux/arm64: " + string(SourceDevDir); len(lines) != 1 || lines[0] != line {
 		t.Fatalf("reported %q, want [%q]", lines, line)
 	}
 	if errOut.Len() != 0 {
@@ -40,7 +40,7 @@ func TestReportingNamesTheEmbeddedSource(t *testing.T) {
 	if _, err := Reporting(func(l string) { lines = append(lines, l) })("amd64"); err != nil {
 		t.Fatal(err)
 	}
-	if line := "agent binary for linux/amd64: " + string(SourceEmbedded); len(lines) != 1 || lines[0] != line {
+	if line := "gate binary for linux/amd64: " + string(SourceEmbedded); len(lines) != 1 || lines[0] != line {
 		t.Fatalf("reported %q, want [%q]", lines, line)
 	}
 }
@@ -59,8 +59,8 @@ func TestReportingWarnsWhenDevAgentsReplaceTheEmbeddedOnes(t *testing.T) {
 	if _, err := Reporting(func(l string) { lines = append(lines, l) })("amd64"); err != nil {
 		t.Fatal(err)
 	}
-	warning := "WARNING: using development agents from " + filepath.Join(home, ".jumpgate", "agents") + ", not the agents built into this jumpgate"
-	if len(lines) != 2 || lines[0] != warning || lines[1] != "agent binary for linux/amd64: "+string(SourceDevDir) {
+	warning := "WARNING: using development gates from " + filepath.Join(home, ".jumpgate", "agents") + ", not the gates built into this jumpgate"
+	if len(lines) != 2 || lines[0] != warning || lines[1] != "gate binary for linux/amd64: "+string(SourceDevDir) {
 		t.Fatalf("reported %q, want the warning then the source", lines)
 	}
 	if strings.TrimSpace(errOut.String()) != warning {

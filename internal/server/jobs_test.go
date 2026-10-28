@@ -418,7 +418,7 @@ func TestJobDetailRefusesALogTheRecordDoesNotDescribe(t *testing.T) {
 		}, "is not for job"},
 		{"an intent for another agent", func(r *intent.JobReadResult) {
 			b.appendSigned(t, r, b.otherIntent(t, stranger.Address(), rec.ID))
-		}, "addressed to agent"},
+		}, "addressed to gate"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			b.srv.jobs.readJob = real
@@ -605,13 +605,13 @@ func TestJobLogCacheIsBoundToTheAgentKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.serve(honest)
-	if _, _, err := b.driverRead(t, rec.ID); !errors.Is(err, errJobLogInvalid) || !strings.Contains(err.Error(), "not signed by agent "+stranger.Address().Hex()) {
+	if _, _, err := b.driverRead(t, rec.ID); !errors.Is(err, errJobLogInvalid) || !strings.Contains(err.Error(), "not signed by gate "+stranger.Address().Hex()) {
 		t.Fatalf("the driver's read after a re-pair = %v", err)
 	}
 	if b.cached(rec.ID) != nil {
 		t.Fatal("a log that did not verify still has a mark")
 	}
-	b.detailRefused(t, rec.ID, "not signed by agent "+stranger.Address().Hex())
+	b.detailRefused(t, rec.ID, "not signed by gate "+stranger.Address().Hex())
 }
 
 // The driver reads on from its mark and verifies only what was added, onto

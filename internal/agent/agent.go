@@ -111,7 +111,7 @@ func (a *Agent) Handle(ctx context.Context, env intent.Envelope) intent.ReceiptE
 	case i.Expiry < i.IssuedAt || i.Expiry-i.IssuedAt > uint64(maxLifetime/time.Second):
 		return a.answerReject(i, reqHash, reject(intent.ReasonInvalidPayload, "intent lifetime must be at most 300s"))
 	case i.IssuedAt > nowSec+skewSec:
-		r := reject(intent.ReasonClockSkew, fmt.Sprintf("issued at unix time %d, agent time is %s", i.IssuedAt, now.UTC().Format(time.RFC3339)))
+		r := reject(intent.ReasonClockSkew, fmt.Sprintf("issued at unix time %d, gate time is %s", i.IssuedAt, now.UTC().Format(time.RFC3339)))
 		return a.answerReject(i, reqHash, r)
 	case nowSec > i.Expiry+skewSec:
 		return a.answerReject(i, reqHash, reject(intent.ReasonExpired, "intent expired at "+time.Unix(int64(i.Expiry), 0).UTC().Format(time.RFC3339)))

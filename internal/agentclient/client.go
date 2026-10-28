@@ -27,11 +27,11 @@ var (
 	// paired agent, or does not answer this request. Its result is discarded.
 	ErrBadReceipt = errors.New("agentclient: receipt failed verification")
 	// ErrUnreachable is a transport failure, never a refusal.
-	ErrUnreachable = errors.New("agentclient: could not reach the agent")
+	ErrUnreachable = errors.New("agentclient: could not reach the gate")
 	// ErrAgentHTTP means the agent socket answered with a non-200 HTTP status
 	// (peer refused, request too large, unreadable body). Such replies are
 	// unsigned and are never a Rejection.
-	ErrAgentHTTP = errors.New("agentclient: agent socket answered with an HTTP error")
+	ErrAgentHTTP = errors.New("agentclient: the gate socket answered with an HTTP error")
 )
 
 // maxReply bounds how much of an agent reply is read before verification; it
@@ -220,7 +220,7 @@ func (c *Client) once(ctx context.Context, kind string, body, blob []byte) (Resp
 	case err != nil:
 		return Response{}, fmt.Errorf("%w: %v", ErrBadReceipt, err)
 	case who != c.t.Agent:
-		return Response{}, fmt.Errorf("%w: signed by %s, expected agent %s", ErrBadReceipt, who.Hex(), c.t.Agent.Hex())
+		return Response{}, fmt.Errorf("%w: signed by %s, expected gate %s", ErrBadReceipt, who.Hex(), c.t.Agent.Hex())
 	case rc.Agent != c.t.Agent || rc.RequestHash != reqHash || rc.Seq != seq || rc.ResultHash != intent.Hash(out.Result):
 		return Response{}, fmt.Errorf("%w: receipt does not answer this request", ErrBadReceipt)
 	}

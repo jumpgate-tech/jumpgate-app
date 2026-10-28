@@ -124,7 +124,7 @@ func TestHostsAddGoesThroughConnect(t *testing.T) {
 	if strings.Join(paths, ",") != "POST /api/targets,POST /api/targets/box/pair" {
 		t.Fatalf("requests %v", paths)
 	}
-	if !strings.Contains(stdout(), "pairing it again") || !strings.Contains(stdout(), "paired: agent 0xabc") {
+	if !strings.Contains(stdout(), "pairing it again") || !strings.Contains(stdout(), "paired: gate 0xabc") {
 		t.Fatalf("stdout %q", stdout())
 	}
 }

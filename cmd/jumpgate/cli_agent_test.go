@@ -64,7 +64,7 @@ func TestAgentJobAbandon(t *testing.T) {
 		t.Fatalf("job-abandon without --yes: exit %d, stderr %q", code, stderr())
 	}
 	args = append(args, "--yes")
-	if code := cmdAgent(args); code != 1 || !strings.Contains(stderr(), "stop the agent") {
+	if code := cmdAgent(args); code != 1 || !strings.Contains(stderr(), "stop the gate") {
 		t.Fatalf("job-abandon beside a running agent: exit %d, stderr %q", code, stderr())
 	}
 	m.Close()

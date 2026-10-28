@@ -522,7 +522,7 @@ func TestPairStreamNamesTheAgentSource(t *testing.T) {
 	res := postPair(t, ts, token, `{}`)
 	defer res.Body.Close()
 	stream, _ := io.ReadAll(res.Body)
-	want := `"line":"agent binary for linux/amd64: dev override ~/.jumpgate/agents"`
+	want := `"line":"gate binary for linux/amd64: dev override ~/.jumpgate/agents"`
 	if !strings.Contains(string(stream), want) {
 		t.Fatalf("stream does not name the agent source (%s):\n%s", want, stream)
 	}

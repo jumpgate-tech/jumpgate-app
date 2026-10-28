@@ -295,7 +295,7 @@ func printJobDetail(w io.Writer, d api.JobDetail) {
 	for _, s := range j.Steps {
 		fmt.Fprintf(w, "  %-8s %s\n", safe(s.State), safe(s.Title))
 	}
-	fmt.Fprintln(w, "signed log (verified against the box's agent key):")
+	fmt.Fprintln(w, "signed log (verified against the box's gate key):")
 	for _, l := range d.Log {
 		fmt.Fprintf(w, "  %3d %s %s\n", l.Index, l.At.Format(time.RFC3339), safe(l.Text))
 	}

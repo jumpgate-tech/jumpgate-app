@@ -17,11 +17,11 @@ func Reporting(report func(line string)) func(arch string) ([]byte, error) {
 		}
 		if src == SourceDevDir && embeddedFS != nil {
 			dir, _ := devDir()
-			warning := fmt.Sprintf("WARNING: using development agents from %s, not the agents built into this jumpgate", dir)
+			warning := fmt.Sprintf("WARNING: using development gates from %s, not the gates built into this jumpgate", dir)
 			report(warning)
 			fmt.Fprintln(stderr, warning)
 		}
-		report(fmt.Sprintf("agent binary for linux/%s: %s", arch, src))
+		report(fmt.Sprintf("gate binary for linux/%s: %s", arch, src))
 		return b, nil
 	}
 }

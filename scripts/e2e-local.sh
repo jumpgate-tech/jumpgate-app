@@ -70,7 +70,7 @@ as() { # user home command...
 }
 
 expect_paired() { # user home
-  if ! as "$1" "$2" jumpgate hosts list | grep -q '^me .*agent 0x'; then
+  if ! as "$1" "$2" jumpgate hosts list | grep -q '^me .*gate 0x'; then
     as "$1" "$2" jumpgate hosts list >&2 || true
     echo "FAIL: $1's controller recorded no pairing" >&2
     exit 1

@@ -69,13 +69,13 @@ func (a *Agent) dispatchJob(ctx context.Context, i intent.Intent, env intent.Env
 		// store that may hold a job answers a failure instead, so the
 		// controller refuses rather than run under it.
 		if i.Kind == intent.KindJobList && a.unopenedJobStore() != nil {
-			return failed(fmt.Errorf("the job store did not open (%v), and it may hold a job; fix it and restart the agent", a.cfg.JobsUnavailable))
+			return failed(fmt.Errorf("the job store did not open (%v), and it may hold a job; fix it and restart the gate", a.cfg.JobsUnavailable))
 		}
 		return nil, 0, reject(intent.ReasonJobsUnsupported, fmt.Sprintf(
-			"this agent runs without durable jobs: its job store did not open (%v); fix that and restart the agent", a.cfg.JobsUnavailable))
+			"this gate runs without durable jobs: its job store did not open (%v); fix that and restart the gate", a.cfg.JobsUnavailable))
 	}
 	if m == nil {
-		return nil, 0, reject(intent.ReasonJobsUnsupported, "this agent runs without durable jobs (no job store)")
+		return nil, 0, reject(intent.ReasonJobsUnsupported, "this gate runs without durable jobs (no job store)")
 	}
 	a.reconcile(ctx)
 	switch i.Kind {
@@ -192,7 +192,7 @@ func (a *Agent) unopenedJobStore() *Reject {
 		}
 	}
 	return reject(intent.ReasonJobActive, fmt.Sprintf(
-		"the job store could not be opened (%v), so a job in it may own the node services; fix the store and restart the agent", a.cfg.JobsUnavailable))
+		"the job store could not be opened (%v), so a job in it may own the node services; fix the store and restart the gate", a.cfg.JobsUnavailable))
 }
 
 // jobOutput is a job's journal through logsSince, the one bounded read

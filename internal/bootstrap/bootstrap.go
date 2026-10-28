@@ -66,17 +66,17 @@ func (e *StepError) Error() string {
 // leftInPlace describes what the steps before step leave on the box when step
 // fails. Every step is idempotent, so re-running hosts add resumes from here.
 func leftInPlace(step string, local bool) string {
-	binary := "the agent binary " + BinaryPath
+	binary := "the gate binary " + BinaryPath
 	user := "the jumpgate user and group (home " + HomeDir + ")"
 	sshd := "the sshd drop-in " + DropInPath + " and the restricted transport key in " + AuthorizedKeys
-	identity := "the agent key and replay record in /var/lib/jumpgate"
+	identity := "the gate key and replay record in /var/lib/jumpgate"
 	policy := "the controller's entry in /etc/jumpgate/policy.json and " + NodePath
 	var have []string
 	switch step {
 	case "preflight":
 		return "nothing; no changes were made on the box"
 	case "upload":
-		return "the box's previous agent binary, if any; at most a staged " + BinaryPath + ".new"
+		return "the box's previous gate binary, if any; at most a staged " + BinaryPath + ".new"
 	case "user":
 		have = []string{binary}
 	case "sshd":
@@ -187,7 +187,7 @@ func (r runner) preflight() (string, error) {
 		return "", err
 	}
 	if strings.TrimSpace(osName) != "Linux" {
-		return "", &StepError{Step: "preflight", Err: fmt.Errorf("the agent runs on Linux; this box is %s", strings.TrimSpace(osName))}
+		return "", &StepError{Step: "preflight", Err: fmt.Errorf("the gate runs on Linux; this box is %s", strings.TrimSpace(osName))}
 	}
 	if _, err := r.sh("preflight", "command -v systemctl >/dev/null && [ -d /run/systemd/system ]"); err != nil {
 		return "", &StepError{Step: "preflight", Err: fmt.Errorf("systemd is required")}
@@ -408,7 +408,7 @@ func (r runner) identity() (eip712.Address, error) {
 	if err != nil {
 		return eip712.Address{}, &StepError{Step: "identity", Err: fmt.Errorf("agent init printed %q: %w", out, err)}
 	}
-	r.emit("identity", "agent address "+addr.Hex())
+	r.emit("identity", "gate address "+addr.Hex())
 	return addr, nil
 }
 

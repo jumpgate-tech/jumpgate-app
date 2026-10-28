@@ -105,7 +105,7 @@ func walk(agent eip712.Address, job string, entries []Entry, start uint64, prev 
 		if sigs {
 			who, err := signer.Recover(e.TypedData(agent, job), e.Sig)
 			if err != nil || who != agent {
-				return prev, fmt.Errorf("%w: entry %d is not signed by agent %s", ErrBroken, want, agent.Hex())
+				return prev, fmt.Errorf("%w: entry %d is not signed by gate %s", ErrBroken, want, agent.Hex())
 			}
 		}
 		d, err := e.Digest(agent, job)
@@ -169,7 +169,7 @@ func VerifyIntents(agent eip712.Address, job string, entries []Entry) error {
 			return fmt.Errorf("%w: entry %d: %v", ErrBroken, e.Index, err)
 		}
 		if in.Agent != agent {
-			return fmt.Errorf("%w: entry %d: the intent was addressed to agent %s", ErrBroken, e.Index, in.Agent.Hex())
+			return fmt.Errorf("%w: entry %d: the intent was addressed to gate %s", ErrBroken, e.Index, in.Agent.Hex())
 		}
 		if e.Kind == KindCreated {
 			if id, err := JobIDFor(in); err != nil || id != job {

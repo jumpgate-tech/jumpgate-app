@@ -631,9 +631,9 @@ func TestAFailedStepSaysWhatWasLeftInPlace(t *testing.T) {
 		{"upload", rule{"sha256sum -c", executor.Result{ExitCode: 1}}, false, []string{BinaryPath + ".new"}, nil},
 		{"user", rule{"useradd", executor.Result{ExitCode: 1}}, false, []string{BinaryPath}, []string{DropInPath}},
 		{"sshd", rule{"sshd -t", executor.Result{ExitCode: 255}}, false, []string{BinaryPath, "jumpgate user", "restored"}, nil},
-		{"identity", rule{"agent init", executor.Result{ExitCode: 1}}, false, []string{BinaryPath, DropInPath, AuthorizedKeys}, []string{"agent key"}},
+		{"identity", rule{"agent init", executor.Result{ExitCode: 1}}, false, []string{BinaryPath, DropInPath, AuthorizedKeys}, []string{"gate key"}},
 		{"identity", rule{"agent init", executor.Result{ExitCode: 1}}, true, []string{BinaryPath}, []string{DropInPath, AuthorizedKeys}},
-		{"policy", rule{"agent enroll", executor.Result{ExitCode: 1}}, false, []string{"agent key", "/var/lib/jumpgate"}, []string{"policy.json"}},
+		{"policy", rule{"agent enroll", executor.Result{ExitCode: 1}}, false, []string{"gate key", "/var/lib/jumpgate"}, []string{"policy.json"}},
 		{"service", rule{"is-active", executor.Result{Stdout: "failed\n", ExitCode: 3}}, false, []string{"policy.json", NodePath, UnitPath}, nil},
 	}
 	for _, c := range cases {

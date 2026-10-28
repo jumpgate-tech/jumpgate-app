@@ -138,7 +138,7 @@ func hostsList(ctx context.Context, w io.Writer) int {
 	for _, t := range ts {
 		paired := "not paired"
 		if t.Agent != nil {
-			paired = "agent " + t.Agent.Address
+			paired = "gate " + t.Agent.Address
 		}
 		fmt.Fprintf(w, "%-16s %-6s %s\n", t.ID, t.Mode, paired)
 	}
@@ -670,7 +670,7 @@ func streamPair(c *apiclient.Client, name string, req api.PairRequest, local boo
 // root SSH login follows an SSH pairing, which may have used it; pairing
 // this machine never touched SSH.
 func pairedMessage(agent string, local bool) string {
-	msg := "paired: agent " + agent + "\n"
+	msg := "paired: gate " + agent + "\n"
 	if !local {
 		msg += "Recommended now: disable root SSH login on the box (PermitRootLogin no). Keep console access as the way back in.\n"
 	}
