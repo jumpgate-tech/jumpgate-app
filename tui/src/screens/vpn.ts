@@ -21,7 +21,10 @@ export class VPNScreen implements Screen {
   private pick = new Pick();
   private out: string[] = [];
 
-  constructor(private readonly app: App) {}
+  constructor(
+    private readonly app: App,
+    private readonly readFile: (path: string) => Uint8Array = (p) => readFileSync(p),
+  ) {}
 
   enter(): void {
     this.load();
@@ -117,7 +120,8 @@ export class VPNScreen implements Screen {
     if (!path) return;
     let config: Uint8Array;
     try {
-      config = new Uint8Array(readFileSync(path));
+      // The Buffer itself, not a copy, so zeroing it clears the only copy we made.
+      config = this.readFile(path);
     } catch {
       return this.say(`FAIL cannot read ${sanitizeLine(path)}`);
     }
@@ -126,8 +130,9 @@ export class VPNScreen implements Screen {
       this.say(`saved ${id}; the config was sent and dropped`);
       this.app.log(`vpn saved ${id}`);
     } catch (e) {
-      config.fill(0);
       this.app.fail(`vpn save ${id}`, e);
+    } finally {
+      config.fill(0);
     }
     this.load();
   }

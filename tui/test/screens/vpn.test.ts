@@ -17,11 +17,18 @@ const CONF = '[Interface]\nPrivateKey = SECRETPRIVKEY=\nAddress = 10.8.0.2/32\n'
 const PEERCONF = "[Interface]\nPrivateKey = PEERSECRET=\n[Peer]\nEndpoint = vpn.example:51820";
 const server = { id: "s1", targetId: "alpha", interface: "wg1", address: "10.9.0.1/24", listenPort: 51820, publicKey: "PUB", endpoint: "vpn.example:51820", peers: [{ name: "phone", publicKey: "PPUB", allowedIp: "10.9.0.2/32" }] };
 
-async function vpn() {
-  m = await mount((app) => [new VPNScreen(app)], {
+let reads: Uint8Array[] = [];
+async function vpn(failSave = false) {
+  reads = [];
+  const read = (p: string) => {
+    const b = require("node:fs").readFileSync(p) as Uint8Array;
+    reads.push(b);
+    return b;
+  };
+  m = await mount((app) => [new VPNScreen(app, read)], {
     routes: {
       "GET /api/vpns": () => json([{ id: "c1", provider: "bring-your-own", interface: "wg0", targetId: "", autostart: false, configured: true }]),
-      "POST /api/vpns": () => json({ id: "c2" }),
+      "POST /api/vpns": () => (failSave ? json({ error: "bad config", code: "bad_request" }, 400) : json({ id: "c2" })),
       "POST /api/vpns/c1/up": () => json({ up: true }),
       "GET /api/vpns/c1/status": () => json({ id: "c1", up: true, peers: 1 }),
       "DELETE /api/vpns/c1": () => new Response(null, { status: 204 }),
@@ -114,3 +121,20 @@ test("jsonWithSecretString escapes like JSON.stringify", () => {
   const b = jsonWithSecretString({ id: "x" }, "config", new TextEncoder().encode(v));
   expect(JSON.parse(new TextDecoder().decode(b))).toEqual({ id: "x", config: v });
 });
+
+for (const fail of [false, true])
+  test(`the config bytes read from the file are zeroed after a ${fail ? "refused" : "good"} save`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jgvpn-"));
+    const f = join(dir, "wg.conf");
+    writeFileSync(f, CONF, { mode: 0o600 });
+    await vpn(fail);
+    await m!.press("n");
+    for (const v of ["c2", "", "", "", f]) {
+      if (v) await typeText(m!, v);
+      await m!.press("return");
+    }
+    await m!.waitFor(() => !!sent("POST", "/api/vpns"));
+    await Bun.sleep(20);
+    expect(reads.length).toBe(1);
+    expect(reads[0]!.every((b) => b === 0)).toBe(true);
+  });
