@@ -47,7 +47,7 @@ func TestInstallScriptIsAReleaseAsset(t *testing.T) {
 func TestPackagesJobIsGatedAndScoped(t *testing.T) {
 	job := section(t, read(t, "../.github/workflows/release.yml"), "  packages:")
 	for _, want := range []string{
-		"needs: [provenance]",
+		"needs: [binaries, checksums, provenance]",
 		"environment: packages",
 		"vars.PKG_REPO_ENABLED == 'true'",
 		"startsWith(github.ref, 'refs/tags/v')",
@@ -82,18 +82,55 @@ func TestPackagesJobIsGatedAndScoped(t *testing.T) {
 	// Nothing from the Release is signed until it matches the attested
 	// checksums and its provenance from this workflow, and both checks run
 	// before the signing key is imported.
-	for _, want := range []string{"sha256sum -c", "gh attestation verify", "--signer-workflow", "attestations: read"} {
+	for _, want := range []string{
+		"sha256sum -c", "gh attestation verify", "--signer-workflow", "attestations: read",
+		`--source-ref "refs/tags/$TAG"`, `--source-digest "$GITHUB_SHA"`,
+		"dpkg-deb -f", "rpm -qp",
+	} {
 		if !strings.Contains(job, want) {
 			t.Errorf("packages job lacks %q", want)
 		}
 	}
 	before("gh attestation verify", "gpg --batch --import")
 	before("sha256sum -c", "gpg --batch --import")
+	before("dpkg-deb -f", "gpg --batch --import")
 	// Packages go up before the indexes that name them.
 	before("repo/apt/pool/", "repo/apt/dists/")
 	before("--exclude 'repodata/*'", "repo/rpm/repodata/")
 	before("repo/apt/dists/", "repo/jumpgate.asc")
 	before("repo/rpm/repodata/", "repo/jumpgate.repo")
+}
+
+// Later jobs take the build outputs from this run's artifacts, checked
+// against the digests the building jobs recorded, never back from the
+// Release, which anyone who can edit it could have swapped.
+func TestReleaseJobsConsumeDigestedArtifacts(t *testing.T) {
+	y := read(t, "../.github/workflows/release.yml")
+	b := section(t, y, "  binaries:")
+	for _, want := range []string{"digest: ${{ steps.collect.outputs.digest }}", "name: release-binaries"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("binaries job lacks %q", want)
+		}
+	}
+	for _, job := range []string{"  checksums:", "  provenance:", "  packages:"} {
+		s := section(t, y, job)
+		if strings.Contains(s, "gh release download") {
+			t.Errorf("%s downloads from the Release", strings.TrimSpace(job))
+		}
+		if !strings.Contains(s, "needs.binaries.outputs.digest") {
+			t.Errorf("%s does not compare the release-binaries digest", strings.TrimSpace(job))
+		}
+	}
+	for _, job := range []string{"  provenance:", "  packages:"} {
+		if !strings.Contains(section(t, y, job), "needs.checksums.outputs.digest") {
+			t.Errorf("%s does not compare the checksums digest", strings.TrimSpace(job))
+		}
+	}
+	// Every attestation check pins the tag and the commit.
+	n := strings.Count(y, "gh attestation verify \"")
+	if n == 0 || strings.Count(y, "--source-ref \"refs/tags/$TAG\" --source-digest \"$GITHUB_SHA\"") != n {
+		t.Errorf("%d gh attestation verify calls, not all pin --source-ref and --source-digest", n)
+	}
 }
 
 func read(t *testing.T, path string) string {
