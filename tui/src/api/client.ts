@@ -1,7 +1,7 @@
 // One typed function per server route the dashboard calls. Every path here
 // has its pattern in ROUTES (src/api/routes.ts), which CI checks against Go.
-import { request, type Conn } from "./http.ts";
-import { stream, type SSEMsg, type StreamOpts } from "./sse.ts";
+import { open, request, type Conn } from "./http.ts";
+import { parseSSE, stream, type SSEMsg, type StreamOpts } from "./sse.ts";
 import type * as T from "./types.ts";
 
 const e = encodeURIComponent;
@@ -112,5 +112,43 @@ export async function systemInitKey(c: Conn, pass: Uint8Array): Promise<void> {
   } finally {
     body.fill(0);
     pass.fill(0);
+  }
+}
+
+export const probeHostKeys = (c: Conn, ssh: T.SSHView) => request<T.HostKeyProbe>(c, "POST", "/api/hostkeys/probe", { ssh });
+export const confirmHostKey = (c: Conn, probeId: string, fingerprint: string) =>
+  request(c, "POST", "/api/hostkeys/confirm", { probeId, fingerprint });
+export const recordedHostKeys = (c: Conn, hostPort: string) =>
+  request<T.RecordedHostKeys>(c, "GET", `/api/hostkeys?hostPort=${e(hostPort)}`);
+export const forgetHostKey = (c: Conn, hostPort: string, fingerprint: string) =>
+  request(c, "POST", "/api/hostkeys/forget", { hostPort, fingerprint });
+export const addTarget = (c: Conn, id: string, ssh: T.SSHView) => request(c, "POST", "/api/targets", { id, mode: "ssh", ssh });
+export const removeTarget = (c: Conn, id: string) => request(c, "DELETE", tgt(id));
+export const pairingInfo = (c: Conn) => request<T.PairingInfo>(c, "GET", "/api/pairing-info");
+export const upgradeGate = (c: Conn, id: string) => request<T.GateUpgrade>(c, "POST", tgt(id, "/agent/upgrade"));
+export const sshCommand = (c: Conn, id: string) => request<T.SSHCommand>(c, "GET", flt(id, "/ssh"));
+export const startJob = (c: Conn, target: string, kind: string, inputs?: unknown) =>
+  request<T.JobView>(c, "POST", `/api/jobs/${e(target)}`, inputs === undefined ? { kind } : { kind, inputs });
+
+/** pair starts pairing id; the reply is an SSE stream of PairEvent that ends with done or error. */
+export async function* pair(c: Conn, id: string, req: { sudo: boolean; installed?: string }, signal?: AbortSignal): AsyncGenerator<T.PairEvent> {
+  const res = await open(c, "POST", tgt(id, "/pair"), req, signal);
+  const p = parseSSE();
+  const dec = new TextDecoder();
+  const reader = res.body!.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      for (const ev of p.push(dec.decode(value, { stream: true }))) {
+        try {
+          yield JSON.parse(ev.data) as T.PairEvent;
+        } catch {
+          /* skipped */
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
   }
 }

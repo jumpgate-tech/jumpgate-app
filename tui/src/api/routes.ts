@@ -34,6 +34,17 @@ export const ROUTES = [
   "POST /api/fleet/{id}/check",
   "POST /api/restart",
   "POST /api/system/init-key",
+  "POST /api/hostkeys/probe",
+  "POST /api/hostkeys/confirm",
+  "GET /api/hostkeys",
+  "POST /api/hostkeys/forget",
+  "POST /api/targets",
+  "DELETE /api/targets/{id}",
+  "POST /api/targets/{id}/pair",
+  "GET /api/pairing-info",
+  "POST /api/targets/{id}/agent/upgrade",
+  "GET /api/fleet/{id}/ssh",
+  "POST /api/jobs/{target}",
 ] as const;
 
 export type Route = (typeof ROUTES)[number];

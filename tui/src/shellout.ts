@@ -22,8 +22,12 @@ export interface RunOpts {
 export const jumpgateBin = (env: Env = process.env) => env.JUMPGATE_BIN || "jumpgate";
 
 export async function runJumpgate(args: string[], o: RunOpts = {}): Promise<number> {
+  return runArgv([jumpgateBin(o.env ?? process.env), ...args], o);
+}
+
+/** runArgv runs argv as runJumpgate does (an ssh argv the server built, for one). */
+export async function runArgv(argv: string[], o: RunOpts = {}): Promise<number> {
   const env = o.env ?? process.env;
-  const argv = [jumpgateBin(env), ...args];
   if (o.detach) {
     const fd = openSync(o.detach.log, "a", 0o600);
     try {

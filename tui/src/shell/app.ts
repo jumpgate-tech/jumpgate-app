@@ -10,7 +10,7 @@ import { redact } from "../secret.ts";
 import { clip, sanitizeLine } from "../text.ts";
 import { Activity } from "./activity.ts";
 import { confirmModal, helpModal, SecretModal, ShowOnce, TextModal, type Modal } from "./confirm.ts";
-import { runJumpgate, type RunOpts } from "../shellout.ts";
+import { runArgv, runJumpgate, type RunOpts } from "../shellout.ts";
 import { drawerLines, minimizedLine } from "./drawer.ts";
 import type { Key } from "./keys.ts";
 import { layoutFor, MIN_H, MIN_W, type Rect } from "./layout.ts";
@@ -49,6 +49,8 @@ export interface AppOptions {
   runningEveryMs?: number;
   /** run replaces runJumpgate (tests record argv). */
   run?: (args: string[], o: RunOpts) => Promise<number>;
+  /** runArgv replaces shellout.runArgv. */
+  runArgv?: (argv: string[], o: RunOpts) => Promise<number>;
   /** platform replaces process.platform (Linux-only actions). */
   platform?: string;
 }
@@ -195,6 +197,13 @@ export class App {
    * run executes `jumpgate <args>` with the renderer suspended; the child owns
    * the terminal. args is fixed by the caller and never holds a secret.
    */
+  /** runArgv runs an argv the server built (ssh), the terminal handed to it. */
+  async runArgv(argv: string[], label: string): Promise<number> {
+    const code = await (this.opts.runArgv ?? runArgv)(argv, { renderer: this.renderer });
+    this.log(`${label}: exit ${code}${code === 0 ? "" : " FAIL"}`);
+    return code;
+  }
+
   async run(args: string[], o: Omit<RunOpts, "renderer"> = {}): Promise<number> {
     const code = await (this.opts.run ?? runJumpgate)(args, { ...o, renderer: this.renderer });
     this.log(`jumpgate ${args.join(" ")}: exit ${code}${code === 0 ? "" : " FAIL"}`);

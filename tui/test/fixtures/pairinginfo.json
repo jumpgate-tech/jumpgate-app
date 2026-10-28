@@ -1,0 +1,7 @@
+{
+  "controller": "0xabc",
+  "transportKey": "ssh-ed25519 AAAA jumpgate",
+  "system": false,
+  "serviceUid": -1,
+  "scope": "self"
+}

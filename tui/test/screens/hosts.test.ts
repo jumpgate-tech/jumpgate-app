@@ -1,0 +1,124 @@
+import { afterEach, expect, test } from "bun:test";
+import { HostsScreen, inviteLines } from "../../src/screens/hosts.ts";
+import { json, sseResponse } from "../fake.ts";
+import { fixture, mount, recorder, typeText, type Mounted } from "../harness.ts";
+
+let m: Mounted | undefined;
+afterEach(async () => {
+  await m?.close();
+  m = undefined;
+});
+
+const unknown = { hops: [{ hostPort: "10.0.0.9:22", fingerprint: "SHA256:fullprint", keyType: "ssh-ed25519", state: "unknown", probeId: "p1" }], allConfirmed: false };
+
+function routes(extra: Record<string, any> = {}) {
+  return {
+    "GET /api/targets": () => json(fixture("targets")),
+    "POST /api/hostkeys/probe": () => json(unknown),
+    "POST /api/hostkeys/confirm": () => new Response(null, { status: 204 }),
+    "POST /api/targets": () => new Response(null, { status: 201 }),
+    "POST /api/targets/beta/pair": () =>
+      sseResponse([`data: {"step":"install","line":"installing the gate"}\n\n`, `data: {"done":true,"agent":"0xfeed"}\n\n`]),
+    "GET /api/pairing-info": () => json(fixture("pairinginfo")),
+    "POST /api/targets/alpha/agent/upgrade": () => json(fixture("agentupgrade")),
+    "DELETE /api/targets/alpha": () => new Response(null, { status: 204 }),
+    "GET /api/hostkeys": () => json(fixture("recordedhostkeys")),
+    "POST /api/hostkeys/forget": () => new Response(null, { status: 204 }),
+    "GET /api/fleet/alpha/ssh": () => json(fixture("sshcommand")),
+    "POST /api/jobs/alpha": () => json(fixture("jobview")),
+    ...extra,
+  };
+}
+
+async function hosts(o: { version?: string } = {}) {
+  const rec = recorder();
+  const argvs: string[][] = [];
+  m = await mount((app) => [new HostsScreen(app)], {
+    routes: routes(o.version ? { "GET /api/version": () => json({ version: o.version }), "GET /api/pairing-info": () => json({ ...fixture("pairinginfo"), scope: "" }) } : {}),
+    app: { run: rec.run, runArgv: async (a) => (argvs.push(a), 0) },
+    width: 120,
+    height: 34,
+  });
+  m.app.go("hosts");
+  const f = await m.waitFor("alpha");
+  expect(f).toContain("alpha          gate");
+  return { rec, argvs };
+}
+
+test("add a box: probe, show the full fingerprint, confirm, add, pair into the activity", async () => {
+  await hosts();
+  await m!.press("a");
+  await typeText(m!, "beta");
+  await m!.press("return");
+  await typeText(m!, "ops@10.0.0.9:22");
+  await m!.press("return");
+  await m!.press("return"); // no jump host
+  const fp = await m!.waitFor("SHA256:fullprint");
+  expect(fp).toContain("10.0.0.9:22");
+  await m!.press("y");
+  await m!.waitFor("installed address");
+  await m!.press("return"); // install over ssh
+  await m!.waitFor(() => m!.app.activity.all().some((l) => l.includes("paired beta: gate 0xfeed")));
+  const req = (p: string) => JSON.parse(m!.fake.requests.find((r) => r.path === p && r.method === "POST")!.body);
+  expect(req("/api/hostkeys/probe")).toEqual({ ssh: { Host: "10.0.0.9", User: "ops", Port: 22 } });
+  expect(req("/api/hostkeys/confirm")).toEqual({ probeId: "p1", fingerprint: "SHA256:fullprint" });
+  expect(req("/api/targets")).toEqual({ id: "beta", mode: "ssh", ssh: { Host: "10.0.0.9", User: "ops", Port: 22 } });
+  expect(req("/api/targets/beta/pair")).toEqual({ sudo: true });
+  expect(m!.app.activity.all().join("\n")).toContain("installing the gate");
+});
+
+test("a refused fingerprint adds nothing", async () => {
+  await hosts();
+  await m!.press("a");
+  await typeText(m!, "beta");
+  await m!.press("return");
+  await typeText(m!, "root@10.0.0.9");
+  await m!.press("return", "return");
+  await m!.waitFor("SHA256:fullprint");
+  await m!.press("n");
+  await Bun.sleep(20);
+  expect(m!.fake.requests.some((r) => r.path === "/api/targets" && r.method === "POST")).toBe(false);
+});
+
+test("add this machine, upgrade, remove, forget a key, ssh, rename legacy names", async () => {
+  const { rec, argvs } = await hosts();
+  await m!.press("L");
+  await typeText(m!, "here");
+  await m!.press("return");
+  await m!.press("u");
+  await m!.waitFor(() => m!.app.activity.all().some((l) => l.includes("gate on alpha: v0.5.0 -> v0.6.0")));
+  await m!.press("f");
+  await m!.waitFor("SHA256:abc");
+  await m!.press("y");
+  await m!.waitFor(() => m!.fake.requests.some((r) => r.path === "/api/hostkeys/forget"));
+  await m!.press("x");
+  await m!.waitFor(() => argvs.length > 0);
+  await m!.press("M", "y");
+  await m!.waitFor(() => m!.fake.requests.some((r) => r.path === "/api/jobs/alpha"));
+  await m!.press("D", "y");
+  await m!.waitFor(() => m!.fake.requests.some((r) => r.method === "DELETE"));
+  expect(rec.calls).toEqual([{ args: ["hosts", "add", "here", "--local"] }]);
+  expect(argvs).toEqual([["ssh", "-p", "22", "root@10.0.0.2"]]);
+  expect(JSON.parse(m!.fake.requests.find((r) => r.path === "/api/hostkeys/forget")!.body)).toEqual({ hostPort: "10.0.0.2:22", fingerprint: "SHA256:abc" });
+  expect(JSON.parse(m!.fake.requests.find((r) => r.path === "/api/jobs/alpha")!.body)).toEqual({ kind: "node.migrate-names" });
+});
+
+test("invite prints the CLI's lines", () => {
+  const lines = inviteLines("v0.6.0", { controller: "0xabc", transportKey: "ssh-ed25519 AAAA it's", system: false }, "beta");
+  expect(lines).toEqual([
+    "on the box, as root:",
+    "curl -fsSL https://jumpgate.app/install.sh | sh -s -- --agent \\",
+    `  --version v0.6.0 --controller 0xabc --transport-key 'ssh-ed25519 AAAA it'"'"'s'`,
+    "then: jumpgate hosts add beta --ssh jumpgate@HOST --installed <address printed on the box>",
+  ]);
+  expect(inviteLines("dev", { controller: "0xabc", transportKey: "k", system: false }, "b")[0]).toContain("development build");
+  expect(inviteLines("v0.6.0", { controller: "0xabc", transportKey: "k", system: false, scope: "self" }, "b")[0]).toContain("self-only");
+});
+
+test("i shows the invite for a named box", async () => {
+  await hosts({ version: "v0.6.0" });
+  await m!.press("i");
+  await typeText(m!, "gamma");
+  await m!.press("return");
+  expect(await m!.waitFor("--controller 0xabc")).toContain("on the box, as root:");
+});

@@ -53,4 +53,9 @@ export const samples: Record<string, unknown> = {
   agentcheck: { agent: "x", version: "x", chainId: 1, setUp: true } satisfies T.AgentCheck,
   sshcommand: { argv: ["ssh"], display: "x" } satisfies T.SSHCommand,
   error: err,
+  hostkeyprobe: { hops: [{ hostPort: "h", fingerprint: "f", keyType: "k", state: "unknown", probeId: "p", error: "e" }], allConfirmed: false } satisfies T.HostKeyProbe,
+  recordedhostkeys: { hostPort: "h", keys: [{ fingerprint: "f", keyType: "k", store: "jumpgate" }] } satisfies T.RecordedHostKeys,
+  pairevent: { step: "s", line: "l", error: "e", code: "c", hint: "h", done: true, agent: "a" } satisfies T.PairEvent,
+  pairinginfo: { controller: "c", transportKey: "k", system: false, scope: "self" } satisfies T.PairingInfo,
+  agentupgrade: { upgraded: true, from: "a", to: "b" } satisfies T.GateUpgrade,
 };

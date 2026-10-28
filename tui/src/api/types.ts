@@ -255,3 +255,53 @@ export interface SettingsUpdate {
   aiKey?: string;
   vaultIdleLockMinutes?: number;
 }
+
+export interface SSHView {
+  Host: string;
+  User: string;
+  Port: number;
+  jump?: SSHView;
+}
+
+export interface HostKeyHop {
+  hostPort: string;
+  fingerprint?: string;
+  keyType?: string;
+  state: "confirmed" | "unknown" | "mismatch" | "unreachable";
+  probeId?: string;
+  error?: string;
+}
+
+export interface HostKeyProbe {
+  hops: HostKeyHop[];
+  allConfirmed: boolean;
+}
+
+export interface RecordedHostKeys {
+  hostPort: string;
+  keys: { fingerprint: string; keyType: string; store: "jumpgate" | "openssh" }[];
+}
+
+export interface PairEvent {
+  step?: string;
+  line?: string;
+  error?: string;
+  code?: string;
+  hint?: string;
+  done?: boolean;
+  /** The paired gate's address. */
+  agent?: string;
+}
+
+export interface PairingInfo {
+  controller: string;
+  transportKey: string;
+  system: boolean;
+  scope?: string;
+}
+
+export interface GateUpgrade {
+  upgraded: boolean;
+  from: string;
+  to: string;
+}
