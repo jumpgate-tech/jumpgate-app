@@ -233,19 +233,37 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      attestations: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Download the packages
+      # Whoever can edit the Release could swap a package; nothing is signed
+      # until each one matches the attested checksums.txt and carries build
+      # provenance from this workflow. Both checks run before the key exists.
+      - name: Download and verify the packages
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           mkdir pkgs
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D pkgs -p '*.deb' -p '*.rpm'
-          ls -l pkgs
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D pkgs -p '*.deb' -p '*.rpm' -p checksums.txt
+          cd pkgs
+          shopt -s nullglob
+          files=(*.deb *.rpm)
+          [ "${#files[@]}" -gt 0 ] || { echo "no packages in the release" >&2; exit 1; }
+          gh attestation verify checksums.txt --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
+          for f in "${files[@]}"; do
+            grep -E "^[0-9a-f]{64}  $f\$" checksums.txt > "$f.sha256" || { echo "$f is not in checksums.txt" >&2; exit 1; }
+            sha256sum -c "$f.sha256"
+            rm "$f.sha256"
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
+          done
+          rm checksums.txt
+          ls -l
       - name: Install the repository tools
         run: |
           set -euo pipefail

@@ -73,13 +73,23 @@ func TestPackagesJobIsGatedAndScoped(t *testing.T) {
 		}
 		t.Errorf("PKG_SIGNING_KEY used outside an env mapping or stdin: %q", s)
 	}
-	// Packages go up before the indexes that name them.
 	before := func(a, b string) {
 		ia, ib := strings.Index(job, a), strings.Index(job, b)
 		if ia < 0 || ib < 0 || ia > ib {
-			t.Errorf("packages job must sync %q before %q", a, b)
+			t.Errorf("packages job must have %q before %q", a, b)
 		}
 	}
+	// Nothing from the Release is signed until it matches the attested
+	// checksums and its provenance from this workflow, and both checks run
+	// before the signing key is imported.
+	for _, want := range []string{"sha256sum -c", "gh attestation verify", "--signer-workflow", "attestations: read"} {
+		if !strings.Contains(job, want) {
+			t.Errorf("packages job lacks %q", want)
+		}
+	}
+	before("gh attestation verify", "gpg --batch --import")
+	before("sha256sum -c", "gpg --batch --import")
+	// Packages go up before the indexes that name them.
 	before("repo/apt/pool/", "repo/apt/dists/")
 	before("--exclude 'repodata/*'", "repo/rpm/repodata/")
 	before("repo/apt/dists/", "repo/jumpgate.asc")
