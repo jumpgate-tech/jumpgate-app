@@ -56,9 +56,11 @@ var DefaultRequirements = map[string][]Tier{
 	intent.KindLogsSince:     {TierRoutine},
 	intent.KindServiceAction: {TierRoutine},
 	intent.KindModulesRead:   {TierRoutine},
-	// agent.upgrade is routine, like re-pairing a pushed box; a box can
-	// require approval for it in policy.json.
-	intent.KindAgentUpgrade: {TierRoutine},
+	// agent.upgrade replaces the gate, so by default it needs an approval
+	// signature beyond the controller's. A box that takes upgrades on the
+	// controller's signature alone says so in policy.json:
+	//   "kinds": {"agent.upgrade": ["routine"]}
+	intent.KindAgentUpgrade: {TierRoutine, TierApproval},
 
 	intent.KindJobList:          {TierRoutine},
 	intent.KindJobRead:          {TierRoutine},
@@ -68,6 +70,10 @@ var DefaultRequirements = map[string][]Tier{
 	intent.KindJobDecide:        {TierRoutine},
 	intent.KindNodeMigrateNames: {TierRoutine},
 }
+
+// upgradeNeedsApproval is the refusal of a gate upgrade under the default
+// tiers, with the way to opt the box in.
+const upgradeNeedsApproval = `a gate upgrade needs an approval signature on this box; to take upgrades on the controller's signature alone, add "kinds": {"agent.upgrade": ["routine"]} to /etc/jumpgate/policy.json`
 
 // LoadPolicy reads the policy file, refusing one other users can write or read.
 func LoadPolicy(path string) (Policy, error) {
@@ -224,6 +230,9 @@ func (p Policy) Authorise(kind string, controller eip712.Address, signers []eip7
 			}
 		}
 		if !found {
+			if kind == intent.KindAgentUpgrade && need == TierApproval {
+				return reject(intent.ReasonUnauthorizedKind, upgradeNeedsApproval)
+			}
 			return reject(intent.ReasonUnauthorizedKind, fmt.Sprintf("%s needs a %s signature", kind, need))
 		}
 	}

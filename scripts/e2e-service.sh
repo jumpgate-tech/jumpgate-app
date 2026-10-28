@@ -251,6 +251,15 @@ ok pull-pair
 install_controller "$A" "$work/jumpgate-next"
 docker exec "$A" systemctl restart jumpgate
 status_ok "$A" a || fail "upgrade: the new controller does not answer"
+# A gate upgrade needs an approval signature by default: refused until B's
+# policy.json opts in to routine upgrades.
+admin "$A" "jumpgate hosts upgrade b"
+[ "$rc" != 0 ] || fail "upgrade-default: exit 0 without an approval signature"
+want "approval signature" upgrade-default
+ok upgrade-default
+# A fresh box's policy.json has no "kinds" yet, so the opt-in is its first key.
+docker exec "$B" sh -c 'p=/etc/jumpgate/policy.json; ! grep -q "\"kinds\"" "$p" && sed -i "1s/^{\$/{\n  \"kinds\": {\"agent.upgrade\": [\"routine\"]},/" "$p" && grep -q "agent.upgrade" "$p"' ||
+  fail "upgrade: could not opt B in to routine upgrades"
 admin "$A" "jumpgate hosts upgrade b"
 [ "$rc" = 0 ] || fail "upgrade: exit $rc"
 want "-> v0.0.91" upgrade

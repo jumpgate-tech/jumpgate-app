@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/agentbin"
@@ -67,6 +68,12 @@ func (s *Server) handleAgentUpgrade(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err != nil:
 		writeNodeError(w, err)
+		return
+	case res.Rejection != nil && res.Rejection.Code == intent.ReasonUnauthorizedKind && strings.Contains(res.Rejection.Message, "approval signature"):
+		// The box is paired; it wants an approval signature for a gate
+		// upgrade (the default), which the pairing hint would not explain.
+		writeErrorDetail(w, http.StatusConflict, "the box refused: "+res.Rejection.Message,
+			"or upgrade the gate on the box itself with install.sh --agent", api.CodeRejected)
 		return
 	case res.Rejection != nil:
 		writeNodeError(w, &agentRejected{*res.Rejection})

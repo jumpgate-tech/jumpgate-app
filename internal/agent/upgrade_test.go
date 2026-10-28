@@ -39,7 +39,26 @@ func upgradeRig(t *testing.T, r *rig) (bin string, restarts *atomic.Int32) {
 	n := &atomic.Int32{}
 	r.a.cfg.BinaryPath = bin
 	r.a.cfg.Restart = func() { n.Add(1) }
+	allowRoutineUpgrade(t, r)
 	return bin, n
+}
+
+// allowRoutineUpgrade opts r's box in to upgrades on the controller's
+// signature alone, as policy.json can.
+func allowRoutineUpgrade(t *testing.T, r *rig) {
+	t.Helper()
+	path := filepath.Join(r.dir, "policy.json")
+	p, err := LoadPolicy(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Kinds == nil {
+		p.Kinds = map[string][]Tier{}
+	}
+	p.Kinds[intent.KindAgentUpgrade] = []Tier{TierRoutine}
+	if err := p.Save(path); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func shaHex(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
@@ -307,18 +326,26 @@ func TestUpgradeRefusesAnotherArch(t *testing.T) {
 	}
 }
 
-func TestUpgradePolicyCanRequireApproval(t *testing.T) {
+func TestUpgradeNeedsApprovalByDefault(t *testing.T) {
 	r := newRig(t, false)
 	upgradeRig(t, r)
 	path := filepath.Join(r.dir, "policy.json")
 	p, _ := LoadPolicy(path)
-	p.Kinds = map[string][]Tier{intent.KindAgentUpgrade: {TierRoutine, TierApproval}}
+	p.Kinds = nil // as a fresh box has it
 	if err := p.Save(path); err != nil {
 		t.Fatal(err)
 	}
 	rc, res := r.sendUpgrade(t, upgradePayload([]byte("new")), failReader{t})
-	if got := rejection(t, rc, res).Code; got != intent.ReasonUnauthorizedKind {
-		t.Fatalf("code %s", got)
+	rej := rejection(t, rc, res)
+	if rej.Code != intent.ReasonUnauthorizedKind {
+		t.Fatalf("code %s", rej.Code)
+	}
+	if !strings.Contains(rej.Message, "approval signature") || !strings.Contains(rej.Message, `"agent.upgrade": ["routine"]`) {
+		t.Fatalf("message %q does not say how to opt in", rej.Message)
+	}
+	want := []Tier{TierRoutine, TierApproval}
+	if got := DefaultRequirements[intent.KindAgentUpgrade]; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("default tiers %v, want %v", got, want)
 	}
 }
 

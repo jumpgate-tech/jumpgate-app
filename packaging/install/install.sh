@@ -274,7 +274,7 @@ main() {
 		next="sudo jumpgate setup server"
 		[ "$self_only" = 0 ] || next="$next --self-only"
 		say ""
-		say "root on this controller server, with the key unlocked, can sign routine intents for every box that trusts it, including agent.upgrade, which replaces a box's gate. Encryption protects the key at rest, in backups and against disk theft; it does not protect it from live root."
+		say "root on this controller server, with the key unlocked, can sign routine intents for every box that trusts it. A gate upgrade, which replaces a box's gate, also needs an approval signature unless that box's policy.json makes it routine. Encryption protects the key at rest, in backups and against disk theft; it does not protect it from live root."
 		say ""
 		say "next: $next"
 		;;
