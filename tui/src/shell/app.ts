@@ -9,7 +9,7 @@ import { maskText } from "../maskurl.ts";
 import { redact } from "../secret.ts";
 import { clip, sanitizeLine } from "../text.ts";
 import { Activity } from "./activity.ts";
-import { confirmModal, helpModal, SecretModal, ShowOnce, TextModal, type Modal } from "./confirm.ts";
+import { confirmModal, helpModal, SecretModal, ShowOnce, TextModal, TypedConfirm, type Modal } from "./confirm.ts";
 import { runArgv, runJumpgate, type RunOpts } from "../shellout.ts";
 import { drawerLines, minimizedLine } from "./drawer.ts";
 import type { Key } from "./keys.ts";
@@ -52,6 +52,8 @@ export interface AppOptions {
   run?: (args: string[], o: RunOpts) => Promise<number>;
   /** runArgv replaces shellout.runArgv. */
   runArgv?: (argv: string[], o: RunOpts) => Promise<number>;
+  /** Keys that arrive this soon after a modal opens were typed before it: they are dropped. */
+  modalGuardMs?: number;
   /** platform replaces process.platform (Linux-only actions). */
   platform?: string;
 }
@@ -148,9 +150,25 @@ export class App {
     this.log(line);
   }
 
+  private modalReadyAt = 0;
+
   private open(m: Modal): void {
     this.modal = m;
+    // Flush: keys already queued (typed ahead of the modal) must not answer it.
+    this.modalReadyAt = performance.now() + (this.opts.modalGuardMs ?? 150);
     this.render();
+  }
+
+  /** confirmTyped asks for want to be typed exactly; Enter alone never says yes. */
+  confirmTyped(text: string, want: string): Promise<boolean> {
+    return new Promise((resolve) =>
+      this.open(
+        new TypedConfirm(text, want, (ok) => {
+          this.close();
+          resolve(ok);
+        }),
+      ),
+    );
   }
   private close(): void {
     this.modal = null;
@@ -309,6 +327,7 @@ export class App {
       return this.quit();
     }
     if (this.modal) {
+      if (performance.now() < this.modalReadyAt) return;
       this.modal.key(k);
       this.render();
       return;

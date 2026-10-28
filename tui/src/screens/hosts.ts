@@ -129,8 +129,9 @@ export class HostsScreen implements Screen {
         if (hop.state === "mismatch") return this.say(`FAIL ${hop.hostPort} presents a key that contradicts the one on record. Stop and find out why.`);
         if (hop.state === "unreachable" || !hop.probeId || !hop.fingerprint)
           return this.say(`FAIL ${hop.hostPort}: ${maskText(sanitizeLine(hop.error ?? "unreachable"))}`);
-        const ok = await this.app.confirm(
+        const ok = await this.app.confirmTyped(
           `${hop.hostPort} presents ${hop.keyType ?? "a key"} ${hop.fingerprint}. Compare it with the box (ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub). Trust it?`,
+          "yes",
         );
         if (!ok) return this.say("Not added: the host key was not confirmed.");
         await api.confirmHostKey(c, hop.probeId, hop.fingerprint);
@@ -188,7 +189,7 @@ export class HostsScreen implements Screen {
   }
 
   private async remove(t: TargetView): Promise<void> {
-    if (!(await this.app.confirm(`Remove ${t.id} from this controller? The box itself is not touched.`))) return;
+    if (!(await this.app.confirmTyped(`Remove ${t.id} from this controller? The box itself is not touched.`, t.id))) return;
     try {
       await api.removeTarget(this.app.conn, t.id);
       this.app.log(`removed ${t.id}`);

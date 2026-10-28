@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { JobsScreen } from "../../src/screens/jobs.ts";
 import { key } from "../../src/shell/keys.ts";
 import { json, sseResponse } from "../fake.ts";
-import { fixture, mount, type Mounted } from "../harness.ts";
+import { fixture, mount, say, type Mounted } from "../harness.ts";
 
 let m: Mounted | undefined;
 afterEach(async () => {
@@ -38,7 +38,9 @@ test("a approves after a confirm that shows the step text, with the api.JobDecis
   const c = await m!.press("a");
   expect(c).toContain("Swap the binary now?");
   expect(c).toContain("Go");
-  await m!.press("y");
+  await m!.press("return"); // Enter alone never answers
+  expect(m!.fake.requests.some((r) => r.path.endsWith("/decide"))).toBe(false);
+  await say(m!, "go");
   await m!.waitFor(() => m!.fake.requests.some((r) => r.path.endsWith("/decide")));
   const req = m!.fake.requests.find((r) => r.path.endsWith("/decide"))!;
   expect(JSON.parse(req.body)).toEqual({ decision: "q1", option: "go" });
@@ -47,15 +49,17 @@ test("a approves after a confirm that shows the step text, with the api.JobDecis
 
 test("x refuses with the abort option; n at the confirm sends nothing", async () => {
   await open();
-  await m!.press("x", "n");
+  await m!.press("x", "escape");
   expect(m!.fake.requests.some((r) => r.path.endsWith("/decide"))).toBe(false);
-  await m!.press("x", "y");
+  await m!.press("x");
+  await say(m!, "abort");
   await m!.waitFor(() => m!.fake.requests.some((r) => r.path.endsWith("/decide")));
   expect(JSON.parse(m!.fake.requests.find((r) => r.path.endsWith("/decide"))!.body)).toEqual({ decision: "q1", option: "abort" });
 });
 
 test("A adopts after a confirm", async () => {
   await open();
-  await m!.press(key("a", { seq: "A", shift: true }), "y");
+  await m!.press(key("a", { seq: "A", shift: true }));
+  await say(m!, "j1");
   await m!.waitFor(() => m!.fake.requests.some((r) => r.path.endsWith("/adopt")));
 });

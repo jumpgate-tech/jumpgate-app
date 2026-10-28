@@ -133,7 +133,7 @@ export class JobsScreen implements Screen {
     const q = j.question;
     const o = q?.options.find((x) => x.id === option);
     if (!q || !o) return;
-    if (!(await this.app.confirm(`${q.prompt}\nAnswer: ${o.label}${o.detail ? ` (${o.detail})` : ""}`))) return;
+    if (!(await this.app.confirmTyped(`${q.prompt}\nAnswer: ${o.label}${o.detail ? ` (${o.detail})` : ""}`, o.id))) return;
     try {
       await api.decide(this.app.conn, j.target, j.id, { decision: q.id, option: o.id });
       this.app.log(`answered ${j.target}/${j.id}: ${o.label}`);
@@ -143,7 +143,7 @@ export class JobsScreen implements Screen {
   }
 
   private async adopt(j: JobView): Promise<void> {
-    if (!(await this.app.confirm(`Adopt ${j.target}/${j.id}? This controller takes over driving it.`))) return;
+    if (!(await this.app.confirmTyped(`Adopt ${j.target}/${j.id}? This controller takes over driving it.`, j.id))) return;
     try {
       await api.adopt(this.app.conn, j.target, j.id);
       this.app.log(`adopted ${j.target}/${j.id}`);

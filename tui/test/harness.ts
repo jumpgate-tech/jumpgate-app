@@ -44,7 +44,7 @@ export async function mount(
   const fake = fakeServer({ ...baseRoutes(), ...o.routes });
   const conn: Conn = { socket: fake.socket, token: TOKEN, system: false };
   const t = await createTestRenderer({ width: o.width ?? 100, height: o.height ?? 30 });
-  const app = new App(t.renderer, { myVersion: "0.0.1", streamOpts: { delay: () => 5 }, runningEveryMs: 60_000, ...o.app });
+  const app = new App(t.renderer, { myVersion: "0.0.1", streamOpts: { delay: () => 5 }, runningEveryMs: 60_000, modalGuardMs: 0, ...o.app });
   for (const s of screens(app)) app.add(s);
   if (o.attach !== false) app.attach(conn);
   const frame = async () => {
@@ -98,4 +98,10 @@ export function recorder(code = 0) {
 export const typeText = (m: Mounted, s: string) => {
   for (const c of s) m.app.handleKey(key(c === " " ? "space" : c, { seq: c }));
   return m.frame();
+};
+
+/** say types word into a typed confirm and presses Enter. */
+export const say = async (m: Mounted, word: string) => {
+  await typeText(m, word);
+  return m.press("return");
 };

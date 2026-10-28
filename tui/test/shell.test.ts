@@ -166,3 +166,35 @@ test("a server error with a credential URL is masked in the flash and the activi
   expect(m.app.flash).not.toContain("SECRET");
   expect(m.app.activity.all().join("\n")).not.toContain("SECRET");
 });
+
+import { TypedConfirm } from "../src/shell/confirm.ts";
+test("TypedConfirm: only the exact word; a miss asks again; a blank or unshowable word is refused", () => {
+  let got = null as boolean | null;
+  const c = new TypedConfirm("Remove?", "alpha", (ok) => (got = ok));
+  c.key(key("return"));
+  expect(got).toBeNull();
+  for (const ch of "alph") c.key(key(ch));
+  c.key(key("return"));
+  expect(got).toBeNull();
+  expect(c.lines(80).join("\n")).toContain('that is not "alpha"');
+  for (const ch of "alpha") c.key(key(ch));
+  c.key(key("return"));
+  expect(got).toBe(true);
+  for (const w of ["", "a\x1bb"]) {
+    let g = null as boolean | null;
+    const r = new TypedConfirm("x", w, (ok) => (g = ok));
+    for (const ch of w) r.key(key(ch, { seq: ch }));
+    r.key(key("return"));
+    expect(g).toBeNull();
+    expect(r.refused).toBe(true);
+  }
+});
+
+test("the y/n confirm no longer takes Enter as yes", async () => {
+  m = await mount(() => [dummy("Fleet")]);
+  const p = m.app.confirm("go?");
+  await m.press("return");
+  expect(m.app.modal).not.toBeNull();
+  await m.press("n");
+  expect(await p).toBe(false);
+});

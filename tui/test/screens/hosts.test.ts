@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { HostsScreen, inviteLines } from "../../src/screens/hosts.ts";
 import { json, sseResponse } from "../fake.ts";
-import { fixture, mount, recorder, typeText, type Mounted } from "../harness.ts";
+import { fixture, mount, recorder, say, typeText, type Mounted } from "../harness.ts";
 
 let m: Mounted | undefined;
 afterEach(async () => {
@@ -55,7 +55,8 @@ test("add a box: probe, show the full fingerprint, confirm, add, pair into the a
   await m!.press("return"); // no jump host
   const fp = await m!.waitFor("SHA256:fullprint");
   expect(fp).toContain("10.0.0.9:22");
-  await m!.press("y");
+  expect(fp).toContain("Type yes to confirm");
+  await say(m!, "yes");
   await m!.waitFor("installed address");
   await m!.press("return"); // install over ssh
   await m!.waitFor(() => m!.app.activity.all().some((l) => l.includes("paired beta: gate 0xfeed")));
@@ -95,7 +96,8 @@ test("add this machine, upgrade, remove, forget a key, ssh, rename legacy names"
   await m!.waitFor(() => argvs.length > 0);
   await m!.press("M", "y");
   await m!.waitFor(() => m!.fake.requests.some((r) => r.path === "/api/jobs/alpha"));
-  await m!.press("D", "y");
+  await m!.press("D");
+  await say(m!, "alpha");
   await m!.waitFor(() => m!.fake.requests.some((r) => r.method === "DELETE"));
   expect(rec.calls).toEqual([{ args: ["hosts", "add", "here", "--local"] }]);
   expect(argvs).toEqual([fixture("sshcommand").argv]);
@@ -136,4 +138,23 @@ test("a server ssh argv of another shape is refused and never run", async () => 
   await m!.press("x");
   await Bun.sleep(30);
   expect(argvs).toEqual([]);
+});
+
+test("a buffered Enter lands on the trust modal and does not trust", async () => {
+  await hosts();
+  await m!.press("a");
+  await typeText(m!, "beta");
+  await m!.press("return");
+  await typeText(m!, "ops@10.0.0.9");
+  await m!.press("return");
+  m!.app.opts.modalGuardMs = 150; // the trust modal opens with the real guard
+  await m!.press("return"); // no jump host
+  await m!.waitFor("SHA256:fullprint");
+  m!.app.handleKey({ name: "return", seq: "\r", ctrl: false, shift: false, meta: false }); // typed ahead: flushed
+  await Bun.sleep(200);
+  m!.app.handleKey({ name: "return", seq: "\r", ctrl: false, shift: false, meta: false }); // Enter alone: not yes
+  await Bun.sleep(20);
+  expect(await m!.frame()).toContain("Type yes to confirm");
+  expect(m!.fake.requests.some((r) => r.path === "/api/hostkeys/confirm")).toBe(false);
+  expect(m!.fake.requests.some((r) => r.path === "/api/targets" && r.method === "POST")).toBe(false);
 });

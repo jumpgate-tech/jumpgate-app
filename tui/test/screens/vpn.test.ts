@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { jsonWithSecretString } from "../../src/api/client.ts";
 import { VPNScreen } from "../../src/screens/vpn.ts";
 import { json } from "../fake.ts";
-import { mount, typeText, type Mounted } from "../harness.ts";
+import { mount, say, typeText, type Mounted } from "../harness.ts";
 
 let m: Mounted | undefined;
 afterEach(async () => {
@@ -62,7 +62,8 @@ test("a client config is read from a file, sent once, and never drawn", async ()
 test("client up, status and delete", async () => {
   await vpn();
   await m!.press("U", "s");
-  await m!.press("D", "y");
+  await m!.press("D");
+  await say(m!, "c1");
   await m!.waitFor(() => !!sent("DELETE", "/api/vpns/c1"));
   expect(sent("POST", "/api/vpns/c1/up")).toBeTruthy();
   expect(sent("GET", "/api/vpns/c1/status")).toBeTruthy();
@@ -82,8 +83,10 @@ test("servers: create, down, status, endpoint, remove peer, delete", async () =>
   await m!.press("return");
   await m!.press("r");
   await typeText(m!, "phone");
-  await m!.press("return", "y");
-  await m!.press("D", "y");
+  await m!.press("return");
+  await say(m!, "phone");
+  await m!.press("D");
+  await say(m!, "s1");
   await m!.waitFor(() => !!sent("DELETE", "/api/vpn-servers/s1"));
   expect(JSON.parse(sent("POST", "/api/vpn-servers")!.body)).toEqual({ id: "s2", targetId: "alpha" });
   expect(JSON.parse(sent("POST", "/api/vpn-servers/s1/endpoint")!.body)).toEqual({ endpointHost: "vpn2.example" });

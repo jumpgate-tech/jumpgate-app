@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { ServicesScreen } from "../../src/screens/services.ts";
 import { json, sseResponse } from "../fake.ts";
-import { fixture, mount, typeText, type Mounted } from "../harness.ts";
+import { fixture, mount, say, typeText, type Mounted } from "../harness.ts";
 
 let m: Mounted | undefined;
 afterEach(async () => {
@@ -73,15 +73,12 @@ test("every action reaches its route; replies are masked", async () => {
 test("wipe and clear need the service name typed back", async () => {
   await open();
   await m!.press("W");
-  await typeText(m!, "exec");
-  await m!.press("return");
+  await say(m!, "exec");
+  expect(await m!.frame()).toContain('that is not "beacon"');
   expect(sent("POST", "/api/targets/alpha/containers/beacon/wipe")).toBeUndefined();
-  await m!.press("W");
-  await typeText(m!, "beacon");
-  await m!.press("return");
+  await say(m!, "beacon");
   await m!.press("K");
-  await typeText(m!, "beacon");
-  await m!.press("return");
+  await say(m!, "beacon");
   await Bun.sleep(30);
   expect(JSON.parse(sent("POST", "/api/targets/alpha/containers/beacon/wipe")!.body)).toEqual({ Confirm: "beacon" });
   expect(JSON.parse(sent("POST", "/api/targets/alpha/services/beacon/clear")!.body)).toEqual({ Confirm: "beacon" });

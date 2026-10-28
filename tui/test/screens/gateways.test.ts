@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { GatewaysScreen } from "../../src/screens/gateways.ts";
 import { json } from "../fake.ts";
-import { mount, typeText, type Mounted } from "../harness.ts";
+import { mount, say, typeText, type Mounted } from "../harness.ts";
 
 let m: Mounted | undefined;
 afterEach(async () => {
@@ -48,16 +48,18 @@ test("every gateway action reaches its route", async () => {
     }
   };
   for (const k of ["g", "S", "R", "v", "a", "A", "t", "K", "l", "d", "h"]) await m!.press(k);
-  await m!.press("T", "y", "P", "y", "c", "y", "s", "y");
+  await m!.press("T");
+  await say(m!, "g1");
+  await m!.press("P", "y", "c", "y", "s", "y");
   await m!.press("n"); await input("g2", "alpha");
   await m!.press("G"); await input('{"networks":[]}');
-  await m!.press("W"); await input("g1");
+  await m!.press("W"); await say(m!, "g1");
   await m!.press("M"); await input("watch"); await m!.press("y");
   await m!.press("k"); await input("1");
   await m!.press("L"); await input("1");
-  await m!.press("x"); await input("k9"); await m!.press("y");
+  await m!.press("x"); await input("k9"); await say(m!, "k9");
   await m!.press("O"); await input("old-gw"); await m!.press("y");
-  await m!.press("D", "y");
+  await m!.press("D"); await say(m!, "g1");
   await Bun.sleep(50);
   for (const r of Object.keys(routes).filter((r) => !r.endsWith(" /api/gateways") && !r.includes("POST /api/gateways/g1/keys"))) {
     const [method, path] = r.split(" ");

@@ -67,12 +67,12 @@ export class GatewaysScreen implements Screen {
       ? {
           g: () => this.call(g, () => api.gateway(c(), g)),
           S: () => this.call(`start ${g}`, () => api.gatewayAction(c(), g, "start")),
-          T: () => this.confirmed(`Stop ${g}? Its RPC stops answering.`, `stop ${g}`, () => api.gatewayAction(c(), g, "stop")),
+          T: () => this.typed(`Stop ${g}? Its RPC stops answering.`, g, `stop ${g}`, () => api.gatewayAction(c(), g, "stop")),
           R: () => this.call(`restart ${g}`, () => api.gatewayAction(c(), g, "restart")),
           G: () => this.json(`${g} config as JSON`, (v) => this.call(`config ${g}`, () => api.putGatewayConfig(c(), g, v))),
           P: () => this.confirmed(`Provision ${g}?`, `provision ${g}`, () => api.provisionGateway(c(), g)),
           W: () => this.wipe(g),
-          D: () => this.confirmed(`Delete the gateway ${g}?`, `delete ${g}`, () => api.deleteGateway(c(), g)),
+          D: () => this.typed(`Delete the gateway ${g}?`, g, `delete ${g}`, () => api.deleteGateway(c(), g)),
           M: () => this.module(g),
           c: () => this.confirmed(`Trust ${g}'s certificate on this machine? The OS may ask you.`, `trust cert ${g}`, () => api.trustCert(c(), g)),
           v: () => this.call(`TLS ${g}`, () => api.tlsVerify(c(), g)),
@@ -112,6 +112,12 @@ export class GatewaysScreen implements Screen {
     this.load();
   }
 
+  private async typed(q: string, want: string, what: string, p: () => Promise<unknown>): Promise<void> {
+    if (!(await this.app.confirmTyped(q, want))) return;
+    await this.call(what, p);
+    this.load();
+  }
+
   private say(s: string): void {
     this.out = [s];
     this.app.render();
@@ -147,10 +153,8 @@ export class GatewaysScreen implements Screen {
   }
 
   private async wipe(g: string): Promise<void> {
-    const t = await this.app.askText(`Wipe ${g}: its data is deleted. Type ${g} to go on`);
-    if (t === null) return;
-    if (t.trim() !== g) return this.say(`Not done: you did not type ${g}`);
-    await this.call(`wipe ${g}`, () => api.wipeGateway(this.app.conn, g, t.trim()));
+    if (!(await this.app.confirmTyped(`Wipe ${g}: its data is deleted.`, g))) return;
+    await this.call(`wipe ${g}`, () => api.wipeGateway(this.app.conn, g, g));
   }
 
   private async module(g: string): Promise<void> {
@@ -178,7 +182,7 @@ export class GatewaysScreen implements Screen {
     const id = (await this.app.askText("key id to revoke"))?.trim();
     if (!id) return;
     if (!NAME.test(id)) return this.say("FAIL a key id is a plain name");
-    await this.confirmed(`Revoke ${id} on ${g}? Its calls start failing at once.`, `revoke ${id}`, () => api.revokeCustomerKey(this.app.conn, g, id));
+    await this.typed(`Revoke ${id} on ${g}? Its calls start failing at once.`, id, `revoke ${id}`, () => api.revokeCustomerKey(this.app.conn, g, id));
   }
 
   private async orphan(): Promise<void> {

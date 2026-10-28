@@ -10,13 +10,58 @@ export interface Modal {
   readonly takesText: boolean;
 }
 
+/**
+ * TypedConfirm: a port of the Go TUI's typed confirm. Only the exact word,
+ * then Enter, says yes; a miss clears the entry and asks again; esc cancels.
+ * A blank word, or one the screen cannot show, can never be confirmed.
+ */
+export class TypedConfirm implements Modal {
+  readonly title = "confirm";
+  readonly takesText = true;
+  private text = "";
+  private miss = "";
+  readonly refused: boolean;
+  constructor(
+    private readonly detail: string,
+    readonly want: string,
+    private readonly done: (ok: boolean) => void,
+  ) {
+    this.refused = want.trim() === "" || sanitizeLine(want) !== want;
+  }
+  lines(w: number): string[] {
+    const out = wrapText(this.detail, w);
+    if (this.refused) return [...out, "", "This name cannot be confirmed here: it is blank, or has characters the screen cannot show. Use the jumpgate CLI.", "", "[esc] close"];
+    out.push("", `Type ${this.want} to confirm, esc to cancel:`, `> ${sanitizeLine(this.text)}_`);
+    if (this.miss) out.push("", this.miss);
+    return out.map((l) => clip(l, w));
+  }
+  key(k: Key) {
+    if (k.name === "escape") return this.done(false);
+    if (k.name === "return") {
+      const typed = this.text.trim();
+      this.text = "";
+      if (this.refused || typed === "" || typed !== this.want) {
+        if (!this.refused) this.miss = `that is not "${this.want}"; type it exactly, or esc to cancel`;
+        return;
+      }
+      return this.done(true);
+    }
+    if (k.name === "backspace") this.text = [...this.text].slice(0, -1).join("");
+    else if (this.text.length < 128) this.text += printable(k);
+  }
+}
+
+function wrapText(s: string, w: number): string[] {
+  return s.split("\n").flatMap((l) => sanitizeLine(l).match(new RegExp(`.{1,${Math.max(10, w)}}`, "g")) ?? [""]);
+}
+
 export function confirmModal(text: string, done: (ok: boolean) => void): Modal {
   return {
     title: "confirm",
     takesText: false,
     lines: (w) => [...sanitizeLine(text).match(new RegExp(`.{1,${Math.max(10, w)}}`, "g"))!, "", "[y] yes   [n] no"],
     key(k) {
-      if (k.name === "y" || k.name === "return") done(true);
+      if (k.name === "y") done(true);
       else if (k.name === "n" || k.name === "escape" || k.name === "q") done(false);
     },
   };

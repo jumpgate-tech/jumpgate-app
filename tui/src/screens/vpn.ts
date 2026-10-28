@@ -74,7 +74,7 @@ export class VPNScreen implements Screen {
       d: () => this.call(`down ${id}`, () => (srv ? api.vpnServerUpDown(c(), id, false) : api.vpnUpDown(c(), id, false))),
       s: () => this.call(`status ${id}`, () => (srv ? api.vpnServerStatus(c(), id) : api.vpnStatus(c(), id))),
       D: async () => {
-        if (!(await this.app.confirm(`Delete the VPN ${srv ? "server" : "overlay"} ${id}?`))) return;
+        if (!(await this.app.confirmTyped(`Delete the VPN ${srv ? "server" : "overlay"} ${id}?`, id))) return;
         await this.call(`delete ${id}`, () => (srv ? api.deleteVPNServer(c(), id) : api.deleteVPN(c(), id)));
       },
     };
@@ -170,7 +170,7 @@ export class VPNScreen implements Screen {
     if (!name) return;
     const p = s.peers.find((x) => x.name === name);
     if (!p) return this.say(`FAIL no peer named ${sanitizeLine(name)}`);
-    if (!(await this.app.confirm(`Remove ${name} from ${s.id}? The device loses access.`))) return;
+    if (!(await this.app.confirmTyped(`Remove ${name} from ${s.id}? The device loses access.`, name))) return;
     await this.call(`remove peer ${name}`, () => api.removePeer(this.app.conn, s.id, p.publicKey));
   }
 

@@ -149,10 +149,8 @@ export class ServicesScreen implements Screen {
   }
 
   private async typed(what: string, name: string, fn: (typed: string) => Promise<void>): Promise<void> {
-    const t = await this.app.askText(`${what} Type ${name} to go on`);
-    if (t === null) return;
-    if (t.trim() !== name) return this.show("Not done", `you typed ${JSON.stringify(t)}, not ${name}`);
-    await fn(t.trim());
+    if (!(await this.app.confirmTyped(what, name))) return;
+    await fn(name);
   }
 
   private async setup(id: string, wire: unknown): Promise<void> {
