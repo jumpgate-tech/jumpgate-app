@@ -89,7 +89,7 @@ func unlockedHook(logf func(string, ...any)) func(*vault.Vault) (signer.Signer, 
 
 // credentialKEK reads the vault's slot key from the systemd credential
 // $CREDENTIALS_DIRECTORY/jumpgate-vault-key: exactly 32 bytes, read through
-// readPrivateFile. ok is false when there is none or it is unusable.
+// readSystemdCredential. ok is false when there is none or it is unusable.
 func credentialKEK(getenv func(string) string) ([]byte, bool) {
 	kek, err := readCredentialKEK(getenv)
 	return kek, err == nil && kek != nil
@@ -103,7 +103,7 @@ func readCredentialKEK(getenv func(string) string) ([]byte, error) {
 		return nil, nil
 	}
 	p := filepath.Join(dir, vaultCredName)
-	raw, err := readPrivateFile(p)
+	raw, err := readSystemdCredential(p)
 	if err != nil {
 		clear(raw)
 		return nil, err
