@@ -15,8 +15,9 @@ const B64 = new TextEncoder().encode("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop
  * secretBody builds `{"<field>":"<base64 of value>"}` as bytes, never as a
  * string, so the caller can zero it. Go decodes a []byte field from base64.
  */
-export function secretBody(field: string, value: Uint8Array): Uint8Array {
-  const pre = new TextEncoder().encode(`{"${field}":"`);
+export function secretBody(field: string, value: Uint8Array, extra: Record<string, string> = {}): Uint8Array {
+  const lead = Object.entries(extra).map(([k, v]) => `${JSON.stringify(k)}:${JSON.stringify(v)},`).join("");
+  const pre = new TextEncoder().encode(`{${lead}"${field}":"`);
   const post = new TextEncoder().encode(`"}`);
   const n = Math.ceil(value.length / 3) * 4;
   const out = new Uint8Array(pre.length + n + post.length);
@@ -96,5 +97,20 @@ export async function putVaultSecret(c: Conn, name: "relay-token" | "admin-token
   } finally {
     body.fill(0);
     value.fill(0);
+  }
+}
+
+export const controller = (c: Conn) => request<T.ControllerView>(c, "GET", "/api/controller");
+export const checkGate = (c: Conn, id: string) => request<T.AgentCheck>(c, "POST", flt(id, "/check"));
+export const restart = (c: Conn) => request(c, "POST", "/api/restart");
+
+/** systemInitKey has the jumpgate service create its controller key in a new vault; pass is zeroed. */
+export async function systemInitKey(c: Conn, pass: Uint8Array): Promise<void> {
+  const body = secretBody("passphrase", pass, { store: "vault" });
+  try {
+    await request(c, "POST", "/api/system/init-key", body);
+  } finally {
+    body.fill(0);
+    pass.fill(0);
   }
 }

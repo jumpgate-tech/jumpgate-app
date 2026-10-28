@@ -30,6 +30,10 @@ export const ROUTES = [
   "GET /api/settings",
   "PUT /api/settings",
   "PUT /api/vault/secrets/{name}",
+  "GET /api/controller",
+  "POST /api/fleet/{id}/check",
+  "POST /api/restart",
+  "POST /api/system/init-key",
 ] as const;
 
 export type Route = (typeof ROUTES)[number];

@@ -6,6 +6,7 @@ import { VERSION } from "../main.ts";
 import { ConnectScreen } from "../screens/connect.ts";
 import { FleetScreen } from "../screens/fleet.ts";
 import { JobsScreen } from "../screens/jobs.ts";
+import { KeysScreen } from "../screens/keys.ts";
 import { NodeScreen } from "../screens/node.ts";
 import { VaultScreen } from "../screens/vault.ts";
 import { App } from "./app.ts";
@@ -17,6 +18,7 @@ export function mountApp(renderer: CliRenderer, args: Args, version = VERSION): 
   app.add(new FleetScreen(app));
   app.add(new JobsScreen(app));
   app.add(new VaultScreen(app));
+  app.add(new KeysScreen(app));
   app.add(new NodeScreen(app), false);
   return app;
 }
