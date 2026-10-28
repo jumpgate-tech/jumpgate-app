@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -125,7 +126,8 @@ func TestSystemPushNeverSendsTheKeyPath(t *testing.T) {
 			t.Fatalf("the probe carried the key path: %q", b)
 		}
 	}
-	if p.dialled == nil || p.dialled.KeyPath != "/home/alice/.ssh/id" || p.dialled.HostKey == nil {
+	wantKey, _ := filepath.Abs("/home/alice/.ssh/id") // C:\home\alice\.ssh\id on Windows
+	if p.dialled == nil || p.dialled.KeyPath != wantKey || p.dialled.HostKey == nil {
 		t.Fatalf("dialled %+v", p.dialled)
 	}
 	// The operator is not root on the box: bootstrap goes through sudo.

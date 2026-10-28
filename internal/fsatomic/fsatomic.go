@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // WriteFile writes b to path (0600) through a fsynced temp file and a rename,
@@ -45,11 +46,16 @@ func WriteFile(path string, b []byte) error {
 }
 
 // SyncDir fsyncs a directory. It is a variable so a test can make the
-// directory fsync fail.
+// directory fsync fail. On Windows the directory is opened but not flushed:
+// a read-only directory handle cannot be flushed (Access is denied), and
+// NTFS journals the rename.
 var SyncDir = func(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
 		return fmt.Errorf("fsatomic: open %s to sync it: %w", dir, err)
+	}
+	if runtime.GOOS == "windows" {
+		return d.Close()
 	}
 	if err := d.Sync(); err != nil {
 		d.Close()

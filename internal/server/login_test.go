@@ -286,7 +286,8 @@ func TestRootRedeemsAnyUsersCode(t *testing.T) {
 func TestPerUserCodesStillBelongToTheServer(t *testing.T) {
 	s, ts, _ := loginServer(t)
 	code := s.NewLoginCode()
-	s.peerUID = func(*http.Request) (int, peerVerdict) { return s.selfUID + 1, peerFound }
+	// Not root either: on Windows selfUID is -1, so selfUID+1 would be 0.
+	s.peerUID = func(*http.Request) (int, peerVerdict) { return s.selfUID + 1000, peerFound }
 	if res, _ := login(t, ts, code); res.StatusCode != http.StatusForbidden {
 		t.Fatalf("another uid: %d, want 403", res.StatusCode)
 	}

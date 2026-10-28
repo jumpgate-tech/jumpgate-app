@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/fs"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -43,6 +44,9 @@ func (r *privRecorder) Close() error                                     { retur
 // package's unit file.
 func setupSeams(t *testing.T, goos string, euid int, packaged bool) *privRecorder {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the service is Linux-only, and its paths are not absolute on Windows")
+	}
 	rec := &privRecorder{}
 	oldGOOS, oldEuid, oldPriv, oldExists := hostGOOS, geteuid, runPrivileged, pathExists
 	hostGOOS, geteuid = goos, func() int { return euid }
