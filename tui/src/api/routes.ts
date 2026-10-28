@@ -49,6 +49,23 @@ export const ROUTES = [
   "GET /api/targets/{id}/modules",
   "PUT /api/targets/{id}/modules/{module}",
   "GET /api/targets/{id}/setup/stream",
+  "GET /api/targets/{id}/disk",
+  "GET /api/targets/{id}/du",
+  "GET /api/targets/{id}/containers",
+  "GET /api/targets/{id}/containers/{svc}",
+  "GET /api/targets/{id}/containers/{svc}/config",
+  "PUT /api/targets/{id}/containers/{svc}/config",
+  "POST /api/targets/{id}/containers/{svc}/{action}",
+  "POST /api/targets/{id}/containers/{svc}/provision",
+  "POST /api/targets/{id}/containers/{svc}/wipe",
+  "POST /api/targets/{id}/containers/{svc}/reset",
+  "POST /api/targets/{id}/services/{svc}/clear",
+  "POST /api/targets/{id}/setup",
+  "GET /api/targets/{id}/monitor/stream",
+  "GET /api/targets/{id}/diagnostics",
+  "GET /api/targets/{id}/diagnostics/latest",
+  "POST /api/targets/{id}/explain",
+  "POST /api/targets/{id}/intent/{kind}",
 ] as const;
 
 export type Route = (typeof ROUTES)[number];

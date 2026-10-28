@@ -158,3 +158,25 @@ export const listModules = (c: Conn, id: string) => request<T.ModulesView>(c, "G
 export const setModule = (c: Conn, id: string, mod: string, body: T.SetModule) =>
   request<T.SetModuleResult>(c, "PUT", tgt(id, `/modules/${e(mod)}`), body);
 export const watchSetup = (c: Conn, id: string, s: AbortSignal, o?: StreamOpts) => stream<T.SetupEvent>(c, tgt(id, "/setup/stream"), s, o);
+
+// Node services and containers (E, rest). Their replies are shown as JSON.
+const ctr = (id: string, svc: string, rest = "") => tgt(id, `/containers/${e(svc)}${rest}`);
+export const targetDisk = (c: Conn, id: string) => request<unknown>(c, "GET", tgt(id, "/disk"));
+export const diskUsage = (c: Conn, id: string) => request<unknown>(c, "GET", tgt(id, "/du"));
+export const containers = (c: Conn, id: string) => request<unknown>(c, "GET", tgt(id, "/containers"));
+export const container = (c: Conn, id: string, svc: string) => request<unknown>(c, "GET", ctr(id, svc));
+export const containerConfig = (c: Conn, id: string, svc: string) => request<unknown>(c, "GET", ctr(id, svc, "/config"));
+export const putContainerConfig = (c: Conn, id: string, svc: string, cfg: unknown) => request<unknown>(c, "PUT", ctr(id, svc, "/config"), cfg);
+export const containerAction = (c: Conn, id: string, svc: string, action: string) => request<unknown>(c, "POST", ctr(id, svc, `/${e(action)}`));
+export const provisionContainer = (c: Conn, id: string, svc: string) => request<unknown>(c, "POST", ctr(id, svc, "/provision"));
+/** wipe and clear need the service's name typed back as confirm, as the server checks. */
+export const wipeContainer = (c: Conn, id: string, svc: string, confirm: string) => request<unknown>(c, "POST", ctr(id, svc, "/wipe"), { Confirm: confirm });
+export const resetContainer = (c: Conn, id: string, svc: string) => request<unknown>(c, "POST", ctr(id, svc, "/reset"));
+export const clearService = (c: Conn, id: string, svc: string, confirm: string) =>
+  request<unknown>(c, "POST", tgt(id, `/services/${e(svc)}/clear`), { Confirm: confirm });
+export const startSetup = (c: Conn, id: string, wire: unknown) => request<unknown>(c, "POST", tgt(id, "/setup"), wire);
+export const watchMonitor = (c: Conn, id: string, s: AbortSignal, o?: StreamOpts) => stream<unknown>(c, tgt(id, "/monitor/stream"), s, o);
+export const diagnostics = (c: Conn, id: string) => request<unknown>(c, "GET", tgt(id, "/diagnostics"));
+export const diagnosticsLatest = (c: Conn, id: string) => request<unknown>(c, "GET", tgt(id, "/diagnostics/latest"));
+export const explain = (c: Conn, id: string, lines: string[]) => request<{ text: string; sentExcerpt: string[]; provider: string; local: boolean }>(c, "POST", tgt(id, "/explain"), { lines });
+export const intent = (c: Conn, id: string, kind: string, payload: unknown = {}) => request<unknown>(c, "POST", tgt(id, `/intent/${e(kind)}`), payload);
