@@ -81,7 +81,8 @@ test("a dead socket means not running, and the token stays out of the message", 
   expect(String(err) + err.stack).not.toContain(TOKEN);
 });
 
-test("an unreadable system dir means not an admin", async () => {
+// root reads a mode-000 dir anyway (the CI image runs as root), so the check cannot fail there.
+test.skipIf(process.getuid?.() === 0)("an unreadable system dir means not an admin", async () => {
   const sys = noSystem();
   writeFileSync(join(sys, "system.json"), "{}");
   chmodSync(sys, 0o000);
