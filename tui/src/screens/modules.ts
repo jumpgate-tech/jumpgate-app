@@ -149,5 +149,7 @@ export class ModulesScreen implements Screen {
       }
     }
     ac.abort();
+    // The module's state changed on the box: show it as it is now.
+    if (this.box === id) this.load(id);
   }
 }

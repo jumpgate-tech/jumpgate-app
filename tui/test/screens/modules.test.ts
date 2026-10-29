@@ -65,6 +65,9 @@ test("a started module follows the setup stream into the activity", async () => 
   await m!.press("space", "y");
   await m!.waitFor(() => m!.app.activity.all().some((l) => l.includes("setup alpha: pull pulling the image")));
   await m!.waitFor(() => m!.app.activity.all().some((l) => l.includes("setup alpha: done")));
+  // Live: the list stayed as it was before the run; it is read again once the run ends.
+  const reads = () => m!.fake.requests.filter((r) => r.path === "/api/targets/alpha/modules").length;
+  await m!.waitFor(() => reads() === 3);
 });
 
 // Live: a box that reports no modules showed "no modules", and nothing in
