@@ -1,0 +1,10 @@
+{
+  "state": "locked",
+  "slots": [
+    "passphrase"
+  ],
+  "plain": [
+    "relay-token"
+  ],
+  "reason": "idle"
+}

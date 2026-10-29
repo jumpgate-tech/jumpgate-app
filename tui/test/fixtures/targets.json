@@ -1,0 +1,20 @@
+[
+  {
+    "id": "alpha",
+    "mode": "ssh",
+    "ssh": {
+      "Host": "10.0.0.2",
+      "User": "root",
+      "KeyPath": "/k",
+      "HostKeyFile": "/h",
+      "Port": 22
+    },
+    "agent": {
+      "address": "0xdef",
+      "transport": "ssh",
+      "pairedAt": "2026-10-28T12:00:00Z"
+    },
+    "link": "agent",
+    "thisMachine": false
+  }
+]

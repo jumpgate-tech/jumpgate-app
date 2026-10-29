@@ -1,0 +1,10 @@
+[
+  {
+    "ID": "ssh",
+    "Title": "SSH is key-only",
+    "Why": "passwords get guessed",
+    "Status": "pass",
+    "Detail": "PasswordAuthentication no",
+    "Fix": ""
+  }
+]

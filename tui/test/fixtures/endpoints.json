@@ -1,0 +1,9 @@
+{
+  "ExecHTTP": "http://127.0.0.1:8545",
+  "BeaconHTTP": "http://127.0.0.1:5052",
+  "ExecReachable": true,
+  "BeaconReachable": false,
+  "ChainIDMatches": true,
+  "Access": "ssh",
+  "TunnelHint": "ssh -L 8545:127.0.0.1:8545 alpha"
+}

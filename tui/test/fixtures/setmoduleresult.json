@@ -1,0 +1,12 @@
+{
+  "status": "saved-gateways-failed",
+  "gateways": [
+    "g1"
+  ],
+  "failed": [
+    {
+      "id": "g2",
+      "error": "down"
+    }
+  ]
+}

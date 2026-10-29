@@ -1,0 +1,4 @@
+# Go routes the dashboard reaches through the jumpgate CLI instead of calling
+# them itself. One per line: METHOD /pattern  reason
+POST /api/login-code  used through `jumpgate open`: the one-time code goes in a redirect file, never through the TUI
+POST /api/system/seal  used through `jumpgate vault seal`: the root steps that install the credential run on the terminal

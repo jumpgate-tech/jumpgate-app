@@ -1,0 +1,110 @@
+{
+  "at": "2026-10-28T12:00:00Z",
+  "intervalSeconds": 15,
+  "rows": [
+    {
+      "id": "alpha",
+      "link": "agent",
+      "thisMachine": true,
+      "reachable": true,
+      "lastSeen": "2026-10-28T12:00:00Z",
+      "checkedAt": "2026-10-28T12:00:00Z",
+      "chainId": 1,
+      "network": "mainnet",
+      "agent": "0.6.0",
+      "status": {
+        "at": "2026-10-28T12:00:00Z",
+        "exec": {
+          "active": true,
+          "syncing": false,
+          "head": 21000000,
+          "distance": 1,
+          "peers": 50,
+          "state": "synced"
+        },
+        "beacon": {
+          "active": true,
+          "syncing": true,
+          "head": 10500000,
+          "distance": 2,
+          "peers": 80,
+          "state": "syncing"
+        },
+        "refHead": 21000003,
+        "headLag": 3,
+        "overall": "syncing",
+        "diskUsedPct": 61.5
+      },
+      "disk": {
+        "at": "2026-10-28T12:00:00Z",
+        "execBytes": 1099511627776,
+        "beaconBytes": 214748364800,
+        "freeBytes": 858993459200,
+        "expectedExecBytes": 1395864371200,
+        "expectedBeaconBytes": 268435456000,
+        "expectedLabel": "mainnet full",
+        "syncLabel": "synced",
+        "fit": "ok",
+        "history": [
+          {
+            "at": "2026-10-28T12:00:00Z",
+            "usedBytes": 1099511627776,
+            "freeBytes": 858993459200
+          }
+        ],
+        "growthPerDay": 12884901888,
+        "daysToFull": 40.5
+      },
+      "firewall": {
+        "pass": 5,
+        "warn": 1,
+        "fail": 0,
+        "unknown": 1,
+        "grade": "B"
+      },
+      "firewallAt": "2026-10-28T12:00:00Z",
+      "jobs": {
+        "running": 1,
+        "needsDecision": 1
+      },
+      "error": {
+        "error": "stale",
+        "hint": "wait",
+        "code": "timeout"
+      },
+      "statusError": {
+        "error": "box unreachable",
+        "hint": "check ssh",
+        "code": "unreachable",
+        "at": "2026-10-28T12:00:00Z"
+      },
+      "diskError": {
+        "error": "box unreachable",
+        "hint": "check ssh",
+        "code": "unreachable",
+        "at": "2026-10-28T12:00:00Z"
+      },
+      "firewallError": {
+        "error": "box unreachable",
+        "hint": "check ssh",
+        "code": "unreachable",
+        "at": "2026-10-28T12:00:00Z"
+      },
+      "stale": {
+        "status": true,
+        "disk": false,
+        "firewall": true
+      },
+      "alertCount": 1,
+      "alertMessage": "disk tight",
+      "alerts": [
+        {
+          "key": "disk",
+          "message": "disk tight",
+          "since": "2026-10-28T12:00:00Z"
+        }
+      ]
+    }
+  ],
+  "locked": true
+}
