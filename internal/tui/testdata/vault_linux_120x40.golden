@@ -8,15 +8,15 @@
 |  Jobs           [2]|| slots      passphrase, keystore                                                                |
 |  Signers        [3]|| plain      relay-token (not in the vault yet: m)                                               |
 |  Gateways       [4]|| idle lock  30 min                                                                              |
-|> Vault          [5]||                                                                                                |
-|  Server         [6]|| [u] unlock   [l] lock   [t] idle lock minutes   [p] put relay-token or admin-token             |
-|  Settings       [7]||                                                                                                |
-|--------------------|| VAULT COMMANDS (take over the terminal and ask for passphrases there)                          |
-|   fleet     3 boxes|| [I] create the vault   [m] move plain secrets in   [b] back up   [r] restore                   |
-|>+ box-a      synced|| [a] add a recovery code (prints once)   [K] raise the KDF cost                                 |
-| + box-b     down 4m|| [s] seal with the TPM2   [S] seal with the host key (sudo)                                     |
+|  VPN            [5]||                                                                                                |
+|> Vault          [6]|| [u] unlock   [l] lock   [t] idle lock minutes   [p] put relay-token or admin-token             |
+|  Server         [7]||                                                                                                |
+|  Settings       [8]|| VAULT COMMANDS (take over the terminal and ask for passphrases there)                          |
+|--------------------|| [I] create the vault   [m] move plain secrets in   [b] back up   [r] restore                   |
+|   fleet     3 boxes|| [a] add a recovery code (prints once)   [K] raise the KDF cost                                 |
+|>+ box-a      synced|| [s] seal with the TPM2   [S] seal with the host key (sudo)                                     |
+| + box-b     down 4m||                                                                                                |
 | + laptop*    local*||                                                                                                |
-|                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |

@@ -22,7 +22,7 @@ func vaultApp(t *testing.T, f *tuitest.Fake, goos string) *App {
 	f.SettingsV.VaultIdleLockMinutes = 30
 	a := dashApp(t, f, 120, 40, "ascii", "auto")
 	a.o.GOOS = goos
-	return press(t, a, "5").(*App)
+	return press(t, a, "6").(*App)
 }
 
 // recordSelf makes Command record each argv and run true.

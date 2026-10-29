@@ -8,15 +8,15 @@
 |  Jobs           [2]|| update     v0.7.0 is out https://github.com/***/jumpgate/releases/tag/***                      |
 |  Signers        [3]|| process    your own server, pid 4242, up 2h                                                    |
 |  Gateways       [4]|| web app    127.0.0.1:7788                                                                      |
-|  Vault          [5]|| relay      off, meter off, key admin off                                                       |
-|> Server         [6]||                                                                                                |
-|  Settings       [7]|| [x] stop the server   [u] check for an update   [o] open in the browser                        |
-|--------------------||                                                                                                |
-|   fleet     3 boxes|| JUMPGATE SERVICE (asks for sudo on the terminal)                                               |
-|>+ box-a      synced|| [I] install the systemd service                                                                |
-| + box-b     down 4m|| [S] set it up: its vault key, unlock, pair this machine                                        |
-| + laptop*    local*|| [A] the same, self-only (this machine is the only box)                                         |
-|                    ||                                                                                                |
+|  VPN            [5]|| relay      off, meter off, key admin off                                                       |
+|  Vault          [6]||                                                                                                |
+|> Server         [7]|| [x] stop the server   [u] check for an update   [o] open in the browser                        |
+|  Settings       [8]||                                                                                                |
+|--------------------|| JUMPGATE SERVICE (asks for sudo on the terminal)                                               |
+|   fleet     3 boxes|| [I] install the systemd service                                                                |
+|>+ box-a      synced|| [S] set it up: its vault key, unlock, pair this machine                                        |
+| + box-b     down 4m|| [A] the same, self-only (this machine is the only box)                                         |
+| + laptop*    local*||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |

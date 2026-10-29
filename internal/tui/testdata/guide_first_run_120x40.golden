@@ -8,12 +8,12 @@
 |  Jobs           [2]||> todo 2. Vault created and unlocked   | next                                                   |
 |  Signers        [3]||  todo 3. Recovery code added                                                                   |
 |  Gateways       [4]||  todo 4. Controller key present                                                                |
-|  Vault          [5]||  todo 5. First box added                                                                       |
-|  Server         [6]||  todo 6. Box paired and healthy                                                                |
-|  Settings       [7]||                                                                                                |
-|--------------------||  optional:                                                                                     |
-|>  fleet     0 boxes||  todo 7. Vault sealed for auto-unlock                                                          |
-|                    ||  todo 8. A second box                                                                          |
+|  VPN            [5]||  todo 5. First box added                                                                       |
+|  Vault          [6]||  todo 6. Box paired and healthy                                                                |
+|  Server         [7]||                                                                                                |
+|  Settings       [8]||  optional:                                                                                     |
+|--------------------||  todo 7. Vault sealed for auto-unlock                                                          |
+|>  fleet     0 boxes||  todo 8. A second box                                                                          |
 |                    ||  todo 9. A module turned on                                                                    |
 |                    ||  todo 10. A gateway                                                                            |
 |                    ||                                                                                                |

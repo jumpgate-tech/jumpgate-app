@@ -8,15 +8,15 @@
 |  Jobs           [2]|| [Overview]  Storage  Endpoints  Security  Logs  Services  Docker  Tools                        |
 |  Signers        [3]||                                                                                                |
 |  Gateways       [4]|| waiting for the first reading~                                                                 |
-|  Vault          [5]||                                                                                                |
-|  Server         [6]||                                                                                                |
-|  Settings       [7]||                                                                                                |
+|  VPN            [5]||                                                                                                |
+|  Vault          [6]||                                                                                                |
+|  Server         [7]||                                                                                                |
+|  Settings       [8]||                                                                                                |
 |--------------------||                                                                                                |
 |   fleet     3 boxes||                                                                                                |
 |>+ box-a      synced||                                                                                                |
 | + box-b     down 4m||                                                                                                |
 | + laptop*    local*||                                                                                                |
-|                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |

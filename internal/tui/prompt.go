@@ -78,6 +78,7 @@ type secretModal struct {
 	twice                bool
 	buf, first           []byte
 	second               bool // typing the repeat
+	lines                bool // a paste keeps its line breaks (a WireGuard config)
 	miss                 string
 	submit               func(a *App, secret []byte) tea.Cmd
 }
@@ -85,6 +86,15 @@ type secretModal struct {
 func newSecret(title, detail, label string, twice bool, submit func(a *App, secret []byte) tea.Cmd) *secretModal {
 	return &secretModal{title: sanitizeLine(title), detail: sanitize(detail), label: label, twice: twice,
 		buf: make([]byte, 0, maxUnlockInput), first: make([]byte, 0, maxUnlockInput), submit: submit}
+}
+
+// multiline makes m take a pasted file: line breaks are kept and it may be
+// up to 16 KiB.
+func (m *secretModal) multiline() *secretModal {
+	m.wipe()
+	m.lines = true
+	m.buf, m.first = make([]byte, 0, 16<<10), make([]byte, 0, 16<<10)
+	return m
 }
 
 func (m *secretModal) wipe() {
@@ -146,6 +156,10 @@ func (m *secretModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (m *secretModal) paste(_ *App, p tea.PasteMsg) tea.Cmd {
+	if m.lines {
+		m.add(strings.ReplaceAll(p.Content, "\r", ""))
+		return nil
+	}
 	m.add(strings.NewReplacer("\r", "", "\n", "").Replace(p.Content))
 	return nil
 }

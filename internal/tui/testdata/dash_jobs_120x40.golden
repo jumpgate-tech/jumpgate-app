@@ -8,15 +8,15 @@
 |> Jobs           [2]||> ! box-a    needs-decision step 2/3 driven here                                                |
 |  Signers        [3]||      Rename the node's account, units and data to jumpgate-node                                |
 |  Gateways       [4]||      1 process(es) still run as valve-node-app                                                 |
-|  Vault          [5]||      1 Check again                                                                             |
-|  Server         [6]||      2 Stop them                                                                               |
-|  Settings       [7]||      3 Stop the migration here                                                                 |
-|--------------------||    box-b    running      step 4/8 silent 10m | a: adopt                                        |
+|  VPN            [5]||      1 Check again                                                                             |
+|  Vault          [6]||      2 Stop them                                                                               |
+|  Server         [7]||      3 Stop the migration here                                                                 |
+|  Settings       [8]||    box-b    running      step 4/8 silent 10m | a: adopt                                        |
+|--------------------||                                                                                                |
 |   fleet     3 boxes||                                                                                                |
 |>+ box-a      synced||                                                                                                |
 | + box-b     down 4m||                                                                                                |
 | + laptop*    local*||                                                                                                |
-|                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
