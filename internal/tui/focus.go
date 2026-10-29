@@ -257,9 +257,10 @@ func (a *App) logView(w, h int) string {
 	for _, e := range evs[a.logOff:] {
 		l := " " + a.sevGlyph(e.Sev) + " " + a.th.Dim.Render(pad(formatAge(a.now().Sub(e.At)), 3)) + " "
 		if box == "" && e.Box != "" {
-			l += e.Box + " "
+			l += sanitizeLine(e.Box) + " "
 		}
-		lines = append(lines, truncate(l+e.Text, w-2, a.gl.Ellipsis))
+		// The sink: sanitized again here, whatever the event stored.
+		lines = append(lines, truncate(l+sanitizeLine(e.Text), w-2, a.gl.Ellipsis))
 	}
 	return a.boxed(title, a.focus == focusLog, strings.Join(lines, "\n"), w, h)
 }

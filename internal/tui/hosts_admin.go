@@ -182,7 +182,7 @@ func (m *listModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (m *listModal) view(a *App, w, _ int) string {
-	lines := []string{a.th.Title.Render(" " + m.title), ""}
+	lines := []string{a.th.Title.Render(" " + sanitizeLine(m.title)), ""} // the sink: rows quote server names
 	if len(m.rows) == 0 {
 		lines = append(lines, " "+a.th.Dim.Render(m.empty))
 	}
@@ -191,10 +191,10 @@ func (m *listModal) view(a *App, w, _ int) string {
 		if i == m.cur {
 			mark = a.gl.Sel
 		}
-		lines = append(lines, a.selIf(i == m.cur, "%s %s", mark, truncate(r, max(w-3, 1), a.gl.Ellipsis)))
+		lines = append(lines, a.selIf(i == m.cur, "%s %s", mark, truncate(sanitizeLine(r), max(w-3, 1), a.gl.Ellipsis)))
 	}
 	if m.note != "" {
-		lines = append(lines, "", " "+a.th.Warn.Render(m.note))
+		lines = append(lines, "", " "+a.th.Warn.Render(sanitizeLine(m.note)))
 	}
 	h := m.act.Help()
 	btn := " [" + h.Key + "] " + h.Desc + "   [esc] close"
