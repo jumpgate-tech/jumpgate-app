@@ -275,6 +275,32 @@ func TestVaultRestoreReplaceKeepsTheOldVault(t *testing.T) {
 	}
 }
 
+func TestVaultAddRecoveryStdin(t *testing.T) {
+	testutil.Home(t)
+	stdout, stderr := captureStdio(t)
+	placeVault(t)
+	withStdin(t, "wrong passphrase\n")
+	if code := cmdVault([]string{"add-recovery", "--stdin"}); code == 0 {
+		t.Fatal("added a recovery code with the wrong passphrase")
+	}
+	withStdin(t, vaulttest.Passphrase+"\n")
+	if code := cmdVault([]string{"add-recovery", "--stdin"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr())
+	}
+	words := 0
+	for _, l := range strings.Split(stdout(), "\n") {
+		if len(strings.Fields(l)) == 24 {
+			words++
+		}
+	}
+	if words != 1 {
+		t.Fatalf("want the code printed once, got %d in %q", words, stdout())
+	}
+	if code := cmdVault([]string{"add-recovery", "extra"}); code == 0 {
+		t.Fatal("took a stray argument")
+	}
+}
+
 func TestVaultAddRecoveryPrintsOnce(t *testing.T) {
 	testutil.Home(t)
 	stdout, stderr := captureStdio(t)

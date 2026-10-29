@@ -17,7 +17,7 @@ var commandHelp = []struct{ name, text string }{
 	{"unlock", "unlock the vault so the server can sign"},
 	{"lock", "drop the vault key from the server's memory"},
 	{"vault init|migrate|backup FILE|restore FILE", "create the vault, move plain secrets into it, copy it out and back"},
-	{"vault add-recovery|rekdf", "add a recovery code; raise the passphrase's argon2id cost"},
+	{"vault add-recovery [--stdin]|rekdf", "add a recovery code; raise the passphrase's argon2id cost"},
 	{"vault seal --tpm2|--allow-host-key", "seal the vault key with systemd-creds, so the service unlocks at boot"},
 	{"vault put relay-token|admin-token", "store the relay's token in the unlocked vault"},
 	{"hosts add NAME --ssh USER@HOST", "pair a Linux box over SSH (--local pairs this Linux machine)"},

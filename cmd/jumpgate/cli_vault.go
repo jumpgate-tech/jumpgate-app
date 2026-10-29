@@ -374,7 +374,11 @@ func backupBeforeReplace(path string) (string, error) {
 
 // openVaultOffline opens the vault and unlocks it in this process with a
 // passphrase from the terminal. The caller locks it.
-func openVaultOffline() (*vault.Vault, error) {
+func openVaultOffline() (*vault.Vault, error) { return openVaultOfflineFrom(false) }
+
+// openVaultOfflineFrom is openVaultOffline, reading the passphrase as one
+// line of standard input when fromStdin.
+func openVaultOfflineFrom(fromStdin bool) (*vault.Vault, error) {
 	path, err := secrets.VaultPath()
 	if err != nil {
 		return nil, err
@@ -386,7 +390,7 @@ func openVaultOffline() (*vault.Vault, error) {
 	if err := v.CheckWrite(); err != nil {
 		return nil, err
 	}
-	pass, err := readPassphrase("vault passphrase: ", false, false)
+	pass, err := readPassphrase("vault passphrase: ", fromStdin, false)
 	if err != nil {
 		return nil, err
 	}
@@ -430,10 +434,13 @@ func vaultPut(args []string) int {
 }
 
 func vaultAddRecovery(args []string) int {
-	if len(args) > 0 {
-		return usage("usage: jumpgate vault add-recovery")
+	const use = "usage: jumpgate vault add-recovery [--stdin]"
+	fset := vaultFlags("add-recovery")
+	fromStdin := fset.Bool("stdin", false, "read the passphrase as one line of standard input")
+	if err := fset.Parse(args); err != nil || fset.NArg() > 0 {
+		return usage(use)
 	}
-	v, err := openVaultOffline()
+	v, err := openVaultOfflineFrom(*fromStdin)
 	if err != nil {
 		return vaultFail("vault add-recovery", err)
 	}

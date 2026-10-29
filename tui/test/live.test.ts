@@ -80,7 +80,18 @@ test.skipIf(!home || !passFile)("live: connect, unlock, fleet, jobs", async () =
   const pass = readFileSync(passFile!, "utf8").trim();
   const noSecret = (f: string) => expect(f).not.toContain(pass);
 
+  // The setup guide's progress, from the status line.
+  const setup = (f: string) => /\| setup (\d)\/(\d)/.exec(f)?.slice(1).join("/");
   app.go("connect");
+  // Setup is incomplete (no box yet), so the first full state opens the guide.
+  const guide = await d.until((f) => f.includes("> Setup") && f.includes("vault locked") && !!setup(f), "setup guide, locked");
+  save("setup guide (vault locked)", guide);
+  // Server, recovery code and controller key (recorded, locked) are done.
+  expect(setup(guide)).toBe("3/6");
+  expect(guide).toMatch(/todo {2}2\. Vault created and unlocked {3}<- next/);
+  expect(guide).toContain("done  3. Recovery code added");
+  expect(guide).toContain("done  4. Controller key present");
+  app.go("fleet");
   const fleet = await d.until((f) => f.includes("> Fleet") && f.includes("vault locked"), "fleet, locked");
   save("fleet (vault locked)", fleet);
 
@@ -93,11 +104,14 @@ test.skipIf(!home || !passFile)("live: connect, unlock, fleet, jobs", async () =
     save("unlock prompt", prompt);
     noSecret(prompt);
     d.press("return");
-    const vault = await d.until((f) => f.includes("state  unlocked"), "unlocked");
+    // The state is said once, on the status strip; the screen notes the result.
+    const vault = await d.until((f) => f.includes("| vault unlocked |") && f.includes("Unlocked."), "unlocked");
     noSecret(vault);
     return vault;
   };
-  save("vault unlocked", await unlock());
+  const unlocked = await unlock();
+  save("vault unlocked", unlocked);
+  expect(setup(await d.until((f) => setup(f) === "4/6", "setup 4/6"))).toBe("4/6");
 
   if (boxes.length >= 2 && hook) {
     d.mark();
@@ -120,15 +134,47 @@ test.skipIf(!home || !passFile)("live: connect, unlock, fleet, jobs", async () =
       await d.modal(); // the installed-address question
       d.press("return");
       await d.logged(new RegExp(`^paired ${name}: gate 0x`), 180_000);
+      if (i === 0) {
+        // The first paired, healthy box completes the required steps.
+        app.go("setup");
+        const six = () => app.setupProgress()?.done === 6 && app.setupProgress()?.total === 6;
+        const done = await d.until((f) => six() && f.includes("done  6. Box paired and healthy"), "setup 6/6", 90_000);
+        save("setup guide (6/6)", done);
+        expect(app.setupProgress()).toEqual({ done: 6, total: 6 });
+        // Complete: the status strip drops its "setup N/6" count.
+        expect(setup(done)).toBeUndefined();
+        for (let n = 1; n <= 6; n++) expect(done).toMatch(new RegExp(`done {2}${n}\\. `));
+        expect(done).not.toMatch(/todo {2}[1-6]\. /);
+      }
     }
     app.go("hosts");
     save("hosts", await d.until((f) => f.includes("box1") && f.includes("box2") && f.includes("paired  root@"), "hosts list"));
 
     // --- fleet and node detail.
     app.go("fleet");
-    save("fleet", await d.until((f) => /box1\s+0x/.test(f) && /box2\s+0x/.test(f), "fleet rows", 90_000));
+    const fl = await d.until((f) => /box1\s+0x/.test(f) && /box2\s+0x/.test(f), "fleet rows", 90_000);
+    save("fleet", fl);
+    // Focus marks: the main pane has the double border and its breadcrumb
+    // title, the nav marks Fleet, and the selected row carries ">".
+    expect(fl).toMatch(/╔═Fleet/);
+    expect(fl).toContain("> Fleet");
+    expect(fl).toMatch(/║> box1\s+0x/);
+    expect(fl).toMatch(/┌─jumpgate/);
+    // tab cycles the focus: main, activity, nav, main; one pane is double at a time.
+    d.press("tab");
+    const actFocused = await d.until((f) => /╔═activity/.test(f), "activity focused");
+    expect(actFocused).toMatch(/┌─Fleet/);
+    expect(actFocused).toContain("up/down scroll");
+    d.press("tab");
+    const navFocused = await d.until((f) => /╔═jumpgate/.test(f), "nav focused");
+    save("fleet: nav focused", navFocused);
+    expect(navFocused).toMatch(/┌─Fleet/);
+    expect(navFocused).toMatch(/┌─activity/);
+    expect(navFocused).toContain("up/down screen  enter go to it");
+    d.press("tab");
+    await d.until((f) => /╔═Fleet/.test(f) && /┌─jumpgate/.test(f), "main focused again");
     d.press("return");
-    save("node box1: status", await d.until((f) => f.includes("Node box1") && f.includes("overall "), "node status", 60_000));
+    save("node box1: status", await d.until((f) => f.includes("Fleet › box1") && f.includes("overall "), "node status", 60_000));
     d.press("2");
     save("node box1: disk", await d.until((f) => f.includes("fit "), "disk", 60_000));
     d.press("5");
@@ -181,14 +227,14 @@ test.skipIf(!home || !passFile)("live: connect, unlock, fleet, jobs", async () =
 
     // --- a module: box2 has no node; turn the health watch on for box1's.
     app.go("modules");
-    await d.until((f) => f.includes("boxes ([enter] open)"), "modules");
+    await d.until((f) => f.includes("boxes:"), "modules");
     d.press("down");
     d.press("return");
-    save("modules on box2", await d.until((f) => f.includes("modules on box2") && !f.includes("loading..."), "box2 modules", 60_000));
+    save("modules on box2", await d.until((f) => f.includes("Modules › box2") && !f.includes("loading..."), "box2 modules", 60_000));
     d.press("escape");
     d.press("up");
     d.press("return");
-    await d.until((f) => f.includes("modules on box1") && !f.includes("loading..."), "box1 modules", 60_000);
+    await d.until((f) => f.includes("Modules › box1") && !f.includes("loading..."), "box1 modules", 60_000);
     for (let i = 0; i < 12 && !(await frame()).includes("> watch"); i++) d.press("down");
     save("modules on box1", await frame());
     d.press("c");
@@ -201,7 +247,16 @@ test.skipIf(!home || !passFile)("live: connect, unlock, fleet, jobs", async () =
     app.go("hosts");
     d.press("i");
     await d.answer("box3");
-    save("hosts invite", await d.until((f) => f.includes("on the box, as root:"), "invite"));
+    const inv = await d.until((f) => f.includes("on the box, as root, run the command below the panes. [c] copy"), "invite");
+    save("hosts invite", inv);
+    // The command is below every border, its rows (cut at the window edge) the one line.
+    const rows = inv.split("\n");
+    const at = rows.findIndex((l) => l.startsWith("curl -fsSL https://jumpgate.app/install.sh | sh -s -- --agent --version v0.0.91 --controller 0x"));
+    expect(at).toBeGreaterThan(0);
+    expect(rows[at - 1]).toMatch(/[└╚]/);
+    const line = rows.slice(at, rows.findIndex((l, i) => i > at && (/^[┌│└]/.test(l) || l.includes("tab pane")))).join("").trimEnd();
+    expect(line).toMatch(/^curl -fsSL https:\/\/jumpgate\.app\/install\.sh \| sh -s -- --agent --version v0\.0\.91 --controller 0x[0-9a-fA-F]{40} --transport-key '[^']+'$/);
+    expect(inv).toContain("c copy the invite");
 
     // --- upgrade box2's gate: the hook opts it in and gives the controller a newer gate.
     const h = Bun.spawnSync([hook, "hook", "pre-upgrade", "2"], { stdout: "inherit", stderr: "inherit" });
@@ -218,7 +273,7 @@ test.skipIf(!home || !passFile)("live: connect, unlock, fleet, jobs", async () =
   d.press("l");
   await d.modal();
   d.press("y");
-  save("vault locked", await d.until((f) => f.includes("state  locked"), "locked"));
+  save("vault locked", await d.until((f) => f.includes("| vault locked |") && f.includes("Locked."), "locked"));
   save("vault unlocked again", await unlock());
 
   app.go("jobs");

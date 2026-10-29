@@ -97,6 +97,8 @@ pass="$work/pass"
 jg() { env -u SSH_AUTH_SOCK HOME="$home" JUMPGATE_HOME= "$work/jumpgate" "$@"; }
 jg vault init --stdin --keystore none < "$pass" >/dev/null
 jg keys init --store vault --stdin < "$pass" >/dev/null
+# A recovery code, so the setup guide can reach 6/6; it prints once, to /dev/null.
+jg vault add-recovery --stdin < "$pass" >/dev/null
 # Not through jg: $! must be the server itself, so cleanup stops it. Port 0
 # keeps clear of a real server on 8799; server.json says where it listens.
 env -u SSH_AUTH_SOCK HOME="$home" JUMPGATE_HOME= "$work/jumpgate" serve --no-open --bind 127.0.0.1:0 > "$work/server.log" 2>&1 &
