@@ -31,8 +31,9 @@ export class TypedConfirm implements Modal {
   lines(w: number): string[] {
     const out = wrapText(this.detail, w);
     if (this.refused) return [...out, "", "This name cannot be confirmed here: it is blank, or has characters the screen cannot show. Use the jumpgate CLI.", "", "[esc] close"];
-    out.push("", `Type ${this.want} to confirm, esc to cancel:`, `> ${sanitizeLine(this.text)}_`);
+    out.push("", `Type ${this.want} to confirm, then press Enter:`, `> ${sanitizeLine(this.text)}_`);
     if (this.miss) out.push("", this.miss);
+    out.push("", "[esc] cancel");
     return out.map((l) => clip(l, w));
   }
   key(k: Key) {
@@ -41,7 +42,7 @@ export class TypedConfirm implements Modal {
       const typed = this.text.trim();
       this.text = "";
       if (this.refused || typed === "" || typed !== this.want) {
-        if (!this.refused) this.miss = `that is not "${this.want}"; type it exactly, or esc to cancel`;
+        if (!this.refused) this.miss = `that is not "${this.want}"; type it exactly`;
         return;
       }
       return this.done(true);

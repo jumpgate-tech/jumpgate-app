@@ -1,6 +1,6 @@
 // App: the one layout's renderables, the key router, the screens, and the
 // live feeds (fleet, jobs) every screen reads from.
-import { BoxRenderable, TextRenderable, type CliRenderer, type KeyEvent } from "@opentui/core";
+import { BoxRenderable, TextRenderable, type CliRenderer, type KeyEvent, type MouseEvent } from "@opentui/core";
 import * as api from "../api/client.ts";
 import type { ApiError, Conn } from "../api/http.ts";
 import type { StreamOpts } from "../api/sse.ts";
@@ -14,11 +14,12 @@ import { runArgv, runJumpgate, type RunOpts } from "../shellout.ts";
 import { isFleet, isJobsInbox } from "../api/guards.ts";
 import type { Bins } from "../bins.ts";
 import { drawerLines, minimizedLine } from "./drawer.ts";
-import type { Key } from "./keys.ts";
 import { layoutFor, MIN_H, MIN_W, type Layout, type Rect } from "./layout.ts";
 import { statusLine } from "./statusbar.ts";
 import { alertLine, alerts } from "./alerts.ts";
-import { DIM_COLOR, FOCUS_COLOR, styled } from "./style.ts";
+import { DIM_COLOR, FOCUS_COLOR, isSelected, styled } from "./style.ts";
+import { buttonAt, DOUBLE_MS, inList, statusTarget } from "./mouse.ts";
+import { key, type Key } from "./keys.ts";
 
 export interface Screen {
   id: string;
@@ -77,6 +78,8 @@ const GLOBAL_KEYS = [
   "up / down         move in the focused pane",
   "enter             open (in the nav: go to the screen)",
   "esc               back, or from the screen to the nav",
+  "mouse             click a pane, a row or a [key] button; double-click opens",
+  "                  the wheel scrolls; a typed confirm still needs typing",
   ".                 open or minimize the drawer",
   "?                 this help",
   "q / ctrl-c        quit",
@@ -125,6 +128,7 @@ export class App {
     renderer.root.add(this.small);
     renderer.keyInput.on("keypress", (e: KeyEvent) => this.handleKey(toKey(e)));
     renderer.on("resize", () => this.render());
+    this.wireMouse();
   }
 
   get conn(): Conn {
@@ -378,6 +382,101 @@ export class App {
       return this.render();
     }
     if (k.name === "escape" && this.focus === "main") return this.setFocus("nav");
+  }
+
+  // ---- mouse ----
+
+  private lastDown = { x: -1, y: -1, t: 0 };
+
+  /** wireMouse: a click focuses the pane under it and acts; the wheel scrolls it. */
+  private wireMouse(): void {
+    const b = this.boxes;
+    const at = (name: keyof App["boxes"], e: MouseEvent) => {
+      const s = this.shown[name];
+      if (!s) return null;
+      const inset = b[name].box.border ? 1 : 0;
+      return { row: e.y - s.r.y - inset, col: e.x - s.r.x - inset, lines: s.lines };
+    };
+    const down = (name: keyof App["boxes"], fn: (p: { row: number; col: number; lines: string[] }, double: boolean) => void) => {
+      b[name].box.onMouseDown = (e: MouseEvent) => {
+        if (this.closed || e.button !== 0) return;
+        const p = at(name, e);
+        if (!p) return;
+        const now = performance.now();
+        const double = now - this.lastDown.t < DOUBLE_MS && this.lastDown.x === e.x && this.lastDown.y === e.y;
+        this.lastDown = double ? { x: -1, y: -1, t: 0 } : { x: e.x, y: e.y, t: now };
+        this.flash = "";
+        fn(p, double);
+      };
+    };
+    const wheel = (name: keyof App["boxes"], fn: (d: 1 | -1) => void) => {
+      b[name].box.onMouseScroll = (e: MouseEvent) => {
+        if (this.closed) return;
+        const dir = e.scroll?.direction;
+        if (dir === "up" || dir === "down") fn(dir === "up" ? -1 : 1);
+      };
+    };
+    down("nav", ({ row }) => {
+      if (this.modal) return;
+      const id = this.nav[row];
+      this.focus = "nav";
+      if (id) this.go(id);
+      else this.render();
+    });
+    wheel("nav", (d) => !this.modal && this.moveNav(d));
+    down("main", ({ row, col, lines }, double) => this.clickMain(row, col, lines, double));
+    wheel("main", (d) => {
+      if (this.modal) return;
+      this.focus = "main";
+      this.current.key?.(key(d < 0 ? "up" : "down"));
+      this.render();
+    });
+    down("activity", () => !this.modal && this.setFocus("activity"));
+    wheel("activity", (d) => this.scrollActivity(-d * 3));
+    down("drawer", () => !this.modal && this.toggleDrawer());
+    down("hints", ({ col, lines }) => {
+      // The folded drawer, "[1 running]", opens it.
+      const m = /^\[\d+ running\]/.exec(lines[0] ?? "");
+      if (!this.modal && m && col < m[0].length) this.toggleDrawer();
+    });
+    down("status", ({ col, lines }) => {
+      if (this.modal) return;
+      const id = statusTarget(lines[0] ?? "", col);
+      if (id && this.screens.has(id)) this.go(id);
+    });
+  }
+
+  /**
+   * clickMain: in a modal, a click presses the button under it, but a typed
+   * confirm only takes [esc] (a click never confirms it). On a screen, the
+   * screen's own click, then a [key] button, then a list row: one click
+   * selects it, a double click opens it.
+   */
+  private clickMain(row: number, col: number, lines: string[], double: boolean): void {
+    const line = lines[row] ?? "";
+    if (this.modal) {
+      if (performance.now() < this.modalReadyAt) return;
+      const k = buttonAt(line, col);
+      if (!k) return;
+      if (this.modal instanceof TypedConfirm && k.name !== "escape") return;
+      this.modal.key(k);
+      return this.render();
+    }
+    this.focus = "main";
+    const s = this.current;
+    if (s.click?.(row, col, double)) return this.render();
+    const k = buttonAt(line, col);
+    if (k) {
+      s.key?.(k);
+      return this.render();
+    }
+    const sel = lines.findIndex(isSelected);
+    if (sel >= 0 && row < lines.length && inList(lines, sel, row)) {
+      const d = row - sel;
+      for (let i = 0; i < Math.abs(d); i++) s.key?.(key(d < 0 ? "up" : "down"));
+      if (double) s.key?.(key("return"));
+    }
+    this.render();
   }
 
   /** focus is the pane that takes up/down/enter; tab cycles it. */

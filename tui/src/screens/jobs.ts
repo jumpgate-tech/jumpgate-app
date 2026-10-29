@@ -59,6 +59,17 @@ export class JobsScreen implements Screen {
     this.outBack = 0;
   }
 
+  /** click on a question's option picks it, like its number key. */
+  click(line: number): boolean {
+    const j = this.current();
+    if (!j?.question) return false;
+    const first = detailLines(j, this.opt).findIndex((l) => l.startsWith("? "));
+    const i = line - first - 1;
+    if (first < 0 || i < 0 || i >= j.question.options.length) return false;
+    this.opt = i;
+    return true;
+  }
+
   crumbs(): string[] {
     return this.open ? [`${this.open.target}/${this.open.id}`] : [];
   }
