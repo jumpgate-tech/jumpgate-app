@@ -5,6 +5,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"os/exec"
 	"time"
 
@@ -62,6 +63,8 @@ type Backend interface {
 	// answer decoded into out (nil: dropped). New screens use it, so each
 	// adds no method here.
 	Do(ctx context.Context, method, path string, in, out any) error
+	// Watch is any other JSON stream, one raw value per event.
+	Watch(ctx context.Context, path string) <-chan apiclient.Update[json.RawMessage]
 }
 
 var _ Backend = (*apiclient.Client)(nil)

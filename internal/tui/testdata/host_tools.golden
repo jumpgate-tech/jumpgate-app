@@ -1,0 +1,24 @@
+ jumpgate  [Fleet] Jobs Signers Gateways Vault Server Settings       connecting
+ boxes n/a  synced n/a  lag n/a  peers n/a  disk n/a  gw 0/0 live  ! alerts n/a
+ Fleet › box › Tools
+ link n/a
+ Overview  Storage  Endpoints  Security  Logs  Services  Docker  [Tools]
+
+ D run diagnostics  d latest  M monitor  I intent  w setup wizard
+
+ latest diagnostics
+   at: 2026-10-29T10:00:00Z
+   checks[0].name: rpc
+   checks[0].ok: true
+
+
+
+
+
+
+
+
+
+
+
+ jobs n/a | left/right tab  [esc] back  [m] measure disk now (Storage)  [m] mod…

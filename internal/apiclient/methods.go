@@ -328,6 +328,13 @@ func (c *Client) SetModule(ctx context.Context, target, module string, req api.S
 	return r, err
 }
 
+// Watch follows any JSON SSE stream at path (query included), one raw
+// value per event, reconnecting like every other stream. Screens use it for
+// the streams that have no method of their own (a box's monitor).
+func (c *Client) Watch(ctx context.Context, path string) <-chan Update[json.RawMessage] {
+	return watch(ctx, c, path, decodeJSON[json.RawMessage])
+}
+
 // WatchSetup follows target's current setup run; the channel closes when the
 // server ends the stream or ctx ends.
 func (c *Client) WatchSetup(ctx context.Context, target string) (<-chan api.SetupEvent, error) {

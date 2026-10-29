@@ -5,7 +5,7 @@
 +-------------++-------------++-------------++-------------++-------------++-------------------------++----------------+
 +- Views ------------++= > Fleet > box-a > Overview ===================================================================+
 |> Fleet          [1]|| link gate | PulseChain                                                                         |
-|  Jobs           [2]|| [Overview]  Storage  Endpoints  Security  Logs  Services                                       |
+|  Jobs           [2]|| [Overview]  Storage  Endpoints  Security  Logs  Services  Docker  Tools                        |
 |  Signers        [3]||                                                                                                |
 |  Gateways       [4]|| waiting for the first reading~                                                                 |
 |  Vault          [5]||                                                                                                |

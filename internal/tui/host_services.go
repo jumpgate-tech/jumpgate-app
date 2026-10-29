@@ -111,6 +111,8 @@ func (h *hostScreen) servicesKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 		return h.serviceAction(a, svc, "stop"), true
 	case key.Matches(k, svcKeys.Restart):
 		return h.serviceAction(a, svc, "restart"), true
+	case key.Matches(k, boxKeys.Clear):
+		return h.clearService(a, svc), true
 	default:
 		return nil, false
 	}
@@ -133,7 +135,7 @@ func (h *hostScreen) viewServices(a *App, w int) string {
 		}
 		mark, hint := " ", ""
 		if i == h.svcCursor {
-			mark, hint = a.gl.Sel, "   s start  t stop  r restart"
+			mark, hint = a.gl.Sel, "   s start  t stop  r restart  C clear"
 		}
 		out += a.selIf(i == h.svcCursor, " %s %-7s %s%s", mark, sanitizeLine(svc), state, hint) + "\n"
 	}

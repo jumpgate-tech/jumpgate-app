@@ -65,6 +65,8 @@ type Fake struct {
 	// route is an error. Every Do is recorded as "Do METHOD /path".
 	Routes map[string]any
 	Sent   map[string]any // what each route last received
+	// StreamCh answer Watch, keyed by path; see Stream.
+	StreamCh map[string]chan apiclient.Update[json.RawMessage]
 
 	VaultV    api.VaultView // what Vault answers; Unlock and Lock change State
 	UnlockErr error         // what Unlock answers
@@ -79,7 +81,7 @@ func NewFake() *Fake {
 		EndpointsV: map[string]api.Endpoints{}, FirewallV: map[string][]api.CheckItem{},
 		JobsCh: make(chan apiclient.Update[api.JobsInbox], 16), JobV: map[string]api.JobDetail{},
 		PrefsV: api.DefaultPrefs(), SSHV: map[string]api.SSHCommand{},
-		DiskV: map[string]api.DiskView{}, Routes: map[string]any{}, Sent: map[string]any{}, StatusCh: map[string]chan apiclient.Update[api.NodeStatus]{},
+		DiskV: map[string]api.DiskView{}, Routes: map[string]any{}, Sent: map[string]any{}, StreamCh: map[string]chan apiclient.Update[json.RawMessage]{}, StatusCh: map[string]chan apiclient.Update[api.NodeStatus]{},
 	}
 }
 
@@ -434,6 +436,22 @@ func (f *Fake) WatchSetup(_ context.Context, target string) (<-chan api.SetupEve
 	}
 	close(ch)
 	return ch, nil
+}
+
+// Stream is the Watch channel for path, made on first use.
+func (f *Fake) Stream(path string) chan apiclient.Update[json.RawMessage] {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.StreamCh[path] == nil {
+		f.StreamCh[path] = make(chan apiclient.Update[json.RawMessage], 16)
+	}
+	return f.StreamCh[path]
+}
+
+// Watch relays Stream(path) until ctx ends; it is recorded as "Watch path".
+func (f *Fake) Watch(ctx context.Context, path string) <-chan apiclient.Update[json.RawMessage] {
+	_ = f.call("Watch", path)
+	return relay(ctx, f.Stream(path))
 }
 
 func (f *Fake) Do(_ context.Context, method, path string, in, out any) error {

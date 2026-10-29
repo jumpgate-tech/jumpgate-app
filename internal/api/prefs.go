@@ -38,7 +38,7 @@ var FleetColumns = []ColumnSpec{
 }
 
 // HostTabs is every host-detail tab, in display order.
-var HostTabs = []string{"overview", "storage", "endpoints", "security", "logs", "services"}
+var HostTabs = []string{"overview", "storage", "endpoints", "security", "logs", "services", "containers", "tools"}
 
 // RefreshChoices are the fleet refresh intervals a person may pick, seconds.
 var RefreshChoices = []int{5, 15, 30, 60}

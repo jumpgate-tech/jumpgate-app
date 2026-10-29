@@ -2,7 +2,7 @@
  boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
  Fleet › box › Storage
  link n/a
- Overview  [Storage]  Endpoints  Security  Logs  Services
+ Overview  [Storage]  Endpoints  Security  Logs  Services  Docker  Tools
 
  DISK  measured 4m ago · m measure now
  exec      1.20 TB
