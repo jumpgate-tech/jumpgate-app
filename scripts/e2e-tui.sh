@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # scripts/e2e-tui.sh — drive the tui/ dashboard against a real `jumpgate serve`
-# and two systemd+sshd boxes from scripts/e2e/Dockerfile (tui/test/live.test.ts
-# through the OpenTUI test renderer). The controller runs on this machine with
+# and two systemd+sshd boxes from scripts/e2e/Dockerfile (internal/tui
+# live_test.go, the Go TUI's program loop in teatest, build tag live). The controller runs on this machine with
 # an isolated HOME; its key lives in a fresh vault. The test pairs both boxes
 # from the Hosts screen, restarts a service, answers a job's decisions, turns a
-# module on, invites, upgrades a gate, and locks and unlocks the vault. Each
-# screen is saved as text to $FRAMES (default: $work/frames.txt, printed at the
-# end). Needs Docker and Bun (~/.bun/bin).
+# module on, invites (and copies it), upgrades a gate, locks and unlocks the
+# vault, and stops the server from the Server view (the TUI must not start
+# another). Each screen is saved as text to $FRAMES (default:
+# $work/frames.txt, printed at the end). Needs Docker and Go.
 #   KEEP=1 scripts/e2e-tui.sh          # keep the containers and work dir
 #   FRAMES=/tmp/f.txt scripts/e2e-tui.sh
 #
@@ -38,7 +39,6 @@ if [ "${1:-}" = hook ]; then
 fi
 
 cd "$here"
-export PATH="$HOME/.bun/bin:$PATH"
 work="$(mktemp -d)"
 work="$(cd "$work" && pwd -P)"
 frames="${FRAMES:-$work/frames.txt}"
@@ -107,11 +107,13 @@ for _ in $(seq 1 60); do [ -s "$home/.jumpgate/run/server.json" ] && break; slee
 [ -s "$home/.jumpgate/run/server.json" ] || { cat "$work/server.log" >&2; fail "the server never wrote server.json"; }
 
 : > "$frames"
-env -u SSH_AUTH_SOCK HOME="$home" \
+# go keeps its caches where the real HOME has them.
+gocache="$(go env GOCACHE)" gomodcache="$(go env GOMODCACHE)" gopath="$(go env GOPATH)"
+env -u SSH_AUTH_SOCK HOME="$home" GOCACHE="$gocache" GOMODCACHE="$gomodcache" GOPATH="$gopath" \
   JUMPGATE_LIVE_HOME="$home/.jumpgate" JUMPGATE_LIVE_PASSFILE="$pass" JUMPGATE_LIVE_FRAMES="$frames" \
   JUMPGATE_LIVE_KEY="$home/.ssh/id_ed25519" JUMPGATE_LIVE_BOXES="127.0.0.1:${ports[0]},127.0.0.1:${ports[1]}" \
   JUMPGATE_LIVE_HOOK="$here/scripts/e2e-tui.sh" E2E_TUI_WORK="$work" E2E_TUI_HOME="$HOME" \
   JUMPGATE_BIN="$work/jumpgate" \
-  bun test --cwd tui test/live.test.ts --timeout 900000 || { tail -50 "$work/server.log" >&2; cat "$frames" >&2; fail "live test"; }
+  go test -tags live -run TestLive -count=1 -timeout 30m -v ./internal/tui || { tail -50 "$work/server.log" >&2; cat "$frames" >&2; fail "live test"; }
 cat "$frames"
 echo "ok e2e-tui"
