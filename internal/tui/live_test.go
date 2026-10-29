@@ -413,6 +413,26 @@ func TestLive(t *testing.T) {
 	d.flashed(`^restart exec on box1: (active|inactive)$`, 180*time.Second)
 	d.save("node box1: after restart", d.frame())
 
+	// --- the module before the rename: box1's node still has the legacy
+	// names, so the server refuses it with the way out, and nothing is
+	// created that would stop the rename.
+	d.press("m")
+	d.modal()
+	d.until("box1 modules", 60*time.Second, func(s liveShot) bool { return strings.Contains(s.frame, "watch") })
+	for i := 0; i < 15 && !regexp.MustCompile(`[>▸] .*watch`).MatchString(d.frame()); i++ {
+		d.press("down")
+	}
+	d.press("enter")
+	d.screen("watch fields", 10*time.Second, "endpoints")
+	d.press("enter")
+	refused := d.screen("module refused", 60*time.Second, "run the node.migrate-names job first")
+	d.save("modules on box1: refused before the rename", refused)
+	if !regexp.MustCompile(`Health watch\s+off`).MatchString(refused) {
+		t.Errorf("the refused module is not shown off")
+	}
+	d.press("esc")
+	d.noModal()
+
 	// --- a job with decisions: rename the legacy names on box1, answer with
 	// the typed confirm.
 	d.press("esc")
@@ -472,8 +492,7 @@ func TestLive(t *testing.T) {
 	})
 	d.save("job succeeded", d.frame())
 
-	// --- a module: the health watch on box1. (After the job: its setup
-	// makes the new account, which the rename would then find twice.)
+	// --- a module: the health watch on box1, now that the node is renamed.
 	d.press("1")
 	d.screen("fleet", 10*time.Second, "box2")
 	d.press("up", "up")
