@@ -3,7 +3,7 @@
 // checkpointz). A change that starts setup follows the setup stream.
 import * as api from "../api/client.ts";
 import { isSetupEvent } from "../api/guards.ts";
-import type { CatalogModule, ModulesView, SetModule } from "../api/types.ts";
+import type { CatalogModule, ModuleStatus, ModulesView, SetModule } from "../api/types.ts";
 import { maskText } from "../maskurl.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
@@ -37,6 +37,17 @@ export class ModulesScreen implements Screen {
     api.listModules(this.app.conn, id).then((v) => ((this.view_ = v), this.app.render()), (e) => this.app.fail(`modules on ${id}`, e));
   }
 
+  /**
+   * rows are the box's modules as it reports them, then each node or box
+   * module of the catalog it does not report, so one never set up on the box
+   * can be turned on here too (a gateway module is turned on for a gateway).
+   */
+  private rows(): { id: string; s?: ModuleStatus }[] {
+    const have = this.view_?.modules ?? [];
+    const missing = (this.cat ?? []).filter((c) => (c.placement === "node" || c.placement === "box") && !have.some((s) => s.id === c.id));
+    return [...have.map((s) => ({ id: s.id, s })), ...missing.map((c) => ({ id: c.id }))];
+  }
+
   view(w: number): string[] {
     const out: string[] = ["catalog:"];
     out.push(...(this.cat ? this.cat.map((c) => `  ${c.id.padEnd(14)} ${clean(c.name).padEnd(16)} ${clean(c.placement).padEnd(8)} ${clean(c.summary)}`) : ["  n/a"]));
@@ -50,10 +61,11 @@ export class ModulesScreen implements Screen {
       else {
         if (v.gateStale) out.push("  ~ the gate is out of date; values may be stale");
         if (v.message) out.push(`  ${clean(v.message)}`);
-        const rows = v.modules.map(
-          (s) =>
-            `${s.id.padEnd(7)} ${s.active ? "active" : "off"}${s.served ? " served" : ""}${s.accepting ? " accepting" : ""} count ${s.count}` +
-            `${s.note ? `  ${clean(s.note)}` : ""}${s.error ? `  FAIL ${clean(s.error)}` : ""}`,
+        const rows = this.rows().map(({ id, s }) =>
+          !s
+            ? `${id.padEnd(7)} off  (not on this box)`
+            : `${s.id.padEnd(7)} ${s.active ? "active" : "off"}${s.served ? " served" : ""}${s.accepting ? " accepting" : ""} count ${s.count}` +
+              `${s.note ? `  ${clean(s.note)}` : ""}${s.error ? `  FAIL ${clean(s.error)}` : ""}`,
         );
         out.push(...(rows.length ? this.modPick.lines(rows) : ["  no modules"]));
       }
@@ -75,13 +87,14 @@ export class ModulesScreen implements Screen {
       }
       return false;
     }
-    const mods = this.view_?.modules ?? [];
+    const mods = this.view_ ? this.rows() : [];
     if (this.modPick.key(k, mods.length)) return true;
     if (k.name === "escape") return (this.box = null), true;
     const mod = this.modPick.of(mods);
     if (!mod) return false;
-    if (k.name === "space") return void this.toggle(this.box, mod.id, !mod.active), true;
-    if (k.seq === "c") return void this.edit(this.box, mod.id, mod.active), true;
+    const active = !!mod.s?.active;
+    if (k.name === "space") return void this.toggle(this.box, mod.id, !active), true;
+    if (k.seq === "c") return void this.edit(this.box, mod.id, active), true;
     return false;
   }
 

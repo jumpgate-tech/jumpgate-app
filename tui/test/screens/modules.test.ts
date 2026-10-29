@@ -66,3 +66,25 @@ test("a started module follows the setup stream into the activity", async () => 
   await m!.waitFor(() => m!.app.activity.all().some((l) => l.includes("setup alpha: pull pulling the image")));
   await m!.waitFor(() => m!.app.activity.all().some((l) => l.includes("setup alpha: done")));
 });
+
+// Live: a box that reports no modules showed "no modules", and nothing in
+// the catalog could be turned on for it.
+test("a catalog module the box does not report can be turned on", async () => {
+  const bodies: any[] = [];
+  m = await mount((app) => [new ModulesScreen(app)], {
+    routes: {
+      "GET /api/catalog": () => json(fixture("catalog")),
+      "GET /api/targets/alpha/modules": () => json({ modules: [], gateStale: false, message: "" }),
+      "PUT /api/targets/alpha/modules/watch": (_r, rec) => (bodies.push(JSON.parse(rec.body)), json({ status: "saved" })),
+    },
+    width: 120,
+    height: 34,
+  });
+  m.app.go("modules");
+  await m.waitFor("Watch");
+  await m.press("return");
+  expect(await m.waitFor("not on this box")).toContain("> watch   off");
+  await m.press("space", "y");
+  await m.waitFor(() => bodies.length === 1);
+  expect(bodies[0]).toEqual({ enabled: true });
+});
