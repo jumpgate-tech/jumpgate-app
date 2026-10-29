@@ -1,0 +1,24 @@
+ jumpgate  [Fleet] Jobs Signers Gateways Vault Server Settings       connecting
+ boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
+ Host keys recorded for box-a
+
+▸ 10.0.0.5:22  ssh-ed25519  SHA256:abc  jumpgate
+  10.0.0.5:22  ssh-rsa  SHA256:def  openssh
+
+ [f] forget, typed confirmation   [esc] close
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ jobs n/a | [?] help

@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -9,11 +11,13 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/valve-tech/jumpgate/internal/api"
+	"github.com/valve-tech/jumpgate/internal/apiclient"
 )
 
-var signerKeys = struct{ Test, Create, Restart, Reload key.Binding }{
+var signerKeys = struct{ Test, Create, Export, Restart, Reload key.Binding }{
 	Test:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "test signing on the selected box")),
 	Create:  key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "create this controller's key")),
+	Export:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export a keystore v3 file")),
 	Restart: key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restart the server (loads a new key)")),
 	Reload:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 }
@@ -56,7 +60,7 @@ type signersScreen struct {
 func (s *signersScreen) capturing() bool { return false }
 
 func (s *signersScreen) keys() []key.Binding {
-	ks := []key.Binding{navKeys.Up, navKeys.Down, signerKeys.Test, signerKeys.Create}
+	ks := []key.Binding{navKeys.Up, navKeys.Down, signerKeys.Test, signerKeys.Create, signerKeys.Export}
 	if s.canRestart {
 		ks = append(ks, signerKeys.Restart)
 	}
@@ -170,6 +174,19 @@ func (s *signersScreen) update(a *App, msg tea.Msg) tea.Cmd {
 				}
 				return nil
 			}
+			if a.o.Server != nil && a.o.Server().System {
+				// The service's key is made by the service: the passphrase
+				// goes over the API in a masked field, as setup server does.
+				a.modal = newSecret("Create the service's controller key", api.CustodyWarning, "vault passphrase", true, func(a *App, v []byte) tea.Cmd {
+					return a.do("create the key", func(ctx context.Context, be Backend) tea.Msg {
+						defer clear(v)
+						body := secretBody(`"store":"vault",`, "passphrase", v)
+						defer clear(body)
+						return keysInitDoneMsg{err: be.Do(ctx, http.MethodPost, "/api/system/init-key", apiclient.RawJSON(body), nil)}
+					})
+				})
+				return nil
+			}
 			if a.o.Self == "" {
 				a.flash = "run `jumpgate keys init` in a terminal"
 				return nil
@@ -177,6 +194,17 @@ func (s *signersScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			// The key store may prompt (keychain, 1Password): only a
 			// foreground process can show that (spec D17). The argv is fixed.
 			return tea.ExecProcess(a.o.Command(a.o.Self, "keys", "init"), func(err error) tea.Msg { return keysInitDoneMsg{err: err} })
+		case key.Matches(msg, signerKeys.Export):
+			if !s.ctlHas || s.ctl.State == "missing" {
+				a.flash = "there is no controller key to export yet"
+				return nil
+			}
+			a.modal = newAsk("Export the controller key", "The keystore v3 file to write. Anyone with the file and its passphrase holds the key.", "", func(a *App, p string) (string, tea.Cmd) {
+				if why := checkPath(p); why != "" {
+					return why, nil
+				}
+				return "", a.runSelfPause("keys", "export", "--keystore-v3", p)
+			})
 		case key.Matches(msg, signerKeys.Restart) && a.o.Restart != nil:
 			return a.restart()
 		}
@@ -248,7 +276,7 @@ func (s *signersScreen) view(a *App, w, h int) string {
 	for len(lines) < h-1 {
 		lines = append(lines, "")
 	}
-	bar := " t test signing  K create a key  "
+	bar := " t test signing  K create a key  e export  "
 	if a.o.Restart != nil {
 		bar += "R restart the server  "
 	}
