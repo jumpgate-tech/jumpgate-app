@@ -108,7 +108,7 @@ func cmdAgent(args []string) int {
 		return usage("unknown agent subcommand %q", args[0])
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "jumpgate agent:", err)
+		fmt.Fprintln(os.Stderr, "jumpgate gate:", err)
 		return 1
 	}
 	return 0
@@ -315,7 +315,7 @@ func agentJobManager(log io.Writer, stateDir, configDir string, k signer.Signer,
 		return nil, nil, err
 	}
 	if err != nil {
-		fmt.Fprintf(log, "jumpgate agent: running without durable jobs, the job store did not open: %v\n", err)
+		fmt.Fprintf(log, "jumpgate gate: running without durable jobs, the job store did not open: %v\n", err)
 		return nil, err, nil
 	}
 	return mgr, nil, nil
@@ -368,7 +368,7 @@ func agentRun(stateDir, configDir string) error {
 		BinaryPath: bootstrap.BinaryPath,
 		Restart: func() {
 			if _, err := ex.Run(context.Background(), "systemctl --no-block restart jumpgate-agent.service", nil); err != nil {
-				fmt.Fprintf(os.Stderr, "jumpgate agent: restart after upgrade: %v\n", err)
+				fmt.Fprintf(os.Stderr, "jumpgate gate: restart after upgrade: %v\n", err)
 			}
 		},
 	})

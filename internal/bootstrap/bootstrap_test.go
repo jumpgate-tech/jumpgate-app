@@ -482,7 +482,7 @@ func TestAServiceThatNeverListensFailsWithTheJournal(t *testing.T) {
 	box := freshBox()
 	box.rules = append([]rule{
 		{"is-active", executor.Result{Stdout: "activating\n"}},
-		{"journalctl", executor.Result{Stdout: "jumpgate agent: signer: open agent.key: no such file or directory\n"}},
+		{"journalctl", executor.Result{Stdout: "jumpgate gate: signer: open agent.key: no such file or directory\n"}},
 	}, box.rules...)
 	_, err := Run(context.Background(), opts(t, box))
 	var se *StepError

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -384,5 +385,16 @@ func TestAgentInfoCountsRoutineSigners(t *testing.T) {
 	info := ok[intent.AgentInfo](t)(r.send(t, intent.KindAgentInfo, struct{}{}, nil))
 	if info.Controllers != 2 {
 		t.Fatalf("controllers %d, want 2", info.Controllers)
+	}
+}
+
+// TestLogLinesSayGate: lines the gate writes to a box's journal are prefixed
+// "jumpgate gate:", the name users see.
+func TestLogLinesSayGate(t *testing.T) {
+	var buf bytes.Buffer
+	a := &Agent{cfg: Config{Log: &buf}}
+	a.logf("replay %d", 3)
+	if got := buf.String(); got != "jumpgate gate: replay 3\n" {
+		t.Fatalf("log line %q", got)
 	}
 }

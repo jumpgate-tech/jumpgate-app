@@ -189,10 +189,10 @@ func decisionCheck(p Policy, controller eip712.Address, signers []eip712.Address
 	}
 }
 
-// logf writes one line to the agent's log.
+// logf writes one line to the gate's log, prefixed "jumpgate gate:".
 func (a *Agent) logf(format string, args ...any) {
 	if a.cfg.Log != nil {
-		fmt.Fprintf(a.cfg.Log, "jumpgate agent: "+format+"\n", args...)
+		fmt.Fprintf(a.cfg.Log, "jumpgate gate: "+format+"\n", args...)
 	}
 }
 
