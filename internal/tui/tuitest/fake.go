@@ -67,6 +67,8 @@ type Fake struct {
 	Sent   map[string]any // what each route last received
 	// StreamCh answer Watch, keyed by path; see Stream.
 	StreamCh map[string]chan apiclient.Update[json.RawMessage]
+	// OutputCh answer WatchJobOutput, keyed "target/id"; see Output.
+	OutputCh map[string]chan apiclient.Update[[]api.JobOutputLine]
 
 	VaultV    api.VaultView // what Vault answers; Unlock and Lock change State
 	UnlockErr error         // what Unlock answers
@@ -436,6 +438,24 @@ func (f *Fake) WatchSetup(_ context.Context, target string) (<-chan api.SetupEve
 	}
 	close(ch)
 	return ch, nil
+}
+
+// Output is the job output channel for "target/id", made on first use.
+func (f *Fake) Output(job string) chan apiclient.Update[[]api.JobOutputLine] {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.OutputCh == nil {
+		f.OutputCh = map[string]chan apiclient.Update[[]api.JobOutputLine]{}
+	}
+	if f.OutputCh[job] == nil {
+		f.OutputCh[job] = make(chan apiclient.Update[[]api.JobOutputLine], 16)
+	}
+	return f.OutputCh[job]
+}
+
+func (f *Fake) WatchJobOutput(ctx context.Context, target, id string) <-chan apiclient.Update[[]api.JobOutputLine] {
+	_ = f.call("WatchJobOutput", target, id)
+	return relay(ctx, f.Output(target+"/"+id))
 }
 
 // Stream is the Watch channel for path, made on first use.

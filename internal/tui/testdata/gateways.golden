@@ -1,8 +1,8 @@
  jumpgate  Fleet Jobs Signers [Gateways] Vault Server Settings       connecting
  boxes n/a  synced n/a  lag n/a  peers n/a  disk n/a  gw 1/1 live  ! alerts n/a
- read-only: change them in the web app
+ m modules; the rest in the web app
 
- rpc-main       on box          running   https://rpc.example.org/
+▸rpc-main       on box          running   https://rpc.example.org/
    PulseChain (369)  https://rpc.example.org/369
    the certificate expires in 6 days
 
@@ -21,4 +21,4 @@
 
 
 
- jobs n/a | ↑↓ select  [r] reload  [?] help
+ jobs n/a | ↑↓ select  [m] modules of the selected gateway  [r] reload  [?] help

@@ -48,6 +48,7 @@ type Backend interface {
 	WatchJobs(ctx context.Context) <-chan apiclient.Update[api.JobsInbox]
 	RunningJobs(ctx context.Context) (api.RunningJobs, error)
 	Job(ctx context.Context, target, id string) (api.JobDetail, error)
+	WatchJobOutput(ctx context.Context, target, id string) <-chan apiclient.Update[[]api.JobOutputLine]
 	MigrateNames(ctx context.Context, target string) (api.JobView, error)
 	Decide(ctx context.Context, target, id string, d api.JobDecision) (api.JobView, error)
 	Adopt(ctx context.Context, target, id string) (api.JobView, error)
