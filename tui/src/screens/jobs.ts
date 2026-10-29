@@ -7,7 +7,7 @@ import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
 import { maskText } from "../maskurl.ts";
 import { isJobOutput } from "../api/guards.ts";
-import { sanitizeLine } from "../text.ts";
+import { sanitizeLine, stepOf } from "../text.ts";
 
 const OUT_MAX = 500;
 
@@ -16,7 +16,7 @@ export function inboxLines(jobs: JobView[], sel: number, stale: boolean): string
   const p = stale ? "~" : "";
   return jobs.map((j, i) => {
     const mark = j.state === "needs-decision" ? "!" : " ";
-    return `${i === sel ? ">" : " "}${mark} ${sanitizeLine(`${j.target}/${j.id}`).padEnd(20)} ${p}${sanitizeLine(j.state).padEnd(15)} step ${j.step + 1}/${j.steps.length}  ${sanitizeLine(j.title)}`;
+    return `${i === sel ? ">" : " "}${mark} ${sanitizeLine(`${j.target}/${j.id}`).padEnd(20)} ${p}${sanitizeLine(j.state).padEnd(15)} ${stepOf(j.step, j.steps.length)}  ${sanitizeLine(j.title)}`;
   });
 }
 
