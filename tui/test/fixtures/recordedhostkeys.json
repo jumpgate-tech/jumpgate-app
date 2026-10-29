@@ -1,0 +1,10 @@
+{
+  "hostPort": "10.0.0.2:22",
+  "keys": [
+    {
+      "fingerprint": "SHA256:abc",
+      "keyType": "ssh-ed25519",
+      "store": "jumpgate"
+    }
+  ]
+}

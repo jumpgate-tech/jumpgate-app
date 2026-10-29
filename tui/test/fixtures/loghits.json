@@ -1,0 +1,11 @@
+[
+  {
+    "unit": "geth",
+    "line": "peer dropped",
+    "at": "2026-10-28T12:00:00Z",
+    "signature": "peer-drop",
+    "severity": "warn",
+    "explain": "a peer left",
+    "learnUrl": "https://example.org/peers"
+  }
+]

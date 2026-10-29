@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "ssh",
+    "-p",
+    "22",
+    "-o",
+    "StrictHostKeyChecking=yes",
+    "-o",
+    "UserKnownHostsFile=/home/u/.jumpgate/confirmed_hosts",
+    "-o",
+    "GlobalKnownHostsFile=none",
+    "-o",
+    "ProxyJump=none",
+    "-o",
+    "ProxyCommand=none",
+    "-l",
+    "root",
+    "--",
+    "10.0.0.2"
+  ],
+  "display": "ssh root@10.0.0.2"
+}

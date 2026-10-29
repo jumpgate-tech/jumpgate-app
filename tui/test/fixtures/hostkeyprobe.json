@@ -1,0 +1,13 @@
+{
+  "hops": [
+    {
+      "hostPort": "10.0.0.2:22",
+      "fingerprint": "SHA256:abc",
+      "keyType": "ssh-ed25519",
+      "state": "unknown",
+      "probeId": "p1",
+      "error": "x"
+    }
+  ],
+  "allConfirmed": false
+}

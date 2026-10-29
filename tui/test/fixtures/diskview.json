@@ -1,0 +1,20 @@
+{
+  "at": "2026-10-28T12:00:00Z",
+  "execBytes": 1099511627776,
+  "beaconBytes": 214748364800,
+  "freeBytes": 858993459200,
+  "expectedExecBytes": 1395864371200,
+  "expectedBeaconBytes": 268435456000,
+  "expectedLabel": "mainnet full",
+  "syncLabel": "synced",
+  "fit": "ok",
+  "history": [
+    {
+      "at": "2026-10-28T12:00:00Z",
+      "usedBytes": 1099511627776,
+      "freeBytes": 858993459200
+    }
+  ],
+  "growthPerDay": 12884901888,
+  "daysToFull": 40.5
+}

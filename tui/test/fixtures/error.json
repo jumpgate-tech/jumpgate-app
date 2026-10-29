@@ -1,0 +1,5 @@
+{
+  "error": "wrong passphrase",
+  "hint": "try again",
+  "code": "bad_request"
+}

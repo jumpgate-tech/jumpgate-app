@@ -1,0 +1,9 @@
+{
+  "agent": "0xdef",
+  "version": "0.6.0",
+  "chainId": 1,
+  "setUp": true,
+  "signers": 1,
+  "controllers": 1,
+  "elapsedMs": 42
+}
