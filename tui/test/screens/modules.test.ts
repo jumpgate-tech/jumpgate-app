@@ -70,6 +70,29 @@ test("a started module follows the setup stream into the activity", async () => 
   await m!.waitFor(() => reads() === 3);
 });
 
+// Live: turning a module on moved it up the list on the reload, and the
+// cursor stayed on the row, so it then sat on another module.
+test("the cursor follows its module across a reload", async () => {
+  const cat = fixture("catalog");
+  const watch = cat.modules[0];
+  let have: any[] = [];
+  m = await mount((app) => [new ModulesScreen(app)], {
+    routes: {
+      "GET /api/catalog": () => json({ ...cat, modules: [{ ...watch, id: "checkpointz", name: "Checkpointz" }, watch] }),
+      "GET /api/targets/alpha/modules": () => json({ modules: have, gateStale: false, message: "" }),
+      "PUT /api/targets/alpha/modules/watch": () => ((have = [{ ...fixture("modulesview").modules[0], note: "", error: "" }]), json({ status: "saved" })),
+    },
+    width: 120,
+    height: 34,
+  });
+  m.app.go("modules");
+  await m.waitFor("Checkpointz");
+  await m.press("return");
+  await m.waitFor("> checkpointz");
+  await m.press("down", "space", "y");
+  expect(await m.waitFor("watch   active")).toContain("> watch   active");
+});
+
 // Live: a box that reports no modules showed "no modules", and nothing in
 // the catalog could be turned on for it.
 test("a catalog module the box does not report can be turned on", async () => {

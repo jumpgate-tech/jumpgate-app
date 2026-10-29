@@ -34,7 +34,19 @@ export class ModulesScreen implements Screen {
   }
 
   private load(id: string): void {
-    api.listModules(this.app.conn, id).then((v) => ((this.view_ = v), this.app.render()), (e) => this.app.fail(`modules on ${id}`, e));
+    api.listModules(this.app.conn, id).then(
+      (v) => {
+        // Keep the cursor on the same module: a reload reorders the rows
+        // (one turned on moves up to the box's own), and space must not
+        // then act on another one.
+        const was = this.view_ ? this.modPick.of(this.rows())?.id : undefined;
+        this.view_ = v;
+        const at = was === undefined ? -1 : this.rows().findIndex((r) => r.id === was);
+        if (at >= 0) this.modPick.sel = at;
+        this.app.render();
+      },
+      (e) => this.app.fail(`modules on ${id}`, e),
+    );
   }
 
   /**
