@@ -2,7 +2,9 @@ package agent
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/eip712"
@@ -127,5 +129,22 @@ func TestUnscopedSignerIgnoresThePeer(t *testing.T) {
 	p := Policy{Signers: []SignerEntry{{Address: addr(1).Hex(), Tier: TierRoutine}}}
 	if err := p.CheckScope(addr(1), peercred.Cred{UID: 997}, true); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestPolicyErrorsSayGate: the policy errors a box's journal shows name the
+// gate, not the agent.
+func TestPolicyErrorsSayGate(t *testing.T) {
+	dir := t.TempDir()
+	_, err := LoadPolicy(filepath.Join(dir, "missing.json"))
+	if err == nil || !strings.HasPrefix(err.Error(), "gate: policy") {
+		t.Fatalf("missing policy: %v", err)
+	}
+	p := filepath.Join(dir, "policy.json")
+	if werr := os.WriteFile(p, []byte("{}"), 0o644); werr != nil {
+		t.Fatal(werr)
+	}
+	if _, err = LoadPolicy(p); err == nil || !strings.HasPrefix(err.Error(), "gate: policy "+p) {
+		t.Fatalf("loose mode: %v", err)
 	}
 }

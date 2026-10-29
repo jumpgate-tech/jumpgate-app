@@ -80,17 +80,17 @@ func LoadPolicy(path string) (Policy, error) {
 	var p Policy
 	fi, err := os.Stat(path)
 	if err != nil {
-		return p, fmt.Errorf("agent: policy: %w", err)
+		return p, fmt.Errorf("gate: policy: %w", err)
 	}
 	if fi.Mode().Perm()&0o077 != 0 {
-		return p, fmt.Errorf("agent: policy %s is mode %o; it must be 0600", path, fi.Mode().Perm())
+		return p, fmt.Errorf("gate: policy %s is mode %o; it must be 0600", path, fi.Mode().Perm())
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return p, fmt.Errorf("agent: policy: %w", err)
+		return p, fmt.Errorf("gate: policy: %w", err)
 	}
 	if err := json.Unmarshal(b, &p); err != nil {
-		return p, fmt.Errorf("agent: policy %s: %w", path, err)
+		return p, fmt.Errorf("gate: policy %s: %w", path, err)
 	}
 	return p, nil
 }
