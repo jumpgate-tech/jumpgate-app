@@ -58,7 +58,7 @@ func guideSteps(f guideFacts) []guideStep {
 	if f.vault != nil {
 		state = f.vault.State
 	}
-	v := guideStep{id: "vault", title: "Vault created and unlocked", done: state == "unlocked", screen: noScreen,
+	v := guideStep{id: "vault", title: "Vault created and unlocked", done: state == "unlocked", screen: scrVault,
 		why: "It holds the controller key and the tokens, encrypted with your passphrase."}
 	switch state {
 	case "unlocked":
@@ -66,9 +66,9 @@ func guideSteps(f guideFacts) []guideStep {
 	case "locked":
 		v.how, v.press = "Press U and type the passphrase.", []string{"U"}
 	case "none":
-		v.how = "Create it in a terminal: jumpgate vault init."
+		v.how, v.press = "Vault: press I to create it.", []string{"I"}
 	case "unusable":
-		v.how = "Its file cannot be used; restore a backup: jumpgate vault restore FILE."
+		v.how, v.press = "Its file cannot be used. Vault: press r to restore a backup.", []string{"r"}
 	default:
 		v.how = "Not read yet: connect to the server first."
 	}
@@ -82,7 +82,7 @@ func guideSteps(f guideFacts) []guideStep {
 			}
 		}
 	}
-	r := guideStep{id: "recovery", title: "Recovery code added", done: pass >= 2, screen: noScreen,
+	r := guideStep{id: "recovery", title: "Recovery code added", done: pass >= 2, screen: scrVault,
 		why: "If the passphrase is lost, the recovery code is the only way back into the vault."}
 	switch {
 	case r.done:
@@ -90,7 +90,7 @@ func guideSteps(f guideFacts) []guideStep {
 	case f.vault == nil || state == "none":
 		r.how = "Create the vault first."
 	default:
-		r.how = "In a terminal: jumpgate vault add-recovery; the code prints once."
+		r.how, r.press = "Vault: press a; the code prints once.", []string{"a"}
 	}
 	add(r)
 
@@ -152,13 +152,13 @@ func guideSteps(f guideFacts) []guideStep {
 			sealed = sealed || s == "systemd-creds" || s == "keystore"
 		}
 	}
-	s := guideStep{id: "seal", title: "Vault sealed for auto-unlock", done: sealed, optional: true, screen: noScreen,
+	s := guideStep{id: "seal", title: "Vault sealed for auto-unlock", done: sealed, optional: true, screen: scrVault,
 		why: "The service can then unlock the vault on boot without you."}
 	switch {
 	case sealed:
 		s.how = "Sealed."
 	case f.goos == "linux":
-		s.how = "In a terminal: jumpgate vault seal."
+		s.how = "Vault: press s to seal with the TPM2, or S with the host key."
 	default:
 		s.how = "On the Linux service: jumpgate vault seal."
 	}

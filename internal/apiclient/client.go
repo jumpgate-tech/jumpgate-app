@@ -193,14 +193,14 @@ func (c *Client) send(ctx context.Context, stream bool, method, path string, in 
 	return sendVia(ctx, base, token, hc, method, path, in, header)
 }
 
-// rawJSON is a request body the caller already encoded. It is sent as is, so
+// RawJSON is a request body the caller already encoded. It is sent as is, so
 // a body that holds a secret stays in a buffer the caller can clear.
-type rawJSON []byte
+type RawJSON []byte
 
 // sendVia sends one request over an explicit connection (see conn).
 func sendVia(ctx context.Context, base, token string, hc *http.Client, method, path string, in any, header http.Header) (*http.Response, error) {
 	var body io.Reader
-	if raw, ok := in.(rawJSON); ok {
+	if raw, ok := in.(RawJSON); ok {
 		body = bytes.NewReader(raw)
 	} else if in != nil {
 		b, err := json.Marshal(in)

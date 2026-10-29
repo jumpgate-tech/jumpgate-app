@@ -8,20 +8,20 @@
 |  Jobs           [2]|| node detail | was = the previous reading | esc box tabs                                                ||                              |
 |  Signers        [3]||                                                                                                        ||                              |
 |  Gateways       [4]|| EXECUTION                                                                                              ||                              |
-|  Server         [5]|| state     synced (was syncing)                                                                         ||                              |
-|  Settings       [6]|| head      21,345,678 (was 21,345,600)                                                                  ||                              |
-|--------------------|| peers     48 (was 40)                                                                                  ||                              |
-|   fleet     3 boxes|| head lag  2 blk (was 40)                                                                               ||                              |
-| - box-a      synced|| ref head  21,345,680 (was 21,345,718)                                                                  ||                              |
-|>    exec  synced 4~|| overall   synced (was syncing)                                                                         ||                              |
-|     beac~ synced 7~|| disk      61% used (was 60%)                                                                           ||                              |
-|     mod msgboard on||                                                                                                        ||                              |
-|     mod el-boot~ on|| read 3s ago | previous 8s ago                                                                          ||                              |
-|     mod watch    on||                                                                                                        ||                              |
-|     mod checkpo~ on|| MODULES                                                                                                ||                              |
-| + box-b     down 4m|| Message board  on | Accepting | 1,234 msgs | local only                                                ||                              |
-| + laptop*    local*|| EL bootnode    on | Running                                                                            ||                              |
-|                    || Health watch   on | Running                                                                            ||                              |
+|  Vault          [5]|| state     synced (was syncing)                                                                         ||                              |
+|  Server         [6]|| head      21,345,678 (was 21,345,600)                                                                  ||                              |
+|  Settings       [7]|| peers     48 (was 40)                                                                                  ||                              |
+|--------------------|| head lag  2 blk (was 40)                                                                               ||                              |
+|   fleet     3 boxes|| ref head  21,345,680 (was 21,345,718)                                                                  ||                              |
+| - box-a      synced|| overall   synced (was syncing)                                                                         ||                              |
+|>    exec  synced 4~|| disk      61% used (was 60%)                                                                           ||                              |
+|     beac~ synced 7~||                                                                                                        ||                              |
+|     mod msgboard on|| read 3s ago | previous 8s ago                                                                          ||                              |
+|     mod el-boot~ on||                                                                                                        ||                              |
+|     mod watch    on|| MODULES                                                                                                ||                              |
+|     mod checkpo~ on|| Message board  on | Accepting | 1,234 msgs | local only                                                ||                              |
+| + box-b     down 4m|| EL bootnode    on | Running                                                                            ||                              |
+| + laptop*    local*|| Health watch   on | Running                                                                            ||                              |
 |                    || Checkpointz    on | unit failed                                                                        ||                              |
 |                    ||                                                                                                        ||                              |
 |                    ||                                                                                                        ||                              |

@@ -25,7 +25,7 @@ func serverApp(t *testing.T, f *tuitest.Fake, goos string) *App {
 		return ServerInfo{PID: 4242, HTTPAddr: "127.0.0.1:7788", StartedAt: testNow.Add(-2 * time.Hour), Shape: &daemon.Shape{}}
 	}
 	a.o.OpenWeb = func(context.Context) error { return nil }
-	return press(t, a, "5").(*App)
+	return press(t, a, "6").(*App)
 }
 
 func TestServerView(t *testing.T) {

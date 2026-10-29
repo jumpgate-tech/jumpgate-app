@@ -2,6 +2,7 @@ package tui
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -208,7 +209,7 @@ func (a *App) clickModal(x, y int) tea.Cmd {
 	return nil
 }
 
-// clickHeader: a view tab (below 100 columns) opens its view, LOCKED opens
+// clickHeader: a view tab (below 100 columns; a name or its number) opens its view, LOCKED opens
 // the unlock prompt, the alert count opens the fleet.
 func (a *App) clickHeader(x int) tea.Cmd {
 	p, ok := a.shown["header"]
@@ -218,7 +219,7 @@ func (a *App) clickHeader(x int) tea.Cmd {
 	line := p.lines[0]
 	w := wordAt(line, x)
 	for i, n := range screenNames {
-		if w == n || w == "["+n+"]" {
+		if w == n || w == "["+n+"]" || w == strconv.Itoa(i+1) {
 			return a.openScreen(screenID(i))
 		}
 	}

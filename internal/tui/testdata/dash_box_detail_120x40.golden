@@ -8,14 +8,14 @@
 |  Jobs           [2]|| [Overview]  Storage  Endpoints  Security  Logs  Services                                       |
 |  Signers        [3]||                                                                                                |
 |  Gateways       [4]|| waiting for the first reading~                                                                 |
-|  Server         [5]||                                                                                                |
-|  Settings       [6]||                                                                                                |
+|  Vault          [5]||                                                                                                |
+|  Server         [6]||                                                                                                |
+|  Settings       [7]||                                                                                                |
 |--------------------||                                                                                                |
 |   fleet     3 boxes||                                                                                                |
 |>+ box-a      synced||                                                                                                |
 | + box-b     down 4m||                                                                                                |
 | + laptop*    local*||                                                                                                |
-|                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |

@@ -127,16 +127,25 @@ func (a *App) header(w int) string {
 	}
 	left := " " + a.th.Title.Render("jumpgate") + "  "
 	switch {
-	case narrow && a.conn == apiclient.Retrying:
-		left += server + "  " + a.tabs()
 	case narrow:
-		left += a.tabs()
+		if a.conn == apiclient.Retrying {
+			left += server + "  "
+		}
+		left += a.tabs(w - lipgloss.Width(left) - lipgloss.Width(a.headerRight(narrow)) - 2)
 	default:
 		left += server
 		if a.srvVer != "" {
 			left += " " + a.gl.Sep + " " + a.srvVer
 		}
 	}
+	right := a.headerRight(narrow)
+	left = truncate(left, max(w-lipgloss.Width(right)-1, 1), a.gl.Ellipsis)
+	return left + strings.Repeat(" ", max(w-lipgloss.Width(left)-lipgloss.Width(right), 1)) + right
+}
+
+// headerRight is the header's right side: the alerts, the setup segment
+// and the reading's age.
+func (a *App) headerRight(narrow bool) string {
 	right := a.th.Dim.Render("connecting")
 	if a.fleetHas {
 		age := a.now().Sub(a.fleet.At)
@@ -166,22 +175,27 @@ func (a *App) header(w int) string {
 			right = a.th.Bad.Render("LOCKED: jobs wait for unlock") + " " + a.gl.Sep + " " + right
 		}
 	}
-	right += " "
-	left = truncate(left, max(w-lipgloss.Width(right)-1, 1), a.gl.Ellipsis)
-	return left + strings.Repeat(" ", max(w-lipgloss.Width(left)-lipgloss.Width(right), 1)) + right
+	return right + " "
 }
 
 // tabs is the views in one line, for the header below 100 columns; the
 // active one is bracketed, so it reads without colour too.
-func (a *App) tabs() string {
-	var parts []string
+// Where the names do not fit in room cells, the views other than the
+// active one show as their number keys.
+func (a *App) tabs(room int) string {
+	var full, short []string
 	for i, n := range screenNames {
+		k := fmt.Sprint(i + 1)
 		if screenID(i) == a.navActive() {
 			n = a.th.Sel.Render("[" + n + "]")
+			k = n
 		}
-		parts = append(parts, n)
+		full, short = append(full, n), append(short, k)
 	}
-	return strings.Join(parts, " ")
+	if s := strings.Join(full, " "); lipgloss.Width(s) <= room {
+		return s
+	}
+	return strings.Join(short, " ")
 }
 
 // viewsList is the left sidebar: the views with their number keys, then

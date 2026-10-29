@@ -12,7 +12,7 @@ import (
 var globalKeys = struct {
 	Screens, Focus, Panels, Help, Palette, Drawer, Back, Quit, ForceQuit, Restart, Unlock, Lock, Guide, Invite, Copy key.Binding
 }{
-	Screens:   key.NewBinding(key.WithKeys("1", "2", "3", "4", "5", "6"), key.WithHelp("1-6", "views")),
+	Screens:   key.NewBinding(key.WithKeys("1", "2", "3", "4", "5", "6", "7"), key.WithHelp("1-7", "views")),
 	Focus:     key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "focus: nav, main, log (esc: back to the nav)")),
 	Panels:    key.NewBinding(key.WithKeys("[", "]"), key.WithHelp("[ ]", "tree / activity log")),
 	Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),

@@ -167,8 +167,8 @@ func TestClickStripOpensItsView(t *testing.T) {
 		t.Fatalf("Boxes tile: active %v", m.(*App).active)
 	}
 	b, _ := mouseApp(t, tuitest.NewFake(), 80, 24)
-	x, y := at(t, b, "Jobs ")
-	if m := click(t, b, x+1, y); m.(*App).active != scrJobs {
+	x, y := at(t, b, "] 2 ")
+	if m := click(t, b, x+2, y); m.(*App).active != scrJobs {
 		t.Fatalf("header tab: active %v", m.(*App).active)
 	}
 }

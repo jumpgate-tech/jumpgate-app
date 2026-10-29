@@ -24,11 +24,12 @@ const (
 	scrJobs
 	scrSigners
 	scrGateways
+	scrVault
 	scrServer
 	scrSettings
 )
 
-var screenNames = [...]string{"Fleet", "Jobs", "Signers", "Gateways", "Server", "Settings"}
+var screenNames = [...]string{"Fleet", "Jobs", "Signers", "Gateways", "Vault", "Server", "Settings"}
 
 // screen is one view in the main area.
 type screen interface {
@@ -213,6 +214,7 @@ func New(o Options) *App {
 	a.screens[scrSigners] = &signersScreen{}
 	a.screens[scrSettings] = &settingsScreen{}
 	a.screens[scrServer] = &serverScreen{}
+	a.screens[scrVault] = &vaultScreen{}
 	if server, mine, differs := a.be.Skew(); differs {
 		server, mine = sanitizeLine(server), sanitizeLine(mine)
 		a.srvVer = server
