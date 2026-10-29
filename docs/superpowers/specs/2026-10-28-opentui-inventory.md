@@ -1,3 +1,5 @@
+> Superseded by docs/superpowers/plans/2026-10-29-go-tui-parity.md: the Bun/OpenTUI `tui/` was retired in favour of the Go TUI.
+
 # OpenTUI TUI: Capability Inventory
 
 Date: 2026-10-28. Input to `docs/superpowers/plans/2026-10-28-opentui-tui.md`.

@@ -1,3 +1,5 @@
+> Superseded by docs/superpowers/plans/2026-10-29-go-tui-parity.md: the Bun/OpenTUI `tui/` was retired in favour of the Go TUI.
+
 # OpenTUI Dashboard Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

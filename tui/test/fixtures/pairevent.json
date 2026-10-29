@@ -1,9 +1,0 @@
-{
-  "step": "install",
-  "line": "installing",
-  "error": "x",
-  "code": "unreachable",
-  "hint": "h",
-  "done": true,
-  "agent": "0xdef"
-}
