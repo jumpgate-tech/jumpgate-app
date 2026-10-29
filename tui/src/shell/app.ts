@@ -1,10 +1,11 @@
 // App: the one layout's renderables, the key router, the screens, and the
 // live feeds (fleet, jobs) every screen reads from.
-import { BoxRenderable, TextRenderable, type CliRenderer, type KeyEvent } from "@opentui/core";
+import { BoxRenderable, TextRenderable, type CliRenderer, type KeyEvent, type MouseEvent } from "@opentui/core";
 import * as api from "../api/client.ts";
 import type { ApiError, Conn } from "../api/http.ts";
 import type { StreamOpts } from "../api/sse.ts";
-import type { DrawerPref, Fleet, JobsInbox, RunningJobs, UIPrefs, VaultView } from "../api/types.ts";
+import type { ControllerView, DrawerPref, Fleet, JobsInbox, RunningJobs, UIPrefs, VaultView } from "../api/types.ts";
+import { guideProgress, guideSteps, type GuideFacts } from "./guide.ts";
 import { maskText } from "../maskurl.ts";
 import { redact } from "../secret.ts";
 import { clip, sanitizeLine } from "../text.ts";
@@ -14,10 +15,12 @@ import { runArgv, runJumpgate, type RunOpts } from "../shellout.ts";
 import { isFleet, isJobsInbox } from "../api/guards.ts";
 import type { Bins } from "../bins.ts";
 import { drawerLines, minimizedLine } from "./drawer.ts";
-import type { Key } from "./keys.ts";
-import { layoutFor, MIN_H, MIN_W, type Rect } from "./layout.ts";
+import { layoutFor, MIN_H, MIN_W, type Layout, type Rect } from "./layout.ts";
 import { statusLine } from "./statusbar.ts";
 import { alertLine, alerts } from "./alerts.ts";
+import { DIM_COLOR, FOCUS_COLOR, isSelected, styled } from "./style.ts";
+import { buttonAt, DOUBLE_MS, inList, statusTarget } from "./mouse.ts";
+import { key, type Key } from "./keys.ts";
 
 export interface Screen {
   id: string;
@@ -28,6 +31,10 @@ export interface Screen {
   /** key returns true when it used the key. */
   key?(k: Key): boolean;
   hints?(): string;
+  /** crumbs is where the user is inside the screen, after its nav title: ["alpha", "exec"]. */
+  crumbs?(): string[];
+  /** click handles a click on view() line `line`, column `col`; true when it used it. */
+  click?(line: number, col: number, double: boolean): boolean;
   enter?(arg?: unknown): void;
   leave?(): void;
 }
@@ -38,6 +45,7 @@ export interface AppState {
   drawer: DrawerPref;
   serverVersion?: string;
   vault?: VaultView;
+  controller?: ControllerView;
   fleet?: Fleet;
   fleetStale: boolean;
   inbox?: JobsInbox;
@@ -62,9 +70,18 @@ export interface AppOptions {
   platform?: string;
 }
 
+export type Pane = "nav" | "main" | "activity";
+
+/** SEP joins the breadcrumb in the main pane's title. */
+export const SEP = " › ";
+
 const GLOBAL_KEYS = [
-  "tab / shift-tab   next / previous screen",
-  "up / down         move (the nav, when the screen has no list)",
+  "tab / shift-tab   focus the next / previous pane (double border)",
+  "up / down         move in the focused pane",
+  "enter             open (in the nav: go to the screen)",
+  "esc               back, or from the screen to the nav",
+  "mouse             click a pane, a row or a [key] button; double-click opens",
+  "                  the wheel scrolls; a typed confirm still needs typing",
   ".                 open or minimize the drawer",
   "?                 this help",
   "q / ctrl-c        quit",
@@ -113,6 +130,7 @@ export class App {
     renderer.root.add(this.small);
     renderer.keyInput.on("keypress", (e: KeyEvent) => this.handleKey(toKey(e)));
     renderer.on("resize", () => this.render());
+    this.wireMouse();
   }
 
   get conn(): Conn {
@@ -299,7 +317,33 @@ export class App {
 
   refreshVault(): Promise<void> {
     if (!this.state.conn) return Promise.resolve();
+    // The controller key's state follows the vault's (it lives there); a
+    // failure leaves it unknown, and the guide's progress stays hidden.
+    api.controller(this.state.conn).then((c) => this.set({ controller: c }), () => {});
     return api.vault(this.state.conn).then((v) => this.set({ vault: v }), (e) => this.fail("vault", e));
+  }
+
+  guideFacts(): GuideFacts {
+    const st = this.state;
+    return { connected: !!st.conn, vault: st.vault, controller: st.controller, fleet: st.fleet, platform: this.platform };
+  }
+
+  /** setupProgress is the guide's count, once the facts it needs are known. */
+  setupProgress(): { done: number; total: number } | undefined {
+    const st = this.state;
+    if (!st.conn || !st.vault || !st.controller || !st.fleet) return undefined;
+    return guideProgress(guideSteps(this.guideFacts()));
+  }
+
+  private guideShown = false;
+
+  /** maybeGuide opens Setup once, on the first full state, when setup is incomplete. */
+  private maybeGuide(): void {
+    if (this.guideShown || !this.screens.has("setup")) return;
+    const p = this.setupProgress();
+    if (!p) return;
+    this.guideShown = true;
+    if (p.done < p.total && this.current?.id === "fleet") this.go("setup");
   }
 
   refreshRunning(): void {
@@ -308,13 +352,19 @@ export class App {
   }
 
   private seenAlerts = new Set<string>();
+  private alertsSeeded = false;
 
   set(p: Partial<AppState>): void {
     Object.assign(this.state, p);
+    this.maybeGuide();
     if (p.fleet) {
       // New alerts reach the activity pane once each; one that clears may come back.
+      // The first frame's alerts are the Alerts screen's list: they are counted, not repeated.
       const now = new Set(alerts(p.fleet, new Date()).map(alertLine));
-      for (const a of now) if (!this.seenAlerts.has(a)) this.activity.add(`alert ${a}`);
+      if (!this.alertsSeeded) {
+        this.alertsSeeded = true;
+        if (now.size) this.activity.add(`${now.size} alert${now.size === 1 ? "" : "s"} open: see Alerts`);
+      } else for (const a of now) if (!this.seenAlerts.has(a)) this.activity.add(`alert ${a}`);
       this.seenAlerts = now;
     }
     this.render();
@@ -343,10 +393,164 @@ export class App {
     if (k.name === "q" && !k.ctrl && !k.meta) return this.quit();
     if (k.name === "?" || k.seq === "?") return this.open(helpModal([...GLOBAL_KEYS, "", this.current.hints?.() ?? ""], () => this.close()));
     if (k.name === "." || k.seq === ".") return this.toggleDrawer();
-    if (k.name === "tab") return this.moveNav(k.shift ? -1 : 1);
-    if (this.current.key?.(k)) return this.render();
-    if (k.name === "up") return this.moveNav(-1);
-    if (k.name === "down") return this.moveNav(1);
+    if (k.name === "tab") return this.cycleFocus(k.shift ? -1 : 1);
+    if (this.focus === "nav") {
+      if (k.name === "up") return this.moveNav(-1);
+      if (k.name === "down") return this.moveNav(1);
+      if (k.name === "return" || k.name === "right") return this.setFocus("main");
+    }
+    if (this.focus === "activity") {
+      const page = Math.max(1, (this.lastLayout?.activity?.h ?? 4) - 3);
+      if (k.name === "up") return this.scrollActivity(1);
+      if (k.name === "down") return this.scrollActivity(-1);
+      if (k.name === "pageup") return this.scrollActivity(page);
+      if (k.name === "pagedown") return this.scrollActivity(-page);
+    }
+    if (this.current.key?.(k)) {
+      this.focus = "main";
+      return this.render();
+    }
+    if (k.name === "escape" && this.focus === "main") return this.setFocus("nav");
+  }
+
+  // ---- mouse ----
+
+  private lastDown = { x: -1, y: -1, t: 0 };
+
+  /** wireMouse: a click focuses the pane under it and acts; the wheel scrolls it. */
+  private wireMouse(): void {
+    const b = this.boxes;
+    const at = (name: keyof App["boxes"], e: MouseEvent) => {
+      const s = this.shown[name];
+      if (!s) return null;
+      const inset = b[name].box.border ? 1 : 0;
+      return { row: e.y - s.r.y - inset, col: e.x - s.r.x - inset, lines: s.lines };
+    };
+    const down = (name: keyof App["boxes"], fn: (p: { row: number; col: number; lines: string[] }, double: boolean) => void) => {
+      b[name].box.onMouseDown = (e: MouseEvent) => {
+        if (this.closed || e.button !== 0) return;
+        const p = at(name, e);
+        if (!p) return;
+        const now = performance.now();
+        const double = now - this.lastDown.t < DOUBLE_MS && this.lastDown.x === e.x && this.lastDown.y === e.y;
+        this.lastDown = double ? { x: -1, y: -1, t: 0 } : { x: e.x, y: e.y, t: now };
+        this.flash = "";
+        fn(p, double);
+      };
+    };
+    const wheel = (name: keyof App["boxes"], fn: (d: 1 | -1) => void) => {
+      b[name].box.onMouseScroll = (e: MouseEvent) => {
+        if (this.closed) return;
+        const dir = e.scroll?.direction;
+        if (dir === "up" || dir === "down") fn(dir === "up" ? -1 : 1);
+      };
+    };
+    down("nav", ({ row }) => {
+      if (this.modal) return;
+      const id = this.nav[row];
+      this.focus = "nav";
+      if (id) this.go(id);
+      else this.render();
+    });
+    wheel("nav", (d) => !this.modal && this.moveNav(d));
+    down("main", ({ row, col, lines }, double) => this.clickMain(row, col, lines, double));
+    wheel("main", (d) => {
+      if (this.modal) return;
+      this.focus = "main";
+      this.current.key?.(key(d < 0 ? "up" : "down"));
+      this.render();
+    });
+    down("activity", () => !this.modal && this.setFocus("activity"));
+    wheel("activity", (d) => this.scrollActivity(-d * 3));
+    down("drawer", () => !this.modal && this.toggleDrawer());
+    down("hints", ({ col, lines }) => {
+      // The folded drawer, "[1 running]", opens it.
+      const m = /^\[\d+ running\]/.exec(lines[0] ?? "");
+      if (!this.modal && m && col < m[0].length) this.toggleDrawer();
+    });
+    down("status", ({ col, lines }) => {
+      if (this.modal) return;
+      const id = statusTarget(lines[0] ?? "", col);
+      if (id && this.screens.has(id)) this.go(id);
+    });
+  }
+
+  /**
+   * clickMain: in a modal, a click presses the button under it, but a typed
+   * confirm only takes [esc] (a click never confirms it). On a screen, the
+   * screen's own click, then a [key] button, then a list row: one click
+   * selects it, a double click opens it.
+   */
+  private clickMain(row: number, col: number, lines: string[], double: boolean): void {
+    const line = lines[row] ?? "";
+    if (this.modal) {
+      if (performance.now() < this.modalReadyAt) return;
+      const k = buttonAt(line, col);
+      if (!k) return;
+      if (this.modal instanceof TypedConfirm && k.name !== "escape") return;
+      this.modal.key(k);
+      return this.render();
+    }
+    this.focus = "main";
+    const s = this.current;
+    if (s.click?.(row, col, double)) return this.render();
+    const k = buttonAt(line, col);
+    if (k) {
+      s.key?.(k);
+      return this.render();
+    }
+    const sel = lines.findIndex(isSelected);
+    if (sel >= 0 && row < lines.length && inList(lines, sel, row)) {
+      const d = row - sel;
+      for (let i = 0; i < Math.abs(d); i++) s.key?.(key(d < 0 ? "up" : "down"));
+      if (double) s.key?.(key("return"));
+    }
+    this.render();
+  }
+
+  /** focus is the pane that takes up/down/enter; tab cycles it. */
+  focus: Pane = "main";
+  /** actScroll is how many lines the activity pane is scrolled up from the newest. */
+  actScroll = 0;
+  private lastLayout?: Layout;
+
+  setFocus(p: Pane): void {
+    this.focus = p;
+    this.render();
+  }
+
+  private panes(): Pane[] {
+    return this.lastLayout?.activity ? ["nav", "main", "activity"] : ["nav", "main"];
+  }
+
+  private cycleFocus(d: number): void {
+    const ps = this.panes();
+    const i = Math.max(0, ps.indexOf(this.focus));
+    this.setFocus(ps[(i + d + ps.length) % ps.length]!);
+  }
+
+  scrollActivity(d: number): void {
+    const h = Math.max(0, (this.lastLayout?.activity?.h ?? 2) - 2);
+    const max = Math.max(0, this.activity.all().length - h);
+    this.actScroll = Math.min(max, Math.max(0, this.actScroll + d));
+    this.render();
+  }
+
+  /** crumbs is the main pane's title: the nav screen, then where the user is inside it. */
+  crumbs(): string[] {
+    const s = this.current;
+    const root = s.parent ? this.screens.get(s.parent)?.title ?? s.title : s.title;
+    return [root, ...(s.crumbs?.() ?? (s.parent ? [s.title] : []))].map((c) => sanitizeLine(c));
+  }
+
+  /** hintLine is the focused pane's keys only, then the few global ones. */
+  hintLine(): string {
+    if (this.modal) return "";
+    let mine = "";
+    if (this.focus === "nav") mine = "up/down screen  enter go to it";
+    else if (this.focus === "activity") mine = "up/down scroll";
+    else mine = this.current.hints?.() ?? "";
+    return [mine, "tab pane  ? keys  q quit"].filter(Boolean).join("  ");
   }
 
   private moveNav(d: number): void {
@@ -387,10 +591,14 @@ export class App {
 
   // ---- drawing ----
 
-  private place(name: keyof App["boxes"], r: Rect | null, lines: string[], title?: string): void {
+  /** shown is what each pane drew last, line by line: mouse clicks map onto it. */
+  readonly shown: Partial<Record<keyof App["boxes"], { r: Rect; lines: string[] }>> = {};
+
+  private place(name: keyof App["boxes"], r: Rect | null, lines: string[], title?: string, o: { focused?: boolean; marks?: boolean } = {}): void {
     const { box, text } = this.boxes[name];
     if (!r || r.h <= 0 || r.w <= 0) {
       box.visible = false;
+      delete this.shown[name];
       return;
     }
     box.visible = true;
@@ -399,10 +607,17 @@ export class App {
     box.width = r.w;
     box.height = r.h;
     if (title !== undefined) box.title = clip(title, Math.max(0, r.w - 4));
+    if (box.border) {
+      // The focused pane: a double border in a bright color; the rest single and dim.
+      box.borderStyle = o.focused ? "double" : "single";
+      box.borderColor = o.focused ? FOCUS_COLOR : DIM_COLOR;
+    }
     const border = box.border ? 2 : 0;
     const iw = Math.max(0, r.w - border);
     const ih = Math.max(0, r.h - border);
-    text.content = lines.slice(0, ih).map((l) => clip(sanitizeLine(l), iw)).join("\n");
+    const out = lines.slice(0, ih).map((l) => clip(sanitizeLine(l), iw));
+    this.shown[name] = { r, lines: out };
+    text.content = o.marks ? styled(out, iw) : out.join("\n");
   }
 
   render(): void {
@@ -430,20 +645,28 @@ export class App {
         fleet: st.fleet,
         fleetStale: st.fleetStale,
         decisions: st.conn ? this.decisions() : undefined,
+        setup: this.setupProgress(),
       }),
     ]);
+    this.lastLayout = l;
+    if (this.modal || (this.focus === "activity" && !l.activity)) this.focus = "main";
+    const f = this.focus;
     const cur = this.current.parent ?? this.current.id;
-    this.place("nav", l.nav, this.nav.map((id) => `${id === cur ? ">" : " "} ${this.screens.get(id)!.title}`));
+    this.place("nav", l.nav, this.nav.map((id) => `${id === cur ? ">" : " "} ${this.screens.get(id)!.title}`), "jumpgate", { focused: f === "nav", marks: true });
     const inner = { w: Math.max(0, l.main.w - 2), h: Math.max(0, l.main.h - 2) };
-    if (this.modal) this.place("main", l.main, this.modal.lines(inner.w), this.modal.title);
-    else this.place("main", l.main, this.current.view(inner.w, inner.h), this.current.title);
-    this.place("activity", l.activity, this.activity.last(Math.max(0, (l.activity?.h ?? 2) - 2)));
+    if (this.modal) this.place("main", l.main, this.modal.lines(inner.w), this.modal.title, { focused: true });
+    else this.place("main", l.main, this.current.view(inner.w, inner.h), this.crumbs().join(SEP), { focused: f === "main", marks: true });
+    const ah = Math.max(0, (l.activity?.h ?? 2) - 2);
+    this.actScroll = Math.min(this.actScroll, Math.max(0, this.activity.all().length - ah));
+    const act = this.activity.window(ah, this.actScroll);
+    this.place("activity", l.activity, act, this.actScroll ? `activity (${this.actScroll} newer below)` : "activity", { focused: f === "activity" });
     const db = this.boxes.drawer.box;
     db.border = l.drawerBoxed;
     this.place("drawer", l.drawer, lines, "jobs");
-    const hint = this.modal ? "" : (this.current.hints?.() ?? "");
-    const min = l.drawerOpen ? "" : minimizedLine(running, st.conn ? this.decisions() : undefined);
-    this.place("hints", l.hints, [[min, this.flash || hint, "? keys  . drawer  q quit"].filter(Boolean).join("  ")]);
+    const min = l.drawerOpen ? "" : minimizedLine(running);
+    // The last failure is in the activity pane; without one, it flashes here.
+    const flash = l.activity ? "" : this.flash;
+    this.place("hints", l.hints, [[min, flash || this.hintLine()].filter(Boolean).join("  ")]);
     this.renderer.requestRender();
   }
 }

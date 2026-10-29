@@ -25,7 +25,7 @@ const routes = {
 
 test("sections render from fixtures", () => {
   expect(statusLines(fixture("nodestatus"), false)[0]).toBe("overall syncing");
-  expect(statusLines(undefined, false)).toEqual(["status n/a"]);
+  expect(statusLines(undefined, false)).toEqual(["n/a"]);
   expect(statusLines(fixture("nodestatus"), true)[1]).toContain("~synced");
   expect(diskLines(fixture("diskview"))).toContain("fit       ok");
   expect(endpointLines(fixture("endpoints"))[1]).toContain("FAIL unreachable");
@@ -36,7 +36,7 @@ test("node detail: tabs, masked endpoints, sanitized logs, a confirmed restart",
   m = await mount((app) => [new FleetScreen(app), new NodeScreen(app)], { routes, width: 120, height: 34 });
   await m.waitFor("alpha");
   await m.press("return");
-  expect(await m.waitFor("overall syncing")).toContain("Node alpha");
+  expect(await m.waitFor("overall syncing")).toContain("Fleet › alpha › exec");
   await m.press("3");
   const ep = await m.waitFor("exec    https://");
   expect(ep).toContain("https://***/key/***");

@@ -3,8 +3,8 @@ import type { RunningJob } from "../api/types.ts";
 import { sanitizeLine, stepOf } from "../text.ts";
 
 export function drawerLines(running: RunningJob[] | undefined): string[] {
-  if (!running) return ["jobs n/a"];
-  if (running.length === 0) return ["no jobs running"];
+  if (!running) return ["n/a"];
+  if (running.length === 0) return ["none running"];
   return running.map((j) => {
     const mark = j.needsDecision ? "! " : "  ";
     const who = sanitizeLine(`${j.target}/${j.id}`);
@@ -12,9 +12,10 @@ export function drawerLines(running: RunningJob[] | undefined): string[] {
   });
 }
 
-/** minimizedLine is the drawer folded into the hints row. */
-export function minimizedLine(running: RunningJob[] | undefined, decisions: number | undefined): string {
-  if (decisions && decisions > 0) return `[! ${decisions} needs decision]`;
-  if (running && running.length > 0) return `[${running.length} running]`;
-  return "";
+/**
+ * minimizedLine is the drawer folded into the hints row: how many jobs run.
+ * Pending decisions are counted once, on the status strip.
+ */
+export function minimizedLine(running: RunningJob[] | undefined): string {
+  return running && running.length > 0 ? `[${running.length} running]` : "";
 }

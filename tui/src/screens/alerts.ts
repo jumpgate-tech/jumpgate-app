@@ -8,7 +8,7 @@ export class AlertsScreen implements Screen {
   constructor(private readonly app: App) {}
   view(): string[] {
     const f = this.app.state.fleet;
-    if (!f) return ["alerts n/a (no fleet yet)"];
+    if (!f) return ["n/a: no fleet yet"];
     const l = alerts(f, new Date()).map(alertLine);
     return [...(this.app.state.fleetStale ? ["~ the fleet stream is reconnecting: these may be stale", ""] : []), ...(l.length ? l : ["No alerts."])];
   }

@@ -18,6 +18,7 @@ export function baseRoutes(): Record<string, Handler> {
     "GET /api/health": () => json({ ok: true }),
     "GET /api/version": () => json({ version: "0.0.1" }),
     "GET /api/vault": () => json(fixture("vaultview")),
+    "GET /api/controller": () => json(fixture("controllerview")),
     "GET /api/ui-prefs": () => json({ ...fixture("uiprefs"), drawer: "min" }),
     "PUT /api/ui-prefs": (_r, rec) => json(JSON.parse(rec.body)),
     "GET /api/jobs/running": () => json(fixture("runningjobs")),

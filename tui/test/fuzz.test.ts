@@ -95,7 +95,7 @@ test("the app keeps drawing every screen while its streams send junk frames", as
     app.render();
     await t.renderOnce();
   }
-  expect(t.captureCharFrame()).toContain("Node alpha");
+  expect(t.captureCharFrame()).toContain("Fleet › alpha › exec");
   app.quit();
   fake.stop();
 }, 20_000);

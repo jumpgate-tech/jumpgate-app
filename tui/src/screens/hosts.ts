@@ -104,7 +104,7 @@ export class HostsScreen implements Screen {
   }
 
   hints(): string {
-    return "a add  L local  i invite  u upgrade  D remove  f forget key  x ssh  M rename";
+    return "up/down select";
   }
 
   private async add(): Promise<void> {

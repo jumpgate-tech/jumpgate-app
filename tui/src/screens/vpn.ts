@@ -37,8 +37,12 @@ export class VPNScreen implements Screen {
     api.vpnServers(c).then((v) => ((this.servers = v), this.app.render()), (e) => this.app.fail("vpn servers", e));
   }
 
+  crumbs(): string[] {
+    return [this.mode];
+  }
+
   view(w: number): string[] {
-    const out = [`[v] showing ${this.mode} (v switches)`, ""];
+    const out = [`[v] show ${this.mode === "clients" ? "servers" : "clients"}`, ""];
     if (this.mode === "clients") {
       const rows = (this.clients ?? []).map(
         (v) => `${v.id.padEnd(14)} ${sanitizeLine(v.provider).padEnd(16)} ${sanitizeLine(v.interface).padEnd(8)} on ${sanitizeLine(v.targetId || "this machine")}${v.autostart ? "  autostart" : ""}`,
@@ -93,7 +97,7 @@ export class VPNScreen implements Screen {
   }
 
   hints(): string {
-    return "v clients/servers  n new  U up  d down  s status  D delete";
+    return "up/down select";
   }
 
   private async call(what: string, p: () => Promise<unknown>): Promise<void> {

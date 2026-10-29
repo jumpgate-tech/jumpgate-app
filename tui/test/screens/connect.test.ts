@@ -55,7 +55,7 @@ test("not an admin: names the group, and offers no start", async () => {
   expect(f).not.toContain("[s] start it");
 });
 
-test("skew: the strip shows [skew!] and the screen shows both versions", async () => {
+test("skew: the strip shows [skew!] once; the screen does not repeat it", async () => {
   m = await mount((app) => [new ConnectScreen(app, { next: "Fleet", discover: async () => m!.conn }), dummy("Fleet")], {
     attach: false,
     routes: { "GET /api/version": () => json({ version: "0.6.0" }) },
@@ -63,6 +63,7 @@ test("skew: the strip shows [skew!] and the screen shows both versions", async (
   m.app.go("connect");
   await m.waitFor("[skew!]");
   m.app.go("connect", { stay: true });
-  const f = await m.waitFor("server 0.6.0, this dashboard 0.0.1");
-  expect(f).toContain("[skew!]");
+  const f = await m.waitFor("This dashboard is 0.0.1.");
+  expect(f.split("[skew!]").length - 1).toBe(1);
+  expect(f.split("0.6.0").length - 1).toBe(1);
 });

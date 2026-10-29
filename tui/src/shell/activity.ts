@@ -19,6 +19,13 @@ export class Activity {
     return n <= 0 ? [] : this.lines.slice(-n);
   }
 
+  /** window returns up to n lines ending `back` lines before the newest. */
+  window(n: number, back: number): string[] {
+    if (n <= 0) return [];
+    const end = Math.max(0, this.lines.length - back);
+    return this.lines.slice(Math.max(0, end - n), end);
+  }
+
   all(): readonly string[] {
     return this.lines;
   }

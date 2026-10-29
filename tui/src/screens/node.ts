@@ -15,7 +15,7 @@ const LOG_MAX = 500;
 const gb = (b: number) => `${(b / 1e9).toFixed(1)} GB`;
 
 export function statusLines(s: NodeStatus | undefined, stale: boolean): string[] {
-  if (!s) return ["status n/a"];
+  if (!s) return ["n/a"];
   const p = stale ? "~" : "";
   const c = (name: string, x: NodeStatus["exec"]) =>
     `${name.padEnd(7)} ${p}${x.state.padEnd(11)} head ${p}${x.head}  peers ${p}${x.peers}  ${x.active ? "active" : "inactive"}`;
@@ -29,7 +29,7 @@ export function statusLines(s: NodeStatus | undefined, stale: boolean): string[]
 }
 
 export function diskLines(d: DiskView | undefined): string[] {
-  if (!d) return ["disk n/a"];
+  if (!d) return ["n/a"];
   return [
     `exec      ${gb(d.execBytes)}`,
     `beacon    ${gb(d.beaconBytes)}`,
@@ -42,7 +42,7 @@ export function diskLines(d: DiskView | undefined): string[] {
 }
 
 export function endpointLines(e: Endpoints | undefined): string[] {
-  if (!e) return ["endpoints n/a"];
+  if (!e) return ["n/a"];
   const r = (ok: boolean) => (ok ? "reachable" : "FAIL unreachable");
   return [
     `exec    ${sanitizeLine(maskURL(e.ExecHTTP))}  ${r(e.ExecReachable)}`,
@@ -54,7 +54,7 @@ export function endpointLines(e: Endpoints | undefined): string[] {
 }
 
 export function firewallLines(items: CheckItem[] | undefined): string[] {
-  if (!items) return ["firewall n/a"];
+  if (!items) return ["n/a"];
   if (!items.length) return ["no checks"];
   return items.flatMap((i) => [
     `[${i.Status.padEnd(7)}] ${sanitizeLine(i.Title)}${i.Detail ? ` - ${maskText(sanitizeLine(i.Detail))}` : ""}`,
@@ -89,6 +89,7 @@ export class NodeScreen implements Screen {
     this.title = `Node ${sanitizeLine(arg)}`;
     this.status = this.disk = this.endpoints = this.firewall = undefined;
     this.logs = [];
+    this.logBack = 0;
     this.err = {};
     const c = this.app.conn;
     const ac = new AbortController();
@@ -131,9 +132,20 @@ export class NodeScreen implements Screen {
     this.ac = null;
   }
 
+  crumbs(): string[] {
+    return [this.target, this.service];
+  }
+
+  /** tabs is the section row; each tab is "N name", the open one marked [ ]. */
+  private tabs(): string {
+    return SECTIONS.map((s, i) => (s === this.section ? `[${i + 1} ${s}]` : ` ${i + 1} ${s} `)).join(" ");
+  }
+
+  /** logBack is how far the logs are scrolled up from the newest line. */
+  logBack = 0;
+
   view(_w: number, h: number): string[] {
-    const tabs = SECTIONS.map((s, i) => (s === this.section ? `[${i + 1} ${s}]` : ` ${i + 1} ${s} `)).join(" ");
-    const head = [tabs, `service: ${this.service} (e/b to pick)`, ""];
+    const head = [this.tabs(), ""];
     const e = this.err[this.section];
     let body: string[];
     switch (this.section) {
@@ -149,12 +161,28 @@ export class NodeScreen implements Screen {
       case "firewall":
         body = firewallLines(this.firewall);
         break;
-      case "logs":
-        body = this.logs.length ? this.logs.slice(-Math.max(1, h - head.length)).map(logLine) : ["no log lines yet"];
+      case "logs": {
+        const room = Math.max(1, h - head.length);
+        this.logBack = Math.min(this.logBack, Math.max(0, this.logs.length - room));
+        const end = this.logs.length - this.logBack;
+        body = this.logs.length ? this.logs.slice(Math.max(0, end - room), end).map(logLine) : ["no log lines yet"];
         break;
+      }
     }
     if (e) body = [`FAIL ${maskText(sanitizeLine(e))}`, ...body.filter((l) => !l.endsWith("n/a"))];
     return [...head, ...body];
+  }
+
+  click(line: number, col: number): boolean {
+    if (line !== 0) return false;
+    // Each tab is 1 + its text + 1 wide, joined by one space.
+    let x = 0;
+    for (let i = 0; i < SECTIONS.length; i++) {
+      const wd = `${i + 1} ${SECTIONS[i]}`.length + 2;
+      if (col >= x && col < x + wd) return (this.section = SECTIONS[i]!), true;
+      x += wd + 1;
+    }
+    return false;
   }
 
   key(k: Key): boolean {
@@ -163,6 +191,8 @@ export class NodeScreen implements Screen {
     if (k.name === "escape") return this.app.go("fleet"), true;
     if (k.name === "e") return (this.service = "exec"), true;
     if (k.name === "b") return (this.service = "beacon"), true;
+    if (this.section === "logs" && k.name === "up") return (this.logBack += 1), true;
+    if (this.section === "logs" && k.name === "down") return (this.logBack = Math.max(0, this.logBack - 1)), true;
     if (k.name === "d" && this.section === "disk") return void this.measure(), true;
     if (k.seq === "s") return void this.act("start"), true;
     if (k.seq === "S") return void this.act("stop"), true;
@@ -171,7 +201,7 @@ export class NodeScreen implements Screen {
   }
 
   hints(): string {
-    return "1-5 section  e/b service  s start  S stop  r restart  esc back";
+    return `1-5 section  e/b service  s start  S stop  r restart${this.section === "logs" ? "  up/down scroll" : ""}  esc back`;
   }
 
   private async measure(): Promise<void> {

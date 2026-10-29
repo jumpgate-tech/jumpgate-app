@@ -104,11 +104,8 @@ export class ConnectScreen implements Screen {
       case "starting":
         return ["Starting jumpgate serve..."];
       case "connected": {
-        const sv = this.app.state.serverVersion ?? "n/a";
-        const mine = this.app.opts.myVersion;
-        const lines = [`Connected: server ${sv}, this dashboard ${mine}`];
-        if (this.app.state.serverVersion !== undefined && sv !== mine) lines.push("", "[skew!] the server and this dashboard are different builds");
-        return lines;
+        // The server version and [skew!] are on the status strip.
+        return [`Connected. This dashboard is ${this.app.opts.myVersion}.`];
       }
       case "error":
         if (st.kind === "not_running") return [st.msg === "No jumpgate server is running." ? "No jumpgate server is running. [s] start it" : `${st.msg}  [s] start it`, "", "[r] look again"];

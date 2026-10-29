@@ -24,7 +24,7 @@ test("u unlocks: the server gets the passphrase, the frame never shows it, the b
       "POST /api/vault/unlock": () => ((unlocked = true), json({ state: "unlocked", slots: ["passphrase"] })),
     },
   });
-  await m.waitFor("state  locked");
+  await m.waitFor("vault locked");
   let handed: Uint8Array | null = null;
   const real = m.app.askSecret.bind(m.app);
   m.app.askSecret = async (p) => (handed = await real(p));
@@ -34,7 +34,7 @@ test("u unlocks: the server gets the passphrase, the frame never shows it, the b
   expect(typed).toContain("*".repeat(PASS.length));
   expect(typed).not.toContain("horse");
   await m.press("return");
-  const f = await m.waitFor("state  unlocked");
+  const f = await m.waitFor("vault unlocked");
   const req = m.fake.requests.find((r) => r.path === "/api/vault/unlock")!;
   expect(Buffer.from(JSON.parse(req.body).passphrase, "base64").toString()).toBe(PASS);
   expect(modal.value).toBe("");
@@ -50,7 +50,7 @@ test("a wrong passphrase shows the server's message and the backoff", async () =
         new Response(JSON.stringify({ error: "wrong passphrase", code: "bad_request" }), { status: 403, headers: { "retry-after": "4" } }),
     },
   });
-  await m.waitFor("state  locked");
+  await m.waitFor("vault locked");
   await m.press("u");
   await typeIt("nope");
   await m.press("return");
@@ -61,7 +61,7 @@ test("a wrong passphrase shows the server's message and the backoff", async () =
 
 test("escape cancels without a request", async () => {
   m = await mount((app) => [new VaultScreen(app)]);
-  await m.waitFor("state  locked");
+  await m.waitFor("vault locked");
   await m.press("u");
   await typeIt("abc");
   await m.press("escape");
@@ -72,7 +72,7 @@ test("l locks after a confirm", async () => {
   m = await mount((app) => [new VaultScreen(app)], {
     routes: { "POST /api/vault/lock": () => json({ state: "locked", slots: [] }) },
   });
-  await m.waitFor("state  locked");
+  await m.waitFor("vault locked");
   expect(await m.press("l")).toContain("Lock the vault?");
   await m.press("n");
   expect(m.fake.requests.some((r) => r.path === "/api/vault/lock")).toBe(false);

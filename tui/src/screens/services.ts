@@ -46,11 +46,15 @@ export class ServicesScreen implements Screen {
   view(w: number, h: number): string[] {
     if (!this.box) {
       const l = this.pick.lines(this.boxes());
-      return ["boxes ([enter] open):", ...(l.length ? l : ["  none"])];
+      return ["boxes:", ...(l.length ? l : ["  none"])];
     }
-    const top = [`${sanitizeLine(this.box)}  service: ${this.svc}`, ...KEYS, ""];
+    const top = [...KEYS, ""];
     const body = this.head ? [this.head, ...this.out] : this.out;
     return [...top, ...body.flatMap((l) => wrap(l, w)).slice(0, Math.max(1, h - top.length))];
+  }
+
+  crumbs(): string[] {
+    return this.box ? [this.box, this.svc] : [];
   }
 
   private show(head: string, v: unknown): void {
@@ -95,7 +99,7 @@ export class ServicesScreen implements Screen {
   }
 
   hints(): string {
-    return this.box ? "1-3 service  esc back  (actions listed above)" : "enter open a box";
+    return this.box ? "esc back" : "up/down select  enter open";
   }
 
   private actions(id: string): Record<string, () => Promise<void>> {

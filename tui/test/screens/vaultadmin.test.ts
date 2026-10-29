@@ -21,7 +21,7 @@ async function vault(platform = "linux", code = 0) {
       "PUT /api/vault/secrets/relay-token": () => new Response(null, { status: 204 }),
     },
   });
-  await m.waitFor("state  locked");
+  await m.waitFor("vault locked");
   return rec;
 }
 

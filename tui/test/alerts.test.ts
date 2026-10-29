@@ -61,14 +61,18 @@ test("alerts are deterministic and FAIL comes first", () => {
   expect(a[0]).toMatch(/^FAIL aa: down/);
 });
 
-test("the Alerts screen lists them; new ones reach the activity once", async () => {
+test("the Alerts screen lists them; the activity counts the first ones and logs new ones once", async () => {
   const m = await mount((app) => [new AlertsScreen(app)]);
   m.app.go("alerts");
   const f = await m.waitFor("FAIL alpha:");
   expect(f).toContain("warn alpha: 1 needs decision");
-  const n = m.app.activity.all().filter((l) => l.includes("alert warn alpha: 1 needs decision")).length;
-  m.app.set({ fleet: fixture("fleet") });
-  expect(m.app.activity.all().filter((l) => l.includes("alert warn alpha: 1 needs decision")).length).toBe(n);
-  expect(n).toBe(1);
+  const count = (s: string) => m.app.activity.all().filter((l) => l.includes(s)).length;
+  expect(count("alerts open: see Alerts")).toBe(1);
+  expect(count("alert warn alpha: 1 needs decision")).toBe(0);
+  const more = fixture("fleet");
+  more.rows[0].jobs = { running: 0, needsDecision: 2 };
+  m.app.set({ fleet: more });
+  m.app.set({ fleet: more });
+  expect(count("alert warn alpha: 2 needs decision")).toBe(1);
   await m.close();
 });

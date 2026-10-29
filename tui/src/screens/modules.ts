@@ -29,6 +29,10 @@ export class ModulesScreen implements Screen {
     api.catalog(this.app.conn).then((c) => ((this.cat = c.modules), this.app.render()), (e) => this.app.fail("catalog", e));
   }
 
+  crumbs(): string[] {
+    return this.box ? [this.box] : [];
+  }
+
   private boxes(): string[] {
     return this.app.state.fleet?.rows.map((r) => r.id) ?? [];
   }
@@ -65,9 +69,9 @@ export class ModulesScreen implements Screen {
     out.push(...(this.cat ? this.cat.map((c) => `  ${c.id.padEnd(14)} ${clean(c.name).padEnd(16)} ${clean(c.placement).padEnd(8)} ${clean(c.summary)}`) : ["  n/a"]));
     out.push("");
     if (!this.box) {
-      out.push("boxes ([enter] open):", ...(this.boxPick.lines(this.boxes()).length ? this.boxPick.lines(this.boxes()) : ["  none"]));
+      out.push("boxes:", ...(this.boxPick.lines(this.boxes()).length ? this.boxPick.lines(this.boxes()) : ["  none"]));
     } else {
-      out.push(`modules on ${sanitizeLine(this.box)} ([space] on/off, [c] config as JSON, [esc] back):`);
+      out.push("[space] on/off   [c] config as JSON   [esc] back");
       const v = this.view_;
       if (!v) out.push("  loading...");
       else {
@@ -111,7 +115,7 @@ export class ModulesScreen implements Screen {
   }
 
   hints(): string {
-    return this.box ? "space on/off  c config  esc back" : "enter open a box";
+    return "up/down select" + (this.box ? "" : "  enter open");
   }
 
   private async toggle(id: string, mod: string, on: boolean): Promise<void> {

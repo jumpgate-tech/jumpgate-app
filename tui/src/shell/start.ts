@@ -46,7 +46,7 @@ export function mountApp(renderer: CliRenderer, args: Args, version = VERSION, o
 
 export async function start(args: Args): Promise<number> {
   const bins = resolveBins();
-  const renderer = await createCliRenderer({ exitOnCtrlC: false });
+  const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
   const app = mountApp(renderer, args, VERSION, { bins });
   app.go("connect");
   await app.done;

@@ -21,7 +21,7 @@ export function inboxLines(jobs: JobView[], sel: number, stale: boolean): string
 }
 
 export function detailLines(j: JobView, opt: number): string[] {
-  const out = [`${sanitizeLine(j.title)} (${sanitizeLine(j.kind)}) on ${sanitizeLine(j.target)}`, `state ${sanitizeLine(j.state)}  lease ${j.lease.mine ? "this controller" : sanitizeLine(j.lease.label ?? "n/a")}${j.lease.fresh ? "" : " (stale)"}`, ""];
+  const out = [`${sanitizeLine(j.title)} (${sanitizeLine(j.kind)})`, `state ${sanitizeLine(j.state)}  lease ${j.lease.mine ? "this controller" : sanitizeLine(j.lease.label ?? "n/a")}${j.lease.fresh ? "" : " (stale)"}`, ""];
   for (const s of j.steps) out.push(`[${sanitizeLine(s.state).padEnd(7)}] ${sanitizeLine(s.title)}`);
   if (j.error) out.push("", `FAIL ${maskText(sanitizeLine(j.error))}`);
   const q = j.question;
@@ -41,6 +41,8 @@ export class JobsScreen implements Screen {
   private output: JobOutputLine[] = [];
   private opt = 0;
   private ac: AbortController | null = null;
+  /** outBack is how far the output is scrolled up from the newest line. */
+  outBack = 0;
 
   constructor(private readonly app: App) {}
 
@@ -54,6 +56,22 @@ export class JobsScreen implements Screen {
     this.open = null;
     this.detail = undefined;
     this.output = [];
+    this.outBack = 0;
+  }
+
+  /** click on a question's option picks it, like its number key. */
+  click(line: number): boolean {
+    const j = this.current();
+    if (!j?.question) return false;
+    const first = detailLines(j, this.opt).findIndex((l) => l.startsWith("? "));
+    const i = line - first - 1;
+    if (first < 0 || i < 0 || i >= j.question.options.length) return false;
+    this.opt = i;
+    return true;
+  }
+
+  crumbs(): string[] {
+    return this.open ? [`${this.open.target}/${this.open.id}`] : [];
   }
 
   private jobs(): JobView[] {
@@ -99,7 +117,9 @@ export class JobsScreen implements Screen {
     }
     const top = detailLines(j, this.opt);
     const room = Math.max(1, h - top.length - 2);
-    const out = this.output.slice(-room).map((o) => `${sanitizeLine(o.unit)} ${sanitizeLine(o.line)}`);
+    this.outBack = Math.min(this.outBack, Math.max(0, this.output.length - room));
+    const end = this.output.length - this.outBack;
+    const out = this.output.slice(Math.max(0, end - room), end).map((o) => `${sanitizeLine(o.unit)} ${sanitizeLine(o.line)}`);
     return [...top, "", "output:", ...(out.length ? out : ["(none yet)"])];
   }
 
@@ -114,6 +134,8 @@ export class JobsScreen implements Screen {
       return false;
     }
     if (k.name === "escape") return this.close(), true;
+    if (k.name === "up") return (this.outBack += 1), true;
+    if (k.name === "down") return (this.outBack = Math.max(0, this.outBack - 1)), true;
     const n = Number(k.name);
     if (j.question && n >= 1 && n <= j.question.options.length) return (this.opt = n - 1), true;
     if (k.seq === "A") return void this.adopt(j), true;
@@ -127,7 +149,7 @@ export class JobsScreen implements Screen {
   }
 
   hints(): string {
-    return this.open ? "1-9 pick  a approve  x refuse  A adopt  esc back" : "up/down select  enter open";
+    return this.open ? "1-9 pick  a approve  x refuse  A adopt  up/down scroll output  esc back" : "up/down select  enter open";
   }
 
   private async decide(j: JobView, option: string | undefined): Promise<void> {

@@ -18,6 +18,8 @@ export interface StatusInput {
   fleet?: Fleet;
   fleetStale?: boolean;
   decisions?: number;
+  /** setup is the guide's progress; shown until every required step is done. */
+  setup?: { done: number; total: number };
 }
 
 export function statusLine(s: StatusInput): string {
@@ -32,5 +34,6 @@ export function statusLine(s: StatusInput): string {
     boxes = `boxes ${s.fleet.rows.length} ${n.ok} ok/${n.warn} warn/${n.down} down${s.fleetStale ? " ~" : ""}`;
   }
   const dec = s.decisions === undefined ? "! n/a decisions" : `! ${s.decisions} decisions`;
-  return `server ${ver}${skew} | vault ${vault} | ${boxes} | ${dec}`;
+  const setup = s.setup && s.setup.done < s.setup.total ? ` | setup ${s.setup.done}/${s.setup.total}` : "";
+  return `server ${ver}${skew} | vault ${vault} | ${boxes} | ${dec}${setup}`;
 }
