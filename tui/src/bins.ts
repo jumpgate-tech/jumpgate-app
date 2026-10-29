@@ -29,10 +29,15 @@ export function resolveBin(name: string, envVar: string, o: ResolveOpts = {}): s
   if (fromEnv !== undefined && fromEnv !== "") return isAbsolute(fromEnv) && executable(fromEnv) ? fromEnv : null;
   const sibling = join(dirname(o.execPath ?? process.execPath), exe);
   if (isAbsolute(sibling) && executable(sibling)) return sibling;
+  return onPath(exe, env);
+}
+
+/** onPath finds exe on PATH with its relative entries dropped; absolute or null. */
+export function onPath(exe: string, env: Env = process.env): string | null {
   const path = (env.PATH ?? "").split(delimiter).filter((d) => d !== "" && isAbsolute(d)).join(delimiter);
   if (!path) return null;
   const found = Bun.which(exe, { PATH: path });
-  return found && isAbsolute(found) ? found : null;
+  return found && isAbsolute(found) && executable(found) ? found : null;
 }
 
 export interface Bins {

@@ -14,6 +14,7 @@ import { confirmModal, helpModal, SecretModal, ShowOnce, TextModal, TypedConfirm
 import { runArgv, runJumpgate, type RunOpts } from "../shellout.ts";
 import { isFleet, isJobsInbox } from "../api/guards.ts";
 import type { Bins } from "../bins.ts";
+import { copyText, systemClipboard, type Clipboard } from "../clipboard.ts";
 import { drawerLines, minimizedLine } from "./drawer.ts";
 import { layoutFor, MIN_H, MIN_W, type Layout, type Rect } from "./layout.ts";
 import { statusLine } from "./statusbar.ts";
@@ -35,6 +36,8 @@ export interface Screen {
   crumbs?(): string[];
   /** click handles a click on view() line `line`, column `col`; true when it used it. */
   click?(line: number, col: number, double: boolean): boolean;
+  /** outside is one line drawn full width, outside any border, so it copies whole (public data only). */
+  outside?(): string | null;
   enter?(arg?: unknown): void;
   leave?(): void;
 }
@@ -68,6 +71,8 @@ export interface AppOptions {
   modalGuardMs?: number;
   /** platform replaces process.platform (Linux-only actions). */
   platform?: string;
+  /** clipboard replaces the terminal's OSC 52 and the local copy program. */
+  clipboard?: Clipboard;
 }
 
 export type Pane = "nav" | "main" | "activity";
@@ -104,7 +109,7 @@ export class App {
   private resolveDone!: () => void;
   readonly done = new Promise<void>((r) => (this.resolveDone = r));
 
-  private boxes: Record<"status" | "nav" | "main" | "activity" | "drawer" | "hints", { box: BoxRenderable; text: TextRenderable }>;
+  private boxes: Record<"status" | "nav" | "main" | "activity" | "drawer" | "outside" | "hints", { box: BoxRenderable; text: TextRenderable }>;
   private small: TextRenderable;
 
   constructor(
@@ -124,6 +129,7 @@ export class App {
       main: mk(true),
       activity: mk(true, "activity"),
       drawer: mk(true, "jobs"),
+      outside: mk(false),
       hints: mk(false),
     };
     this.small = new TextRenderable(renderer, { content: "", position: "absolute", left: 0, top: 0 });
@@ -589,6 +595,11 @@ export class App {
     return this.closed;
   }
 
+  /** copy puts public text on the clipboard (OSC 52, plus pbcopy/wl-copy/xclip when found). */
+  async copy(text: string, what: string): Promise<void> {
+    this.log(`${what}: ${await copyText(text, this.opts.clipboard ?? systemClipboard())}`);
+  }
+
   // ---- drawing ----
 
   /** shown is what each pane drew last, line by line: mouse clicks map onto it. */
@@ -626,7 +637,10 @@ export class App {
     const h = this.renderer.height;
     const running = this.state.running?.jobs;
     const lines = drawerLines(running);
-    const l = layoutFor(w, h, this.state.drawer, lines.length);
+    const out = this.modal ? null : this.current.outside?.() ?? null;
+    // Cut at the window width with nothing added, so the rows read back as the one line.
+    const outRows = out ? [...sanitizeLine(out)].reduce<string[]>((a, c, i) => (i % w ? (a[a.length - 1] += c) : a.push(c), a), []) : [];
+    const l = layoutFor(w, h, this.state.drawer, lines.length, outRows.length);
     if (l.tooSmall) {
       for (const b of Object.values(this.boxes)) b.box.visible = false;
       this.small.visible = true;
@@ -663,6 +677,7 @@ export class App {
     const db = this.boxes.drawer.box;
     db.border = l.drawerBoxed;
     this.place("drawer", l.drawer, lines, "jobs");
+    this.place("outside", l.outside, outRows);
     const min = l.drawerOpen ? "" : minimizedLine(running);
     // The last failure is in the activity pane; without one, it flashes here.
     const flash = l.activity ? "" : this.flash;

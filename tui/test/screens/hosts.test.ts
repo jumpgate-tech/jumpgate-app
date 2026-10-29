@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { HostsScreen, inviteLines } from "../../src/screens/hosts.ts";
+import { HostsScreen, inviteCommand, inviteLines } from "../../src/screens/hosts.ts";
 import { json, sseResponse } from "../fake.ts";
 import { fixture, mount, recorder, say, typeText, type Mounted } from "../harness.ts";
 
@@ -30,12 +30,20 @@ function routes(extra: Record<string, any> = {}) {
   };
 }
 
+const clip = { oscs: [] as string[], runs: [] as { argv: string[]; input: string }[] };
+
 async function hosts(o: { version?: string } = {}) {
+  clip.oscs = [];
+  clip.runs = [];
   const rec = recorder();
   const argvs: string[][] = [];
   m = await mount((app) => [new HostsScreen(app)], {
     routes: routes(o.version ? { "GET /api/version": () => json({ version: o.version }), "GET /api/pairing-info": () => json({ ...fixture("pairinginfo"), scope: "" }) } : {}),
-    app: { run: rec.run, runArgv: async (a) => (argvs.push(a), 0) },
+    app: {
+      run: rec.run,
+      runArgv: async (a) => (argvs.push(a), 0),
+      clipboard: { osc: (q) => clip.oscs.push(q), argv: ["/usr/bin/pbcopy"], run: async (argv, input) => (clip.runs.push({ argv, input }), 0) },
+    },
     width: 120,
     height: 34,
   });
@@ -143,12 +151,67 @@ test("invite prints the CLI's lines", () => {
   expect(inviteLines("v0.6.0", { controller: "0xabc", transportKey: "k", system: false, scope: "self" }, "b")[0]).toContain("self-only");
 });
 
-test("i shows the invite for a named box", async () => {
+const CMD =
+  "curl -fsSL https://jumpgate.app/install.sh | sh -s -- --agent --version v0.6.0 " +
+  "--controller 0x00000000000000000000000000000000000000ab --transport-key 'ssh-ed25519 AAAA jumpgate'";
+
+test("inviteCommand is the CLI's command on one line, or the FAIL line", () => {
+  const A = "0x" + "ab".repeat(20);
+  expect(inviteCommand("v0.6.0", { controller: A, transportKey: "ssh-ed25519 AAAA it's", system: false }, "beta")).toEqual({
+    cmd: `curl -fsSL https://jumpgate.app/install.sh | sh -s -- --agent --version v0.6.0 --controller ${A} --transport-key 'ssh-ed25519 AAAA it'"'"'s'`,
+  });
+  expect(inviteCommand("dev", { controller: A, transportKey: "k", system: false }, "b")).toEqual({
+    fail: "FAIL this controller is a development build (dev); an invite needs a released version",
+  });
+});
+
+test("i shows the invite command outside every border, as one unwrapped line", async () => {
   await hosts({ version: "v0.6.0" });
   await m!.press("i");
   await typeText(m!, "gamma");
   await m!.press("return");
-  expect(await m!.waitFor("--controller 0x0000")).toContain("on the box, as root:");
+  const f = await m!.waitFor("--controller 0x0000");
+  expect(f).toContain("on the box, as root, run the command below the panes. [c] copy");
+  expect(f).toContain("then: jumpgate hosts add gamma --ssh jumpgate@HOST --installed <address");
+  expect(f).toContain("printed on the box>");
+  // The strip is full width with no border character: its rows, joined, are exactly the command.
+  const rows = f.split("\n");
+  const start = rows.findIndex((r) => r.startsWith("curl -fsSL"));
+  expect(start).toBeGreaterThan(0);
+  const n = Math.ceil(CMD.length / 120);
+  const strip = rows.slice(start, start + n);
+  expect(strip.join("").trimEnd()).toBe(CMD);
+  for (const r of strip) expect(r).not.toMatch(/[│║┃|]$|^[│║┃]/);
+  // It sits below the main pane's bottom border.
+  expect(rows[start - 1]).toMatch(/[└╚]/);
+  expect(f).toContain("c copy the invite");
+});
+
+test("c copies the invite command by OSC 52 and the local copy program", async () => {
+  await hosts({ version: "v0.6.0" });
+  await m!.press("c");
+  expect(clip.oscs).toEqual([]); // nothing to copy before an invite
+  await m!.press("i");
+  await typeText(m!, "gamma");
+  await m!.press("return");
+  await m!.waitFor("--controller 0x0000");
+  await m!.press("c");
+  await m!.waitFor(() => m!.app.activity.all().some((l) => l.includes("invite command: copied")));
+  expect(clip.oscs).toEqual([`\x1b]52;c;${Buffer.from(CMD).toString("base64")}\x07`]);
+  expect(clip.runs).toEqual([{ argv: ["/usr/bin/pbcopy"], input: CMD }]);
+  expect(m!.app.activity.all().some((l) => l.includes("invite command: copied (OSC 52 and /usr/bin/pbcopy)"))).toBe(true);
+});
+
+test("a failed invite shows no command and copies nothing", async () => {
+  await hosts(); // a self-only controller
+  await m!.press("i");
+  await typeText(m!, "gamma");
+  await m!.press("return");
+  const f = await m!.waitFor("FAIL");
+  expect(f).not.toContain("curl -fsSL");
+  await m!.press("c");
+  expect(clip.oscs).toEqual([]);
+  expect(clip.runs).toEqual([]);
 });
 
 test("a server ssh argv of another shape is refused and never run", async () => {

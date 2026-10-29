@@ -18,6 +18,8 @@ export interface Layout {
   main: Rect;
   activity: Rect | null;
   drawer: Rect;
+  /** outside is a borderless full-width strip above the drawer, for a line meant to be copied. */
+  outside: Rect | null;
   hints: Rect;
   /** The drawer pref, resolved: auto opens at 34+ rows. */
   drawerOpen: boolean;
@@ -34,14 +36,16 @@ const ACTIVITY_W = 30;
 const DRAWER_MAX = 6;
 const DRAWER_COMPACT = 2;
 
-export function layoutFor(w: number, h: number, drawer: DrawerPref, lines = 1): Layout | { tooSmall: true } {
+export function layoutFor(w: number, h: number, drawer: DrawerPref, lines = 1, outsideRows = 0): Layout | { tooSmall: true } {
   if (w < MIN_W || h < MIN_H) return { tooSmall: true };
   const drawerOpen = drawer === "open" || (drawer === "auto" && h >= TALL_H);
   const drawerBoxed = drawerOpen && h >= TALL_H;
   let drawerH = 0;
   if (drawerOpen) drawerH = drawerBoxed ? 2 + Math.min(Math.max(lines, 1), DRAWER_MAX) : DRAWER_COMPACT;
   const bodyY = 1;
-  const bodyH = h - 1 - 1 - drawerH;
+  // The outside strip never takes the body below half the window.
+  const outH = Math.max(0, Math.min(outsideRows, Math.floor((h - 2 - drawerH) / 2)));
+  const bodyH = h - 1 - 1 - drawerH - outH;
   const actW = w >= ACTIVITY_MIN_W ? ACTIVITY_W : 0;
   return {
     tooSmall: false,
@@ -49,7 +53,8 @@ export function layoutFor(w: number, h: number, drawer: DrawerPref, lines = 1): 
     nav: { x: 0, y: bodyY, w: NAV_W, h: bodyH },
     main: { x: NAV_W, y: bodyY, w: w - NAV_W - actW, h: bodyH },
     activity: actW ? { x: w - actW, y: bodyY, w: actW, h: bodyH } : null,
-    drawer: { x: 0, y: bodyY + bodyH, w, h: drawerH },
+    outside: outH ? { x: 0, y: bodyY + bodyH, w, h: outH } : null,
+    drawer: { x: 0, y: bodyY + bodyH + outH, w, h: drawerH },
     hints: { x: 0, y: h - 1, w, h: 1 },
     drawerOpen,
     drawerBoxed,

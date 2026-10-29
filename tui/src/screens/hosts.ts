@@ -31,6 +31,17 @@ export function inviteLines(version: string, info: PairingInfo, name: string): s
   ];
 }
 
+/**
+ * inviteCommand is the invite's install command as one line, or a FAIL line.
+ * It holds only public data: the version, the controller's address and its
+ * tunnel public key.
+ */
+export function inviteCommand(version: string, info: PairingInfo, name: string): { cmd: string } | { fail: string } {
+  const l = inviteLines(version, info, name);
+  if (l.length < 4) return { fail: l[0]! };
+  return { cmd: `${l[1]!.replace(/ \\$/, "")} ${l[2]!.trim()}` };
+}
+
 /** parseSSH reads user@host[:port]. */
 export function parseSSH(s: string): SSHView | null {
   const m = /^([^@\s]+)@([^:\s]+)(?::(\d+))?$/.exec(s.trim());
@@ -50,6 +61,8 @@ export class HostsScreen implements Screen {
   private targets?: TargetView[];
   private pick = new Pick();
   private panel: string[] = [];
+  /** cmd is the invite command shown outside the panes, for copying. */
+  private cmd: string | null = null;
 
   constructor(private readonly app: App) {}
 
@@ -82,6 +95,10 @@ export class HostsScreen implements Screen {
     return out;
   }
 
+  outside(): string | null {
+    return this.cmd;
+  }
+
   key(k: Key): boolean {
     if (this.pick.key(k, this.targets?.length ?? 0)) return true;
     const t = this.sel();
@@ -90,6 +107,8 @@ export class HostsScreen implements Screen {
       L: () => this.addLocal(),
       i: () => this.invite(),
     };
+    const cmd = this.cmd;
+    if (cmd) act.c = () => this.app.copy(cmd, "invite command");
     if (t) {
       act.u = () => this.upgrade(t);
       act.D = () => this.remove(t);
@@ -104,7 +123,7 @@ export class HostsScreen implements Screen {
   }
 
   hints(): string {
-    return "up/down select";
+    return this.cmd ? "up/down select  c copy the invite" : "up/down select";
   }
 
   private async add(): Promise<void> {
@@ -175,7 +194,13 @@ export class HostsScreen implements Screen {
     if (!NAME.test(name)) return this.say(`FAIL ${name} is not a box name`);
     try {
       const info = await api.pairingInfo(this.app.conn);
-      this.panel = inviteLines(this.app.state.serverVersion ?? "n/a", info, name).map(sanitizeLine);
+      const r = inviteCommand(this.app.state.serverVersion ?? "n/a", info, name);
+      if ("fail" in r) return this.say(r.fail);
+      this.cmd = r.cmd;
+      this.panel = [
+        "on the box, as root, run the command below the panes. [c] copy",
+        `then: jumpgate hosts add ${shq(name)} --ssh jumpgate@HOST --installed <address printed on the box>`,
+      ].map(sanitizeLine);
       this.app.render();
     } catch (e) {
       this.app.fail("pairing info", e);
@@ -243,6 +268,7 @@ export class HostsScreen implements Screen {
   }
 
   private say(s: string): void {
+    this.cmd = null;
     this.panel = [s];
     this.app.render();
   }
