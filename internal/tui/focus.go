@@ -27,7 +27,19 @@ func (f focusRegion) String() string { return [...]string{"main", "tree", "log"}
 const overlayWidth = 34
 
 func (a *App) layout() layout {
-	return layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer), a.drawerLines())
+	l := layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer), a.drawerLines())
+	if a.inviteOn && l.Main.H > 4 {
+		// The invite takes the panes' last row: one unboxed line under them.
+		l.Left.H, l.Main.H, l.Right.H = max(l.Left.H-1, 0), l.Main.H-1, max(l.Right.H-1, 0)
+		if l.Left.W == 0 {
+			l.Left.H = 0
+		}
+		if l.Right.W == 0 {
+			l.Right.H = 0
+		}
+		l.Invite = rect{0, l.Main.Y + l.Main.H, a.w, 1}
+	}
+	return l
 }
 
 // regions are the focusable regions showing now, in tab order: nav (the

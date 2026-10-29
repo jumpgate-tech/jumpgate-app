@@ -187,6 +187,9 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 	// Listed only when relevant: TestHelpListsTheVaultKeysWhenRelevant.
 	delete(all, "Unlock")
 	delete(all, "Lock")
+	delete(all, "Guide") // these three: TestHelpListsTheGuideKeysWhenRelevant
+	delete(all, "Invite")
+	delete(all, "Copy")
 	for name, b := range all {
 		h := b.Help()
 		if !regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(h.Key) + `\s+` + regexp.QuoteMeta(h.Desc) + `$`).MatchString(fr) {

@@ -64,6 +64,9 @@ func statusFacts(a *App) []string {
 	if a.srvVer != "" {
 		fs = append(fs, a.srvVer)
 	}
+	if seg := a.setupSegment(); seg != "" {
+		fs = append(fs, seg)
+	}
 	return fs
 }
 

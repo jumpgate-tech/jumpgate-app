@@ -40,6 +40,7 @@ type Fake struct {
 	PrefsV      api.UIPrefs // what Prefs answers (the defaults to start)
 	LastPrefs   api.UIPrefs // what SavePrefs last received
 	ControllerV api.ControllerView
+	PairingV    api.PairingInfo
 	CheckV      api.AgentCheck
 	SSHV        map[string]api.SSHCommand
 	GatewaysV   []api.GatewaySummary
@@ -319,6 +320,13 @@ func (f *Fake) Lock(context.Context) (api.VaultView, error) {
 	v := f.VaultV
 	f.mu.Unlock()
 	return v, f.call("Lock")
+}
+
+func (f *Fake) PairingInfo(_ context.Context, target string) (api.PairingInfo, error) {
+	f.mu.Lock()
+	v := f.PairingV
+	f.mu.Unlock()
+	return v, f.call("PairingInfo", target)
 }
 
 func (f *Fake) Controller(context.Context) (api.ControllerView, error) {

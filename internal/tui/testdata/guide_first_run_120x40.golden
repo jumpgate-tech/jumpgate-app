@@ -1,0 +1,40 @@
+ jumpgate  server live                                                          ! 0 alerts | setup 1/6 | updated 0s ago
++- Boxes -----++- Synced ----++- Head lag --++- Peers -----++- Disk ------++- Gateways --------------++- Alerts -------+
+|n/a          ||n/a          ||n/a          ||n/a          ||n/a          ||n/a                      ||0 alerts        |
+|             ||             ||             ||             ||             ||n/a no request counts yet||                |
++-------------++-------------++-------------++-------------++-------------++-------------------------++----------------+
++- Views ------------++= > Fleet ======================================================================================+
+|> Fleet          [1]||  done 1. Server running                                                                        |
+|  Jobs           [2]||> todo 2. Vault created and unlocked   | next                                                   |
+|  Signers        [3]||  todo 3. Recovery code added                                                                   |
+|  Gateways       [4]||  todo 4. Controller key present                                                                |
+|  Settings       [5]||  todo 5. First box added                                                                       |
+|--------------------||  todo 6. Box paired and healthy                                                                |
+|>  fleet     0 boxes||                                                                                                |
+|                    ||  optional:                                                                                     |
+|                    ||  todo 7. Vault sealed for auto-unlock                                                          |
+|                    ||  todo 8. A second box                                                                          |
+|                    ||  todo 9. A module turned on                                                                    |
+|                    ||  todo 10. A gateway                                                                            |
+|                    ||                                                                                                |
+|                    ||  why: It holds the controller key and the tokens, encrypted with your passphrase.              |
+|                    ||  do:  Create it in a terminal: jumpgate vault init.                                            |
+|                    ||                                                                                                |
+|                    ||  [esc] close                                                                                   |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
++--------------------++------------------------------------------------------------------------------------------------+
++- Activity -----------------------------------------------------------------------------------------------------------+
+| no progress to show | jobs n/a                                                                                       |
++----------------------------------------------------------------------------------------------------------------------+
+ [?] help

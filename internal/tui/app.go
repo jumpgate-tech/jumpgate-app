@@ -163,6 +163,19 @@ type App struct {
 	// restarting: a restart is under way. A second one would race the first
 	// over which server is current, so R does nothing until it lands.
 	restarting bool
+	// The setup guide's facts: the vault and the controller as last read
+	// (guideKnown: one of them was), and whether the guide opened by itself.
+	vault      api.VaultView
+	vaultHas   bool
+	ctl        api.ControllerView
+	ctlHas     bool
+	guideKnown bool
+	guideShown bool
+	// The invite line: shown, and its command or why there is none.
+	inviteOn   bool
+	invite     string
+	inviteFail string
+	bins       bins
 	// vaultOpen: this TUI unlocked the vault and has not locked it since, so
 	// help lists the lock key.
 	vaultOpen bool
@@ -188,6 +201,8 @@ func New(o Options) *App {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &App{o: o, loc: o.Location, be: o.Backend, ctx: ctx, cancel: cancel, now: o.Now, th: NewTheme(), prefs: api.DefaultPrefs(), conn: apiclient.Connecting, clock: time.Now}
 	a.gl = DetectGlyphs(a.prefs.Glyphs, o.GOOS, o.Getenv)
+	a.bins = resolveBins(o.Self, o.Getenv, o.GOOS)
+	a.o.Self = a.bins.jumpgate
 	for i := range a.screens {
 		a.screens[i] = comingScreen{name: screenNames[i]}
 	}
@@ -215,7 +230,7 @@ func New(o Options) *App {
 // Init starts the fleet watch, the clock and a prefs fetch. The fetch does
 // not block the first frame: the TUI shows the defaults until prefsMsg lands.
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs(), loadGateways(a), gwTick(), treeTick(), loadTargets(a))
+	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs(), loadGateways(a), gwTick(), treeTick(), loadTargets(a), loadGuide(a))
 }
 
 // gatewaysEvery is how often the KPI strip re-reads the gateways: the
@@ -334,7 +349,17 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		return a, tick()
 	case gwTickMsg:
-		return a, tea.Batch(loadGateways(a), gwTick())
+		return a, tea.Batch(loadGateways(a), gwTick(), loadGuide(a))
+	case guideMsg:
+		a.gotGuide(msg)
+		return a, nil
+	case stepKeysMsg:
+		return a, a.stepKeys(msg)
+	case inviteMsg:
+		a.gotInvite(msg)
+		return a, nil
+	case keysInitDoneMsg:
+		return a, tea.Batch(loadGuide(a), a.broadcast(msg))
 	case treeModsMsg:
 		a.gotTreeMods(msg)
 		return a, nil
@@ -359,6 +384,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.needs, a.needsKnown = n, true
 		}
+		a.maybeGuide()
 		return a, tea.Batch(a.watchFleet(msg.ch), a.broadcast(msg), ring, a.readRunning())
 	case runningMsg:
 		a.runningBusy, a.runningErr = false, msg.err
@@ -406,14 +432,14 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), a.openScreen(a.active), loadGateways(a))
 	case unlockDoneMsg:
 		a.unlockDone(msg)
-		return a, nil
+		return a, loadGuide(a)
 	case lockDoneMsg:
 		if msg.err != nil {
 			a.flash = "lock: " + a.errText(msg.err)
 		} else {
 			a.flash, a.vaultOpen = "the vault is locked; jobs wait for unlock", false
 		}
-		return a, nil
+		return a, loadGuide(a)
 	case tea.KeyPressMsg:
 		a.flash = ""
 		return a, a.key(msg)
@@ -484,6 +510,13 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case key.Matches(k, globalKeys.Lock):
 		return a.lockVault()
+	case key.Matches(k, globalKeys.Guide):
+		a.modal = newGuide(a)
+		return loadGuide(a)
+	case key.Matches(k, globalKeys.Invite):
+		return a.toggleInvite()
+	case key.Matches(k, globalKeys.Copy) && a.inviteOn:
+		return a.copyInvite()
 	case key.Matches(k, globalKeys.Back) && a.detail == nil && a.focus != focusTree && a.layout().Left.W > 0:
 		a.focus = focusTree // esc goes back to the nav
 		return nil

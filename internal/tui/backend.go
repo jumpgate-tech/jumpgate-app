@@ -38,6 +38,7 @@ type Backend interface {
 	Prefs(ctx context.Context) (api.UIPrefs, error)
 	SavePrefs(ctx context.Context, p api.UIPrefs) (api.UIPrefs, error)
 	Controller(ctx context.Context) (api.ControllerView, error)
+	PairingInfo(ctx context.Context, target string) (api.PairingInfo, error)
 	CheckAgent(ctx context.Context, target string) (api.AgentCheck, error)
 	SSHCommand(ctx context.Context, target string) (api.SSHCommand, error)
 	Gateways(ctx context.Context) ([]api.GatewaySummary, error)

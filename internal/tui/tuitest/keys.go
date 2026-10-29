@@ -4,6 +4,7 @@
 package tuitest
 
 import (
+	"reflect"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -97,6 +98,15 @@ func Run(cmd tea.Cmd) []tea.Msg {
 			var out []tea.Msg
 			for _, c := range batch {
 				out = append(out, Run(c)...)
+			}
+			return out
+		}
+		// tea.Sequence's message is an unexported []tea.Cmd: its commands
+		// run in order, so their messages arrive in order.
+		if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice && v.Type().Elem() == reflect.TypeOf(tea.Cmd(nil)) {
+			var out []tea.Msg
+			for i := 0; i < v.Len(); i++ {
+				out = append(out, Run(v.Index(i).Interface().(tea.Cmd))...)
 			}
 			return out
 		}

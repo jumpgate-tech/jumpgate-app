@@ -95,6 +95,11 @@ func (a *App) frame() string {
 	}
 	body = lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 	parts = append(parts, body)
+	if l.Invite.H > 0 {
+		inv := a.inviteLine(a.w)
+		a.keep("invite", "", 0, l.Invite.Y, inv)
+		parts = append(parts, inv)
+	}
 	last := a.drawerLine(a.w)
 	if l.DrawerOpen {
 		dv := a.drawerView(l.Drawer, l.DrawerCompact)
@@ -151,6 +156,9 @@ func (a *App) header(w int) string {
 		default:
 			right = text
 		}
+	}
+	if seg := a.setupSegment(); seg != "" {
+		right = a.th.Warn.Render(seg) + " " + a.gl.Sep + " " + right
 	}
 	if a.fleetHas {
 		right = a.alertCount() + " " + a.gl.Sep + " " + right
@@ -333,8 +341,8 @@ func (a *App) hints() string {
 func (a *App) paneHints(bs []key.Binding) []string {
 	var hs []string
 	for _, b := range bs {
-		if !b.Enabled() {
-			continue
+		if !b.Enabled() || (a.inviteOn && a.invite != "" && b.Help().Key == "c") {
+			continue // c copies the invite while it shows
 		}
 		switch b.Help() {
 		case navKeys.Up.Help(), navKeys.Left.Help():

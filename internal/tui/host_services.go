@@ -87,9 +87,10 @@ func (h *hostScreen) runShell(a *App, msg sshCmdMsg) tea.Cmd {
 		a.flash = "refusing the server's ssh command: " + sanitizeLine(err.Error())
 		return nil
 	}
-	name := "ssh"
-	if a.o.GOOS == "windows" {
-		name = "ssh.exe"
+	name := a.bins.ssh
+	if name == "" {
+		a.flash = "ssh: not found on PATH (relative PATH entries are skipped); set JUMPGATE_SSH to its absolute path"
+		return nil
 	}
 	id, gen := msg.id, msg.gen
 	cmd := a.o.Command(name, msg.c.Argv[1:]...)

@@ -159,6 +159,13 @@ func (a *App) click(m tea.MouseClickMsg) tea.Cmd {
 		return a.clickKPI(m.X)
 	case m.Y == a.h-1:
 		return a.clickLast(m.X, l)
+	case l.Invite.H > 0 && m.Y == l.Invite.Y:
+		if p, ok := a.shown["invite"]; ok && len(p.lines) > 0 {
+			if k, ok := buttonAt(p.lines[0], m.X); ok {
+				return a.press(k)
+			}
+		}
+		return nil
 	case l.DrawerOpen && in(m.X, m.Y, l.Drawer):
 		return a.toggleDrawer()
 	case a.treeOver && in(m.X, m.Y, rect{l.Main.X, l.Main.Y, min(overlayWidth, l.Main.W), l.Main.H}):
@@ -218,6 +225,9 @@ func (a *App) clickHeader(x int) tea.Cmd {
 	switch {
 	case strings.HasPrefix(w, "LOCKED"):
 		a.modal = newUnlock()
+	case w == "setup":
+		a.modal = newGuide(a)
+		return loadGuide(a)
 	case w == "alerts":
 		return a.openScreen(scrFleet)
 	}
