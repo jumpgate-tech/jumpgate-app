@@ -38,7 +38,7 @@ func jobsApp(t *testing.T, f *tuitest.Fake, glyphs string) *App {
 
 func TestInboxShowsWhatNeedsYouFirst(t *testing.T) {
 	fr := tuitest.Frame(jobsApp(t, tuitest.NewFake(), "unicode"))
-	for _, want := range []string{"Jobs inbox", "1 needs you", "box-a", "⚑", "step 2/3", "1 process(es) still run", "1 Check again", "2 Stop them", "box-b", "running", "silent 10m", "a: adopt"} {
+	for _, want := range []string{" inbox", "1 needs you", "box-a", "⚑", "step 2/3", "1 process(es) still run", "1 Check again", "2 Stop them", "box-b", "running", "silent 10m", "a: adopt"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("inbox lacks %q:\n%s", want, fr)
 		}

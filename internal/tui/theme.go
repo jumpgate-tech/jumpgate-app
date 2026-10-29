@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -79,4 +80,13 @@ func keyLabel(s string, g Glyphs) string {
 		return asciiKeys.Replace(s)
 	}
 	return s
+}
+
+// selIf formats a list row, drawn in reverse when it is the selected one.
+func (a *App) selIf(sel bool, format string, args ...any) string {
+	l := fmt.Sprintf(format, args...)
+	if sel {
+		return a.th.Sel.Render(l)
+	}
+	return l
 }

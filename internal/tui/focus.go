@@ -30,13 +30,15 @@ func (a *App) layout() layout {
 	return layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer), a.drawerLines())
 }
 
-// regions are the focusable regions showing now, in tab order.
+// regions are the focusable regions showing now, in tab order: nav (the
+// views and the tree), main, log.
 func (a *App) regions() []focusRegion {
 	l := a.layout()
-	rs := []focusRegion{focusMain}
+	var rs []focusRegion
 	if l.Left.W > 0 || a.treeOver {
 		rs = append(rs, focusTree)
 	}
+	rs = append(rs, focusMain)
 	if l.Right.W > 0 || a.logOver {
 		rs = append(rs, focusLog)
 	}
@@ -215,18 +217,25 @@ func (a *App) sevGlyph(s logSev) string {
 	return a.th.Dim.Render(a.gl.Info)
 }
 
+// logTitle names the log's scope: the fleet, or a box (and client).
+func (a *App) logTitle() string {
+	box, node := a.logScope()
+	if box == "" {
+		return "Log: fleet"
+	}
+	title := "Log: " + sanitizeLine(box)
+	if node != "" {
+		title += " " + node
+	}
+	return title
+}
+
 // logView is the activity log, boxed, w×h: newest first, each line its
 // severity glyph, its age, the box (fleet-wide) and the text.
 func (a *App) logView(w, h int) string {
-	box, node := a.logScope()
-	title := "Log: fleet"
-	if box != "" {
-		title = "Log: " + sanitizeLine(box)
-		if node != "" {
-			title += " " + node
-		}
-	}
-	evs := a.log.scoped(box, node)
+	box, _ := a.logScope()
+	title := a.logTitle()
+	evs := a.log.scoped(a.logScope())
 	room := max(h-2, 1)
 	a.logOff = min(a.logOff, max(len(evs)-room, 0))
 	var lines []string

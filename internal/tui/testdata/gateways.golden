@@ -1,6 +1,6 @@
  jumpgate  Fleet Jobs Signers [Gateways] Settings                    connecting
  boxes n/a  synced n/a  lag n/a  peers n/a  disk n/a  gw 1/1 live  ! alerts n/a
- GATEWAYS (read-only; change them in the web app)
+ read-only: change them in the web app
 
  rpc-main       on box          running   https://rpc.example.org/
    PulseChain (369)  https://rpc.example.org/369
@@ -21,4 +21,4 @@
 
 
 
- jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-5 views  [ ] panels  q…
+ jobs n/a | ↑↓ select  [r] reload  [?] help

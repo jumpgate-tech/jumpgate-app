@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -264,7 +263,7 @@ func (s *hostsScreen) view(a *App, w, h int) string {
 			pairing = a.th.OK.Render("gate " + shortAddr(sanitizeLine(t.Agent.Address), a.gl)) // the date is on Signers
 		}
 		id, addr := sanitizeLine(t.ID), sanitizeLine(describe(t))
-		lines = append(lines, fmt.Sprintf("%s %-14s %-38s %s", mark, truncate(id, 14, a.gl.Ellipsis), truncate(addr, 38, a.gl.Ellipsis), pairing))
+		lines = append(lines, a.selIf(i == s.cursor, "%s %-14s %-38s %s", mark, truncate(id, 14, a.gl.Ellipsis), truncate(addr, 38, a.gl.Ellipsis), pairing))
 	}
 	if len(s.ts) == 0 {
 		lines = append(lines, " "+a.th.Dim.Render("no boxes yet: press a to add one"))

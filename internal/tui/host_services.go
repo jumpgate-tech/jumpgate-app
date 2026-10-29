@@ -134,7 +134,7 @@ func (h *hostScreen) viewServices(a *App, w int) string {
 		if i == h.svcCursor {
 			mark, hint = a.gl.Sel, "   s start  t stop  r restart"
 		}
-		out += fmt.Sprintf(" %s %-7s %s%s\n", mark, sanitizeLine(svc), state, hint)
+		out += a.selIf(i == h.svcCursor, " %s %-7s %s%s", mark, sanitizeLine(svc), state, hint) + "\n"
 	}
 	out += "\n S  open an SSH shell on this box (system ssh, confirmed host keys only)\n"
 	out += " x  every action for this box\n"

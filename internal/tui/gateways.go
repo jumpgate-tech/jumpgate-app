@@ -51,7 +51,7 @@ func (s *gatewaysScreen) update(a *App, msg tea.Msg) tea.Cmd {
 }
 
 func (s *gatewaysScreen) view(a *App, w, h int) string {
-	head := truncate(" "+a.th.Title.Render("GATEWAYS")+a.th.Dim.Render(" (read-only; change them in the web app)"), w, a.gl.Ellipsis)
+	head := truncate(a.th.Dim.Render(" read-only: change them in the web app"), w, a.gl.Ellipsis) // the title says Gateways
 	switch {
 	case s.err != nil && !s.has:
 		return head + "\n\n " + a.th.Bad.Render("unavailable: ") + a.errText(s.err)

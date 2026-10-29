@@ -87,12 +87,25 @@ const (
 // App is the root model.
 type App struct {
 	mainRect rect // the main region as last drawn, for mouse hits
-	o        Options
-	be       Backend
-	ctx      context.Context
-	cancel   context.CancelFunc
-	now      func() time.Time
-	loc      *time.Location // the zone log times are shown in
+	// shown is what each region drew last, line by line (mouse.go); kpiHits
+	// the KPI tiles' columns and treeFirst the first tree line drawn.
+	shown     map[string]pane
+	kpiHits   []tileHit
+	treeFirst int
+	// clock is the wall clock for double clicks and the modal flush; modalAt
+	// is when the open modal opened.
+	clock     func() time.Time
+	modalAt   time.Time
+	lastClick struct {
+		x, y int
+		at   time.Time
+	}
+	o      Options
+	be     Backend
+	ctx    context.Context
+	cancel context.CancelFunc
+	now    func() time.Time
+	loc    *time.Location // the zone log times are shown in
 
 	w, h     int
 	th       Theme
@@ -173,7 +186,7 @@ func New(o Options) *App {
 		o.Location = time.Local
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{o: o, loc: o.Location, be: o.Backend, ctx: ctx, cancel: cancel, now: o.Now, th: NewTheme(), prefs: api.DefaultPrefs(), conn: apiclient.Connecting}
+	a := &App{o: o, loc: o.Location, be: o.Backend, ctx: ctx, cancel: cancel, now: o.Now, th: NewTheme(), prefs: api.DefaultPrefs(), conn: apiclient.Connecting, clock: time.Now}
 	a.gl = DetectGlyphs(a.prefs.Glyphs, o.GOOS, o.Getenv)
 	for i := range a.screens {
 		a.screens[i] = comingScreen{name: screenNames[i]}
@@ -296,7 +309,11 @@ func (a *App) openScreen(id screenID) tea.Cmd {
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	before := a.modal
 	m, cmd := a.update(msg)
+	if a.modal != nil && a.modal != before {
+		a.modalAt = a.clock() // the flush window starts
+	}
 	switch msg := msg.(type) {
 	case fleetMsg, gatewaysMsg, targetsMsg, treeModsMsg:
 		a.record()
@@ -402,6 +419,10 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.key(msg)
 	case tea.PasteMsg:
 		return a, a.paste(msg)
+	case tea.MouseClickMsg:
+		return a, a.click(msg)
+	case tea.MouseWheelMsg:
+		return a, a.wheel(msg)
 	}
 	return a, a.broadcast(msg)
 }
@@ -426,6 +447,9 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 		return tea.Quit
 	}
 	if a.modal != nil {
+		if a.flushing() {
+			return nil // typed ahead of the modal: it must not answer it
+		}
 		done, cmd := a.modal.key(a, k)
 		if done {
 			a.modal = nil
@@ -460,6 +484,9 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case key.Matches(k, globalKeys.Lock):
 		return a.lockVault()
+	case key.Matches(k, globalKeys.Back) && a.detail == nil && a.focus != focusTree && a.layout().Left.W > 0:
+		a.focus = focusTree // esc goes back to the nav
+		return nil
 	}
 	return cur.update(a, k)
 }

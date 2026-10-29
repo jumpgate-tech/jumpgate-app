@@ -238,7 +238,7 @@ func (s *signersScreen) view(a *App, w, h int) string {
 		if i == s.cursor {
 			mark = a.gl.Sel
 		}
-		lines = append(lines, fmt.Sprintf("%s %-12s gate %s  %-5s  paired %s  routine", mark, truncate(sanitizeLine(t.ID), 12, a.gl.Ellipsis),
+		lines = append(lines, a.selIf(i == s.cursor, "%s %-12s gate %s  %-5s  paired %s  routine", mark, truncate(sanitizeLine(t.ID), 12, a.gl.Ellipsis),
 			shortAddr(sanitizeLine(t.Agent.Address), a.gl), truncate(sanitizeLine(t.Agent.Transport), 5, a.gl.Ellipsis), t.Agent.PairedAt.In(a.loc).Format("2006-01-02")))
 		if c, ok := s.checks[t.ID]; ok {
 			lines = append(lines, "    "+c)

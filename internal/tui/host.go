@@ -438,9 +438,10 @@ func (h *hostScreen) tabUpdate(a *App, msg tea.Msg) tea.Cmd {
 }
 
 func (h *hostScreen) view(a *App, w, hgt int) string {
-	head := " " + a.th.Title.Render(sanitizeLine(h.id))
+	// The box's name is in the breadcrumb (main's title): not repeated here.
+	head := " link n/a"
 	if row, ok := a.fleet.Row(h.id); ok {
-		head += " " + a.gl.Sep + " " + linkWord(row)
+		head = " link " + linkWord(row)
 		if row.Network != "" {
 			head += " " + a.gl.Sep + " " + sanitizeLine(row.Network)
 		}

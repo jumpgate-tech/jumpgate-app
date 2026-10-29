@@ -1,6 +1,7 @@
- jumpgate  Fleet Jobs Signers Gateways Settings                      connecting
+ jumpgate  [Fleet] Jobs Signers Gateways Settings                    connecting
  boxes n/a  synced n/a  lag n/a  peers n/a  disk n/a  gw 0/0 live  ! alerts n/a
- box
+ Fleet › box › Services
+ link n/a
  Overview  Storage  Endpoints  Security  Logs  [Services]
 
  SERVICES
@@ -20,5 +21,4 @@
 
 
 
-
- jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-5 views  [ ] panels  e…
+ jobs n/a | left/right tab  [esc] back  [m] measure disk now (Storage)  [m] mod…

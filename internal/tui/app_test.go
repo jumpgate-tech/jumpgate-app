@@ -78,7 +78,7 @@ func TestTooSmallTerminalKeepsState(t *testing.T) {
 		t.Fatalf("frame:\n%s", f)
 	}
 	m, _ = tuitest.Send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
-	if m.(*App).active != scrJobs || !strings.Contains(tuitest.Frame(m), "Jobs inbox") {
+	if m.(*App).active != scrJobs || !strings.Contains(tuitest.Frame(m), " inbox") {
 		t.Fatalf("state lost:\n%s", tuitest.Frame(m))
 	}
 }

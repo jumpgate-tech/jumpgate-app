@@ -247,6 +247,7 @@ func (a *App) treeView(w, h int) string {
 	if cur >= h {
 		first = cur - h + 1
 	}
+	a.treeFirst = first
 	var lines []string
 	for i := first; i < len(ns) && len(lines) < h; i++ {
 		n := ns[i]

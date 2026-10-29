@@ -37,4 +37,4 @@
 | job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision                                  |
 | job  box-b      migrate-names  step 4/8     [########............]                                                   |
 +----------------------------------------------------------------------------------------------------------------------+
- . drawer  ? help  : command  1-5 views  tab focus  ] log  q quit
+ up/dn select  [enter] open  [/] filter  [s] sort: host, sync, disk, lag  [c] choose columns (Settings)  [r] refresh no~

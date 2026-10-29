@@ -247,7 +247,7 @@ func (m *choiceModal) view(a *App, w, h int) string {
 func (s *jobsScreen) view(a *App, w, h int) string {
 	var b strings.Builder
 	need := s.in.NeedsDecision()
-	head := " Jobs inbox"
+	head := " inbox" // the title says Jobs
 	if s.has {
 		head += fmt.Sprintf(" %s %d needs you", a.gl.Sep, need)
 	}
@@ -276,7 +276,11 @@ func (s *jobsScreen) view(a *App, w, h int) string {
 		}
 		line := fmt.Sprintf("%s%s %-8s %-12s step %d/%d %s", mark, flag, truncate(sanitizeLine(j.Target), 8, a.gl.Ellipsis),
 			sanitizeLine(j.State), min(j.Step+1, len(j.Steps)), len(j.Steps), s.leaseWord(a, j))
-		b.WriteString(truncate(line, w, a.gl.Ellipsis) + "\n")
+		line = truncate(line, w, a.gl.Ellipsis)
+		if i == s.cursor {
+			line = a.th.Sel.Render(line)
+		}
+		b.WriteString(line + "\n")
 		if i == s.cursor {
 			b.WriteString(s.selectedBody(a, j, w))
 		}

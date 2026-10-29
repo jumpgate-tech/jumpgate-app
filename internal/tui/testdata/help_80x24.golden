@@ -3,7 +3,7 @@
  Help  (esc to close)
 keys everywhere
   1-5          views
-  tab          focus: tree, main, log (space expands a box)
+  tab          focus: nav, main, log (esc: back to the nav)
   [ ]          tree / activity log
   ?            help
   :            command
@@ -21,4 +21,4 @@ keys here
   d            answer the selected job's question
   a            adopt a job whose controller went silent
   r            reload
- jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-5 views  [ ] panels  q…
+ jobs n/a | [?] help

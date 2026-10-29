@@ -494,9 +494,9 @@ func (s *settingsScreen) view(a *App, w, h int) string {
 		}
 		v := it.value(a)
 		if strings.HasPrefix(v, "[") {
-			lines = append(lines, fmt.Sprintf("%s %s %s", mark, v, it.label))
+			lines = append(lines, a.selIf(i == s.cursor, "%s %s %s", mark, v, it.label))
 		} else {
-			lines = append(lines, fmt.Sprintf("%s %-48s %s", mark, it.label, v))
+			lines = append(lines, a.selIf(i == s.cursor, "%s %-48s %s", mark, it.label, v))
 		}
 		if i == s.cursor && it.label == "AI provider" {
 			if d := s.disclosure(); d != "" {
