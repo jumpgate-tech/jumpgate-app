@@ -397,7 +397,7 @@ func TestHeaderAge(t *testing.T) {
 // with the host list under it once a host is open.
 func TestViewsSidebarAndTabs(t *testing.T) {
 	fr := tuitest.Frame(dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto"))
-	if l := strings.Split(fr, "\n")[0]; !strings.HasPrefix(l, " jumpgate  [Fleet] Jobs Signers Gateways Settings") || !strings.HasSuffix(strings.TrimRight(l, " "), "5s ago") {
+	if l := strings.Split(fr, "\n")[0]; !strings.HasPrefix(l, " jumpgate  [Fleet] Jobs Signers Gateways Server Settings") || !strings.HasSuffix(strings.TrimRight(l, " "), "5s ago") {
 		t.Fatalf("header with tabs %q", l)
 	}
 	m := press(t, dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "auto"), "enter")

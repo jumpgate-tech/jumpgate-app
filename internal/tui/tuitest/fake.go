@@ -2,6 +2,7 @@ package tuitest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -58,6 +59,13 @@ type Fake struct {
 	LastSetModule api.SetModule // what SetModule last received
 	SetupV        []api.SetupEvent
 
+	// Routes answer Do, keyed "METHOD /path" (the query included). A value
+	// is the answer, sent through JSON into out; an error is returned; a
+	// func(in any) (any, error) is called with what was sent. A missing
+	// route is an error. Every Do is recorded as "Do METHOD /path".
+	Routes map[string]any
+	Sent   map[string]any // what each route last received
+
 	VaultV    api.VaultView // what Vault answers; Unlock and Lock change State
 	UnlockErr error         // what Unlock answers
 	Unlocks   [][]byte      // copies of every passphrase Unlock received
@@ -71,7 +79,7 @@ func NewFake() *Fake {
 		EndpointsV: map[string]api.Endpoints{}, FirewallV: map[string][]api.CheckItem{},
 		JobsCh: make(chan apiclient.Update[api.JobsInbox], 16), JobV: map[string]api.JobDetail{},
 		PrefsV: api.DefaultPrefs(), SSHV: map[string]api.SSHCommand{},
-		DiskV: map[string]api.DiskView{}, StatusCh: map[string]chan apiclient.Update[api.NodeStatus]{},
+		DiskV: map[string]api.DiskView{}, Routes: map[string]any{}, Sent: map[string]any{}, StatusCh: map[string]chan apiclient.Update[api.NodeStatus]{},
 	}
 }
 
@@ -426,4 +434,35 @@ func (f *Fake) WatchSetup(_ context.Context, target string) (<-chan api.SetupEve
 	}
 	close(ch)
 	return ch, nil
+}
+
+func (f *Fake) Do(_ context.Context, method, path string, in, out any) error {
+	route := method + " " + path
+	if err := f.call("Do", route); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	v, ok := f.Routes[route]
+	f.Sent[route] = in
+	f.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("tuitest: no route %s", route)
+	}
+	if fn, ok := v.(func(any) (any, error)); ok {
+		var err error
+		if v, err = fn(in); err != nil {
+			return err
+		}
+	}
+	if err, ok := v.(error); ok {
+		return err
+	}
+	if out == nil || v == nil {
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, out)
 }

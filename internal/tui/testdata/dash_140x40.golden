@@ -8,13 +8,13 @@
 |  Jobs           [2]||>box-a        gate       PulseCha~ synced    2      48/72   [####|...] 61%  warn        || ! 0s  1 needs decision   |
 |  Signers        [3]|| box-b        down 4m    Ethereum  syncing~  n/a    3/9~    n/a             n/a         || + 0s  exec synced (was s~|
 |  Gateways       [4]|| laptop*      local*     ?         n/a       n/a    n/a     n/a             n/a         ||                          |
-|  Settings       [5]||                                                                                        ||                          |
+|  Server         [5]||                                                                                        ||                          |
+|  Settings       [6]||                                                                                        ||                          |
 |--------------------||                                                                                        ||                          |
 |   fleet     3 boxes||                                                                                        ||                          |
 |>+ box-a      synced||                                                                                        ||                          |
 | + box-b     down 4m||                                                                                        ||                          |
 | + laptop*    local*||                                                                                        ||                          |
-|                    ||                                                                                        ||                          |
 |                    ||                                                                                        ||                          |
 |                    ||                                                                                        ||                          |
 |                    ||                                                                                        ||                          |

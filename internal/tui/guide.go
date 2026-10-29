@@ -46,11 +46,11 @@ func guideSteps(f guideFacts) []guideStep {
 	var steps []guideStep
 	add := func(s guideStep) { steps = append(steps, s) }
 
-	srv := guideStep{id: "server", title: "Server running", done: f.connected, screen: noScreen,
+	srv := guideStep{id: "server", title: "Server running", done: f.connected, screen: scrServer,
 		why: "The dashboard, the CLI and every gate talk to this one server."}
 	srv.how = "Running."
 	if !f.connected {
-		srv.how = "Start it: jumpgate serve, or wait while this dashboard reconnects."
+		srv.how, srv.press = "Server: press s to start it.", []string{"s"}
 	}
 	add(srv)
 

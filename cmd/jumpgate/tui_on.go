@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/apiclient"
@@ -28,7 +29,20 @@ var (
 // tuiOptions wires the TUI to this process: the server client, this binary
 // for foreground children, the browser opener and the restart.
 func tuiOptions(c *apiclient.Client, exe, host string) tui.Options {
+	// cur is the client in use: Start and Restart replace it off the TUI's
+	// update loop, and Server reads it on it.
+	var mu sync.Mutex
 	cur := c
+	set := func(nc *apiclient.Client) {
+		mu.Lock()
+		defer mu.Unlock()
+		cur = nc
+	}
+	get := func() *apiclient.Client {
+		mu.Lock()
+		defer mu.Unlock()
+		return cur
+	}
 	return tui.Options{
 		Backend:       c,
 		Self:          exe,
@@ -37,12 +51,24 @@ func tuiOptions(c *apiclient.Client, exe, host string) tui.Options {
 		Location:      time.Local,
 		OpenWeb:       func(ctx context.Context) error { return openWebApp(ctx, io.Discard) },
 		SystemService: c.Info().System,
-		Restart: func(ctx context.Context) (tui.Backend, error) {
-			nc, err := apiclient.Restart(ctx, cur)
+		Start: func(ctx context.Context) (tui.Backend, error) {
+			nc, err := apiclient.Connect(ctx, apiclient.Options{Start: true, Exe: exe})
 			if err != nil {
 				return nil, err
 			}
-			cur = nc // a second restart stops the server the first one started
+			set(nc)
+			return nc, nil
+		},
+		Server: func() tui.ServerInfo {
+			i := get().Info() // the token stays here
+			return tui.ServerInfo{PID: i.PID, HTTPAddr: i.HTTPAddr, StartedAt: i.StartedAt, System: i.System, Shape: i.Shape}
+		},
+		Restart: func(ctx context.Context) (tui.Backend, error) {
+			nc, err := apiclient.Restart(ctx, get())
+			if err != nil {
+				return nil, err
+			}
+			set(nc) // a second restart stops the server the first one started
 			return nc, nil
 		},
 	}

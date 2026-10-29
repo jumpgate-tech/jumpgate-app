@@ -554,15 +554,15 @@ func TestLeavingHostsEndsTheFlowAndSaysSo(t *testing.T) {
 func hostsOf(a *App) *hostsScreen { return a.screens[scrFleet].(*fleetScreen).hosts }
 
 func TestViewsRenumbered(t *testing.T) {
-	for k, want := range map[string]screenID{"1": scrFleet, "2": scrJobs, "3": scrSigners, "4": scrGateways, "5": scrSettings} {
+	for k, want := range map[string]screenID{"1": scrFleet, "2": scrJobs, "3": scrSigners, "4": scrGateways, "5": scrServer, "6": scrSettings} {
 		if a := press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), k).(*App); a.active != want {
 			t.Errorf("%s opened %v, want %v", k, a.active, want)
 		}
 	}
-	if a := press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), "3", "6").(*App); a.active != scrSigners {
-		t.Errorf("6 moved to %v", a.active)
+	if a := press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), "3", "7").(*App); a.active != scrSigners {
+		t.Errorf("7 moved to %v", a.active)
 	}
-	if len(screenNames) != 5 || screenNames[1] != "Jobs" || screenNames[4] != "Settings" {
+	if len(screenNames) != 6 || screenNames[1] != "Jobs" || screenNames[4] != "Server" || screenNames[5] != "Settings" {
 		t.Errorf("views %v", screenNames)
 	}
 }

@@ -24,10 +24,11 @@ const (
 	scrJobs
 	scrSigners
 	scrGateways
+	scrServer
 	scrSettings
 )
 
-var screenNames = [...]string{"Fleet", "Jobs", "Signers", "Gateways", "Settings"}
+var screenNames = [...]string{"Fleet", "Jobs", "Signers", "Gateways", "Server", "Settings"}
 
 // screen is one view in the main area.
 type screen interface {
@@ -211,6 +212,7 @@ func New(o Options) *App {
 	a.screens[scrGateways] = &gatewaysScreen{}
 	a.screens[scrSigners] = &signersScreen{}
 	a.screens[scrSettings] = &settingsScreen{}
+	a.screens[scrServer] = &serverScreen{}
 	if server, mine, differs := a.be.Skew(); differs {
 		server, mine = sanitizeLine(server), sanitizeLine(mine)
 		a.srvVer = server
@@ -353,6 +355,32 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case guideMsg:
 		a.gotGuide(msg)
 		return a, nil
+	case startedMsg:
+		a.restarting = false
+		if msg.err != nil {
+			a.flash = "could not start the server: " + a.errText(msg.err)
+			return a, nil
+		}
+		a.cancel()
+		a.ctx, a.cancel = context.WithCancel(context.Background())
+		a.be, a.skew, a.srvVer, a.flash = msg.be, "", "", "the server started"
+		return a, tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), a.openScreen(a.active), loadGateways(a), loadGuide(a))
+	case stoppedMsg:
+		if msg.err != nil {
+			a.flash = "stop: " + a.errText(msg.err)
+		} else {
+			a.flash, a.vaultOpen = "the server is stopping; jobs pause until it starts again", false
+		}
+		return a, nil
+	case serverWebMsg:
+		if msg.err != nil {
+			a.flash = "could not open the web app: " + a.errText(msg.err)
+		} else {
+			a.flash = "the web app is open in your browser"
+		}
+		return a, nil
+	case selfDoneMsg:
+		return a, a.selfDone(msg)
 	case stepKeysMsg:
 		return a, a.stepKeys(msg)
 	case inviteMsg:

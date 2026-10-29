@@ -8,13 +8,13 @@
 |  Jobs           [2]||>box-a        gate       PulseCha~ n/a       n/a    n/a     n/a             n/a                 |
 |  Signers        [3]|| box-b        down 9m    ?         n/a       n/a    n/a     n/a             n/a                 |
 |  Gateways       [4]|| box-c        gate       ?         ~         n/a    n/a     n/a             n/a                 |
-|  Settings       [5]||                                                                                                |
+|  Server         [5]||                                                                                                |
+|  Settings       [6]||                                                                                                |
 |--------------------||                                                                                                |
 |   fleet     3 boxes||                                                                                                |
 |>+ box-a         n/a||                                                                                                |
 | + box-b     down 9m||                                                                                                |
 | + box-c         n/a||                                                                                                |
-|                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
