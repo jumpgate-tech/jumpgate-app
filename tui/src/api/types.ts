@@ -261,6 +261,8 @@ export interface SSHView {
   Host: string;
   User: string;
   Port: number;
+  /** The private key file on the controller; without one the server needs an ssh-agent. */
+  KeyPath?: string;
   jump?: SSHView;
 }
 

@@ -122,6 +122,9 @@ export class HostsScreen implements Screen {
       if (!j) return this.say("FAIL want the jump host as user@host[:port]");
       ssh.jump = j;
     }
+    const keyPath = (await this.app.askText("ssh key file on this machine (blank to use the ssh-agent)"))?.trim();
+    if (keyPath === undefined) return;
+    if (keyPath) ssh.KeyPath = keyPath;
     try {
       const probe = await api.probeHostKeys(c, ssh);
       for (const hop of probe.hops) {
