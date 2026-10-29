@@ -68,7 +68,7 @@ export class KeysScreen implements Screen {
   }
 
   hints(): string {
-    return "t test  c create  e export  R restart";
+    return "up/down select";
   }
 
   private async test(): Promise<void> {

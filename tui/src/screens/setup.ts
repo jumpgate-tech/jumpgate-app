@@ -48,7 +48,7 @@ export class SetupScreen implements Screen {
   }
 
   hints(): string {
-    return (this.linux ? "i install  s set up  S self-only  " : "") + "o open web  X stop";
+    return "";
   }
 
   private async cli(q: string, args: string[]): Promise<void> {

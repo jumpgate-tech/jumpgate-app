@@ -3,7 +3,6 @@ import type { Fleet, FleetRow } from "../api/types.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
 import { boxHealth } from "../shell/statusbar.ts";
-import { maskText } from "../maskurl.ts";
 import { pad, sanitizeLine } from "../text.ts";
 
 const COLS = [
@@ -49,12 +48,9 @@ export class FleetScreen implements Screen {
     if (f.rows.length === 0) return ["No boxes yet. Add one with `jumpgate hosts add`."];
     this.sel = Math.min(this.sel, f.rows.length - 1);
     const [head, ...rows] = fleetRows(f, this.app.state.fleetStale);
-    const out = ["  " + head, ...rows.map((r, i) => (i === this.sel ? "> " : "  ") + r)];
-    if (f.locked) out.push("", "The vault is locked: values may be stale. Unlock it on the Vault screen.");
-    const r = f.rows[this.sel];
-    if (r?.alertMessage) out.push("", `! ${sanitizeLine(r.id)}: ${maskText(sanitizeLine(r.alertMessage))}`);
-    if (r?.error) out.push("", `FAIL ${sanitizeLine(r.id)}: ${maskText(sanitizeLine(r.error.error))}`);
-    return out;
+    // The vault state and each box's alerts are on the status strip and the
+    // Alerts screen: the table does not repeat them.
+    return ["  " + head, ...rows.map((r, i) => (i === this.sel ? "> " : "  ") + r)];
   }
 
   key(k: Key): boolean {

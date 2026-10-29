@@ -97,7 +97,7 @@ export class VPNScreen implements Screen {
   }
 
   hints(): string {
-    return "v clients/servers  n new  U up  d down  s status  D delete";
+    return "up/down select";
   }
 
   private async call(what: string, p: () => Promise<unknown>): Promise<void> {

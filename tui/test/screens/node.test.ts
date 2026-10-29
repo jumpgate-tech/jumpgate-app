@@ -25,7 +25,7 @@ const routes = {
 
 test("sections render from fixtures", () => {
   expect(statusLines(fixture("nodestatus"), false)[0]).toBe("overall syncing");
-  expect(statusLines(undefined, false)).toEqual(["status n/a"]);
+  expect(statusLines(undefined, false)).toEqual(["n/a"]);
   expect(statusLines(fixture("nodestatus"), true)[1]).toContain("~synced");
   expect(diskLines(fixture("diskview"))).toContain("fit       ok");
   expect(endpointLines(fixture("endpoints"))[1]).toContain("FAIL unreachable");

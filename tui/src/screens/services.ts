@@ -46,7 +46,7 @@ export class ServicesScreen implements Screen {
   view(w: number, h: number): string[] {
     if (!this.box) {
       const l = this.pick.lines(this.boxes());
-      return ["boxes ([enter] open):", ...(l.length ? l : ["  none"])];
+      return ["boxes:", ...(l.length ? l : ["  none"])];
     }
     const top = [...KEYS, ""];
     const body = this.head ? [this.head, ...this.out] : this.out;

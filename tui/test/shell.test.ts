@@ -38,40 +38,42 @@ test("below 100 columns the activity pane folds away", async () => {
 
 test(". toggles the drawer and saves the pref", async () => {
   m = await mount(() => [dummy("Fleet")]);
-  await m.waitFor("[! 1 needs decision]");
+  await m.waitFor("[1 running]");
   const f = await m.press(".");
   expect(f).toContain("alpha/j1");
-  expect(f).not.toContain("[! 1 needs decision]");
+  expect(f).not.toContain("[1 running]");
   await Bun.sleep(20);
   const put = m.fake.requests.find((r) => r.method === "PUT" && r.path === "/api/ui-prefs");
   expect(JSON.parse(put!.body).drawer).toBe("open");
-  expect(await m.press(".")).toContain("[! 1 needs decision]");
+  expect(await m.press(".")).toContain("[1 running]");
 });
 
 test("a refused drawer save flashes and re-reads the prefs", async () => {
+  // 90 columns: no activity pane, so the failure flashes on the hints row.
   m = await mount(() => [dummy("Fleet")], {
+    width: 90,
     routes: { "PUT /api/ui-prefs": () => json({ error: "bad prefs", code: "invalid_prefs" }, 400) },
   });
-  await m.waitFor("[! 1 needs decision]");
+  await m.waitFor("[1 running]");
   await m.press(".");
   const f = await m.waitFor("FAIL save the drawer setting: bad prefs");
   expect(f).toContain("bad prefs");
-  await m.waitFor("[! 1 needs decision]"); // back to the server's "min"
+  await m.waitFor("[1 running]"); // back to the server's "min"
   expect(m.fake.requests.filter((r) => r.path === "/api/ui-prefs" && r.method === "GET").length).toBe(2);
 });
 
 test("the drawer never opens itself on a new decision", async () => {
   m = await mount(() => [dummy("Fleet")]);
-  await m.waitFor("[! 1 needs decision]");
+  await m.waitFor("[1 running]");
   m.app.set({ inbox: { ...fixture("jobsinbox"), jobs: [fixture("jobview"), { ...fixture("jobview"), id: "j2" }] } });
   const f = await m.frame();
-  expect(f).toContain("[! 2 needs decision]");
+  expect(f).toContain("! 2 decisions");
   expect(m.app.state.drawer).toBe("min");
 });
 
 test("a . typed into a focused secret input types, not toggles", async () => {
   m = await mount(() => [dummy("Fleet")]);
-  await m.waitFor("[! 1 needs decision]");
+  await m.waitFor("[1 running]");
   const p = m.app.askSecret("vault passphrase");
   const f = await m.press("a", ".", "b");
   expect(f).toContain("vault passphrase: ***");
@@ -131,11 +133,11 @@ test("statusLine is fail-closed and marks skew and staleness", () => {
   );
 });
 
-test("the minimized drawer line counts decisions", () => {
-  expect(minimizedLine([], 3)).toBe("[! 3 needs decision]");
-  expect(minimizedLine(fixture("runningjobs").jobs, 0)).toBe("[1 running]");
-  expect(minimizedLine(undefined, undefined)).toBe("");
-  expect(drawerLines(undefined)).toEqual(["jobs n/a"]);
+test("the minimized drawer line counts running jobs; decisions are on the status strip only", () => {
+  expect(minimizedLine([])).toBe("");
+  expect(minimizedLine(fixture("runningjobs").jobs)).toBe("[1 running]");
+  expect(minimizedLine(undefined)).toBe("");
+  expect(drawerLines(undefined)).toEqual(["n/a"]);
 });
 
 test("activity keeps 200 lines, redacted and sanitized", () => {

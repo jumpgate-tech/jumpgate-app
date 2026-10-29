@@ -58,7 +58,7 @@ export class SettingsScreen implements Screen {
   }
 
   hints(): string {
-    return "p provider  k AI key  i idle lock  d drawer  r updates";
+    return "";
   }
 
   private async save(u: api.SettingsUpdateT, what: string): Promise<void> {

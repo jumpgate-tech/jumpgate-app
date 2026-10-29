@@ -320,13 +320,18 @@ export class App {
   }
 
   private seenAlerts = new Set<string>();
+  private alertsSeeded = false;
 
   set(p: Partial<AppState>): void {
     Object.assign(this.state, p);
     if (p.fleet) {
       // New alerts reach the activity pane once each; one that clears may come back.
+      // The first frame's alerts are the Alerts screen's list: they are counted, not repeated.
       const now = new Set(alerts(p.fleet, new Date()).map(alertLine));
-      for (const a of now) if (!this.seenAlerts.has(a)) this.activity.add(`alert ${a}`);
+      if (!this.alertsSeeded) {
+        this.alertsSeeded = true;
+        if (now.size) this.activity.add(`${now.size} alert${now.size === 1 ? "" : "s"} open: see Alerts`);
+      } else for (const a of now) if (!this.seenAlerts.has(a)) this.activity.add(`alert ${a}`);
       this.seenAlerts = now;
     }
     this.render();
@@ -529,8 +534,10 @@ export class App {
     const db = this.boxes.drawer.box;
     db.border = l.drawerBoxed;
     this.place("drawer", l.drawer, lines, "jobs");
-    const min = l.drawerOpen ? "" : minimizedLine(running, st.conn ? this.decisions() : undefined);
-    this.place("hints", l.hints, [[min, this.flash || this.hintLine()].filter(Boolean).join("  ")]);
+    const min = l.drawerOpen ? "" : minimizedLine(running);
+    // The last failure is in the activity pane; without one, it flashes here.
+    const flash = l.activity ? "" : this.flash;
+    this.place("hints", l.hints, [[min, flash || this.hintLine()].filter(Boolean).join("  ")]);
     this.renderer.requestRender();
   }
 }

@@ -15,7 +15,7 @@ const LOG_MAX = 500;
 const gb = (b: number) => `${(b / 1e9).toFixed(1)} GB`;
 
 export function statusLines(s: NodeStatus | undefined, stale: boolean): string[] {
-  if (!s) return ["status n/a"];
+  if (!s) return ["n/a"];
   const p = stale ? "~" : "";
   const c = (name: string, x: NodeStatus["exec"]) =>
     `${name.padEnd(7)} ${p}${x.state.padEnd(11)} head ${p}${x.head}  peers ${p}${x.peers}  ${x.active ? "active" : "inactive"}`;
@@ -29,7 +29,7 @@ export function statusLines(s: NodeStatus | undefined, stale: boolean): string[]
 }
 
 export function diskLines(d: DiskView | undefined): string[] {
-  if (!d) return ["disk n/a"];
+  if (!d) return ["n/a"];
   return [
     `exec      ${gb(d.execBytes)}`,
     `beacon    ${gb(d.beaconBytes)}`,
@@ -42,7 +42,7 @@ export function diskLines(d: DiskView | undefined): string[] {
 }
 
 export function endpointLines(e: Endpoints | undefined): string[] {
-  if (!e) return ["endpoints n/a"];
+  if (!e) return ["n/a"];
   const r = (ok: boolean) => (ok ? "reachable" : "FAIL unreachable");
   return [
     `exec    ${sanitizeLine(maskURL(e.ExecHTTP))}  ${r(e.ExecReachable)}`,
@@ -54,7 +54,7 @@ export function endpointLines(e: Endpoints | undefined): string[] {
 }
 
 export function firewallLines(items: CheckItem[] | undefined): string[] {
-  if (!items) return ["firewall n/a"];
+  if (!items) return ["n/a"];
   if (!items.length) return ["no checks"];
   return items.flatMap((i) => [
     `[${i.Status.padEnd(7)}] ${sanitizeLine(i.Title)}${i.Detail ? ` - ${maskText(sanitizeLine(i.Detail))}` : ""}`,

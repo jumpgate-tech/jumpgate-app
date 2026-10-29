@@ -92,7 +92,7 @@ export class GatewaysScreen implements Screen {
   }
 
   hints(): string {
-    return "up/down select; actions listed above";
+    return "up/down select";
   }
 
   private async call(what: string, p: () => Promise<unknown>): Promise<void> {

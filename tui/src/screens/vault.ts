@@ -5,7 +5,7 @@ import { redact, withSecret } from "../secret.ts";
 import type { App, Screen } from "../shell/app.ts";
 import type { Key } from "../shell/keys.ts";
 import { maskText } from "../maskurl.ts";
-import { na, sanitizeLine, wrap } from "../text.ts";
+import { sanitizeLine, wrap } from "../text.ts";
 
 export class VaultScreen implements Screen {
   readonly id = "vault";
@@ -29,10 +29,8 @@ export class VaultScreen implements Screen {
 
   view(w: number): string[] {
     const v = this.app.state.vault;
-    const lines = [
-      `state  ${na(v?.state, sanitizeLine)}`,
-      `slots  ${v ? v.slots.map(sanitizeLine).join(", ") || "none" : "n/a"}`,
-    ];
+    // The state (locked, unlocked) is on the status strip.
+    const lines = [`slots  ${v ? v.slots.map(sanitizeLine).join(", ") || "none" : "n/a"}`];
     if (v?.reason) lines.push(`reason ${maskText(sanitizeLine(v.reason))}`);
     if (v?.plain?.length) lines.push(`plain  ${v.plain.map(sanitizeLine).join(", ")} (not in the vault yet)`);
     const idle = this.idle === undefined ? "n/a" : this.idle === 0 ? "off" : `${this.idle} min`;
@@ -78,7 +76,7 @@ export class VaultScreen implements Screen {
   }
 
   hints(): string {
-    return "u unlock  l lock  t idle  p put  i/m/b/R/k/K" + (this.linux ? "/s/S" : "");
+    return ""; // every action is a [key] button in the pane
   }
 
   private async cli(question: string, args: string[], pause = false): Promise<void> {
