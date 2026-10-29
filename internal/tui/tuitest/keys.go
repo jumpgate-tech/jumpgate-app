@@ -12,7 +12,7 @@ import (
 
 // Key is the key press a person makes for a name: "enter", "esc", "tab",
 // "shift+tab", "up", "down", "left", "right", "backspace", "space",
-// "ctrl+c", "ctrl+v", or one printable character.
+// "ctrl+c", "ctrl+u", "ctrl+v", or one printable character.
 func Key(s string) tea.KeyPressMsg {
 	switch s {
 	case "enter":
@@ -41,6 +41,8 @@ func Key(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl}
 	case "ctrl+v":
 		return tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl}
+	case "ctrl+u":
+		return tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}
 	}
 	r := []rune(s)
 	if len(r) != 1 {

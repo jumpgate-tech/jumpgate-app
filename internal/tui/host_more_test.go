@@ -63,7 +63,7 @@ func TestSecurityTabShowsFixesForFailures(t *testing.T) {
 	}
 }
 
-func TestGatewaysScreenIsReadOnly(t *testing.T) {
+func TestGatewaysScreen(t *testing.T) {
 	f := tuitest.NewFake()
 	g := gateway("rpc-main", "box")
 	g.Warnings = []string{"the certificate expires in 6 days"}
