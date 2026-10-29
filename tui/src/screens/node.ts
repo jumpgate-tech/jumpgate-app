@@ -89,6 +89,7 @@ export class NodeScreen implements Screen {
     this.title = `Node ${sanitizeLine(arg)}`;
     this.status = this.disk = this.endpoints = this.firewall = undefined;
     this.logs = [];
+    this.logBack = 0;
     this.err = {};
     const c = this.app.conn;
     const ac = new AbortController();
@@ -131,9 +132,20 @@ export class NodeScreen implements Screen {
     this.ac = null;
   }
 
+  crumbs(): string[] {
+    return [this.target, this.service];
+  }
+
+  /** tabs is the section row; each tab is "N name", the open one marked [ ]. */
+  private tabs(): string {
+    return SECTIONS.map((s, i) => (s === this.section ? `[${i + 1} ${s}]` : ` ${i + 1} ${s} `)).join(" ");
+  }
+
+  /** logBack is how far the logs are scrolled up from the newest line. */
+  logBack = 0;
+
   view(_w: number, h: number): string[] {
-    const tabs = SECTIONS.map((s, i) => (s === this.section ? `[${i + 1} ${s}]` : ` ${i + 1} ${s} `)).join(" ");
-    const head = [tabs, `service: ${this.service} (e/b to pick)`, ""];
+    const head = [this.tabs(), ""];
     const e = this.err[this.section];
     let body: string[];
     switch (this.section) {
@@ -149,12 +161,28 @@ export class NodeScreen implements Screen {
       case "firewall":
         body = firewallLines(this.firewall);
         break;
-      case "logs":
-        body = this.logs.length ? this.logs.slice(-Math.max(1, h - head.length)).map(logLine) : ["no log lines yet"];
+      case "logs": {
+        const room = Math.max(1, h - head.length);
+        this.logBack = Math.min(this.logBack, Math.max(0, this.logs.length - room));
+        const end = this.logs.length - this.logBack;
+        body = this.logs.length ? this.logs.slice(Math.max(0, end - room), end).map(logLine) : ["no log lines yet"];
         break;
+      }
     }
     if (e) body = [`FAIL ${maskText(sanitizeLine(e))}`, ...body.filter((l) => !l.endsWith("n/a"))];
     return [...head, ...body];
+  }
+
+  click(line: number, col: number): boolean {
+    if (line !== 0) return false;
+    // Each tab is 1 + its text + 1 wide, joined by one space.
+    let x = 0;
+    for (let i = 0; i < SECTIONS.length; i++) {
+      const wd = `${i + 1} ${SECTIONS[i]}`.length + 2;
+      if (col >= x && col < x + wd) return (this.section = SECTIONS[i]!), true;
+      x += wd + 1;
+    }
+    return false;
   }
 
   key(k: Key): boolean {
@@ -163,6 +191,8 @@ export class NodeScreen implements Screen {
     if (k.name === "escape") return this.app.go("fleet"), true;
     if (k.name === "e") return (this.service = "exec"), true;
     if (k.name === "b") return (this.service = "beacon"), true;
+    if (this.section === "logs" && k.name === "up") return (this.logBack += 1), true;
+    if (this.section === "logs" && k.name === "down") return (this.logBack = Math.max(0, this.logBack - 1)), true;
     if (k.name === "d" && this.section === "disk") return void this.measure(), true;
     if (k.seq === "s") return void this.act("start"), true;
     if (k.seq === "S") return void this.act("stop"), true;
@@ -171,7 +201,7 @@ export class NodeScreen implements Screen {
   }
 
   hints(): string {
-    return "1-5 section  e/b service  s start  S stop  r restart  esc back";
+    return `1-5 section  e/b service  s start  S stop  r restart${this.section === "logs" ? "  up/down scroll" : ""}  esc back`;
   }
 
   private async measure(): Promise<void> {

@@ -36,7 +36,7 @@ test("node detail: tabs, masked endpoints, sanitized logs, a confirmed restart",
   m = await mount((app) => [new FleetScreen(app), new NodeScreen(app)], { routes, width: 120, height: 34 });
   await m.waitFor("alpha");
   await m.press("return");
-  expect(await m.waitFor("overall syncing")).toContain("Node alpha");
+  expect(await m.waitFor("overall syncing")).toContain("Fleet › alpha › exec");
   await m.press("3");
   const ep = await m.waitFor("exec    https://");
   expect(ep).toContain("https://***/key/***");

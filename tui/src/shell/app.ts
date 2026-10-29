@@ -15,9 +15,10 @@ import { isFleet, isJobsInbox } from "../api/guards.ts";
 import type { Bins } from "../bins.ts";
 import { drawerLines, minimizedLine } from "./drawer.ts";
 import type { Key } from "./keys.ts";
-import { layoutFor, MIN_H, MIN_W, type Rect } from "./layout.ts";
+import { layoutFor, MIN_H, MIN_W, type Layout, type Rect } from "./layout.ts";
 import { statusLine } from "./statusbar.ts";
 import { alertLine, alerts } from "./alerts.ts";
+import { DIM_COLOR, FOCUS_COLOR, styled } from "./style.ts";
 
 export interface Screen {
   id: string;
@@ -28,6 +29,10 @@ export interface Screen {
   /** key returns true when it used the key. */
   key?(k: Key): boolean;
   hints?(): string;
+  /** crumbs is where the user is inside the screen, after its nav title: ["alpha", "exec"]. */
+  crumbs?(): string[];
+  /** click handles a click on view() line `line`, column `col`; true when it used it. */
+  click?(line: number, col: number, double: boolean): boolean;
   enter?(arg?: unknown): void;
   leave?(): void;
 }
@@ -62,9 +67,16 @@ export interface AppOptions {
   platform?: string;
 }
 
+export type Pane = "nav" | "main" | "activity";
+
+/** SEP joins the breadcrumb in the main pane's title. */
+export const SEP = " › ";
+
 const GLOBAL_KEYS = [
-  "tab / shift-tab   next / previous screen",
-  "up / down         move (the nav, when the screen has no list)",
+  "tab / shift-tab   focus the next / previous pane (double border)",
+  "up / down         move in the focused pane",
+  "enter             open (in the nav: go to the screen)",
+  "esc               back, or from the screen to the nav",
   ".                 open or minimize the drawer",
   "?                 this help",
   "q / ctrl-c        quit",
@@ -343,10 +355,69 @@ export class App {
     if (k.name === "q" && !k.ctrl && !k.meta) return this.quit();
     if (k.name === "?" || k.seq === "?") return this.open(helpModal([...GLOBAL_KEYS, "", this.current.hints?.() ?? ""], () => this.close()));
     if (k.name === "." || k.seq === ".") return this.toggleDrawer();
-    if (k.name === "tab") return this.moveNav(k.shift ? -1 : 1);
-    if (this.current.key?.(k)) return this.render();
-    if (k.name === "up") return this.moveNav(-1);
-    if (k.name === "down") return this.moveNav(1);
+    if (k.name === "tab") return this.cycleFocus(k.shift ? -1 : 1);
+    if (this.focus === "nav") {
+      if (k.name === "up") return this.moveNav(-1);
+      if (k.name === "down") return this.moveNav(1);
+      if (k.name === "return" || k.name === "right") return this.setFocus("main");
+    }
+    if (this.focus === "activity") {
+      const page = Math.max(1, (this.lastLayout?.activity?.h ?? 4) - 3);
+      if (k.name === "up") return this.scrollActivity(1);
+      if (k.name === "down") return this.scrollActivity(-1);
+      if (k.name === "pageup") return this.scrollActivity(page);
+      if (k.name === "pagedown") return this.scrollActivity(-page);
+    }
+    if (this.current.key?.(k)) {
+      this.focus = "main";
+      return this.render();
+    }
+    if (k.name === "escape" && this.focus === "main") return this.setFocus("nav");
+  }
+
+  /** focus is the pane that takes up/down/enter; tab cycles it. */
+  focus: Pane = "main";
+  /** actScroll is how many lines the activity pane is scrolled up from the newest. */
+  actScroll = 0;
+  private lastLayout?: Layout;
+
+  setFocus(p: Pane): void {
+    this.focus = p;
+    this.render();
+  }
+
+  private panes(): Pane[] {
+    return this.lastLayout?.activity ? ["nav", "main", "activity"] : ["nav", "main"];
+  }
+
+  private cycleFocus(d: number): void {
+    const ps = this.panes();
+    const i = Math.max(0, ps.indexOf(this.focus));
+    this.setFocus(ps[(i + d + ps.length) % ps.length]!);
+  }
+
+  scrollActivity(d: number): void {
+    const h = Math.max(0, (this.lastLayout?.activity?.h ?? 2) - 2);
+    const max = Math.max(0, this.activity.all().length - h);
+    this.actScroll = Math.min(max, Math.max(0, this.actScroll + d));
+    this.render();
+  }
+
+  /** crumbs is the main pane's title: the nav screen, then where the user is inside it. */
+  crumbs(): string[] {
+    const s = this.current;
+    const root = s.parent ? this.screens.get(s.parent)?.title ?? s.title : s.title;
+    return [root, ...(s.crumbs?.() ?? (s.parent ? [s.title] : []))].map((c) => sanitizeLine(c));
+  }
+
+  /** hintLine is the focused pane's keys only, then the few global ones. */
+  hintLine(): string {
+    if (this.modal) return "";
+    let mine = "";
+    if (this.focus === "nav") mine = "up/down screen  enter go to it";
+    else if (this.focus === "activity") mine = "up/down scroll";
+    else mine = this.current.hints?.() ?? "";
+    return [mine, "tab pane  ? keys  q quit"].filter(Boolean).join("  ");
   }
 
   private moveNav(d: number): void {
@@ -387,10 +458,14 @@ export class App {
 
   // ---- drawing ----
 
-  private place(name: keyof App["boxes"], r: Rect | null, lines: string[], title?: string): void {
+  /** shown is what each pane drew last, line by line: mouse clicks map onto it. */
+  readonly shown: Partial<Record<keyof App["boxes"], { r: Rect; lines: string[] }>> = {};
+
+  private place(name: keyof App["boxes"], r: Rect | null, lines: string[], title?: string, o: { focused?: boolean; marks?: boolean } = {}): void {
     const { box, text } = this.boxes[name];
     if (!r || r.h <= 0 || r.w <= 0) {
       box.visible = false;
+      delete this.shown[name];
       return;
     }
     box.visible = true;
@@ -399,10 +474,17 @@ export class App {
     box.width = r.w;
     box.height = r.h;
     if (title !== undefined) box.title = clip(title, Math.max(0, r.w - 4));
+    if (box.border) {
+      // The focused pane: a double border in a bright color; the rest single and dim.
+      box.borderStyle = o.focused ? "double" : "single";
+      box.borderColor = o.focused ? FOCUS_COLOR : DIM_COLOR;
+    }
     const border = box.border ? 2 : 0;
     const iw = Math.max(0, r.w - border);
     const ih = Math.max(0, r.h - border);
-    text.content = lines.slice(0, ih).map((l) => clip(sanitizeLine(l), iw)).join("\n");
+    const out = lines.slice(0, ih).map((l) => clip(sanitizeLine(l), iw));
+    this.shown[name] = { r, lines: out };
+    text.content = o.marks ? styled(out, iw) : out.join("\n");
   }
 
   render(): void {
@@ -432,18 +514,23 @@ export class App {
         decisions: st.conn ? this.decisions() : undefined,
       }),
     ]);
+    this.lastLayout = l;
+    if (this.modal || (this.focus === "activity" && !l.activity)) this.focus = "main";
+    const f = this.focus;
     const cur = this.current.parent ?? this.current.id;
-    this.place("nav", l.nav, this.nav.map((id) => `${id === cur ? ">" : " "} ${this.screens.get(id)!.title}`));
+    this.place("nav", l.nav, this.nav.map((id) => `${id === cur ? ">" : " "} ${this.screens.get(id)!.title}`), "jumpgate", { focused: f === "nav", marks: true });
     const inner = { w: Math.max(0, l.main.w - 2), h: Math.max(0, l.main.h - 2) };
-    if (this.modal) this.place("main", l.main, this.modal.lines(inner.w), this.modal.title);
-    else this.place("main", l.main, this.current.view(inner.w, inner.h), this.current.title);
-    this.place("activity", l.activity, this.activity.last(Math.max(0, (l.activity?.h ?? 2) - 2)));
+    if (this.modal) this.place("main", l.main, this.modal.lines(inner.w), this.modal.title, { focused: true });
+    else this.place("main", l.main, this.current.view(inner.w, inner.h), this.crumbs().join(SEP), { focused: f === "main", marks: true });
+    const ah = Math.max(0, (l.activity?.h ?? 2) - 2);
+    this.actScroll = Math.min(this.actScroll, Math.max(0, this.activity.all().length - ah));
+    const act = this.activity.window(ah, this.actScroll);
+    this.place("activity", l.activity, act, this.actScroll ? `activity (${this.actScroll} newer below)` : "activity", { focused: f === "activity" });
     const db = this.boxes.drawer.box;
     db.border = l.drawerBoxed;
     this.place("drawer", l.drawer, lines, "jobs");
-    const hint = this.modal ? "" : (this.current.hints?.() ?? "");
     const min = l.drawerOpen ? "" : minimizedLine(running, st.conn ? this.decisions() : undefined);
-    this.place("hints", l.hints, [[min, this.flash || hint, "? keys  . drawer  q quit"].filter(Boolean).join("  ")]);
+    this.place("hints", l.hints, [[min, this.flash || this.hintLine()].filter(Boolean).join("  ")]);
     this.renderer.requestRender();
   }
 }

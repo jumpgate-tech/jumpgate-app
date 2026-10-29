@@ -39,7 +39,7 @@ async function open() {
   m.app.go("services");
   await m.waitFor("alpha");
   await m.press("return", "2");
-  await m.waitFor("service: beacon");
+  await m.waitFor("Services › alpha › beacon");
 }
 
 const sent = (method: string, path: string) => m!.fake.requests.find((r) => r.method === method && r.path === path);

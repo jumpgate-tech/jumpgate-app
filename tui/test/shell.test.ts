@@ -81,12 +81,23 @@ test("a . typed into a focused secret input types, not toggles", async () => {
   expect(new TextDecoder().decode(got!)).toBe("a.b");
 });
 
-test("tab and arrows move the nav", async () => {
+test("esc or tab focuses the nav, where the arrows move it and enter goes back to the screen", async () => {
   m = await mount(() => [dummy("Fleet"), dummy("Jobs"), dummy("Vault")]);
-  expect(await m.press("tab")).toContain("> Jobs");
+  expect(m.app.focus).toBe("main");
+  expect(await m.press("down")).toContain("> Fleet");
+  await m.press("escape");
+  expect(m.app.focus).toBe("nav");
+  expect(await m.press("down")).toContain("> Jobs");
   expect(await m.press("down")).toContain("> Vault");
-  expect(await m.press(key("tab", { shift: true }))).toContain("> Jobs");
-  expect(await m.press("up")).toContain("> Fleet");
+  expect(await m.press("up")).toContain("> Jobs");
+  await m.press("return");
+  expect(m.app.focus).toBe("main");
+  await m.press("tab");
+  expect(m.app.focus).toBe("activity");
+  await m.press("tab");
+  expect(m.app.focus).toBe("nav");
+  await m.press(key("tab", { shift: true }));
+  expect(m.app.focus).toBe("activity");
 });
 
 test("? lists the keys", async () => {
