@@ -77,6 +77,36 @@ describe("useGatewayOps.provision", () => {
     await waitFor(() => expect(result.current.busy).toBeNull());
   });
 
+  it("logs the run's terminal frame as nothing: no duplicated ': done' line", async () => {
+    vi.mocked(api.provisionGateway).mockResolvedValue({ status: "accepted", targetId: "local" });
+    const { push, stop } = wireStream();
+    const { result } = renderHook(() => useGatewayOps("gw-1"), { wrapper });
+    await act(async () => {
+      await result.current.provision();
+    });
+    push({ stepId: "preflight", line: "checking" });
+    push({ stepId: "run", done: true });
+    push({ stepId: "", done: true }); // the server's terminal frame, before the stream is torn down
+    await waitFor(() => expect(result.current.busy).toBeNull());
+    expect(result.current.activity).toEqual(["preflight: checking", "run: done"]);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("a run that ends before its final step finishes on the terminal frame, its error once", async () => {
+    vi.mocked(api.provisionGateway).mockResolvedValue({ status: "accepted", targetId: "local" });
+    const { push, stop } = wireStream();
+    const { result } = renderHook(() => useGatewayOps("gw-1"), { wrapper });
+    await act(async () => {
+      await result.current.provision();
+    });
+    push({ stepId: "preflight", done: true });
+    push({ stepId: "", done: true, err: "context canceled" });
+    await waitFor(() => expect(result.current.busy).toBeNull());
+    expect(result.current.activity).toEqual(["preflight: done", "setup: context canceled"]);
+    expect(result.current.actionErr).toBe("Provisioning failed — see the log below.");
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it("resets without a stream when the POST is rejected (e.g. 409)", async () => {
     vi.mocked(api.provisionGateway).mockRejectedValue(new Error("already provisioning"));
     const { result } = renderHook(() => useGatewayOps("gw-1"), { wrapper });

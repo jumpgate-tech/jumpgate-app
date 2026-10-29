@@ -216,6 +216,22 @@ describe("useContainerOps.provision", () => {
     expect(result.current.busy.devnet).toBe("create");
   });
 
+  it("does not log the run's terminal frame as a duplicated ': done' line", async () => {
+    vi.mocked(api.provisionContainer).mockResolvedValue({ status: "accepted" });
+    vi.mocked(api.getContainers).mockResolvedValue(containersResponse());
+    const stream = wireStream();
+    const { result } = renderHook(() => useContainerOps("t1"), { wrapper });
+    await act(async () => {
+      await result.current.provision("devnet");
+    });
+    stream.push({ stepId: "preflight", done: true });
+    stream.push({ stepId: "run", done: true });
+    stream.push({ stepId: "", done: true });
+    await waitFor(() => expect(result.current.busy.devnet).toBeNull());
+    expect(result.current.activity.devnet).toEqual(["preflight: done", "run: done"]);
+    expect(stream.stop).toHaveBeenCalledTimes(1);
+  });
+
   it("clears busy, reloads, and stops the stream when the final step reports done", async () => {
     vi.mocked(api.provisionContainer).mockResolvedValue({ status: "accepted" });
     vi.mocked(api.getContainers).mockResolvedValue(containersResponse());

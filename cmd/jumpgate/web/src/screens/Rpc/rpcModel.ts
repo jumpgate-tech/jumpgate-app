@@ -21,9 +21,8 @@ import type {
 // chain this screen renders LAST and de-emphasised, offered only as an opt-in.
 export const DEVNET_CHAIN_ID = 1337;
 
-// FINAL_STEP is the id every gateway setup plan ends on. The setup stream has
-// no terminal frame, so this is what tells the progress log it is finished.
-export const FINAL_STEP = "run";
+// FINAL_STEP is the id every gateway setup plan ends on (lib/setupEvents).
+export { FINAL_STEP } from "../../lib/setupEvents";
 
 // CAP_ORDER is the capability set every endpoint row renders, in order, whether
 // or not the endpoint has an opinion about each. CAP_TAGS are the short forms.

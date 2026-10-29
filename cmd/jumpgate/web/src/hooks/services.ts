@@ -140,8 +140,9 @@ export function useContainerOps(targetId: string): UseContainerOpsResult {
       streamRef.current?.();
       streamRef.current = api.streamSetup(targetId, (ev) => {
         if (!mountedRef.current) return;
+        if (!streamRef.current) return; // finished: a late frame is not this run's
         const line = provisionLine(ev);
-        setActivity((a) => ({ ...a, [svc]: [...(a[svc] ?? []).filter((l) => l !== "starting…"), line] }));
+        if (line !== null) setActivity((a) => ({ ...a, [svc]: [...(a[svc] ?? []).filter((l) => l !== "starting…"), line] }));
         if (!provisionFinished(ev)) return;
 
         streamRef.current?.();

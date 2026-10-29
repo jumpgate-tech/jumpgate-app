@@ -7,11 +7,10 @@
 import type { ContainerServiceID, ContainerView, DevnetConfig, DockerView } from "../../api";
 
 // The step id both container plans end with (PlanDevnet: preflight, run;
-// PlanGateway: preflight, config, run). The setup event stream has no
-// terminal frame, so this is what tells a provisioning run's progress log
-// that it is finished and the cards can be re-read. Mirrors services.ts's
-// own FINAL_STEP.
-export const FINAL_STEP = "run";
+// PlanGateway: preflight, config, run). Its done, or the run's terminal
+// frame, tells a provisioning run's progress log that it is finished.
+export { FINAL_STEP } from "../../lib/setupEvents";
+import { setupFinished, setupLine } from "../../lib/setupEvents";
 
 export const SERVICE_BLURB: Record<ContainerServiceID, string> = {
   devnet:
@@ -140,14 +139,14 @@ export function parseIntOr(value: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-// provisionLine mirrors provision()'s own per-event line formatting inside
-// its streamSetup callback.
-export function provisionLine(ev: { stepId: string; line?: string; err?: string }): string {
-  return ev.err ? `${ev.stepId}: ${ev.err}` : ev.line ? `${ev.stepId}: ${ev.line}` : `${ev.stepId}: done`;
+// provisionLine is provision()'s per-event log line; null for the run's
+// terminal frame, which is not a step (see lib/setupEvents).
+export function provisionLine(ev: { stepId: string; line?: string; done?: boolean; err?: string }): string | null {
+  return setupLine(ev);
 }
 
 // provisionFinished mirrors provision()'s own finish condition: an error at
 // any step, or the plan's final step reporting done.
 export function provisionFinished(ev: { stepId: string; done?: boolean; err?: string }): boolean {
-  return !!ev.err || (ev.stepId === FINAL_STEP && !!ev.done);
+  return setupFinished(ev);
 }

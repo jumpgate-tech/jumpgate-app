@@ -32,6 +32,7 @@ import {
   useWipeGateway,
 } from "../../hooks/gateway";
 import { useEventStream } from "../../hooks/useEventStream";
+import { setupFinished, setupLine } from "../../lib/setupEvents";
 import { Sprite } from "./icons";
 import { primaryAction } from "./PowerBand";
 import { ListView } from "./ListView";
@@ -42,9 +43,6 @@ import { ConfirmDialog, TextInputDialog, validateUrlScheme } from "./Dialogs";
 import { AddNetworkDialog } from "./AddNetworkModal";
 import { DEVNET_CHAIN_ID, withDevnetUpstream } from "../Rpc/rpcModel";
 
-// FINAL_STEP is the id every gateway setup plan ends on (mirrors rpc.ts). The
-// setup stream is done when a step errors, or when this step reports done.
-const FINAL_STEP = "run";
 
 type View =
   | { name: "list" }
@@ -109,11 +107,10 @@ export function Panel() {
   // The setup stream: only ever one provision in flight, so one subscription.
   useEventStream(provisionTargetId, (ev) => {
     if (captureLogRef.current) {
-      const line = ev.err ? `${ev.stepId}: ${ev.err}` : ev.line ? `${ev.stepId}: ${ev.line}` : `${ev.stepId}: done`;
-      setSetupLog((prev) => [...prev, line]);
+      const line = setupLine(ev);
+      if (line !== null) setSetupLog((prev) => [...prev, line]);
     }
-    const finished = !!ev.err || (ev.stepId === FINAL_STEP && !!ev.done);
-    if (!finished) return;
+    if (!setupFinished(ev)) return;
     setProvisionTargetId(null);
     setBusy(null);
     if (ev.err) setActionErr(`Provisioning failed: ${ev.err}`);

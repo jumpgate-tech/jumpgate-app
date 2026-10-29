@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import * as api from "../api";
-import { FINAL_STEP } from "../screens/Rpc/rpcModel";
+import { setupFinished, setupLine } from "../lib/setupEvents";
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -195,10 +195,10 @@ export function useGatewayOps(gid: string): UseGatewayOpsResult {
     streamRef.current?.();
     streamRef.current = api.streamSetup(started.targetId, (ev) => {
       if (!mountedRef.current) return;
-      const line = ev.err ? `${ev.stepId}: ${ev.err}` : ev.line ? `${ev.stepId}: ${ev.line}` : `${ev.stepId}: done`;
-      setActivity((prev) => [...prev.filter((l) => l !== "starting…"), line]);
-      const finished = !!ev.err || (ev.stepId === FINAL_STEP && !!ev.done);
-      if (!finished) return;
+      if (!streamRef.current) return; // finished: a late frame is not this run's
+      const line = setupLine(ev);
+      if (line !== null) setActivity((prev) => [...prev.filter((l) => l !== "starting…"), line]);
+      if (!setupFinished(ev)) return;
       streamRef.current?.();
       streamRef.current = null;
       setBusy(null);
