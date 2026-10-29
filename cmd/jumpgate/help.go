@@ -11,7 +11,7 @@ import (
 
 // commandHelp is one line per command, in the order a new user needs them.
 var commandHelp = []struct{ name, text string }{
-	{"keys init [--store vault]", "create this controller's signing key (OS key store, else the vault)"},
+	{"keys init [--store vault [--stdin]]", "create this controller's signing key (OS key store, else the vault)"},
 	{"keys show", "print this controller's address"},
 	{"keys export --keystore-v3 FILE", "write the controller key as an Ethereum keystore v3 file"},
 	{"unlock", "unlock the vault so the server can sign"},

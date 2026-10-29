@@ -57,6 +57,32 @@ func TestKeysInitVaultCreatesTheVaultAndRecordsTheKey(t *testing.T) {
 	}
 }
 
+// With no terminal the passphrase error says to pipe it in with --stdin, so
+// keys init takes --stdin for the vault (scripts set a controller up this way).
+func TestKeysInitVaultReadsThePassphraseFromStdin(t *testing.T) {
+	testutil.Home(t)
+	_, stderr := captureStdio(t)
+	placeVault(t)
+	_, opens := useFakeTTY(t)
+	withStdin(t, vaulttest.Passphrase+"\n")
+	if code := keysInit([]string{"--store", "vault", "--stdin"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr())
+	}
+	if *opens != 0 {
+		t.Fatalf("asked the terminal %d times", *opens)
+	}
+	c, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Controller == nil || c.Controller.KeyStore != "vault" {
+		t.Fatalf("config %+v", c.Controller)
+	}
+	if code := keysInit([]string{"--store", "file", "--insecure-plain", "--stdin"}); code != 2 {
+		t.Fatalf("--stdin with --store file: exit %d, want 2", code)
+	}
+}
+
 func TestKeysShowOpensAVaultKey(t *testing.T) {
 	testutil.Home(t)
 	captureStdio(t)

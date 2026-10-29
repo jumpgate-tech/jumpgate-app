@@ -97,3 +97,6 @@ export function wrap(s: string, w: number): string[] {
   }
   return out;
 }
+
+/** stepOf is "step N/M" for a job at 0-based step i of n; a finished job's i is n. */
+export const stepOf = (i: number, n: number) => `step ${Math.min(i + 1, n)}/${n}`;

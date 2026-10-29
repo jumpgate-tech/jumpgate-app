@@ -61,7 +61,7 @@ export interface FleetRow {
   lastSeen?: string;
   chainId?: number;
   network?: string;
-  /** The gate's version on the box. */
+  /** The paired gate's address (api.FleetRow.Agent), not its version. */
   agent?: string;
   status: NodeStatus | null;
   disk: DiskView | null;
@@ -261,6 +261,8 @@ export interface SSHView {
   Host: string;
   User: string;
   Port: number;
+  /** The private key file on the controller; without one the server needs an ssh-agent. */
+  KeyPath?: string;
   jump?: SSHView;
 }
 

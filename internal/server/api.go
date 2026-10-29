@@ -1486,14 +1486,26 @@ func (s *Server) releaseSetupRun(id string, c claimedRun) {
 // claimed run so .../setup/stream can replay and follow it.
 func (s *Server) launchSetupRun(c claimedRun, ex executor.Executor, steps []setup.Step, wire catalog.WireConfig) {
 	events := make(chan setup.Event, 32)
+	drained := make(chan bool)
 	go func() {
+		sawErr := false
 		for ev := range events {
+			sawErr = sawErr || ev.Err != ""
 			c.run.append(ev)
 		}
+		drained <- sawErr
 	}()
 	go func() {
-		defer close(events)
 		runErr := setup.RunAll(c.ctx, ex, steps, &setup.State{Wire: wire, Events: events})
+		close(events)
+		// The terminal frame, {"stepId":"","done":true}: the run has ended,
+		// after every step's events. It carries the error only when no step
+		// reported it (a canceled run), so a failure is reported once.
+		end := setup.Event{Done: true}
+		if sawErr := <-drained; runErr != nil && !sawErr {
+			end.Err = runErr.Error()
+		}
+		c.run.append(end)
 		c.run.finish(runErr)
 		if c.retireOnFinish {
 			c.retireObservers()

@@ -87,11 +87,15 @@ func keysInit(args []string) int {
 	store := fset.String("store", "", "vault | keychain | wincred | 1password | file (file needs --insecure-plain) (default: this machine's OS key store, else vault)")
 	insecurePlain := fset.Bool("insecure-plain", false, "with --store file: confirm the key is kept unencrypted on disk")
 	ref := fset.String("ref", "", "key file path, keychain or Windows credential name, or op://vault/item/field")
+	fromStdin := fset.Bool("stdin", false, "with --store vault: read the vault passphrase as one line of standard input")
 	if err := fset.Parse(args); err != nil {
 		return exitCode("usage")
 	}
 	if *store == "" {
 		*store = string(signer.DefaultStore())
+	}
+	if *fromStdin && signer.Store(*store) != signer.StoreVault {
+		return usage("--stdin reads the vault passphrase; it goes with --store vault")
 	}
 	if signer.Store(*store) == signer.StoreFile && !*insecurePlain {
 		return usage("--store file keeps the key unencrypted on disk; add --insecure-plain to confirm, or use --store vault")
@@ -119,7 +123,7 @@ func keysInit(args []string) int {
 	}
 	var k *signer.Key
 	if signer.Store(*store) == signer.StoreVault {
-		k, err = createVaultKey(*ref)
+		k, err = createVaultKey(*ref, *fromStdin)
 	} else {
 		k, err = signer.Create(context.Background(), signer.Store(*store), *ref)
 	}
@@ -159,7 +163,7 @@ func keysInit(args []string) int {
 // unlockVault opens the vault at secrets.VaultPath() and unlocks it with a
 // passphrase read from the terminal. With create, a missing vault is created
 // first, after a warning and a confirmed passphrase.
-func unlockVault(create bool) (*vault.Vault, error) {
+func unlockVault(create, fromStdin bool) (*vault.Vault, error) {
 	path, err := secrets.VaultPath()
 	if err != nil {
 		return nil, err
@@ -169,7 +173,7 @@ func unlockVault(create bool) (*vault.Vault, error) {
 			return nil, fmt.Errorf("no vault at %s", path)
 		}
 		fmt.Fprintln(os.Stderr, "a lost passphrase cannot be recovered: jumpgate keeps no copy")
-		pass, err := readNewPassphrase("new vault passphrase: ", false, true)
+		pass, err := readNewPassphrase("new vault passphrase: ", fromStdin, !fromStdin)
 		if err != nil {
 			return nil, err
 		}
@@ -187,7 +191,7 @@ func unlockVault(create bool) (*vault.Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	pass, err := readPassphrase("vault passphrase: ", false, false)
+	pass, err := readPassphrase("vault passphrase: ", fromStdin, false)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +226,7 @@ func unlockOffline(v *vault.Vault, pass []byte) (*vault.Vault, error) {
 
 // openVaultKey unlocks the vault offline, reads the key, and locks it again.
 func openVaultKey(ref string) (*signer.Key, error) {
-	v, err := unlockVault(false)
+	v, err := unlockVault(false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -298,8 +302,8 @@ func keysExport(args []string) int {
 }
 
 // createVaultKey creates the vault if needed and stores a new key in it.
-func createVaultKey(ref string) (*signer.Key, error) {
-	v, err := unlockVault(true)
+func createVaultKey(ref string, fromStdin bool) (*signer.Key, error) {
+	v, err := unlockVault(true, fromStdin)
 	if err != nil {
 		return nil, err
 	}

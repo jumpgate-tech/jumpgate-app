@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { JobsScreen } from "../../src/screens/jobs.ts";
+import { inboxLines, JobsScreen } from "../../src/screens/jobs.ts";
 import { key } from "../../src/shell/keys.ts";
 import { json, sseResponse } from "../fake.ts";
 import { fixture, mount, say, type Mounted } from "../harness.ts";
@@ -62,4 +62,12 @@ test("A adopts after a confirm", async () => {
   await m!.press(key("a", { seq: "A", shift: true }));
   await say(m!, "j1");
   await m!.waitFor(() => m!.fake.requests.some((r) => r.path.endsWith("/adopt")));
+});
+
+// Live: a succeeded job's step is one past its last, and the inbox said "step 9/8".
+test("a finished job shows its last step, not one past it", () => {
+  const j = { ...fixture("jobview"), state: "succeeded" };
+  j.step = j.steps.length;
+  const line = inboxLines([j], 0, false)[0]!;
+  expect(line).toContain(`step ${j.steps.length}/${j.steps.length}`);
 });

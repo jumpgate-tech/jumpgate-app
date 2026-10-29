@@ -53,6 +53,7 @@ test("add a box: probe, show the full fingerprint, confirm, add, pair into the a
   await typeText(m!, "ops@10.0.0.9:22");
   await m!.press("return");
   await m!.press("return"); // no jump host
+  await m!.press("return"); // the ssh-agent's key
   const fp = await m!.waitFor("SHA256:fullprint");
   expect(fp).toContain("10.0.0.9:22");
   expect(fp).toContain("Type yes to confirm");
@@ -68,13 +69,35 @@ test("add a box: probe, show the full fingerprint, confirm, add, pair into the a
   expect(m!.app.activity.all().join("\n")).toContain("installing the gate");
 });
 
+// Live: a box whose key is a file, with no ssh-agent, could not be added
+// from the TUI (the server wants a key path or an agent).
+test("add a box with a key file: the path goes with the probe and the target", async () => {
+  await hosts();
+  await m!.press("a");
+  await say(m!, "beta");
+  await say(m!, "root@10.0.0.9:2222");
+  await m!.press("return"); // no jump host
+  await m!.waitFor("ssh key file");
+  await say(m!, "/home/me/.ssh/box_ed25519");
+  await m!.waitFor("SHA256:fullprint");
+  await say(m!, "yes");
+  await m!.waitFor("installed address");
+  await m!.press("return");
+  await m!.waitFor(() => m!.app.activity.all().some((l) => l.includes("paired beta")));
+  const req = (p: string) => JSON.parse(m!.fake.requests.find((r) => r.path === p && r.method === "POST")!.body);
+  const ssh = { Host: "10.0.0.9", User: "root", Port: 2222, KeyPath: "/home/me/.ssh/box_ed25519" };
+  expect(req("/api/hostkeys/probe")).toEqual({ ssh });
+  expect(req("/api/targets")).toEqual({ id: "beta", mode: "ssh", ssh });
+  expect(req("/api/targets/beta/pair")).toEqual({ sudo: false });
+});
+
 test("a refused fingerprint adds nothing", async () => {
   await hosts();
   await m!.press("a");
   await typeText(m!, "beta");
   await m!.press("return");
   await typeText(m!, "root@10.0.0.9");
-  await m!.press("return", "return");
+  await m!.press("return", "return", "return");
   await m!.waitFor("SHA256:fullprint");
   await m!.press("n");
   await Bun.sleep(20);
@@ -147,8 +170,9 @@ test("a buffered Enter lands on the trust modal and does not trust", async () =>
   await m!.press("return");
   await typeText(m!, "ops@10.0.0.9");
   await m!.press("return");
-  m!.app.opts.modalGuardMs = 150; // the trust modal opens with the real guard
   await m!.press("return"); // no jump host
+  m!.app.opts.modalGuardMs = 150; // the trust modal opens with the real guard
+  await m!.press("return"); // the ssh-agent's key
   await m!.waitFor("SHA256:fullprint");
   m!.app.handleKey({ name: "return", seq: "\r", ctrl: false, shift: false, meta: false }); // typed ahead: flushed
   await Bun.sleep(200);

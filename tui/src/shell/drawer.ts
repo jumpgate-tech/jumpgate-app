@@ -1,6 +1,6 @@
 // The drawer: running jobs and pending decisions. It never opens itself.
 import type { RunningJob } from "../api/types.ts";
-import { sanitizeLine } from "../text.ts";
+import { sanitizeLine, stepOf } from "../text.ts";
 
 export function drawerLines(running: RunningJob[] | undefined): string[] {
   if (!running) return ["jobs n/a"];
@@ -8,7 +8,7 @@ export function drawerLines(running: RunningJob[] | undefined): string[] {
   return running.map((j) => {
     const mark = j.needsDecision ? "! " : "  ";
     const who = sanitizeLine(`${j.target}/${j.id}`);
-    return `${mark}${who} ${sanitizeLine(j.kind)} step ${j.step + 1}/${j.total} ${sanitizeLine(j.state)}`;
+    return `${mark}${who} ${sanitizeLine(j.kind)} ${stepOf(j.step, j.total)} ${sanitizeLine(j.state)}`;
   });
 }
 
