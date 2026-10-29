@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,6 +26,7 @@ const statusStaleAfter = 15 * time.Second
 var tabTitles = map[string]string{
 	"overview": "Overview", "storage": "Storage", "endpoints": "Endpoints",
 	"security": "Security", "logs": "Logs", "services": "Services",
+	"containers": "Docker", "tools": "Tools",
 }
 
 type (
@@ -118,6 +120,21 @@ type hostScreen struct {
 	modView      api.ModulesView
 	modGws       []api.GatewaySummary // for the Public choice: which gateways are public and route here
 	modRestarted time.Time            // when a module change last restarted the exec client
+
+	// host_box.go: each tab's last answer, the containers, the monitor and
+	// the setup run being followed (runTab "" : none).
+	results   map[string]boxResult
+	ctr       containersView
+	ctrHas    bool
+	ctrErr    error
+	ctrCursor int
+	monStop   context.CancelFunc
+	monGen    int
+	monConn   apiclient.ConnState
+	monLines  []string
+	monErr    error
+	runTab    string
+	runHead   string
 }
 
 // openHost shows a box's detail, closing any open one.
@@ -197,6 +214,10 @@ func (h *hostScreen) load(a *App, tab string) tea.Cmd {
 		}, loadGateways(a))
 	case "logs":
 		return h.watchLogs(be.WatchLogs(ctx, id, logBacklog))
+	case "containers":
+		return h.loadContainers(a)
+	case "tools":
+		return h.boxCall(a, "tools", "latest diagnostics", "GET", tpath(id, "/diagnostics/latest"), nil, nil)
 	case "security":
 		return tea.Batch(func() tea.Msg {
 			items, err := be.Firewall(ctx, id)
@@ -216,6 +237,9 @@ func (h *hostScreen) keys() []key.Binding {
 }
 
 func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
+	if cmd, ok := h.boxUpdate(a, msg); ok {
+		return cmd
+	}
 	switch msg := msg.(type) {
 	case statusMsg:
 		if msg.id != h.id || !h.current(msg.gen) {
@@ -318,6 +342,9 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		if m, ok := a.modal.(*modulesModal); ok && m.h == h {
 			return m.gotSetupEv(a, msg)
 		}
+		if h.runTab != "" {
+			return h.gotRunEv(a, msg)
+		}
 		if msg.closed || msg.ev.Err != "" || (msg.ev.Done && msg.ev.StepID == "") {
 			return h.reloadModules(a)
 		}
@@ -408,6 +435,13 @@ func (h *hostScreen) tabKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 		if key.Matches(k, hostKeys.Measure) {
 			return h.measure(a), true
 		}
+		if key.Matches(k, boxKeys.DU) {
+			return h.diskUsage(a), true
+		}
+	case "containers":
+		return h.containersKey(a, k)
+	case "tools":
+		return h.toolsKey(a, k)
 	case "services":
 		return h.servicesKey(a, k)
 	}
@@ -438,9 +472,10 @@ func (h *hostScreen) tabUpdate(a *App, msg tea.Msg) tea.Cmd {
 }
 
 func (h *hostScreen) view(a *App, w, hgt int) string {
-	head := " " + a.th.Title.Render(sanitizeLine(h.id))
+	// The box's name is in the breadcrumb (main's title): not repeated here.
+	head := " link n/a"
 	if row, ok := a.fleet.Row(h.id); ok {
-		head += " " + a.gl.Sep + " " + linkWord(row)
+		head = " link " + linkWord(row)
 		if row.Network != "" {
 			head += " " + a.gl.Sep + " " + sanitizeLine(row.Network)
 		}
@@ -470,7 +505,7 @@ func (h *hostScreen) body(a *App, w, hgt int) string {
 	case "overview":
 		return h.viewOverview(a, w) + h.viewModules(a, w)
 	case "storage":
-		return h.viewStorage(a, w)
+		return h.viewStorage(a, w) + strings.Join(h.viewResult(a, "storage"), "\n")
 	case "endpoints":
 		return h.viewEndpoints(a, w, hgt)
 	case "security":
@@ -478,7 +513,11 @@ func (h *hostScreen) body(a *App, w, hgt int) string {
 	case "logs":
 		return h.viewLogs(a, w, hgt)
 	case "services":
-		return h.viewServices(a, w)
+		return h.viewServices(a, w) + strings.Join(h.viewResult(a, "services"), "\n")
+	case "containers":
+		return h.viewContainers(a, w, hgt)
+	case "tools":
+		return h.viewTools(a, w, hgt)
 	}
 	title, ok := tabTitles[h.tabName(a)]
 	if !ok {

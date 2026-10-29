@@ -51,6 +51,14 @@ func (a *App) offers(b key.Binding) bool {
 		// The vault keys are listed when they are the news, so the help
 		// still fits 80x24; both keys work at any time.
 		return a.fleetHas && a.fleet.Locked
+	// The guide and invite keys, like the vault's, are listed while they
+	// are the news (the help must fit 80x24); they work at any time.
+	case globalKeys.Guide.Help():
+		return a.setupSegment() != ""
+	case globalKeys.Invite.Help():
+		return a.inviteOn || a.setupSegment() != ""
+	case globalKeys.Copy.Help():
+		return a.inviteOn && a.invite != ""
 	case globalKeys.Lock.Help():
 		return a.vaultOpen && !(a.fleetHas && a.fleet.Locked)
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -62,29 +63,55 @@ func (a *App) boxed(title string, focused bool, body string, w, h int) string {
 func (a *App) frame() string {
 	l := a.layout()
 	a.mainRect = l.Main
-	parts := []string{a.header(a.w), a.kpiView(l.KPI)}
+	a.shown = map[string]pane{}
+	head, kpi := a.header(a.w), a.kpiView(l.KPI)
+	a.keep("header", "", 0, 0, head)
+	a.keep("kpi", "", 0, l.KPI.Y, kpi)
+	parts := []string{head, kpi}
 	body := a.mainView(l.Main)
 	switch {
 	case a.logOver:
-		body = overlay(body, a.logView(min(overlayWidth, l.Main.W), l.Main.H), l.Main.W-min(overlayWidth, l.Main.W), l.Main.W)
+		ow := min(overlayWidth, l.Main.W)
+		lv := a.logView(ow, l.Main.H)
+		a.keepBoxed("log", a.logTitle(), rect{l.Main.X + l.Main.W - ow, l.Main.Y, ow, l.Main.H}, lv)
+		body = overlay(body, lv, l.Main.W-ow, l.Main.W)
 	case a.treeOver:
-		body = overlay(body, a.boxed("Tree", a.focus == focusTree, a.treeView(overlayWidth-2, l.Main.H-2), min(overlayWidth, l.Main.W), l.Main.H), 0, l.Main.W)
+		ow := min(overlayWidth, l.Main.W)
+		tv := a.boxed("Tree", a.focus == focusTree, a.treeView(overlayWidth-2, l.Main.H-2), ow, l.Main.H)
+		a.keepBoxed("nav", "Tree", rect{l.Main.X, l.Main.Y, ow, l.Main.H}, tv)
+		body = overlay(body, tv, 0, l.Main.W)
 	}
 	cols := []string{}
 	if l.Left.W > 0 {
-		cols = append(cols, a.viewsList(l.Left))
+		nav := a.viewsList(l.Left)
+		a.keepBoxed("nav", "Views", l.Left, nav)
+		cols = append(cols, nav)
 	}
 	cols = append(cols, body)
 	if l.Right.W > 0 {
-		cols = append(cols, a.logView(l.Right.W, l.Right.H))
+		lv := a.logView(l.Right.W, l.Right.H)
+		a.keepBoxed("log", a.logTitle(), l.Right, lv)
+		cols = append(cols, lv)
 	}
 	body = lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 	parts = append(parts, body)
+	if l.Invite.H > 0 {
+		inv := a.inviteLine(a.w)
+		a.keep("invite", "", 0, l.Invite.Y, inv)
+		parts = append(parts, inv)
+	}
 	last := a.drawerLine(a.w)
 	if l.DrawerOpen {
-		parts = append(parts, a.drawerView(l.Drawer, l.DrawerCompact))
+		dv := a.drawerView(l.Drawer, l.DrawerCompact)
+		if l.DrawerCompact {
+			a.keep("drawer", "Activity", 0, l.Drawer.Y, dv)
+		} else {
+			a.keepBoxed("drawer", "Activity", l.Drawer, dv)
+		}
+		parts = append(parts, dv)
 		last = truncate(" "+a.hints(), a.w, a.gl.Ellipsis)
 	}
+	a.keep("hints", "", 0, a.h-1, last)
 	return lipgloss.JoinVertical(lipgloss.Left, append(parts, last)...)
 }
 
@@ -100,16 +127,25 @@ func (a *App) header(w int) string {
 	}
 	left := " " + a.th.Title.Render("jumpgate") + "  "
 	switch {
-	case narrow && a.conn == apiclient.Retrying:
-		left += server + "  " + a.tabs()
 	case narrow:
-		left += a.tabs()
+		if a.conn == apiclient.Retrying {
+			left += server + "  "
+		}
+		left += a.tabs(w - lipgloss.Width(left) - lipgloss.Width(a.headerRight(narrow)) - 2)
 	default:
 		left += server
 		if a.srvVer != "" {
 			left += " " + a.gl.Sep + " " + a.srvVer
 		}
 	}
+	right := a.headerRight(narrow)
+	left = truncate(left, max(w-lipgloss.Width(right)-1, 1), a.gl.Ellipsis)
+	return left + strings.Repeat(" ", max(w-lipgloss.Width(left)-lipgloss.Width(right), 1)) + right
+}
+
+// headerRight is the header's right side: the alerts, the setup segment
+// and the reading's age.
+func (a *App) headerRight(narrow bool) string {
 	right := a.th.Dim.Render("connecting")
 	if a.fleetHas {
 		age := a.now().Sub(a.fleet.At)
@@ -130,28 +166,36 @@ func (a *App) header(w int) string {
 			right = text
 		}
 	}
+	if seg := a.setupSegment(); seg != "" {
+		right = a.th.Warn.Render(seg) + " " + a.gl.Sep + " " + right
+	}
 	if a.fleetHas {
 		right = a.alertCount() + " " + a.gl.Sep + " " + right
 		if a.fleet.Locked {
 			right = a.th.Bad.Render("LOCKED: jobs wait for unlock") + " " + a.gl.Sep + " " + right
 		}
 	}
-	right += " "
-	left = truncate(left, max(w-lipgloss.Width(right)-1, 1), a.gl.Ellipsis)
-	return left + strings.Repeat(" ", max(w-lipgloss.Width(left)-lipgloss.Width(right), 1)) + right
+	return right + " "
 }
 
 // tabs is the views in one line, for the header below 100 columns; the
 // active one is bracketed, so it reads without colour too.
-func (a *App) tabs() string {
-	var parts []string
+// Where the names do not fit in room cells, the views other than the
+// active one show as their number keys.
+func (a *App) tabs(room int) string {
+	var full, short []string
 	for i, n := range screenNames {
-		if screenID(i) == a.active && a.detail == nil {
+		k := fmt.Sprint(i + 1)
+		if screenID(i) == a.navActive() {
 			n = a.th.Sel.Render("[" + n + "]")
+			k = n
 		}
-		parts = append(parts, n)
+		full, short = append(full, n), append(short, k)
 	}
-	return strings.Join(parts, " ")
+	if s := strings.Join(full, " "); lipgloss.Width(s) <= room {
+		return s
+	}
+	return strings.Join(short, " ")
 }
 
 // viewsList is the left sidebar: the views with their number keys, then
@@ -161,13 +205,48 @@ func (a *App) viewsList(r rect) string {
 	for i, n := range screenNames {
 		nw := max(r.W-2-6, 1) // "x " + name + " [n]"
 		l := fmt.Sprintf("  %-*s [%d]", nw, n, i+1)
-		if screenID(i) == a.active && a.detail == nil {
+		if screenID(i) == a.navActive() {
 			l = a.th.Sel.Render(fmt.Sprintf("%s %-*s [%d]", a.gl.Sel, nw, n, i+1))
 		}
 		lines = append(lines, l)
 	}
 	lines = append(lines, a.th.Dim.Render(strings.Repeat(a.border().H, r.W-2)), a.treeView(r.W-2, max(r.H-3-len(lines), 1)))
 	return a.boxed("Views", a.focus == focusTree, strings.Join(lines, "\n"), r.W, r.H)
+}
+
+// navActive is the view the nav marks: the open box belongs to the Fleet.
+func (a *App) navActive() screenID {
+	if a.detail != nil {
+		return scrFleet
+	}
+	return a.active
+}
+
+// crumbs is where main is: the view, then the open box and its tab (or
+// client). The main pane's title joins them.
+func (a *App) crumbs() []string {
+	hs, ok := a.detail.(*hostScreen)
+	if !ok {
+		return []string{screenNames[a.active]}
+	}
+	c := []string{screenNames[scrFleet], sanitizeLine(hs.id)}
+	if hs.node != "" {
+		return append(c, hs.node)
+	}
+	t, ok := tabTitles[hs.tabName(a)]
+	if !ok {
+		t = sanitizeLine(hs.tabName(a))
+	}
+	return append(c, t)
+}
+
+// breadcrumb is the crumbs joined: "Fleet › box › Logs" (">" in ASCII).
+func (a *App) breadcrumb() string {
+	sep := " › "
+	if a.gl.ASCII {
+		sep = " > "
+	}
+	return strings.Join(a.crumbs(), sep)
 }
 
 // mainView is the boxed main region: the skew banner above it, then the
@@ -186,13 +265,14 @@ func (a *App) mainView(r rect) string {
 	if boxedMain {
 		iw, ih = r.W-2, h-2
 	}
-	title := screenNames[a.active]
-	if hs, ok := a.detail.(*hostScreen); ok {
-		title = sanitizeLine(hs.id)
-		if hs.node != "" {
-			title += " / " + hs.node
-		}
+	title := a.breadcrumb()
+	crumb := ""
+	if !boxedMain && a.detail != nil {
+		// Unboxed main has no title border: the breadcrumb takes a line.
+		crumb = a.th.Title.Render(truncate(" "+title, r.W, a.gl.Ellipsis)) + "\n"
+		ih--
 	}
+	top := r.Y + strings.Count(banner, "\n")
 	var content string
 	switch {
 	case a.modal != nil:
@@ -201,9 +281,13 @@ func (a *App) mainView(r rect) string {
 		content = a.current().view(a, iw, ih)
 	}
 	if !boxedMain {
-		return banner + fit(content, r.W, h, a.gl.Ellipsis)
+		body := fit(content, r.W, ih, a.gl.Ellipsis)
+		a.keep("main", title, r.X, top+strings.Count(crumb, "\n"), body)
+		return banner + crumb + body
 	}
-	return banner + a.boxed(title, a.focus == focusMain, content, r.W, h)
+	box := a.boxed(title, a.focus == focusMain, content, r.W, h)
+	a.keepBoxed("main", title, rect{r.X, top, r.W, h}, box)
+	return banner + box
 }
 
 // drawerOpen is the drawer's resolved state at this window size.
@@ -241,30 +325,52 @@ func (a *App) jobsRunning() string {
 func (a *App) drawerLine(w int) string {
 	left := a.flash
 	if left == "" {
+		// The alert count is in the header already: every fact once.
 		parts := []string{a.jobsRunning()}
 		if n := a.needCount(); n > 0 {
 			parts = append(parts, a.th.Warn.Render(fmt.Sprintf("[! %d needs decision]", n)))
 		}
-		parts = append(parts, a.alertCount())
 		left = strings.Join(parts, "  ")
 	}
 	return truncate(" "+left+" | "+a.hints(), w, a.gl.Ellipsis)
 }
 
-// hints are the keys worth showing on one line, the drawer's first.
+// hints are the focused pane's keys on one line, each key a button the
+// mouse can press; help (?) lists the rest.
 func (a *App) hints() string {
-	hs := []string{". drawer", "? help", ": command", "1-5 views", "tab focus"}
-	if a.w < leftMinWidth {
-		hs[4] = "[ ] panels"
-	} else if a.w < rightMinWidth {
-		hs[4] = "tab focus  ] log"
+	var hs []string
+	switch {
+	case a.modal != nil:
+	case a.focus == focusTree:
+		hs = []string{a.gl.UpDown + " select", "[space] expand", "[enter] open"}
+	case a.focus == focusLog:
+		hs = []string{a.gl.UpDown + " scroll"}
+	default:
+		hs = a.paneHints(a.current().keys())
 	}
-	if a.detail != nil {
-		hs = append(hs, "esc back")
-	} else {
-		hs = append(hs, "q quit")
+	return strings.Join(append(hs, "[?] help"), "  ")
+}
+
+// paneHints is a screen's keys as hints: the arrows folded into one each.
+func (a *App) paneHints(bs []key.Binding) []string {
+	var hs []string
+	for _, b := range bs {
+		if !b.Enabled() || (a.inviteOn && a.invite != "" && b.Help().Key == "c") {
+			continue // c copies the invite while it shows
+		}
+		switch b.Help() {
+		case navKeys.Up.Help(), navKeys.Left.Help():
+			continue
+		case navKeys.Down.Help():
+			hs = append(hs, a.gl.UpDown+" select")
+			continue
+		case navKeys.Right.Help():
+			hs = append(hs, "left/right tab")
+			continue
+		}
+		hs = append(hs, "["+keyLabel(b.Help().Key, a.gl)+"] "+b.Help().Desc)
 	}
-	return strings.Join(hs, "  ")
+	return hs
 }
 
 // statusLine is the selected box and its link, the server connection and

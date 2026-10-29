@@ -8,7 +8,10 @@
 |  Jobs           [2]||>box-a        gate       PulseCha~ n/a       n/a    n/a     n/a             n/a                 |
 |  Signers        [3]|| box-b        down 9m    ?         n/a       n/a    n/a     n/a             n/a                 |
 |  Gateways       [4]|| box-c        gate       ?         ~         n/a    n/a     n/a             n/a                 |
-|  Settings       [5]||                                                                                                |
+|  VPN            [5]||                                                                                                |
+|  Vault          [6]||                                                                                                |
+|  Server         [7]||                                                                                                |
+|  Settings       [8]||                                                                                                |
 |--------------------||                                                                                                |
 |   fleet     3 boxes||                                                                                                |
 |>+ box-a         n/a||                                                                                                |
@@ -29,12 +32,9 @@
 |                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
-|                    ||                                                                                                |
-|                    ||                                                                                                |
-|                    ||                                                                                                |
 |                    || 3 boxes | sort: host | ~ stale  * this machine                                                 |
 +--------------------++------------------------------------------------------------------------------------------------+
 +- Activity -----------------------------------------------------------------------------------------------------------+
 | no progress to show | jobs n/a                                                                                       |
 +----------------------------------------------------------------------------------------------------------------------+
- . drawer  ? help  : command  1-5 views  tab focus  ] log  q quit
+ up/dn select  [enter] open  [/] filter  [s] sort: host, sync, disk, lag  [c] choose columns (Settings)  [r] refresh no~

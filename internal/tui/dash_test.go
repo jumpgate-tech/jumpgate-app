@@ -23,19 +23,19 @@ func TestTabCyclesFocus(t *testing.T) {
 		t.Fatalf("default focus %v", a.focus)
 	}
 	var m tea.Model = a
-	for _, want := range []focusRegion{focusTree, focusLog, focusMain} {
+	for _, want := range []focusRegion{focusLog, focusTree, focusMain} {
 		m = press(t, m, "tab")
 		if got := m.(*App).focus; got != want {
 			t.Fatalf("tab: focus %v, want %v", got, want)
 		}
 	}
-	for _, want := range []focusRegion{focusLog, focusTree, focusMain} {
+	for _, want := range []focusRegion{focusTree, focusLog, focusMain} {
 		m = press(t, m, "shift+tab")
 		if got := m.(*App).focus; got != want {
 			t.Fatalf("shift+tab: focus %v, want %v", got, want)
 		}
 	}
-	if fr := tuitest.Frame(press(t, m, "tab")); !strings.Contains(fr, "+= > Views") {
+	if fr := tuitest.Frame(press(t, m, "shift+tab")); !strings.Contains(fr, "+= > Views") {
 		t.Fatalf("the focused tree is not marked:\n%s", fr)
 	}
 	narrow := press(t, dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto"), "tab").(*App)
@@ -59,7 +59,7 @@ func TestHostTabsStillOnArrows(t *testing.T) {
 
 func TestTreeEnterOpensBoxAndLogFollows(t *testing.T) {
 	a := dashApp(t, tuitest.NewFake(), 140, 40, "ascii", "auto")
-	m := press(t, a, "tab", "k") // the tree; up to the fleet line
+	m := press(t, a, "esc", "k") // esc: the nav (tree); up to the fleet line
 	if fr := tuitest.Frame(m); !m.(*App).selAll || !strings.Contains(fr, "Log: fleet") {
 		t.Fatalf("fleet line: selAll %v\n%s", m.(*App).selAll, fr)
 	}

@@ -38,6 +38,7 @@ func typed(t *testing.T, m tea.Model, s string) tea.Model {
 // real one; the returned cmd is never run by the tests.
 func stubShell(a *App) *[]string {
 	var got []string
+	a.bins.ssh = "/usr/bin/ssh"
 	a.o.Command = func(name string, args ...string) *exec.Cmd {
 		got = append([]string{name}, args...)
 		return exec.Command("true")
@@ -128,7 +129,7 @@ func TestShellRunsTheServersSSHCommand(t *testing.T) {
 	a.th = plainTheme()
 	got := stubShell(a)
 	m := press(t, a, "S")
-	if !slices.Equal(*got, f.SSHV["box"].Argv) {
+	if !slices.Equal(*got, append([]string{"/usr/bin/ssh"}, f.SSHV["box"].Argv[1:]...)) {
 		t.Fatalf("ran %v", *got)
 	}
 	noEscapes(t, "shell", m)

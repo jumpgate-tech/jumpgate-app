@@ -5,11 +5,13 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"os/exec"
 	"time"
 
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/apiclient"
+	"github.com/valve-tech/jumpgate/internal/daemon"
 )
 
 // Backend is the server as the TUI uses it; *apiclient.Client is the real one.
@@ -38,6 +40,7 @@ type Backend interface {
 	Prefs(ctx context.Context) (api.UIPrefs, error)
 	SavePrefs(ctx context.Context, p api.UIPrefs) (api.UIPrefs, error)
 	Controller(ctx context.Context) (api.ControllerView, error)
+	PairingInfo(ctx context.Context, target string) (api.PairingInfo, error)
 	CheckAgent(ctx context.Context, target string) (api.AgentCheck, error)
 	SSHCommand(ctx context.Context, target string) (api.SSHCommand, error)
 	Gateways(ctx context.Context) ([]api.GatewaySummary, error)
@@ -45,6 +48,7 @@ type Backend interface {
 	WatchJobs(ctx context.Context) <-chan apiclient.Update[api.JobsInbox]
 	RunningJobs(ctx context.Context) (api.RunningJobs, error)
 	Job(ctx context.Context, target, id string) (api.JobDetail, error)
+	WatchJobOutput(ctx context.Context, target, id string) <-chan apiclient.Update[[]api.JobOutputLine]
 	MigrateNames(ctx context.Context, target string) (api.JobView, error)
 	Decide(ctx context.Context, target, id string, d api.JobDecision) (api.JobView, error)
 	Adopt(ctx context.Context, target, id string) (api.JobView, error)
@@ -56,6 +60,12 @@ type Backend interface {
 	// Unlock clears passphrase before it returns.
 	Unlock(ctx context.Context, passphrase []byte) (api.VaultView, error)
 	Lock(ctx context.Context) (api.VaultView, error)
+	// Do is any other API call: in is sent as JSON (nil: no body), the
+	// answer decoded into out (nil: dropped). New screens use it, so each
+	// adds no method here.
+	Do(ctx context.Context, method, path string, in, out any) error
+	// Watch is any other JSON stream, one raw value per event.
+	Watch(ctx context.Context, path string) <-chan apiclient.Update[json.RawMessage]
 }
 
 var _ Backend = (*apiclient.Client)(nil)
@@ -73,6 +83,12 @@ type Options struct {
 	Command func(name string, args ...string) *exec.Cmd // nil: exec.Command
 	// OpenWeb opens the web app (platform Task 8); nil hides the action.
 	OpenWeb func(ctx context.Context) error
+	// Start starts a server when none answers and returns a backend for it
+	// (daemon.EnsureRunning, as the CLI does); nil hides the action.
+	Start func(ctx context.Context) (Backend, error)
+	// Server is what the running server published about itself (never its
+	// token), for the Server view; nil shows n/a.
+	Server func() ServerInfo
 	// Restart stops the server and returns a backend for a fresh one (spec
 	// D30); nil hides the action.
 	Restart func(ctx context.Context) (Backend, error)
@@ -85,4 +101,14 @@ type Options struct {
 	Now           func() time.Time    // nil: time.Now
 	// Location is the zone log times are shown in; nil: time.Local.
 	Location *time.Location
+}
+
+// ServerInfo is the running server as server.json (or system.json)
+// describes it, less the token.
+type ServerInfo struct {
+	PID       int
+	HTTPAddr  string
+	StartedAt time.Time
+	System    bool
+	Shape     *daemon.Shape // nil: a server older than the field
 }

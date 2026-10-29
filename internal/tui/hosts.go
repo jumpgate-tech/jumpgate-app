@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -11,12 +10,15 @@ import (
 	"github.com/valve-tech/jumpgate/internal/api"
 )
 
-var hostsKeys = struct{ Add, Pair, Local, Remove, Reload key.Binding }{
-	Add:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add a box")),
-	Pair:   key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pair or re-pair")),
-	Local:  key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "pair this machine")),
-	Remove: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove, typed confirmation")),
-	Reload: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
+var hostsKeys = struct{ Add, Pair, Local, Remove, Upgrade, HostKeys, Orphans, Reload key.Binding }{
+	Add:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add a box")),
+	Pair:     key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pair or re-pair")),
+	Local:    key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "pair this machine")),
+	Remove:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove, typed confirmation")),
+	Upgrade:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "upgrade the gate")),
+	HostKeys: key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "host keys: list, forget")),
+	Orphans:  key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "leftover containers")),
+	Reload:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 }
 
 type (
@@ -53,7 +55,7 @@ type hostsScreen struct {
 func (s *hostsScreen) capturing() bool { return s.flow != nil }
 
 func (s *hostsScreen) keys() []key.Binding {
-	return []key.Binding{navKeys.Up, navKeys.Down, navKeys.Enter, hostsKeys.Add, hostsKeys.Pair, hostsKeys.Local, hostsKeys.Remove, hostsKeys.Reload}
+	return []key.Binding{navKeys.Up, navKeys.Down, navKeys.Enter, hostsKeys.Add, hostsKeys.Pair, hostsKeys.Local, hostsKeys.Remove, hostsKeys.Upgrade, hostsKeys.HostKeys, hostsKeys.Orphans, hostsKeys.Reload}
 }
 
 // startFlow opens a new add or pair conversation, ending any earlier one.
@@ -106,6 +108,9 @@ func (s *hostsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 				return cmd
 			}
 		}
+	}
+	if cmd, ok := adminMsg(a, msg); ok {
+		return cmd
 	}
 	switch msg := msg.(type) {
 	case enterMsg:
@@ -175,6 +180,20 @@ func (s *hostsScreen) key(a *App, k tea.KeyPressMsg) tea.Cmd {
 		return f.probe(a)
 	case key.Matches(k, hostsKeys.Remove) && sel != nil:
 		confirmRemove(a, sel.ID)
+	case key.Matches(k, hostsKeys.Upgrade) && sel != nil:
+		if sel.Agent == nil {
+			a.flash = "this box has no gate yet: pair it with p"
+			return nil
+		}
+		return upgradeGate(a, sel.ID)
+	case key.Matches(k, hostsKeys.HostKeys) && sel != nil:
+		if sel.SSH == nil {
+			a.flash = "this box has no SSH address, so no host key"
+			return nil
+		}
+		return loadHostKeys(a, sel.ID, sel.SSH)
+	case key.Matches(k, hostsKeys.Orphans):
+		return loadOrphans(a)
 	}
 	return nil
 }
@@ -264,7 +283,7 @@ func (s *hostsScreen) view(a *App, w, h int) string {
 			pairing = a.th.OK.Render("gate " + shortAddr(sanitizeLine(t.Agent.Address), a.gl)) // the date is on Signers
 		}
 		id, addr := sanitizeLine(t.ID), sanitizeLine(describe(t))
-		lines = append(lines, fmt.Sprintf("%s %-14s %-38s %s", mark, truncate(id, 14, a.gl.Ellipsis), truncate(addr, 38, a.gl.Ellipsis), pairing))
+		lines = append(lines, a.selIf(i == s.cursor, "%s %-14s %-38s %s", mark, truncate(id, 14, a.gl.Ellipsis), truncate(addr, 38, a.gl.Ellipsis), pairing))
 	}
 	if len(s.ts) == 0 {
 		lines = append(lines, " "+a.th.Dim.Render("no boxes yet: press a to add one"))
@@ -272,6 +291,6 @@ func (s *hostsScreen) view(a *App, w, h int) string {
 	for len(lines) < h-1 {
 		lines = append(lines, "")
 	}
-	foot := " a add  p pair  L pair this machine  d remove  enter open"
+	foot := " a add  p pair  L pair this machine  d remove  u upgrade the gate  H host keys  o leftovers  enter open"
 	return strings.Join(append(lines, a.th.Dim.Render(foot)), "\n")
 }

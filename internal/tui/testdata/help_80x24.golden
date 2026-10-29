@@ -1,9 +1,8 @@
- jumpgate  Fleet [Jobs] Signers Gateways Settings                    connecting
+ jumpgate  Fleet [Jobs] Signers Gateways VPN Vault Server Settings   connecting
  boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
- Help  (esc to close)
-keys everywhere
-  1-5          views
-  tab          focus: tree, main, log (space expands a box)
+ Help: keys everywhere  (esc to close)
+  1-8          views
+  tab          focus: nav, main, log (esc: back to the nav)
   [ ]          tree / activity log
   ?            help
   :            command
@@ -21,4 +20,5 @@ keys here
   d            answer the selected job's question
   a            adopt a job whose controller went silent
   r            reload
- jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-5 views  [ ] panels  q…
+  n            start a job on a box
+ jobs n/a | [?] help

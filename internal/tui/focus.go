@@ -27,16 +27,30 @@ func (f focusRegion) String() string { return [...]string{"main", "tree", "log"}
 const overlayWidth = 34
 
 func (a *App) layout() layout {
-	return layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer), a.drawerLines())
+	l := layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer), a.drawerLines())
+	if a.inviteOn && l.Main.H > 4 {
+		// The invite takes the panes' last row: one unboxed line under them.
+		l.Left.H, l.Main.H, l.Right.H = max(l.Left.H-1, 0), l.Main.H-1, max(l.Right.H-1, 0)
+		if l.Left.W == 0 {
+			l.Left.H = 0
+		}
+		if l.Right.W == 0 {
+			l.Right.H = 0
+		}
+		l.Invite = rect{0, l.Main.Y + l.Main.H, a.w, 1}
+	}
+	return l
 }
 
-// regions are the focusable regions showing now, in tab order.
+// regions are the focusable regions showing now, in tab order: nav (the
+// views and the tree), main, log.
 func (a *App) regions() []focusRegion {
 	l := a.layout()
-	rs := []focusRegion{focusMain}
+	var rs []focusRegion
 	if l.Left.W > 0 || a.treeOver {
 		rs = append(rs, focusTree)
 	}
+	rs = append(rs, focusMain)
 	if l.Right.W > 0 || a.logOver {
 		rs = append(rs, focusLog)
 	}
@@ -215,18 +229,25 @@ func (a *App) sevGlyph(s logSev) string {
 	return a.th.Dim.Render(a.gl.Info)
 }
 
+// logTitle names the log's scope: the fleet, or a box (and client).
+func (a *App) logTitle() string {
+	box, node := a.logScope()
+	if box == "" {
+		return "Log: fleet"
+	}
+	title := "Log: " + sanitizeLine(box)
+	if node != "" {
+		title += " " + node
+	}
+	return title
+}
+
 // logView is the activity log, boxed, w×h: newest first, each line its
 // severity glyph, its age, the box (fleet-wide) and the text.
 func (a *App) logView(w, h int) string {
-	box, node := a.logScope()
-	title := "Log: fleet"
-	if box != "" {
-		title = "Log: " + sanitizeLine(box)
-		if node != "" {
-			title += " " + node
-		}
-	}
-	evs := a.log.scoped(box, node)
+	box, _ := a.logScope()
+	title := a.logTitle()
+	evs := a.log.scoped(a.logScope())
 	room := max(h-2, 1)
 	a.logOff = min(a.logOff, max(len(evs)-room, 0))
 	var lines []string
@@ -236,9 +257,10 @@ func (a *App) logView(w, h int) string {
 	for _, e := range evs[a.logOff:] {
 		l := " " + a.sevGlyph(e.Sev) + " " + a.th.Dim.Render(pad(formatAge(a.now().Sub(e.At)), 3)) + " "
 		if box == "" && e.Box != "" {
-			l += e.Box + " "
+			l += sanitizeLine(e.Box) + " "
 		}
-		lines = append(lines, truncate(l+e.Text, w-2, a.gl.Ellipsis))
+		// The sink: sanitized again here, whatever the event stored.
+		lines = append(lines, truncate(l+sanitizeLine(e.Text), w-2, a.gl.Ellipsis))
 	}
 	return a.boxed(title, a.focus == focusLog, strings.Join(lines, "\n"), w, h)
 }

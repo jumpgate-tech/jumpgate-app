@@ -8,7 +8,10 @@
 |  Jobs       [2]||>box-a        gate       PulseCha~ synced    2      48/72   [####|...] 61%  warn|
 |  Signers    [3]|| box-b        down 4m    Ethereum  syncing~  n/a    3/9~    n/a             n/a |
 |  Gateways   [4]|| laptop*      local*     ?         n/a       n/a    n/a     n/a             n/a |
-|  Settings   [5]||                                                                                |
+|  VPN        [5]||                                                                                |
+|  Vault      [6]||                                                                                |
+|  Server     [7]||                                                                                |
+|  Settings   [8]||                                                                                |
 |----------------||                                                                                |
 |   fleet 3 boxes||                                                                                |
 |>+ box-a  synced||                                                                                |
@@ -22,9 +25,6 @@
 |                ||                                                                                |
 |                ||                                                                                |
 |                ||                                                                                |
-|                ||                                                                                |
-|                ||                                                                                |
-|                ||                                                                                |
 |                || 3 boxes | sort: host | ~ stale  * this machine                                 |
 +----------------++--------------------------------------------------------------------------------+
- jobs 1 running  [! 1 needs decision]  ! 3 alerts | . drawer  ? help  : command  1-5 views  tab foc~
+ jobs 1 running  [! 1 needs decision] | up/dn select  [enter] open  [/] filter  [s] sort: host, syn~

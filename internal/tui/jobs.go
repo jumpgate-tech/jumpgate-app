@@ -12,7 +12,8 @@ import (
 	"github.com/valve-tech/jumpgate/internal/apiclient"
 )
 
-var jobKeys = struct{ Decide, Adopt, Reload key.Binding }{
+var jobKeys = struct{ Decide, Adopt, Reload, Start key.Binding }{
+	Start:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "start a job on a box")),
 	Decide: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "answer the selected job's question")),
 	Adopt:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "adopt a job whose controller went silent")),
 	Reload: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
@@ -44,21 +45,25 @@ type (
 // decision first, then running and waiting ones, then finished ones. It
 // watches /api/jobs/stream while it is visible.
 type jobsScreen struct {
-	in     api.JobsInbox
-	has    bool
-	conn   apiclient.ConnState
-	err    error
-	cursor int
-	open   string // "target/id" whose log is shown
-	detail *api.JobDetail
-	detErr error
+	in      api.JobsInbox
+	has     bool
+	conn    apiclient.ConnState
+	err     error
+	cursor  int
+	open    string // "target/id" whose log is shown
+	detail  *api.JobDetail
+	detErr  error
+	out     []string // the open job's output, sanitized, at most maxJobOutput lines
+	outConn apiclient.ConnState
+	outStop context.CancelFunc
+	outGen  int
 	visit
 }
 
 func (s *jobsScreen) capturing() bool { return false }
 
 func (s *jobsScreen) keys() []key.Binding {
-	return []key.Binding{navKeys.Up, navKeys.Down, navKeys.Enter, jobKeys.Decide, jobKeys.Adopt, jobKeys.Reload}
+	return []key.Binding{navKeys.Up, navKeys.Down, navKeys.Enter, jobKeys.Decide, jobKeys.Adopt, jobKeys.Reload, jobKeys.Start}
 }
 
 func (s *jobsScreen) selected() (api.JobView, bool) {
@@ -120,6 +125,8 @@ func (s *jobsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			s.cursor = min(s.cursor, max(len(s.in.Jobs)-1, 0))
 		}
 		return s.next(msg.gen, msg.ch)
+	case jobOutputMsg:
+		return s.gotOutput(msg)
 	case jobDetailMsg:
 		if s.current(msg.gen) && msg.key == s.open {
 			s.detail, s.detErr = &msg.d, msg.err
@@ -148,9 +155,12 @@ func (s *jobsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			}
 			if k := j.Target + "/" + j.ID; s.open != k {
 				s.open, s.detail, s.detErr = k, nil, nil
-				return s.loadDetail(a, j)
+				return tea.Batch(s.loadDetail(a, j), s.watchOutput(a, j))
 			}
 			s.open = ""
+			s.stopOutput()
+		case key.Matches(msg, jobKeys.Start):
+			s.startJob(a)
 		case key.Matches(msg, jobKeys.Decide):
 			return s.decide(a)
 		case key.Matches(msg, jobKeys.Adopt):
@@ -247,7 +257,7 @@ func (m *choiceModal) view(a *App, w, h int) string {
 func (s *jobsScreen) view(a *App, w, h int) string {
 	var b strings.Builder
 	need := s.in.NeedsDecision()
-	head := " Jobs inbox"
+	head := " inbox" // the title says Jobs
 	if s.has {
 		head += fmt.Sprintf(" %s %d needs you", a.gl.Sep, need)
 	}
@@ -276,7 +286,11 @@ func (s *jobsScreen) view(a *App, w, h int) string {
 		}
 		line := fmt.Sprintf("%s%s %-8s %-12s step %d/%d %s", mark, flag, truncate(sanitizeLine(j.Target), 8, a.gl.Ellipsis),
 			sanitizeLine(j.State), min(j.Step+1, len(j.Steps)), len(j.Steps), s.leaseWord(a, j))
-		b.WriteString(truncate(line, w, a.gl.Ellipsis) + "\n")
+		line = truncate(line, w, a.gl.Ellipsis)
+		if i == s.cursor {
+			line = a.th.Sel.Render(line)
+		}
+		b.WriteString(line + "\n")
 		if i == s.cursor {
 			b.WriteString(s.selectedBody(a, j, w))
 		}
@@ -327,6 +341,7 @@ func (s *jobsScreen) selectedBody(a *App, j api.JobView, w int) string {
 				b.WriteString(truncate(fmt.Sprintf("%s%3d %s", ind, l.Index, sanitizeLine(l.Text)), w, a.gl.Ellipsis) + "\n")
 			}
 		}
+		b.WriteString(s.viewOutput(a, w, ind))
 	}
 	return b.String()
 }

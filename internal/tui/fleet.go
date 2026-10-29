@@ -394,14 +394,6 @@ func (s *fleetScreen) fleetUpdate(a *App, msg tea.Msg) tea.Cmd {
 		s.cursor = 0
 		s.clamp(a)
 		return cmd
-	case tea.MouseClickMsg:
-		if a.prefs.Mouse && a.detail == nil && a.modal == nil && a.active == scrFleet && msg.Button == tea.MouseLeft {
-			if row, ok := s.clickRow(a, msg.X, msg.Y); ok {
-				s.cursor = row
-				s.clamp(a)
-			}
-		}
-		return nil
 	case tea.KeyPressMsg:
 		if s.editing {
 			switch msg.String() {
@@ -554,7 +546,11 @@ func (s *fleetScreen) view(a *App, w, h int) string {
 			}
 			cells[j] = pad(truncate(s.cell(a, rows[i], c.ID), c.Width, a.gl.Ellipsis), c.Width)
 		}
-		out = append(out, mark+strings.Join(cells, " "))
+		line := mark + strings.Join(cells, " ")
+		if i == s.cursor {
+			line = a.th.Sel.Render(line)
+		}
+		out = append(out, line)
 	}
 	foot := fmt.Sprintf(" %d boxes", len(rows))
 	if hidden > 0 {

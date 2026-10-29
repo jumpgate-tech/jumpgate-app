@@ -304,6 +304,31 @@ func TestWatchFleet(t *testing.T) {
 	t.Fatal("the stream ended without a fleet")
 }
 
+// Watch is the generic stream: each default event's data, raw.
+func TestWatchRaw(t *testing.T) {
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/targets/a/monitor/stream" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"peers\":7}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for u := range c.Watch(ctx, "/api/targets/a/monitor/stream") {
+		if u.Has {
+			if string(u.Value) != `{"peers":7}` {
+				t.Fatalf("value %s", u.Value)
+			}
+			return
+		}
+	}
+	t.Fatal("the stream ended without a value")
+}
+
 func TestDiskAndStatusMethods(t *testing.T) {
 	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

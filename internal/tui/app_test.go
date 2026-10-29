@@ -78,7 +78,7 @@ func TestTooSmallTerminalKeepsState(t *testing.T) {
 		t.Fatalf("frame:\n%s", f)
 	}
 	m, _ = tuitest.Send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
-	if m.(*App).active != scrJobs || !strings.Contains(tuitest.Frame(m), "Jobs inbox") {
+	if m.(*App).active != scrJobs || !strings.Contains(tuitest.Frame(m), " inbox") {
 		t.Fatalf("state lost:\n%s", tuitest.Frame(m))
 	}
 }
@@ -187,6 +187,9 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 	// Listed only when relevant: TestHelpListsTheVaultKeysWhenRelevant.
 	delete(all, "Unlock")
 	delete(all, "Lock")
+	delete(all, "Guide") // these three: TestHelpListsTheGuideKeysWhenRelevant
+	delete(all, "Invite")
+	delete(all, "Copy")
 	for name, b := range all {
 		h := b.Help()
 		if !regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(h.Key) + `\s+` + regexp.QuoteMeta(h.Desc) + `$`).MatchString(fr) {

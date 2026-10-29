@@ -71,7 +71,7 @@ func TestDrawerToggleSaves(t *testing.T) {
 func TestDrawerAutoMinimizedAt80x24(t *testing.T) {
 	a := dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto")
 	last := lastLine(tuitest.Frame(a))
-	if !strings.HasPrefix(last, " jobs") || !strings.Contains(last, ". drawer") {
+	if !strings.HasPrefix(last, " jobs") || !strings.Contains(last, "[enter] open") {
 		t.Fatalf("last line %q", last)
 	}
 	if a.drawerOpen() {
@@ -81,7 +81,7 @@ func TestDrawerAutoMinimizedAt80x24(t *testing.T) {
 
 func TestDrawerLineFailsClosed(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "ascii")
-	if l := a.drawerLine(80); !strings.HasPrefix(l, " jobs n/a") || !strings.Contains(l, "! alerts n/a") || strings.Contains(l, "needs decision") {
+	if l := a.drawerLine(80); !strings.HasPrefix(l, " jobs n/a") || strings.Contains(l, "alerts") || strings.Contains(l, "needs decision") {
 		t.Fatalf("before any jobs reading: %q", l)
 	}
 	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fleetWithJobs(0, 0), Has: true}})
@@ -93,7 +93,7 @@ func TestDrawerLineFailsClosed(t *testing.T) {
 func TestDrawerHighlightsDecisionNoOpen(t *testing.T) {
 	a := dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto")
 	fr := tuitest.Frame(a)
-	if last := lastLine(fr); !strings.Contains(last, "jobs 1 running  [! 1 needs decision]  ! 3 alerts | ") {
+	if last := lastLine(fr); !strings.Contains(last, "jobs 1 running  [! 1 needs decision] | ") {
 		t.Fatalf("last line %q", last)
 	}
 	if strings.Contains(fr, "Activity") || a.drawerOpen() {
@@ -285,9 +285,11 @@ func TestHeaderAlertCount(t *testing.T) {
 	}
 }
 
+// The alert count is in the header; the drawer line does not repeat it.
 func TestDrawerLineAlertCount(t *testing.T) {
-	if last := lastLine(tuitest.Frame(dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto"))); !strings.Contains(last, "! 3 alerts") {
-		t.Fatalf("last line %q", last)
+	fr := tuitest.Frame(dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto"))
+	if last := lastLine(fr); strings.Contains(last, "alerts") || !strings.Contains(strings.Split(fr, "\n")[0], "! 3 alerts") {
+		t.Fatalf("frame:\n%s", fr)
 	}
 }
 
@@ -395,12 +397,12 @@ func TestHeaderAge(t *testing.T) {
 // with the host list under it once a host is open.
 func TestViewsSidebarAndTabs(t *testing.T) {
 	fr := tuitest.Frame(dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto"))
-	if l := strings.Split(fr, "\n")[0]; !strings.HasPrefix(l, " jumpgate  [Fleet] Jobs Signers Gateways Settings") || !strings.HasSuffix(strings.TrimRight(l, " "), "5s ago") {
+	if l := strings.Split(fr, "\n")[0]; !strings.HasPrefix(l, " jumpgate  [Fleet] 2 3 4 5 6 7 ") || !strings.HasSuffix(strings.TrimRight(l, " "), "5s ago") {
 		t.Fatalf("header with tabs %q", l)
 	}
 	m := press(t, dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "auto"), "enter")
 	fr = tuitest.Frame(m)
-	if !strings.Contains(fr, "+- Views") || !strings.Contains(fr, "+= > box-a") || !strings.Contains(fr, "|>+ box-a") {
+	if !strings.Contains(fr, "+- Views") || !strings.Contains(fr, "+= > Fleet > box-a > Overview") || !strings.Contains(fr, "|>+ box-a") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 }
@@ -419,7 +421,7 @@ func TestNarrowHeaderFoldsTabs(t *testing.T) {
 	for _, w := range []int{80, 90, 99} {
 		a := dashApp(t, tuitest.NewFake(), w, 24, "ascii", "auto")
 		h := ansi.Strip(a.header(w))
-		if ansi.StringWidth(h) > w || !strings.Contains(h, "[Fleet] Jobs") {
+		if ansi.StringWidth(h) > w || !strings.Contains(h, "[Fleet] 2 3 4 5 6 7") && !strings.Contains(h, "[Fleet] Jobs") {
 			t.Errorf("%d: header %q", w, h)
 		}
 		if l := strings.Split(tuitest.Frame(a), "\n")[1]; strings.Contains(l, "Signers") {

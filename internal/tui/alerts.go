@@ -74,7 +74,7 @@ func alertText(s string) string { return maskText(sanitizeLine(s)) }
 func alerts(in alertInput) []alert {
 	var out []alert
 	add := func(sev alertSev, box, text string) {
-		out = append(out, alert{sev, sanitizeLine(box), text})
+		out = append(out, alert{sev, sanitizeLine(box), sanitizeLine(text)})
 	}
 	every := time.Duration(in.Fleet.IntervalSeconds) * time.Second
 	for _, r := range in.Fleet.Rows {

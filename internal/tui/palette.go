@@ -32,10 +32,10 @@ func newPalette() *paletteModal {
 }
 
 var paletteScreens = map[string]screenID{
-	"fleet": scrFleet, "signers": scrSigners, "gateways": scrGateways, "jobs": scrJobs, "settings": scrSettings,
+	"fleet": scrFleet, "signers": scrSigners, "gateways": scrGateways, "vpn": scrVPN, "jobs": scrJobs, "vault": scrVault, "server": scrServer, "settings": scrSettings,
 }
 
-const paletteHelp = "fleet hosts signers gateways jobs settings | host NAME | logs NAME | measure NAME | ssh NAME | start|stop|restart exec|beacon NAME | remove NAME | migrate-names NAME | add | help | quit"
+const paletteHelp = "fleet hosts signers gateways vpn jobs vault server settings | host NAME | logs NAME | measure NAME | ssh NAME | start|stop|restart exec|beacon NAME | remove NAME | migrate-names NAME | add | help | quit"
 
 func (m *paletteModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch k.String() {

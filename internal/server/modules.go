@@ -399,6 +399,15 @@ func (s *Server) setBoxModule(w http.ResponseWriter, r *http.Request, cfg config
 		s.releaseSetupRun(target.ID, claimed)
 		return
 	}
+	// Asked before the module is recorded: a refusal from the run's own
+	// account step would come after the save and leave it listed as on.
+	if req.Enabled {
+		if err := setup.CheckModuleAccount(r.Context(), ex); err != nil {
+			s.releaseSetupRun(target.ID, claimed)
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+	}
 	var clash error
 	if _, err := s.updateConfig(func(c *config.Config) error {
 		t := findTargetPtr(c, target.ID)

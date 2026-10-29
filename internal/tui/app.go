@@ -24,10 +24,13 @@ const (
 	scrJobs
 	scrSigners
 	scrGateways
+	scrVPN
+	scrVault
+	scrServer
 	scrSettings
 )
 
-var screenNames = [...]string{"Fleet", "Jobs", "Signers", "Gateways", "Settings"}
+var screenNames = [...]string{"Fleet", "Jobs", "Signers", "Gateways", "VPN", "Vault", "Server", "Settings"}
 
 // screen is one view in the main area.
 type screen interface {
@@ -87,12 +90,25 @@ const (
 // App is the root model.
 type App struct {
 	mainRect rect // the main region as last drawn, for mouse hits
-	o        Options
-	be       Backend
-	ctx      context.Context
-	cancel   context.CancelFunc
-	now      func() time.Time
-	loc      *time.Location // the zone log times are shown in
+	// shown is what each region drew last, line by line (mouse.go); kpiHits
+	// the KPI tiles' columns and treeFirst the first tree line drawn.
+	shown     map[string]pane
+	kpiHits   []tileHit
+	treeFirst int
+	// clock is the wall clock for double clicks and the modal flush; modalAt
+	// is when the open modal opened.
+	clock     func() time.Time
+	modalAt   time.Time
+	lastClick struct {
+		x, y int
+		at   time.Time
+	}
+	o      Options
+	be     Backend
+	ctx    context.Context
+	cancel context.CancelFunc
+	now    func() time.Time
+	loc    *time.Location // the zone log times are shown in
 
 	w, h     int
 	th       Theme
@@ -150,6 +166,19 @@ type App struct {
 	// restarting: a restart is under way. A second one would race the first
 	// over which server is current, so R does nothing until it lands.
 	restarting bool
+	// The setup guide's facts: the vault and the controller as last read
+	// (guideKnown: one of them was), and whether the guide opened by itself.
+	vault      api.VaultView
+	vaultHas   bool
+	ctl        api.ControllerView
+	ctlHas     bool
+	guideKnown bool
+	guideShown bool
+	// The invite line: shown, and its command or why there is none.
+	inviteOn   bool
+	invite     string
+	inviteFail string
+	bins       bins
 	// vaultOpen: this TUI unlocked the vault and has not locked it since, so
 	// help lists the lock key.
 	vaultOpen bool
@@ -173,8 +202,10 @@ func New(o Options) *App {
 		o.Location = time.Local
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{o: o, loc: o.Location, be: o.Backend, ctx: ctx, cancel: cancel, now: o.Now, th: NewTheme(), prefs: api.DefaultPrefs(), conn: apiclient.Connecting}
+	a := &App{o: o, loc: o.Location, be: o.Backend, ctx: ctx, cancel: cancel, now: o.Now, th: NewTheme(), prefs: api.DefaultPrefs(), conn: apiclient.Connecting, clock: time.Now}
 	a.gl = DetectGlyphs(a.prefs.Glyphs, o.GOOS, o.Getenv)
+	a.bins = resolveBins(o.Self, o.Getenv, o.GOOS)
+	a.o.Self = a.bins.jumpgate
 	for i := range a.screens {
 		a.screens[i] = comingScreen{name: screenNames[i]}
 	}
@@ -183,6 +214,9 @@ func New(o Options) *App {
 	a.screens[scrGateways] = &gatewaysScreen{}
 	a.screens[scrSigners] = &signersScreen{}
 	a.screens[scrSettings] = &settingsScreen{}
+	a.screens[scrServer] = &serverScreen{}
+	a.screens[scrVault] = &vaultScreen{}
+	a.screens[scrVPN] = &vpnScreen{}
 	if server, mine, differs := a.be.Skew(); differs {
 		server, mine = sanitizeLine(server), sanitizeLine(mine)
 		a.srvVer = server
@@ -202,7 +236,7 @@ func New(o Options) *App {
 // Init starts the fleet watch, the clock and a prefs fetch. The fetch does
 // not block the first frame: the TUI shows the defaults until prefsMsg lands.
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs(), loadGateways(a), gwTick(), treeTick(), loadTargets(a))
+	return tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), tick(), a.fetchPrefs(), loadGateways(a), gwTick(), treeTick(), loadTargets(a), loadGuide(a))
 }
 
 // gatewaysEvery is how often the KPI strip re-reads the gateways: the
@@ -296,7 +330,11 @@ func (a *App) openScreen(id screenID) tea.Cmd {
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	before := a.modal
 	m, cmd := a.update(msg)
+	if a.modal != nil && a.modal != before {
+		a.modalAt = a.clock() // the flush window starts
+	}
 	switch msg := msg.(type) {
 	case fleetMsg, gatewaysMsg, targetsMsg, treeModsMsg:
 		a.record()
@@ -317,7 +355,43 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		return a, tick()
 	case gwTickMsg:
-		return a, tea.Batch(loadGateways(a), gwTick())
+		return a, tea.Batch(loadGateways(a), gwTick(), loadGuide(a))
+	case guideMsg:
+		a.gotGuide(msg)
+		return a, nil
+	case startedMsg:
+		a.restarting = false
+		if msg.err != nil {
+			a.flash = "could not start the server: " + a.errText(msg.err)
+			return a, nil
+		}
+		a.cancel()
+		a.ctx, a.cancel = context.WithCancel(context.Background())
+		a.be, a.skew, a.srvVer, a.flash = msg.be, "", "", "the server started"
+		return a, tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), a.openScreen(a.active), loadGateways(a), loadGuide(a))
+	case stoppedMsg:
+		if msg.err != nil {
+			a.flash = "stop: " + a.errText(msg.err)
+		} else {
+			a.flash, a.vaultOpen = "the server is stopping; jobs pause until it starts again", false
+		}
+		return a, nil
+	case serverWebMsg:
+		if msg.err != nil {
+			a.flash = "could not open the web app: " + a.errText(msg.err)
+		} else {
+			a.flash = "the web app is open in your browser"
+		}
+		return a, nil
+	case selfDoneMsg:
+		return a, a.selfDone(msg)
+	case stepKeysMsg:
+		return a, a.stepKeys(msg)
+	case inviteMsg:
+		a.gotInvite(msg)
+		return a, nil
+	case keysInitDoneMsg:
+		return a, tea.Batch(loadGuide(a), a.broadcast(msg))
 	case treeModsMsg:
 		a.gotTreeMods(msg)
 		return a, nil
@@ -342,6 +416,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.needs, a.needsKnown = n, true
 		}
+		a.maybeGuide()
 		return a, tea.Batch(a.watchFleet(msg.ch), a.broadcast(msg), ring, a.readRunning())
 	case runningMsg:
 		a.runningBusy, a.runningErr = false, msg.err
@@ -389,19 +464,23 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), a.openScreen(a.active), loadGateways(a))
 	case unlockDoneMsg:
 		a.unlockDone(msg)
-		return a, nil
+		return a, loadGuide(a)
 	case lockDoneMsg:
 		if msg.err != nil {
 			a.flash = "lock: " + a.errText(msg.err)
 		} else {
 			a.flash, a.vaultOpen = "the vault is locked; jobs wait for unlock", false
 		}
-		return a, nil
+		return a, loadGuide(a)
 	case tea.KeyPressMsg:
 		a.flash = ""
 		return a, a.key(msg)
 	case tea.PasteMsg:
 		return a, a.paste(msg)
+	case tea.MouseClickMsg:
+		return a, a.click(msg)
+	case tea.MouseWheelMsg:
+		return a, a.wheel(msg)
 	}
 	return a, a.broadcast(msg)
 }
@@ -426,6 +505,9 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 		return tea.Quit
 	}
 	if a.modal != nil {
+		if a.flushing() {
+			return nil // typed ahead of the modal: it must not answer it
+		}
 		done, cmd := a.modal.key(a, k)
 		if done {
 			a.modal = nil
@@ -460,6 +542,16 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case key.Matches(k, globalKeys.Lock):
 		return a.lockVault()
+	case key.Matches(k, globalKeys.Guide):
+		a.modal = newGuide(a)
+		return loadGuide(a)
+	case key.Matches(k, globalKeys.Invite):
+		return a.toggleInvite()
+	case key.Matches(k, globalKeys.Copy) && a.inviteOn:
+		return a.copyInvite()
+	case key.Matches(k, globalKeys.Back) && a.detail == nil && a.focus != focusTree && a.layout().Left.W > 0:
+		a.focus = focusTree // esc goes back to the nav
+		return nil
 	}
 	return cur.update(a, k)
 }

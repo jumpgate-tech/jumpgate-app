@@ -282,6 +282,13 @@ func (a *App) kpiView(r rect) string {
 		// Narrower windows close up the separators before anything is cut.
 		for _, sep := range []string{" | ", "  ", " "} {
 			if lipgloss.Width(" "+strings.Join(plain, sep)) <= r.W || sep == " " {
+				a.kpiHits = a.kpiHits[:0]
+				x := 1
+				for i, p := range plain {
+					w := lipgloss.Width(p)
+					a.kpiHits = append(a.kpiHits, tileHit{x, x + w, ts[i].Title})
+					x += w + len(sep)
+				}
 				return truncate(" "+strings.Join(styled, sep), r.W, a.gl.Ellipsis)
 			}
 		}
@@ -292,7 +299,8 @@ func (a *App) kpiView(r rect) string {
 	rest := r.W - fixed["Gateways"] - fixed["Alerts"]
 	others := len(ts) - len(fixed)
 	var boxes []string
-	k := 0
+	k, x := 0, 0
+	a.kpiHits = a.kpiHits[:0]
 	for _, t := range ts {
 		w, ok := fixed[t.Title]
 		if !ok {
@@ -303,6 +311,8 @@ func (a *App) kpiView(r rect) string {
 			k++
 		}
 		body := a.tileStyle(t, truncate(t.Lines[0], w-2, a.gl.Ellipsis)) + "\n" + truncate(t.Lines[1], w-2, a.gl.Ellipsis)
+		a.kpiHits = append(a.kpiHits, tileHit{x, x + w, t.Title})
+		x += w
 		boxes = append(boxes, a.boxed(t.Title, false, body, w, 4))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, boxes...)

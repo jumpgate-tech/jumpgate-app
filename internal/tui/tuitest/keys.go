@@ -4,6 +4,7 @@
 package tuitest
 
 import (
+	"reflect"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -11,7 +12,7 @@ import (
 
 // Key is the key press a person makes for a name: "enter", "esc", "tab",
 // "shift+tab", "up", "down", "left", "right", "backspace", "space",
-// "ctrl+c", "ctrl+v", or one printable character.
+// "ctrl+c", "ctrl+u", "ctrl+v", or one printable character.
 func Key(s string) tea.KeyPressMsg {
 	switch s {
 	case "enter":
@@ -40,6 +41,8 @@ func Key(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl}
 	case "ctrl+v":
 		return tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl}
+	case "ctrl+u":
+		return tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}
 	}
 	r := []rune(s)
 	if len(r) != 1 {
@@ -97,6 +100,15 @@ func Run(cmd tea.Cmd) []tea.Msg {
 			var out []tea.Msg
 			for _, c := range batch {
 				out = append(out, Run(c)...)
+			}
+			return out
+		}
+		// tea.Sequence's message is an unexported []tea.Cmd: its commands
+		// run in order, so their messages arrive in order.
+		if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice && v.Type().Elem() == reflect.TypeOf(tea.Cmd(nil)) {
+			var out []tea.Msg
+			for i := 0; i < v.Len(); i++ {
+				out = append(out, Run(v.Index(i).Interface().(tea.Cmd))...)
 			}
 			return out
 		}

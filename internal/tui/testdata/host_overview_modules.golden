@@ -1,7 +1,8 @@
- jumpgate  Fleet Jobs Signers Gateways Settings                      connecting
+ jumpgate  [Fleet] Jobs Signers Gateways VPN Vault Server Settings   connecting
  boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
- box
- [Overview]  Storage  Endpoints  Security  Logs  Services
+ Fleet › box › Overview
+ link n/a
+ [Overview]  Storage  Endpoints  Security  Logs  Services  Docker  Tools
 
  EXECUTION                            BEACON
  state   synced                       state     synced
@@ -20,5 +21,4 @@
 
 
 
-
- jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-5 views  [ ] panels  e…
+ jobs n/a | left/right tab  [esc] back  [m] measure disk now (Storage)  [m] mod…

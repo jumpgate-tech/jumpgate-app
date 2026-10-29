@@ -4,19 +4,19 @@
 |1 n/a of 3   ||1 sync 1 n/a ||2 n/a        ||~81 bcn 1 n/a||on box-a     ||n/a no request counts yet||box-b down 4m   |
 +-------------++-------------++-------------++-------------++-------------++-------------------------++----------------+
 +- Views ------------++= > Jobs =======================================================================================+
-|  Fleet          [1]|| Jobs inbox | 1 needs you                                                                       |
+|  Fleet          [1]|| inbox | 1 needs you                                                                            |
 |> Jobs           [2]||> ! box-a    needs-decision step 2/3 driven here                                                |
 |  Signers        [3]||      Rename the node's account, units and data to jumpgate-node                                |
 |  Gateways       [4]||      1 process(es) still run as valve-node-app                                                 |
-|  Settings       [5]||      1 Check again                                                                             |
-|--------------------||      2 Stop them                                                                               |
-|   fleet     3 boxes||      3 Stop the migration here                                                                 |
-|>+ box-a      synced||    box-b    running      step 4/8 silent 10m | a: adopt                                        |
+|  VPN            [5]||      1 Check again                                                                             |
+|  Vault          [6]||      2 Stop them                                                                               |
+|  Server         [7]||      3 Stop the migration here                                                                 |
+|  Settings       [8]||    box-b    running      step 4/8 silent 10m | a: adopt                                        |
+|--------------------||                                                                                                |
+|   fleet     3 boxes||                                                                                                |
+|>+ box-a      synced||                                                                                                |
 | + box-b     down 4m||                                                                                                |
 | + laptop*    local*||                                                                                                |
-|                    ||                                                                                                |
-|                    ||                                                                                                |
-|                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
@@ -37,4 +37,4 @@
 | job  box-b      migrate-names  step 4/8     [########............]                                                   |
 | sync box-b      exec           21.1M/21.3M  [####################] 99.1% ~ stale                                     |
 +----------------------------------------------------------------------------------------------------------------------+
- . drawer  ? help  : command  1-5 views  tab focus  ] log  q quit
+ up/dn select  [enter] open  [d] answer the selected job's question  [a] adopt a job whose controller went silent  [r] ~

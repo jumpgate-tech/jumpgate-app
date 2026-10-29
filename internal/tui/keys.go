@@ -10,10 +10,10 @@ import (
 // help screen lists every field here (help.go), so a key added here is
 // documented by adding it.
 var globalKeys = struct {
-	Screens, Focus, Panels, Help, Palette, Drawer, Back, Quit, ForceQuit, Restart, Unlock, Lock key.Binding
+	Screens, Focus, Panels, Help, Palette, Drawer, Back, Quit, ForceQuit, Restart, Unlock, Lock, Guide, Invite, Copy key.Binding
 }{
-	Screens:   key.NewBinding(key.WithKeys("1", "2", "3", "4", "5"), key.WithHelp("1-5", "views")),
-	Focus:     key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "focus: tree, main, log (space expands a box)")),
+	Screens:   key.NewBinding(key.WithKeys("1", "2", "3", "4", "5", "6", "7", "8"), key.WithHelp("1-8", "views")),
+	Focus:     key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "focus: nav, main, log (esc: back to the nav)")),
 	Panels:    key.NewBinding(key.WithKeys("[", "]"), key.WithHelp("[ ]", "tree / activity log")),
 	Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	Palette:   key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "command")),
@@ -24,7 +24,11 @@ var globalKeys = struct {
 	Restart:   key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restart the server")),
 	Unlock:    key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "unlock the vault")),
 	// ctrl+l, not L: L pairs this machine on the hosts view.
-	Lock: key.NewBinding(key.WithKeys("ctrl+l"), key.WithHelp("ctrl+l", "lock the vault")),
+	Lock:   key.NewBinding(key.WithKeys("ctrl+l"), key.WithHelp("ctrl+l", "lock the vault")),
+	Guide:  key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "setup guide")),
+	Invite: key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "invite a box: one line to run on it")),
+	// c copies only while the invite shows; elsewhere it is the view's.
+	Copy: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy the invite")),
 }
 
 // navKeys move a cursor or switch tabs.

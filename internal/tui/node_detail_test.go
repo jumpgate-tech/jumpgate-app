@@ -70,7 +70,7 @@ func nodeApp(t *testing.T, f *tuitest.Fake, w, h int, node string, rs ...api.Nod
 	for _, r := range rs {
 		f.Status("box-a") <- apiclient.Update[api.NodeStatus]{Value: r, Has: true, State: apiclient.Live}
 	}
-	keys := []string{"tab", "space", "j"}
+	keys := []string{"esc", "space", "j"}
 	if node == "beacon" {
 		keys = append(keys, "j")
 	}
@@ -84,7 +84,7 @@ func TestNodeDetailOpensFromTree(t *testing.T) {
 		t.Fatalf("detail %T %+v", m.(*App).detail, h)
 	}
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"box-a / exec", "EXECUTION", "Overview"} {
+	for _, want := range []string{"Fleet > box-a > exec", "EXECUTION", "Overview"} {
 		if want == "Overview" {
 			if strings.Contains(fr, "[Overview]") {
 				t.Errorf("node detail shows the box tabs:\n%s", fr)
@@ -120,7 +120,7 @@ func TestNodeDetailDeltas(t *testing.T) {
 
 func TestNodeDetailBeacon(t *testing.T) {
 	fr := tuitest.Frame(nodeApp(t, nodeFake(), 120, 40, "beacon", readingBefore(), readingNow()))
-	for _, want := range []string{"box-a / beacon", "BEACON", "slot      9,876,543 (was 9,876,500)", "distance  0 (was 3)", "peers     72 (was 70)"} {
+	for _, want := range []string{"Fleet > box-a > beacon", "BEACON", "slot      9,876,543 (was 9,876,500)", "distance  0 (was 3)", "peers     72 (was 70)"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("no %q:\n%s", want, fr)
 		}

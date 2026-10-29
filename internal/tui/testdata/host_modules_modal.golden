@@ -1,5 +1,6 @@
- jumpgate  Fleet Jobs Signers Gateways Settings                      connecting
+ jumpgate  [Fleet] Jobs Signers Gateways VPN Vault Server Settings   connecting
  boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
+ Fleet › box › Overview
  MODULES for box (enter to turn on or off, esc to close)
 
  ▸ Message board  on · Accepting · 1,234 msgs · local only
@@ -20,5 +21,4 @@
 
 
 
-
- jobs n/a  ! alerts n/a | . drawer  ? help  : command  1-5 views  [ ] panels  e…
+ jobs n/a | [?] help

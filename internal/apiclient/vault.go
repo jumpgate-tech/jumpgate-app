@@ -28,7 +28,7 @@ func (c *Client) Unlock(ctx context.Context, passphrase []byte) (api.VaultView, 
 	base64.StdEncoding.Encode(body[n:], passphrase)
 	copy(body[len(body)-len(post):], post)
 	var v api.VaultView
-	err := c.Do(ctx, http.MethodPost, "/api/vault/unlock", rawJSON(body), &v)
+	err := c.Do(ctx, http.MethodPost, "/api/vault/unlock", RawJSON(body), &v)
 	return v, err
 }
 
@@ -43,7 +43,7 @@ func (c *Client) PutVaultSecret(ctx context.Context, name string, value []byte) 
 	n := copy(body, pre)
 	base64.StdEncoding.Encode(body[n:], value)
 	copy(body[len(body)-len(post):], post)
-	return c.Do(ctx, http.MethodPut, "/api/vault/secrets/"+url.PathEscape(name), rawJSON(body), nil)
+	return c.Do(ctx, http.MethodPut, "/api/vault/secrets/"+url.PathEscape(name), RawJSON(body), nil)
 }
 
 // SystemInitKey asks the jumpgate service to create its controller key
@@ -56,7 +56,7 @@ func (c *Client) SystemInitKey(ctx context.Context, req api.SystemInitKey) error
 		return err
 	}
 	defer clear(body)
-	return c.Do(ctx, http.MethodPost, "/api/system/init-key", rawJSON(body), nil)
+	return c.Do(ctx, http.MethodPost, "/api/system/init-key", RawJSON(body), nil)
 }
 
 // SystemSeal has the jumpgate service add a systemd-creds slot to its vault
@@ -71,7 +71,7 @@ func (c *Client) SystemSeal(ctx context.Context, passphrase []byte) ([]byte, err
 	base64.StdEncoding.Encode(body[n:], passphrase)
 	copy(body[len(body)-len(post):], post)
 	var v api.SystemSealed
-	if err := c.Do(ctx, http.MethodPost, "/api/system/seal", rawJSON(body), &v); err != nil {
+	if err := c.Do(ctx, http.MethodPost, "/api/system/seal", RawJSON(body), &v); err != nil {
 		clear(v.KEK)
 		return nil, err
 	}

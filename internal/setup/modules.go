@@ -284,8 +284,32 @@ func currentAccountStep() Step {
 			return f(ctx, e, &cp)
 		}
 	}
-	s.Run, s.Verify = withCurrent(s.Run), withCurrent(s.Verify)
+	run := withCurrent(s.Run)
+	s.Run = func(ctx context.Context, e executor.Executor, st *State) error {
+		if err := CheckModuleAccount(ctx, e); err != nil {
+			return err
+		}
+		return run(ctx, e, st)
+	}
+	s.Verify = withCurrent(s.Verify)
 	return s
+}
+
+// CheckModuleAccount stops a box module on a box whose node still runs as
+// the legacy account. Creating the current account beside it (and the
+// module's data under the current data root) would leave
+// node.migrate-names facing both accounts, which it refuses. It asks the box
+// itself: the server's copy of the node may not say which names it uses.
+func CheckModuleAccount(ctx context.Context, e executor.Executor) error {
+	legacy, cur := catalog.LegacyNames.User, catalog.CurrentNames.User
+	res, err := e.Run(ctx, fmt.Sprintf("if id -u %s >/dev/null 2>&1 && ! id -u %s >/dev/null 2>&1; then echo legacy; fi", legacy, cur), nil)
+	if err != nil {
+		return fmt.Errorf("account: checking for %s: %w", legacy, err)
+	}
+	if strings.TrimSpace(res.Stdout) == "legacy" {
+		return fmt.Errorf("account: this box's node still runs as %s; run the node.migrate-names job first, then turn the module on (a module runs as %s, and the rename cannot proceed once that account exists beside %s)", legacy, cur, legacy)
+	}
+	return nil
 }
 
 func (p *boxPlan) preflightStep() Step {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
+	"github.com/valve-tech/jumpgate/internal/executor"
 )
 
 func runWriteFiles(t *testing.T, steps []Step) *fakeExecutor {
@@ -53,5 +54,42 @@ func TestPlanBoxModuleStagesWatchNodeConfig(t *testing.T) {
 	}
 	if e := runWriteFiles(t, steps); ran(e, "'"+b.NodePath()+"'") {
 		t.Error("node.json staged without a node")
+	}
+}
+
+// A box module on a box whose node still runs as the legacy account would
+// create the current account beside it, and node.migrate-names refuses a box
+// with both. The account step asks the box and refuses before any useradd;
+// a box with no legacy account, or one already renamed, goes ahead.
+func TestBoxModuleRefusesALegacyAccountBox(t *testing.T) {
+	steps, err := PlanBoxModule(watchModule(t), nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var account Step
+	for _, s := range steps {
+		if s.ID == "account" {
+			account = s
+		}
+	}
+	if account.Run == nil {
+		t.Fatal("no account step")
+	}
+	legacy := boxTarget().script("! id -u jumpgate-node", executor.Result{Stdout: "legacy\n"})
+	err = account.Run(context.Background(), legacy, &State{})
+	if err == nil || !strings.Contains(err.Error(), "node.migrate-names") {
+		t.Fatalf("legacy box: %v, want a refusal naming node.migrate-names", err)
+	}
+	for _, c := range legacy.callLog() {
+		if strings.Contains(c, "useradd") {
+			t.Fatalf("legacy box: ran %q", c)
+		}
+	}
+	other := boxTarget()
+	if err := account.Run(context.Background(), other, &State{}); err != nil {
+		t.Fatalf("no legacy account: %v", err)
+	}
+	if !ran(other, "useradd", "jumpgate-node") {
+		t.Fatalf("no legacy account: useradd not run; ran %q", other.callLog())
 	}
 }

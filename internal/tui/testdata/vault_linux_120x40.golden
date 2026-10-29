@@ -1,0 +1,40 @@
+ jumpgate  server live                                                          ! 3 alerts | setup 3/6 | updated 5s ago
++- Boxes -----++- Synced ----++- Head lag --++- Peers -----++- Disk ------++- Gateways --------------++- Alerts -------+
+|1 up 1 down  ||~1/3 synced  ||max 2 blk    ||~51 exec     ||min 39% free ||n/a                      ||1 FAIL 2 warn   |
+|1 n/a of 3   ||1 sync 1 n/a ||2 n/a        ||~81 bcn 1 n/a||on box-a     ||n/a no request counts yet||box-b down 4m   |
++-------------++-------------++-------------++-------------++-------------++-------------------------++----------------+
++- Views ------------++= > Vault ======================================================================================+
+|  Fleet          [1]|| state      locked                                                                              |
+|  Jobs           [2]|| slots      passphrase, keystore                                                                |
+|  Signers        [3]|| plain      relay-token (not in the vault yet: m)                                               |
+|  Gateways       [4]|| idle lock  30 min                                                                              |
+|  VPN            [5]||                                                                                                |
+|> Vault          [6]|| [u] unlock   [l] lock   [t] idle lock minutes   [p] put relay-token or admin-token             |
+|  Server         [7]||                                                                                                |
+|  Settings       [8]|| VAULT COMMANDS (take over the terminal and ask for passphrases there)                          |
+|--------------------|| [I] create the vault   [m] move plain secrets in   [b] back up   [r] restore                   |
+|   fleet     3 boxes|| [a] add a recovery code (prints once)   [K] raise the KDF cost                                 |
+|>+ box-a      synced|| [s] seal with the TPM2   [S] seal with the host key (sudo)                                     |
+| + box-b     down 4m||                                                                                                |
+| + laptop*    local*||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
+|                    ||                                                                                                |
++--------------------++------------------------------------------------------------------------------------------------+
++- Activity -----------------------------------------------------------------------------------------------------------+
+| job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision                                  |
+| job  box-b      migrate-names  step 4/8     [########............]                                                   |
++----------------------------------------------------------------------------------------------------------------------+
+ [u] unlock  [l] lock  [t] idle lock minutes  [p] put relay-token or admin-token  [I] create the vault  [m] move plain ~

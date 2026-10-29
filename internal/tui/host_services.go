@@ -87,9 +87,10 @@ func (h *hostScreen) runShell(a *App, msg sshCmdMsg) tea.Cmd {
 		a.flash = "refusing the server's ssh command: " + sanitizeLine(err.Error())
 		return nil
 	}
-	name := "ssh"
-	if a.o.GOOS == "windows" {
-		name = "ssh.exe"
+	name := a.bins.ssh
+	if name == "" {
+		a.flash = "ssh: not found on PATH (relative PATH entries are skipped); set JUMPGATE_SSH to its absolute path"
+		return nil
 	}
 	id, gen := msg.id, msg.gen
 	cmd := a.o.Command(name, msg.c.Argv[1:]...)
@@ -110,6 +111,8 @@ func (h *hostScreen) servicesKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 		return h.serviceAction(a, svc, "stop"), true
 	case key.Matches(k, svcKeys.Restart):
 		return h.serviceAction(a, svc, "restart"), true
+	case key.Matches(k, boxKeys.Clear):
+		return h.clearService(a, svc), true
 	default:
 		return nil, false
 	}
@@ -132,9 +135,9 @@ func (h *hostScreen) viewServices(a *App, w int) string {
 		}
 		mark, hint := " ", ""
 		if i == h.svcCursor {
-			mark, hint = a.gl.Sel, "   s start  t stop  r restart"
+			mark, hint = a.gl.Sel, "   s start  t stop  r restart  C clear"
 		}
-		out += fmt.Sprintf(" %s %-7s %s%s\n", mark, sanitizeLine(svc), state, hint)
+		out += a.selIf(i == h.svcCursor, " %s %-7s %s%s", mark, sanitizeLine(svc), state, hint) + "\n"
 	}
 	out += "\n S  open an SSH shell on this box (system ssh, confirmed host keys only)\n"
 	out += " x  every action for this box\n"

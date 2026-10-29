@@ -62,6 +62,7 @@ type layout struct {
 	Right         rect // the activity log, 20% of w (28-40) when w >= 140, else zero
 	Drawer        rect // activity rows; H=0 when minimized
 	Hints         rect // 1 row, last line (minimized: the status line)
+	Invite        rect // the invite's one line under the panes; H=0 when hidden
 	DrawerOpen    bool // resolved: auto -> h >= 34
 	DrawerCompact bool // open but h < 34: up to 4 activity lines, no box
 }

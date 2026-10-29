@@ -8,15 +8,15 @@
 |  Jobs           [2]||>box-a        gate       PulseCha~ synced    2      48/72   [####|...] 61%  warn                |
 |  Signers        [3]|| box-b        down 4m    Ethereum  syncing~  n/a    3/9~    n/a             n/a                 |
 |  Gateways       [4]|| laptop*      local*     ?         n/a       n/a    n/a     n/a             n/a                 |
-|  Settings       [5]||                                                                                                |
+|  VPN            [5]||                                                                                                |
+|  Vault          [6]||                                                                                                |
+|  Server         [7]||                                                                                                |
+|  Settings       [8]||                                                                                                |
 |--------------------||                                                                                                |
 |   fleet     3 boxes||                                                                                                |
 |>+ box-a      synced||                                                                                                |
 | + box-b     down 4m||                                                                                                |
 | + laptop*    local*||                                                                                                |
-|                    ||                                                                                                |
-|                    ||                                                                                                |
-|                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
@@ -37,4 +37,4 @@
 | job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision                                  |
 | job  box-b      migrate-names  step 4/8     [########............]                                                   |
 +----------------------------------------------------------------------------------------------------------------------+
- . drawer  ? help  : command  1-5 views  tab focus  ] log  q quit
+ up/dn select  [enter] open  [/] filter  [s] sort: host, sync, disk, lag  [c] choose columns (Settings)  [r] refresh no~
