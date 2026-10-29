@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -73,6 +74,26 @@ func TestContainersTab(t *testing.T) {
 		t.Fatalf("an endpoint's credentials are shown:\n%s", fr)
 	}
 	tuitest.Golden(t, "host_containers", fr)
+}
+
+// A service id with ESC and OSC sequences never reaches the screen raw.
+func TestContainerHostileIDIsSanitized(t *testing.T) {
+	f := boxFake()
+	bad := "dev\x1b[2J\x1b]52;c;aGk=\x07net"
+	c := sampleContainers()
+	c["services"].([]any)[0].(map[string]any)["id"] = bad
+	f.Routes["GET "+ctrPath] = c
+	f.Routes["POST "+ctrPath+"/"+url.PathEscape(bad)+"/start"] = map[string]any{"status": map[string]any{"State": bad}}
+	m := press(t, containersHost(t, f), "s")
+	fr := tuitest.Frame(m)
+	for _, s := range []string{"\x1b[2J", "\x1b]52", "\x07"} {
+		if strings.Contains(fr, s) {
+			t.Fatalf("frame carries %q:\n%q", s, fr)
+		}
+	}
+	if !strings.Contains(fr, "start dev") {
+		t.Fatalf("frame:\n%s", fr)
+	}
 }
 
 func TestContainerStartAtOnceStopTyped(t *testing.T) {

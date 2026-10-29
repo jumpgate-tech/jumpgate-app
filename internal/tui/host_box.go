@@ -178,7 +178,7 @@ func jsonLines(raw json.RawMessage) []string {
 // boxCall sends one request and shows the answer on tab under head.
 func (h *hostScreen) boxCall(a *App, tab, head, method, path string, in any, then func(*hostScreen, *App) tea.Cmd) tea.Cmd {
 	id, gen, ctx, be := h.id, h.gen, h.ctx, a.be
-	h.setResult(tab, boxResult{head: head + a.gl.Ellipsis})
+	h.setResult(tab, boxResult{head: sanitizeLine(head) + a.gl.Ellipsis})
 	return func() tea.Msg {
 		var v json.RawMessage
 		err := be.Do(ctx, method, path, in, &v)
@@ -458,13 +458,16 @@ func (h *hostScreen) viewResult(a *App, tab string) []string {
 	if !ok {
 		return nil
 	}
-	head := a.th.Title.Render(r.head)
+	// The sink: a head quotes server ids, so it is sanitized here whatever
+	// was stored.
+	safe := sanitizeLine(r.head)
+	head := a.th.Title.Render(safe)
 	if r.bad {
-		head = a.th.Bad.Render(r.head)
+		head = a.th.Bad.Render(safe)
 	}
 	out := []string{"", " " + head}
 	for _, l := range r.lines {
-		out = append(out, "   "+l)
+		out = append(out, "   "+sanitizeLine(l))
 	}
 	return out
 }
