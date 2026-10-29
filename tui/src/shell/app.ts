@@ -4,7 +4,8 @@ import { BoxRenderable, TextRenderable, type CliRenderer, type KeyEvent, type Mo
 import * as api from "../api/client.ts";
 import type { ApiError, Conn } from "../api/http.ts";
 import type { StreamOpts } from "../api/sse.ts";
-import type { DrawerPref, Fleet, JobsInbox, RunningJobs, UIPrefs, VaultView } from "../api/types.ts";
+import type { ControllerView, DrawerPref, Fleet, JobsInbox, RunningJobs, UIPrefs, VaultView } from "../api/types.ts";
+import { guideProgress, guideSteps, type GuideFacts } from "./guide.ts";
 import { maskText } from "../maskurl.ts";
 import { redact } from "../secret.ts";
 import { clip, sanitizeLine } from "../text.ts";
@@ -44,6 +45,7 @@ export interface AppState {
   drawer: DrawerPref;
   serverVersion?: string;
   vault?: VaultView;
+  controller?: ControllerView;
   fleet?: Fleet;
   fleetStale: boolean;
   inbox?: JobsInbox;
@@ -315,7 +317,33 @@ export class App {
 
   refreshVault(): Promise<void> {
     if (!this.state.conn) return Promise.resolve();
+    // The controller key's state follows the vault's (it lives there); a
+    // failure leaves it unknown, and the guide's progress stays hidden.
+    api.controller(this.state.conn).then((c) => this.set({ controller: c }), () => {});
     return api.vault(this.state.conn).then((v) => this.set({ vault: v }), (e) => this.fail("vault", e));
+  }
+
+  guideFacts(): GuideFacts {
+    const st = this.state;
+    return { connected: !!st.conn, vault: st.vault, controller: st.controller, fleet: st.fleet, platform: this.platform };
+  }
+
+  /** setupProgress is the guide's count, once the facts it needs are known. */
+  setupProgress(): { done: number; total: number } | undefined {
+    const st = this.state;
+    if (!st.conn || !st.vault || !st.controller || !st.fleet) return undefined;
+    return guideProgress(guideSteps(this.guideFacts()));
+  }
+
+  private guideShown = false;
+
+  /** maybeGuide opens Setup once, on the first full state, when setup is incomplete. */
+  private maybeGuide(): void {
+    if (this.guideShown || !this.screens.has("setup")) return;
+    const p = this.setupProgress();
+    if (!p) return;
+    this.guideShown = true;
+    if (p.done < p.total && this.current?.id === "fleet") this.go("setup");
   }
 
   refreshRunning(): void {
@@ -328,6 +356,7 @@ export class App {
 
   set(p: Partial<AppState>): void {
     Object.assign(this.state, p);
+    this.maybeGuide();
     if (p.fleet) {
       // New alerts reach the activity pane once each; one that clears may come back.
       // The first frame's alerts are the Alerts screen's list: they are counted, not repeated.
@@ -616,6 +645,7 @@ export class App {
         fleet: st.fleet,
         fleetStale: st.fleetStale,
         decisions: st.conn ? this.decisions() : undefined,
+        setup: this.setupProgress(),
       }),
     ]);
     this.lastLayout = l;
