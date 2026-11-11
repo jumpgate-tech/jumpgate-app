@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -110,7 +111,12 @@ func TestServerInstallsRunSelf(t *testing.T) {
 
 func exitErr(t *testing.T, code int) error {
 	t.Helper()
-	err := exec.Command("sh", "-c", "exit 3").Run()
+	// Windows has no sh; cmd sets the same exit status.
+	c := exec.Command("sh", "-c", "exit 3")
+	if runtime.GOOS == "windows" {
+		c = exec.Command("cmd", "/c", "exit 3")
+	}
+	err := c.Run()
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) || ee.ExitCode() != code {
 		t.Fatalf("no exit %d: %v", code, err)

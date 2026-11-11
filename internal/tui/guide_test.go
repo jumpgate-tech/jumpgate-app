@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -277,6 +278,9 @@ func TestInviteLineAndCopy(t *testing.T) {
 }
 
 func TestInviteFeedsTheLocalCopyProgram(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix modes: the fake pbcopy is found by its exec bit")
+	}
 	f := tuitest.NewFake()
 	f.ServerVersion = "v0.6.0"
 	f.PairingV = api.PairingInfo{Controller: "0x1234567890abcdef1234567890abcdef12345678", TransportKey: testKey}
