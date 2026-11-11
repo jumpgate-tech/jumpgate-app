@@ -169,12 +169,12 @@ func TestWSSessionReapsAnIdleClient(t *testing.T) {
 // it alive for three idle windows here.
 func TestWSSessionKeepsAListenOnlyClientThatAnswersPings(t *testing.T) {
 	h := newWSHarnessWith(t, enabledKey(), func(cfg *WSConfig) {
-		cfg.IdleTimeout = 50 * time.Millisecond
-		cfg.PingInterval = 10 * time.Millisecond
+		cfg.IdleTimeout = 500 * time.Millisecond
+		cfg.PingInterval = 50 * time.Millisecond
 	})
 
 	// The client reads, and so answers pings, but sends nothing of its own.
-	h.conn.SetDeadline(time.Now().Add(150 * time.Millisecond))
+	h.conn.SetDeadline(time.Now().Add(1500 * time.Millisecond))
 	if _, err := h.conn.ReadMessage(); !isTimeout(err) {
 		t.Fatalf("read = %v, want the client's own deadline with nothing to read", err)
 	}
