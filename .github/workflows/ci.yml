@@ -186,7 +186,15 @@ jobs:
           check-latest: true
       - name: the engine is in Windows-container mode
         run: |
-          $os = docker info --format '{{.OSType}}'
+          # The docker service can still be starting when the job begins
+          # (seen 2026-11-11 on an image that passed hours earlier), and then
+          # docker info answers nothing. Start it and give it two minutes.
+          Start-Service docker -ErrorAction SilentlyContinue
+          $os = ''
+          for ($i = 0; $i -lt 24 -and -not $os; $i++) {
+            $os = docker info --format '{{.OSType}}' 2>$null
+            if (-not $os) { Start-Sleep -Seconds 5 }
+          }
           if ($os -ne 'windows') { throw "expected a Windows-container engine on this runner, got '$os'; the runner image changed, so revisit this job" }
       - name: the plan refuses with the hint
         env:
