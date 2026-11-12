@@ -21,7 +21,7 @@ In a terminal, bare `jumpgate` opens the terminal UI.
 
 ## A Linux server
 
-To run the controller as a service on a Linux server, install the `jumpgate` deb or rpm from the release page, or from the apt and dnf repository at `pkg.jumpgate.app`. The package puts `jumpgate.service` in place and creates its users; it never turns the service on. The `install.sh` file on the release page, run as root with `--controller`, does the same for a release binary when there is no package manager. Then finish with the steps in [Getting started](getting-started.md).
+To run the controller as a service on a Linux server, install the `jumpgate` deb or rpm from the release page. The package puts `jumpgate.service` in place and creates its users; it never turns the service on. The `install.sh` file on the release page, run as root with `--controller`, does the same for a release binary when there is no package manager. Then finish with the steps in [Getting started](getting-started.md).
 
 ## The downloads are not code-signed yet
 

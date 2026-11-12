@@ -6,7 +6,7 @@ Download the new release and replace the app or the binary. The background serve
 
 If the app finds a server already running with different options, it prints which options are not in effect. Run `jumpgate stop` and launch again to apply them.
 
-On a Linux server where a package installed the service, upgrade with `apt upgrade jumpgate` or `dnf upgrade jumpgate`. The package does not restart a running service, because a restarted service comes back locked and stops every box it drives until someone unlocks it; a service whose vault key is sealed (see [The vault](vault.md)) is the exception and restarts onto the new binary. Otherwise restart it yourself and unlock it.
+On a Linux server where a package installed the service, upgrade by installing the newer deb or rpm from the release page (`sudo apt install ./jumpgate_<version>_<arch>.deb` or `sudo dnf install ./jumpgate_<version>_<arch>.rpm`). The package does not restart a running service, because a restarted service comes back locked and stops every box it drives until someone unlocks it; a service whose vault key is sealed (see [The vault](vault.md)) is the exception and restarts onto the new binary. Otherwise restart it yourself and unlock it.
 
 ## The gate on a box
 
