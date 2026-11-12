@@ -51,6 +51,12 @@ func TestEveryScreenIsASCIIUnderASCIIGlyphs(t *testing.T) {
 		"help": func(t *testing.T) tea.Model {
 			return press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), "2", "?")
 		},
+		"guide": func(t *testing.T) tea.Model {
+			return press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), "?", "F")
+		},
+		"guide page": func(t *testing.T) tea.Model {
+			return press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), "?", "F", "j", "j", "enter")
+		},
 		"palette": func(t *testing.T) tea.Model {
 			return typed(t, press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "ascii"), ":"), "logs box-a")
 		},

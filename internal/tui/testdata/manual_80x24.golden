@@ -1,0 +1,24 @@
+ jumpgate  Fleet [Jobs] Signers Gateways VPN Vault Server Settings   connecting
+ boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
+ Guide  (enter to read, esc to close)
+
+  ▸ Install               :help install
+    Getting started       :help getting-started
+    The TUI               :help tui
+    Commands              :help commands
+    Modules               :help modules
+    Durable jobs          :help jobs
+    The vault             :help vault
+    Upgrading             :help upgrading
+    Security              :help security
+
+  ? or :keys lists the keys for the screen you are on
+
+
+
+
+
+
+
+
+ jobs n/a | [?] help

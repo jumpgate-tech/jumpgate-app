@@ -9,7 +9,7 @@ import (
 )
 
 // helpModal lists the global keys and the current screen's, generated from
-// the same bindings the screens match on.
+// the same bindings the screens match on. F opens the full guide from here.
 type helpModal struct {
 	lines  []string
 	offset int
@@ -65,7 +65,11 @@ func (a *App) offers(b key.Binding) bool {
 	return b.Enabled()
 }
 
-func (h *helpModal) key(_ *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
+func (h *helpModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
+	if key.Matches(k, manualKeys.Open) {
+		a.modal, _ = newManual("")
+		return false, nil
+	}
 	switch k.String() {
 	case "esc", "?", "q":
 		return true, nil
@@ -83,7 +87,8 @@ func (h *helpModal) key(_ *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 // worse than a cramped one. When even that is too tall the keys scroll, and
 // a last line says there is more.
 func (h *helpModal) view(a *App, w, height int) string {
-	head := a.th.Title.Render(" Help") + a.th.Dim.Render("  (esc to close)")
+	const close = "  (F for the full guide, esc to close)"
+	head := a.th.Title.Render(" Help") + a.th.Dim.Render(close)
 	lines := h.lines
 	if len(lines)+2 > height {
 		lines = lines[:0:0]
@@ -94,7 +99,7 @@ func (h *helpModal) view(a *App, w, height int) string {
 		}
 		// Still too tall: the first heading shares the title's line.
 		if len(lines)+1 > height && len(lines) > 0 && lines[0] == "keys everywhere" {
-			head = a.th.Title.Render(" Help") + ": keys everywhere" + a.th.Dim.Render("  (esc to close)")
+			head = a.th.Title.Render(" Help") + ": keys everywhere" + a.th.Dim.Render(close)
 			lines = lines[1:]
 		}
 	} else {

@@ -42,6 +42,7 @@ func (t Theme) state(s api.SyncState) lipgloss.Style {
 // fonts lack block elements (spec D8).
 type Glyphs struct {
 	Flag, Full, Empty, Tick, Ellipsis, Sel, Sep, Dash string
+	Bullet                                            string // a list item in the guide
 	UpDown                                            string // the scroll keys in a footer
 	Info, OK, Warn, Fail                              string // activity-log severity marks
 	Open, Closed                                      string // an expanded / collapsed tree node
@@ -51,8 +52,8 @@ type Glyphs struct {
 }
 
 var (
-	unicodeGlyphs = Glyphs{Flag: "⚑", Full: "█", Empty: "░", Tick: "│", Ellipsis: "…", Sel: "▸", Sep: "·", Dash: "–", UpDown: "↑↓", Info: "·", OK: "✓", Warn: "▲", Fail: "✗", Open: "▾", Closed: "▹", Mask: "•", Spark: strings.Split("▁▂▃▄▅▆▇█", "")}
-	asciiGlyphs   = Glyphs{Flag: "!", Full: "#", Empty: ".", Tick: "|", Ellipsis: "~", Sel: ">", Sep: "|", Dash: "-", UpDown: "up/dn", Info: "-", OK: "+", Warn: "!", Fail: "x", Open: "-", Closed: "+", Mask: "*", Spark: []string{"_", ".", "-", "=", "#"}, ASCII: true}
+	unicodeGlyphs = Glyphs{Flag: "⚑", Full: "█", Empty: "░", Tick: "│", Ellipsis: "…", Sel: "▸", Sep: "·", Dash: "–", Bullet: "•", UpDown: "↑↓", Info: "·", OK: "✓", Warn: "▲", Fail: "✗", Open: "▾", Closed: "▹", Mask: "•", Spark: strings.Split("▁▂▃▄▅▆▇█", "")}
+	asciiGlyphs   = Glyphs{Flag: "!", Full: "#", Empty: ".", Tick: "|", Ellipsis: "~", Sel: ">", Sep: "|", Dash: "-", Bullet: "*", UpDown: "up/dn", Info: "-", OK: "+", Warn: "!", Fail: "x", Open: "-", Closed: "+", Mask: "*", Spark: []string{"_", ".", "-", "=", "#"}, ASCII: true}
 )
 
 // DetectGlyphs picks the glyph set: the preference when it names one, else
