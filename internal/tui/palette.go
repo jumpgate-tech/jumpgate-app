@@ -7,6 +7,8 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/valve-tech/jumpgate/internal/catalog"
 )
@@ -35,7 +37,12 @@ var paletteScreens = map[string]screenID{
 	"fleet": scrFleet, "signers": scrSigners, "gateways": scrGateways, "vpn": scrVPN, "jobs": scrJobs, "vault": scrVault, "server": scrServer, "settings": scrSettings,
 }
 
-const paletteHelp = "fleet hosts signers gateways vpn jobs vault server settings | host NAME | logs NAME | measure NAME | ssh NAME | start|stop|restart exec|beacon NAME | remove NAME | migrate-names NAME | add | help | quit"
+// paletteCommands is what run takes, as the palette lists it (see Commands):
+// NAME is a box, TOPIC a guide topic, a|b one of the words, [x] optional.
+var paletteCommands = []string{"fleet", "hosts", "signers", "gateways", "vpn", "jobs", "vault", "server", "settings", "host NAME", "logs NAME",
+	"measure NAME", "ssh NAME", "start|stop|restart exec|beacon NAME", "remove NAME", "migrate-names NAME", "add", "help [TOPIC]", "keys", "quit"}
+
+var paletteHelp = strings.Join(paletteCommands, " | ")
 
 func (m *paletteModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch k.String() {
@@ -120,8 +127,19 @@ func (m *paletteModal) run(a *App) (stay bool, cmd tea.Cmd) {
 		return bad("no box named %q", truncate(sanitizeLine(f[1]), 32, a.gl.Ellipsis))
 	}
 	switch {
-	case f[0] == "help" && len(f) == 1:
+	case f[0] == "keys" && len(f) == 1: // what ? shows
 		a.modal = newHelp(a)
+		return false, nil
+	case f[0] == "help" && len(f) <= 2: // the guide: its topics, or one page
+		topic := ""
+		if len(f) == 2 {
+			topic = f[1]
+		}
+		g, ok := newManual(topic)
+		if !ok {
+			return bad("no guide topic %q; the topics are %s", truncate(sanitizeLine(topic), 32, a.gl.Ellipsis), manualTopicNames())
+		}
+		a.modal = g
 		return false, nil
 	case f[0] == "quit" && len(f) == 1:
 		a.cancel()
@@ -175,9 +193,15 @@ func (m *paletteModal) run(a *App) (stay bool, cmd tea.Cmd) {
 }
 
 func (m *paletteModal) view(a *App, w, _ int) string {
-	out := " " + a.th.Title.Render("COMMAND") + a.th.Dim.Render("  (enter to run, esc to close)") + "\n\n " + m.in.View() + "\n\n " + a.th.Dim.Render(paletteHelp)
+	out := " " + a.th.Title.Render("COMMAND") + a.th.Dim.Render("  (enter to run, esc to close)") + "\n\n " + m.in.View() + "\n\n" + a.th.Dim.Render(wrapIndent(paletteHelp, w, " "))
 	if m.err != "" {
-		out += "\n\n " + a.th.Warn.Render(m.err)
+		out += "\n\n" + a.th.Warn.Render(wrapIndent(m.err, w, " "))
 	}
 	return out
+}
+
+// wrapIndent wraps s at words to w cells, each line led by indent: the list
+// of commands is longer than a line, and a cut one would hide the last.
+func wrapIndent(s string, w int, indent string) string {
+	return indent + strings.ReplaceAll(ansi.Wrap(s, w-lipgloss.Width(indent)-1, ""), "\n", "\n"+indent)
 }
