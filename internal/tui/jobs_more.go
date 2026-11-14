@@ -211,7 +211,17 @@ func (m *gwModulesModal) view(a *App, w, _ int) string {
 		}
 		b.WriteString(truncate(fmt.Sprintf(" %d %s %s", i+1, mark, sanitizeLine(name)), w, a.gl.Ellipsis) + "\n")
 	}
-	return b.String() + "\n " + a.th.Dim.Render("a number turns it on or off, esc closes")
+	return b.String() + "\n " + a.th.Dim.Render("a number, or a click on a row, turns it on or off; [esc] closes")
+}
+
+// click on a module's row is its number key.
+func (m *gwModulesModal) click(a *App, row, _ int, _ bool) (done, handled bool, cmd tea.Cmd) {
+	i := row - 2 // the title and a blank come first
+	if i < 0 || i >= len(m.cat) || i > 8 {
+		return false, false, nil
+	}
+	done, cmd = m.key(a, tea.KeyPressMsg{Code: rune('1' + i), Text: string(rune('1' + i))})
+	return done, true, cmd
 }
 
 // gwModulesUpdate takes the modal's replies; ok is false for any other.

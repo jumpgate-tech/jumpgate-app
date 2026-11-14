@@ -11,7 +11,7 @@
  Compare it with the box's console:
    ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 
- Type yes to trust it, esc to stop:
+ Type yes to trust it, or [esc] to stop:
  >
 
 

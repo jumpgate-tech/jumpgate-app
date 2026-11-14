@@ -64,17 +64,28 @@ type gwKeyMsg struct {
 // gatewaysScreen lists the eRPC gateways (spec D28) and runs every gateway
 // call (inventory H): each answer shows under the list as key: value lines.
 type gatewaysScreen struct {
-	gws    []api.GatewaySummary
-	has    bool
-	err    error
-	cursor int // the selected gateway
-	offset int // clamped against the content when drawn
-	res    resultPane
+	lineItem []int // the gateway each line of the list belongs to (-1: none), for clicks
+	gws      []api.GatewaySummary
+	has      bool
+	err      error
+	cursor   int // the selected gateway
+	offset   int // clamped against the content when drawn
+	res      resultPane
 }
 
 func (s *gatewaysScreen) capturing() bool { return false }
 func (s *gatewaysScreen) keys() []key.Binding {
 	return append([]key.Binding{navKeys.Up, navKeys.Down, navKeys.Enter, gwModKey}, keyList(gatewayKeys)...)
+}
+
+// itemAtRow: the gateway on a drawn row; the head, a gateway's detail lines
+// and the blank lines between are not gateways.
+func (s *gatewaysScreen) itemAtRow(row int) (item, cursor int, ok bool) {
+	line := s.offset + row - 2 // the head and a blank come first
+	if line < 0 || line >= len(s.lineItem) || s.lineItem[line] < 0 {
+		return 0, s.cursor, false
+	}
+	return s.lineItem[line], s.cursor, true
 }
 
 func (s *gatewaysScreen) selected() (api.GatewaySummary, bool) {
@@ -291,6 +302,7 @@ func (s *gatewaysScreen) view(a *App, w, h int) string {
 		return head + "\n\n " + a.th.Dim.Render("no gateways") + strings.Join(res, "\n")
 	}
 	var lines []string
+	s.lineItem = s.lineItem[:0]
 	for i, g := range s.gws {
 		gl := gatewayLines(a, g)
 		if i == s.cursor {
@@ -299,6 +311,10 @@ func (s *gatewaysScreen) view(a *App, w, h int) string {
 		}
 		lines = append(lines, gl...)
 		lines = append(lines, "")
+		for range gl {
+			s.lineItem = append(s.lineItem, i)
+		}
+		s.lineItem = append(s.lineItem, -1)
 	}
 	listH := h - 2
 	if len(res) > 0 {

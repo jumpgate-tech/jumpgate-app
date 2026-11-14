@@ -113,8 +113,9 @@ type hostScreen struct {
 	svcCursor int
 	svcLast   string
 
-	shownTab string // the tab view drew last, for keys()
-	scroll   int    // first visible line of the Endpoints or Security tab; clamped when drawn
+	shownTab string      // the tab view drew last, for keys()
+	ctrRows  map[int]int // the container on each line of the Docker tab, for clicks
+	scroll   int         // first visible line of the Endpoints or Security tab; clamped when drawn
 
 	modCat       []api.CatalogModule
 	modTarget    *api.TargetView // this box's record: its wire and box modules
@@ -431,6 +432,36 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 	}
 	return h.tabUpdate(a, msg)
+}
+
+// clickTab: a click on a tab's name in the tab row (the second line) opens
+// that tab, as left and right do.
+func (h *hostScreen) clickTab(a *App, line string, row, col int) (tea.Cmd, bool) {
+	if h.node != "" || row != 1 {
+		return nil, false
+	}
+	w := strings.Trim(wordAt(line, col), "[]")
+	for i, t := range a.prefs.HostTabs {
+		title, ok := tabTitles[t]
+		if !ok {
+			title = sanitizeLine(t)
+		}
+		if w == title {
+			h.node, h.tab, h.scroll = "", i, 0
+			return h.load(a, h.tabName(a)), true
+		}
+	}
+	return nil, false
+}
+
+// itemAtRow: on the Docker tab, the container on a drawn row (the head and
+// tab lines come first, then the tab's own lines).
+func (h *hostScreen) itemAtRow(row int) (item, cursor int, ok bool) {
+	if h.node != "" || h.shownTab != "containers" {
+		return 0, 0, false
+	}
+	i, ok := h.ctrRows[row-2]
+	return i, h.ctrCursor, ok
 }
 
 // tabKey gives the visible tab first refusal of a key.

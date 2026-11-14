@@ -122,7 +122,7 @@ func (m *unlockModal) view(a *App, _, _ int) string {
 	if m.custodyLine != "" {
 		s += "\n\n " + sanitizeLine(m.custodyLine)
 	}
-	return s + "\n\n " + a.th.Dim.Render("enter to unlock, esc to cancel")
+	return s + "\n\n " + a.th.Dim.Render("enter to unlock, [esc] cancel")
 }
 
 // unlockDone handles the server's answer: a success closes the modal, a

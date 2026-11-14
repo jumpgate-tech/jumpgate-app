@@ -286,7 +286,7 @@ func (s *hostsScreen) view(a *App, w, h int) string {
 		lines = append(lines, a.selIf(i == s.cursor, "%s %-14s %-38s %s", mark, truncate(id, 14, a.gl.Ellipsis), truncate(addr, 38, a.gl.Ellipsis), pairing))
 	}
 	if len(s.ts) == 0 {
-		lines = append(lines, " "+a.th.Dim.Render("no boxes yet: press a to add one"))
+		lines = append(lines, " "+"no boxes yet: [a] add one")
 	}
 	for len(lines) < h-1 {
 		lines = append(lines, "")

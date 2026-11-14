@@ -181,6 +181,15 @@ func (m *listModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
+// click on a row selects it; the action itself asks for a typed name.
+func (m *listModal) click(a *App, row, _ int, _ bool) (done, handled bool, cmd tea.Cmd) {
+	if row < 2 || row-2 >= len(m.rows) {
+		return false, false, nil
+	}
+	m.cur = row - 2
+	return false, true, nil
+}
+
 func (m *listModal) view(a *App, w, _ int) string {
 	lines := []string{a.th.Title.Render(" " + sanitizeLine(m.title)), ""} // the sink: rows quote server names
 	if len(m.rows) == 0 {

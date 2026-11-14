@@ -61,11 +61,28 @@ type settingsScreen struct {
 	settingsHas    bool
 	keyInput       textinput.Model
 	editingKey     bool
+	lineItem       []int // the item on each line of the list (-1: none), for clicks
 
 	visit
 }
 
 func (s *settingsScreen) capturing() bool { return s.editingKey }
+
+// clickRow: a click on a row of settings selects it and does what space does
+// (a checkbox toggles, a choice cycles), as a click on a checkbox should.
+func (s *settingsScreen) clickRow(a *App, row int) (tea.Cmd, bool) {
+	line := s.offset + row
+	if s.editingKey || line < 0 || line >= len(s.lineItem) || s.lineItem[line] < 0 {
+		return nil, false
+	}
+	items := s.items(a)
+	i := s.lineItem[line]
+	if i >= len(items) {
+		return nil, false
+	}
+	s.cursor = i
+	return items[i].act(a, s), true
+}
 
 func (s *settingsScreen) keys() []key.Binding {
 	return []key.Binding{navKeys.Up, navKeys.Down,
@@ -482,15 +499,20 @@ func (s *settingsScreen) view(a *App, w, h int) string {
 	items := s.items(a)
 	s.cursor = min(s.cursor, len(items)-1)
 	var lines []string
+	s.lineItem = s.lineItem[:0]
+	add := func(l string, item int) {
+		lines = append(lines, l)
+		s.lineItem = append(s.lineItem, item)
+	}
 	cursorLine := 0
 	section := ""
 	for i, it := range items {
 		if it.section != section {
 			section = it.section
 			if len(lines) > 0 {
-				lines = append(lines, "")
+				add("", -1)
 			}
-			lines = append(lines, " "+a.th.Title.Render(section))
+			add(" "+a.th.Title.Render(section), -1)
 		}
 		mark := " "
 		if i == s.cursor {
@@ -498,20 +520,21 @@ func (s *settingsScreen) view(a *App, w, h int) string {
 		}
 		v := it.value(a)
 		if strings.HasPrefix(v, "[") {
-			lines = append(lines, a.selIf(i == s.cursor, "%s %s %s", mark, v, it.label))
+			add(a.selIf(i == s.cursor, "%s %s %s", mark, v, it.label), i)
 		} else {
-			lines = append(lines, a.selIf(i == s.cursor, "%s %-48s %s", mark, it.label, v))
+			add(a.selIf(i == s.cursor, "%s %-48s %s", mark, it.label, v), i)
 		}
 		if i == s.cursor && it.label == "AI provider" {
 			if d := s.disclosure(); d != "" {
-				lines = append(lines, "    "+a.th.Dim.Render(d))
+				add("    "+a.th.Dim.Render(d), -1)
 				cursorLine = len(lines) - 1 // keep the disclosure in view with its item
 			}
 		}
 		if i == s.cursor && it.label == "Idle lock" {
 			// Two lines, so it fits an 80-column terminal.
 			first, rest, _ := strings.Cut(idleLockHelp, " Plans")
-			lines = append(lines, "    "+a.th.Dim.Render(first), "    "+a.th.Dim.Render("Plans"+rest))
+			add("    "+a.th.Dim.Render(first), -1)
+			add("    "+a.th.Dim.Render("Plans"+rest), -1)
 			cursorLine = len(lines) - 1
 		}
 	}
@@ -524,7 +547,7 @@ func (s *settingsScreen) view(a *App, w, h int) string {
 	}
 	end := min(s.offset+room, len(lines))
 	out := strings.Join(lines[s.offset:end], "\n")
-	foot := " " + a.gl.UpDown + " move  space toggle  enter change  (saved at once)"
+	foot := " " + a.gl.UpDown + " move  [space] toggle  [enter] change  (saved at once; or click a row)"
 	if s.editingKey {
 		foot = " " + s.keyInput.View() + "   enter save, esc cancel"
 	}

@@ -187,8 +187,27 @@ func TestClickNeverConfirms(t *testing.T) {
 			*now = now.Add(time.Second)
 		}
 	}
-	if ran || m.(*App).modal == nil {
+	// Only the [esc] button does anything, and it only cancels.
+	if ran {
 		t.Fatalf("a click answered the confirmation (ran %v)", ran)
+	}
+	_ = m
+}
+
+// A click on a typed confirmation's [esc] cancels it; a click elsewhere in it
+// does nothing.
+func TestClickEscCancelsATypedConfirmationOnly(t *testing.T) {
+	a, now := mouseApp(t, tuitest.NewFake(), 120, 40)
+	ran := false
+	a.modal = newConfirm("Remove box-a", "this removes box-a", "box-a", func() tea.Cmd { ran = true; return nil })
+	*now = now.Add(time.Second)
+	x, y := at(t, a, "this removes")
+	if m := click(t, a, x, y); m.(*App).modal == nil || ran {
+		t.Fatal("a click on the text closed or confirmed it")
+	}
+	x, y = at(t, a, "[esc]")
+	if m := click(t, a, x+1, y); m.(*App).modal != nil || ran {
+		t.Fatalf("clicking [esc]: modal %T ran %v", m.(*App).modal, ran)
 	}
 }
 

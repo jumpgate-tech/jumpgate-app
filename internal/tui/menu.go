@@ -147,7 +147,7 @@ func (m *menuModal) view(a *App, w, h int) string {
 }
 
 // click runs the entry on the row clicked.
-func (m *menuModal) click(a *App, row, _ int) (done, handled bool, cmd tea.Cmd) {
+func (m *menuModal) click(a *App, row, _ int, _ bool) (done, handled bool, cmd tea.Cmd) {
 	if row < menuFirstRow || m.filtering {
 		return false, false, nil
 	}

@@ -101,7 +101,7 @@ func (h *helpModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 // worse than a cramped one. When even that is too tall the keys scroll, and
 // a last line says there is more.
 func (h *helpModal) view(a *App, w, height int) string {
-	const close = "  (F for the full guide, esc to close)"
+	const close = "  ([F] the full guide  [esc] close)"
 	head := a.th.Title.Render(" Help") + a.th.Dim.Render(close)
 	lines := h.lines
 	if len(lines)+2 > height {

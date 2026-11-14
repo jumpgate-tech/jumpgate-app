@@ -500,7 +500,7 @@ func (m *explainModal) view(a *App, w, _ int) string {
 	para := func(s string) string {
 		return " " + strings.ReplaceAll(wrap.Render(s), "\n", "\n ") + "\n"
 	}
-	out := " " + a.th.Title.Render("EXPLAIN") + a.th.Dim.Render("  (esc to close)") + "\n\n"
+	out := " " + a.th.Title.Render("EXPLAIN") + a.th.Dim.Render("  ([esc] close)") + "\n\n"
 	switch m.state {
 	case explainAsking, explainSending:
 		n := len(m.lines)

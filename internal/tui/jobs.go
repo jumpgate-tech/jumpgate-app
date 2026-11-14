@@ -58,10 +58,18 @@ type jobsScreen struct {
 	outConn apiclient.ConnState
 	outStop context.CancelFunc
 	outGen  int
+	rows    map[int]int // the job on each drawn row, for clicks
 	visit
 }
 
 func (s *jobsScreen) capturing() bool { return false }
+
+// itemAtRow: the job on a drawn row. A selected job's detail lines and the
+// head are not jobs.
+func (s *jobsScreen) itemAtRow(row int) (item, cursor int, ok bool) {
+	i, ok := s.rows[row]
+	return i, s.cursor, ok
+}
 
 func (s *jobsScreen) keys() []key.Binding {
 	return []key.Binding{navKeys.Up, navKeys.Down, navKeys.Enter, jobKeys.Decide, jobKeys.Adopt, jobKeys.Reload, jobKeys.Start}
@@ -227,8 +235,9 @@ func (s *jobsScreen) adopt(a *App) tea.Cmd {
 // choiceModal lists a question's options by number; a number opens the typed
 // confirmation for that option.
 type choiceModal struct {
-	job    api.JobView
-	screen *jobsScreen
+	optRows map[int]int // the answer on each drawn row, for clicks
+	job     api.JobView
+	screen  *jobsScreen
 }
 
 func (m *choiceModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
@@ -258,19 +267,33 @@ func (m *choiceModal) view(a *App, w, h int) string {
 		b.WriteString(" " + truncate(line, w-2, a.gl.Ellipsis) + "\n")
 	}
 	b.WriteString("\n")
+	m.optRows = map[int]int{}
 	for i, o := range q.Options {
-		b.WriteString(fmt.Sprintf(" %d %s", i+1, sanitizeLine(o.Label)))
+		m.optRows[strings.Count(b.String(), "\n")] = i
+		b.WriteString(fmt.Sprintf(" [%d] %s", i+1, sanitizeLine(o.Label)))
 		if o.Detail != "" {
 			b.WriteString(a.th.Dim.Render(" " + a.gl.Sep + " " + sanitizeLine(o.Detail)))
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\n" + a.th.Dim.Render(" press a number, or esc"))
+	b.WriteString("\n" + a.th.Dim.Render(" press a number or click an answer; [esc] closes"))
 	return b.String()
+}
+
+// click on an answer is its number key: it opens the confirmation that asks
+// you to type the answer's name, which a click cannot answer.
+func (m *choiceModal) click(a *App, row, _ int, _ bool) (done, handled bool, cmd tea.Cmd) {
+	i, ok := m.optRows[row]
+	if !ok {
+		return false, false, nil
+	}
+	done, cmd = m.key(a, tea.KeyPressMsg{Code: rune('1' + i), Text: string(rune('1' + i))})
+	return done, true, cmd
 }
 
 func (s *jobsScreen) view(a *App, w, h int) string {
 	var b strings.Builder
+	s.rows = map[int]int{}
 	need := s.in.NeedsDecision()
 	head := " inbox" // the title says Jobs
 	if s.has {
@@ -299,6 +322,7 @@ func (s *jobsScreen) view(a *App, w, h int) string {
 		if j.State == "needs-decision" {
 			flag = a.th.Warn.Render(a.gl.Flag)
 		}
+		s.rows[strings.Count(b.String(), "\n")] = i
 		line := fmt.Sprintf("%s%s %-8s %-12s step %d/%d %s", mark, flag, truncate(sanitizeLine(j.Target), 8, a.gl.Ellipsis),
 			sanitizeLine(j.State), min(j.Step+1, len(j.Steps)), len(j.Steps), s.leaseWord(a, j))
 		line = truncate(line, w, a.gl.Ellipsis)

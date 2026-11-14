@@ -20,5 +20,5 @@
     asks before it runs that step again. It never reruns one on its own.
   • The node is the job's. While a job on a box has not finished, the box
     refuses service start, stop and restart, and the controller refuses node
- 22%  ↑↓ pgup/pgdn scroll  ←/→ topic  esc topics  q close
+ 22%  ↑↓ scroll  [space] page  [h] prev  [l] next  [esc] topics  [q] close
  jobs n/a | [?] more

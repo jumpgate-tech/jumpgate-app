@@ -221,7 +221,7 @@ func (s *signersScreen) view(a *App, w, h int) string {
 	case !s.ctlHas:
 		lines = append(lines, " "+a.th.Dim.Render("loading"+a.gl.Ellipsis))
 	case s.ctl.State == "missing":
-		lines = append(lines, " "+a.th.Warn.Render("no key yet")+": press K to create one (jumpgate keys init)")
+		lines = append(lines, " "+a.th.Warn.Render("no key yet")+": [K] create one (jumpgate keys init)")
 	default:
 		addr := sanitizeLine(s.ctl.Address)
 		if addr == "" {
@@ -259,7 +259,7 @@ func (s *signersScreen) view(a *App, w, h int) string {
 	lines = append(lines, "", " "+a.th.Title.Render("BOXES THIS KEY SIGNS FOR"))
 	boxes := s.paired()
 	if len(boxes) == 0 {
-		lines = append(lines, " "+a.th.Dim.Render("none paired yet (Hosts, p)"))
+		lines = append(lines, " "+a.th.Dim.Render("none paired yet: on Fleet, select a box and press [p]"))
 	}
 	for i, t := range boxes {
 		mark := " "
@@ -276,9 +276,9 @@ func (s *signersScreen) view(a *App, w, h int) string {
 	for len(lines) < h-1 {
 		lines = append(lines, "")
 	}
-	bar := " t test signing  K create a key  e export  "
+	bar := " [T] test signing  [K] create a key  [E] export  "
 	if a.o.Restart != nil {
-		bar += "R restart the server  "
+		bar += "[R] restart the server  "
 	}
-	return strings.Join(append(lines, a.th.Dim.Render(bar+"r reload")), "\n")
+	return strings.Join(append(lines, bar+"[r] reload"), "\n")
 }

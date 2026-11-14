@@ -41,7 +41,7 @@ func TestManualListsEveryTopic(t *testing.T) {
 // The ? key list says how to reach the guide.
 func TestHelpNamesTheManual(t *testing.T) {
 	m := press(t, newTestApp(t, tuitest.NewFake(), 80, 24, "unicode"), "?")
-	if fr := tuitest.Frame(m); !strings.Contains(fr, "F for the full guide") {
+	if fr := tuitest.Frame(m); !strings.Contains(fr, "[F] the full guide") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 }

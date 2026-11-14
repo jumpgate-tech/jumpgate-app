@@ -140,7 +140,7 @@ func TestRestartRefusalIsShown(t *testing.T) {
 
 func TestRestartIsHiddenWithoutAWayToDoIt(t *testing.T) {
 	a := signersApp(t, tuitest.NewFake())
-	if fr := tuitest.Frame(a); strings.Contains(fr, "R restart") {
+	if fr := tuitest.Frame(a); strings.Contains(fr, "[R] restart") {
 		t.Fatalf("R offered with no Restart:\n%s", fr)
 	}
 	for _, k := range a.screens[scrSigners].keys() {
@@ -149,7 +149,7 @@ func TestRestartIsHiddenWithoutAWayToDoIt(t *testing.T) {
 		}
 	}
 	a.o.Restart = func(context.Context) (Backend, error) { return nil, nil }
-	if fr := tuitest.Frame(a); !strings.Contains(fr, "R restart") {
+	if fr := tuitest.Frame(a); !strings.Contains(fr, "[R] restart") {
 		t.Fatalf("R not offered:\n%s", fr)
 	}
 }

@@ -431,7 +431,7 @@ func (g *guideModal) view(a *App, w, h int) string {
 }
 
 // click on a step goes there, as enter does.
-func (g *guideModal) click(a *App, row, _ int) (done, handled bool, cmd tea.Cmd) {
+func (g *guideModal) click(a *App, row, _ int, _ bool) (done, handled bool, cmd tea.Cmd) {
 	if row < 0 || row >= len(g.rowStep) || g.rowStep[row] < 0 {
 		return false, false, nil
 	}

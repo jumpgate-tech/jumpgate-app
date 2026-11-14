@@ -77,11 +77,11 @@ func (m *confirmModal) paste(_ *App, p tea.PasteMsg) tea.Cmd {
 func (m *confirmModal) view(a *App, w, _ int) string {
 	s := a.th.Bad.Render(" "+m.title) + "\n\n " + m.detail + "\n\n"
 	if m.refused != "" {
-		return s + " " + a.th.Warn.Render(m.refused) + "\n\n " + a.th.Dim.Render("esc to close")
+		return s + " " + a.th.Warn.Render(m.refused) + "\n\n " + a.th.Dim.Render("[esc] close")
 	}
 	prompt := m.prompt
 	if prompt == "" {
-		prompt = "Type %s to confirm, esc to cancel:"
+		prompt = "Type %s to confirm, or [esc] to cancel:"
 	}
 	s += fmt.Sprintf(" "+prompt+"\n ", a.th.Key.Render(m.want)) + m.in.View()
 	if m.miss != "" {

@@ -329,7 +329,7 @@ func (s *vpnScreen) view(a *App, w, h int) string {
 	if s.servers {
 		other = "clients"
 	}
-	head := truncate(a.th.Dim.Render(" v "+other+"  n new  u/d up/down  s status  D delete  ? every key"), w, a.gl.Ellipsis)
+	head := truncate(" [v] "+other+"  [n] new  [s] up  [t] down  [S] status  [D] delete  [x] more", w, a.gl.Ellipsis)
 	if !s.has {
 		return head + "\n\n " + a.th.Dim.Render("loading"+a.gl.Ellipsis)
 	}

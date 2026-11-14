@@ -153,7 +153,7 @@ func (a *App) click(m tea.MouseClickMsg) tea.Cmd {
 	}
 	l := a.layout()
 	if a.modal != nil {
-		return a.clickModal(m.X, m.Y)
+		return a.clickModal(m.X, m.Y, double)
 	}
 	switch {
 	case m.Y == 0:
@@ -162,6 +162,8 @@ func (a *App) click(m tea.MouseClickMsg) tea.Cmd {
 		return a.clickKPI(m.X)
 	case m.Y == a.h-1:
 		return a.clickLast(m.X, l)
+	case a.skew != "" && a.canRestart() && m.Y == l.Main.Y && in(m.X, m.Y, l.Main):
+		return a.press(tea.KeyPressMsg{Code: 'R', Text: "R"}) // the banner says "press R to restart"
 	case l.Flash.H > 0 && in(m.X, m.Y, l.Flash):
 		a.flash, a.flashErr = "", false // a click on an error dismisses it
 		return nil
@@ -202,14 +204,28 @@ func (a *App) click(m tea.MouseClickMsg) tea.Cmd {
 // line; handled says the click was on one of its rows, done that the modal
 // is finished.
 type modalClicker interface {
-	click(a *App, row, col int) (done, handled bool, cmd tea.Cmd)
+	click(a *App, row, col int, double bool) (done, handled bool, cmd tea.Cmd)
+}
+
+// typist is a modal that can say whether a text field has the keyboard now.
+// A modal with a field that is not always open (the modules list, which
+// opens its settings form) answers for the moment; any other pasteTaker is
+// always typing.
+type typist interface{ typing() bool }
+
+func isTyped(m modal) bool {
+	if t, ok := m.(typist); ok {
+		return t.typing()
+	}
+	_, ok := m.(pasteTaker)
+	return ok
 }
 
 // clickModal: a modal with a text field (the typed confirm, the passphrase)
 // takes no click but "[esc]", which only cancels, so a click can never confirm
 // or submit it. Other modals take a click on a row or a [k] button, once the
 // flush window has passed.
-func (a *App) clickModal(x, y int) tea.Cmd {
+func (a *App) clickModal(x, y int, double bool) tea.Cmd {
 	if a.flushing() {
 		return nil
 	}
@@ -218,9 +234,9 @@ func (a *App) clickModal(x, y int) tea.Cmd {
 		return nil
 	}
 	row, col := y-p.y, x-p.x
-	_, typed := a.modal.(pasteTaker)
+	typed := isTyped(a.modal)
 	if mc, ok := a.modal.(modalClicker); ok && !typed {
-		if done, handled, cmd := mc.click(a, row, col); handled {
+		if done, handled, cmd := mc.click(a, row, col, double); handled {
 			if done {
 				a.modal = nil
 			}
@@ -337,8 +353,27 @@ func (a *App) clickMain(x, y int, double bool) tea.Cmd {
 	if row < 0 || row >= len(p.lines) {
 		return nil
 	}
+	if st, ok := cur.(*settingsScreen); ok {
+		// A checkbox row reads "[x] NAME": its [x] is a mark, not a button.
+		if cmd, handled := st.clickRow(a, row); handled {
+			return cmd
+		}
+	}
 	if k, ok := buttonAt(p.lines[row], col); ok {
 		return a.press(k)
+	}
+	if hs, ok := cur.(*hostScreen); ok {
+		if cmd, ok := hs.clickTab(a, p.lines[row], row, col); ok {
+			return cmd
+		}
+	}
+	if ic, ok := cur.(itemClicker); ok {
+		if item, at, ok := ic.itemAtRow(row); ok {
+			return a.moveTo(cur, item, at, double)
+		}
+		if _, listed := ic.(*hostScreen); !listed {
+			return nil
+		}
 	}
 	if _, fleet := cur.(*fleetScreen); fleet && !cur.(*fleetScreen).hostMode {
 		return nil // the table's rows are clickRow's
@@ -361,9 +396,33 @@ func (a *App) clickMain(x, y int, double bool) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// itemClicker is a screen whose list has lines that are not items (a
+// selected row's detail, the blank between rows): it says which item a drawn
+// row belongs to, and which is selected now.
+type itemClicker interface {
+	itemAtRow(row int) (item, cursor int, ok bool)
+}
+
+// moveTo selects item (the cursor is at) by the arrow keys the screen
+// already answers; a double click opens it.
+func (a *App) moveTo(cur screen, item, at int, double bool) tea.Cmd {
+	step := tea.KeyPressMsg{Code: tea.KeyDown}
+	if item < at {
+		step = tea.KeyPressMsg{Code: tea.KeyUp}
+	}
+	var cmds []tea.Cmd
+	for i := 0; i < abs(item-at); i++ {
+		cmds = append(cmds, cur.update(a, step))
+	}
+	if double {
+		cmds = append(cmds, a.press(tea.KeyPressMsg{Code: tea.KeyEnter}))
+	}
+	return tea.Batch(cmds...)
+}
+
 // wheel scrolls the region under the pointer.
 func (a *App) wheel(m tea.MouseWheelMsg) tea.Cmd {
-	if !a.prefs.MouseOn() || a.modal != nil || a.w < minW || a.h < minH {
+	if !a.prefs.MouseOn() || a.w < minW || a.h < minH {
 		return nil
 	}
 	up := m.Button == tea.MouseWheelUp
@@ -373,6 +432,18 @@ func (a *App) wheel(m tea.MouseWheelMsg) tea.Cmd {
 	step := tea.KeyPressMsg{Code: tea.KeyDown}
 	if up {
 		step = tea.KeyPressMsg{Code: tea.KeyUp}
+	}
+	if a.modal != nil {
+		// The wheel moves the list or scrolls the page of a modal that is
+		// not taking text; the arrow keys do exactly that.
+		if isTyped(a.modal) || a.flushing() {
+			return nil
+		}
+		done, cmd := a.modal.key(a, step)
+		if done {
+			a.modal = nil
+		}
+		return cmd
 	}
 	l := a.layout()
 	switch {

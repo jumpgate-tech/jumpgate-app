@@ -466,7 +466,7 @@ func TestConfirmReadsAsTheBriefAndNamesTheJump(t *testing.T) {
 	m = typed(t, m, "ops@bastion")
 	m = press(t, m, "enter", "enter")
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"ADD A BOX", "bastion:22 is the jump host for box-c", "Type yes to trust it, esc to stop:", "Compare it with the box's console:"} {
+	for _, want := range []string{"ADD A BOX", "bastion:22 is the jump host for box-c", "Type yes to trust it, or [esc] to stop:", "Compare it with the box's console:"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("first hop lacks %q:\n%s", want, fr)
 		}

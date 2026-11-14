@@ -126,7 +126,7 @@ func TestModulesModalCopiesBootnodeIdentity(t *testing.T) {
 	f.ModulesV["box"] = api.ModulesView{Modules: []api.ModuleStatus{{ID: "el-bootnode", Active: true, Identity: enode, Note: note}}}
 	m := press(t, openTestHost(t, f, "unicode"), "m", "down")
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"enode://ab12ab12", note, "c to copy"} {
+	for _, want := range []string{"enode://ab12ab12", note, "[c] copy"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("modal lacks %q:\n%s", want, fr)
 		}

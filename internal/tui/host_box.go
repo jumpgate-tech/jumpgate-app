@@ -502,6 +502,7 @@ func (h *hostScreen) viewContainers(a *App, w, hgt int) string {
 		eng += " reachable"
 	}
 	lines := []string{"", " " + eng}
+	h.ctrRows = map[int]int{}
 	if d.Detail != "" || d.Hint != "" {
 		lines = append(lines, "   "+a.th.Warn.Render(strings.TrimSpace(sanitizeLine(d.Detail)+" "+sanitizeLine(d.Hint))))
 	}
@@ -520,6 +521,7 @@ func (h *hostScreen) viewContainers(a *App, w, hgt int) string {
 		if !c.Configured {
 			state += ", not configured"
 		}
+		h.ctrRows[len(lines)] = i
 		lines = append(lines, a.selIf(i == h.ctrCursor, " %s %-8s %s", mark, sanitizeLine(c.ID), state))
 		if c.Error != "" {
 			lines = append(lines, "   "+a.th.Bad.Render(sanitizeLine(c.Error)))

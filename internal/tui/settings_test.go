@@ -36,7 +36,7 @@ func pick(t *testing.T, a *App, label string) *App {
 
 func TestSettingsFrame(t *testing.T) {
 	fr := tuitest.Frame(settingsApp(t, tuitest.NewFake()))
-	for _, want := range []string{"FLEET COLUMNS", "[x] HOST", "[ ] JOBS", "space toggle"} {
+	for _, want := range []string{"FLEET COLUMNS", "[x] HOST", "[ ] JOBS", "[space] toggle"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("settings lack %q:\n%s", want, fr)
 		}

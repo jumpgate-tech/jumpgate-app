@@ -136,7 +136,8 @@ func (a *App) header(w int) string {
 	switch {
 	case narrow:
 		if a.conn == apiclient.Retrying {
-			left += server + "  "
+			// The error is cut short: the tabs matter more here.
+			left += truncate(server, 30, a.gl.Ellipsis) + "  "
 		}
 		tabs, tier := a.tabs(w - lipgloss.Width(left) - lipgloss.Width(right) - 2)
 		if tier == tabsNumbers {

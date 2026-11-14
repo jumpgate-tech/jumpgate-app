@@ -1,10 +1,10 @@
  jumpgate  [Fleet] Jobs Signers Gateways VPN Vault Server Settings   connecting
  connecting to the server… no readings yet
  Fleet › box › Overview
- MODULES for box (enter to turn on or off, esc to close)
+ MODULES for box ([enter] turn on or off  [esc] close)
 
  ▸ Message board  on · Accepting · 1,234 msgs · local only
-     reachable: local only (p to change)
+     reachable: local only ([p] change)
    EL bootnode    off
    Checkpointz    unavailable: Checkpointz needs a beacon on this box.
 

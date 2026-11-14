@@ -252,7 +252,7 @@ func TestTheChoiceListShowsTheQuestionAndEscSendsNothing(t *testing.T) {
 	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: in, Has: true, State: apiclient.Live}
 	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "2", "d").(*App)
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"box-a asks", "1 process still runs", "as valve-node-app", "1 Check again", "2 Stop them", "SIGTERM first", "3 Stop the migration here", "press a number, or esc"} {
+	for _, want := range []string{"box-a asks", "1 process still runs", "as valve-node-app", "[1] Check again", "[2] Stop them", "SIGTERM first", "[3] Stop the migration here", "press a number or click an answer"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("the choice list lacks %q:\n%s", want, fr)
 		}

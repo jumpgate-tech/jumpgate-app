@@ -206,7 +206,7 @@ func (m *paletteModal) run(a *App) (stay bool, cmd tea.Cmd) {
 }
 
 func (m *paletteModal) view(a *App, w, _ int) string {
-	out := " " + a.th.Title.Render("COMMAND") + a.th.Dim.Render("  (enter to run, tab to complete, esc to close)") + "\n\n " + m.in.View() + "\n\n" + a.th.Dim.Render(wrapIndent(paletteHelp, w, " "))
+	out := " " + a.th.Title.Render("COMMAND") + a.th.Dim.Render("  (enter to run, tab to complete, [esc] close)") + "\n\n " + m.in.View() + "\n\n" + a.th.Dim.Render(wrapIndent(paletteHelp, w, " "))
 	if m.hint != "" {
 		out += "\n\n" + a.th.Dim.Render(wrapIndent("matches: "+m.hint, w, " "))
 	}
