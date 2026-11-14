@@ -14,8 +14,8 @@ var hostsKeys = struct{ Add, Pair, Local, Remove, Upgrade, HostKeys, Orphans, Re
 	Add:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add a box")),
 	Pair:     key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pair or re-pair")),
 	Local:    key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "pair this machine")),
-	Remove:   key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "remove, typed confirmation")),
-	Upgrade:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "upgrade the gate")),
+	Remove:   key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "remove, typed confirmation")),
+	Upgrade:  key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "upgrade the gate")),
 	HostKeys: key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "host keys: list, forget")),
 	Orphans:  key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "leftover containers")),
 	Reload:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
@@ -291,6 +291,6 @@ func (s *hostsScreen) view(a *App, w, h int) string {
 	for len(lines) < h-1 {
 		lines = append(lines, "")
 	}
-	foot := " [a] add  [p] pair  [L] this machine  [D] remove  [u] upgrade  [H] host keys  [o] leftovers  [enter] open"
+	foot := " [a] add  [p] pair  [L] this machine  [H] host keys  [o] leftovers  [enter] open"
 	return strings.Join(append(lines, a.th.Dim.Render(foot)), "\n")
 }

@@ -21,19 +21,18 @@ import (
 // re-run this jumpgate in the foreground (runSelfPause) so passphrases and a
 // printed recovery code stay on the real terminal.
 
-var vaultKeys = struct{ Unlock, Lock, Idle, Put, Init, Migrate, Backup, Restore, Recovery, Rekdf, SealTPM, SealHost key.Binding }{
+var vaultKeys = struct{ Unlock, Lock, Idle, Put, Init, Migrate, Backup, Restore, Recovery, SealTPM, Reload key.Binding }{
 	Unlock:   key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unlock")),
-	Lock:     key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "lock")),
-	Idle:     key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "idle lock minutes")),
+	Lock:     key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "lock")),
+	Idle:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "idle lock minutes")),
 	Put:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "put relay-token or admin-token")),
 	Init:     key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "create the vault")),
 	Migrate:  key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "move plain secrets into the vault")),
-	Backup:   key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "back up to a file")),
-	Restore:  key.NewBinding(key.WithKeys("B"), key.WithHelp("B", "restore from a file, typed confirmation")),
-	Recovery: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add a recovery code")),
-	Rekdf:    key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "make the passphrase harder to crack (unlock gets slower)")),
-	SealTPM:  key.NewBinding(key.WithKeys("Z"), key.WithHelp("Z", "seal with the TPM2 so the service unlocks at boot (sudo)")),
-	SealHost: key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "seal with the host key so the service unlocks at boot (sudo)")),
+	Backup:   key.NewBinding(key.WithKeys("ctrl+w"), key.WithHelp("ctrl+w", "back up to a file")),
+	Restore:  key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "restore from a file, typed confirmation")),
+	Recovery: key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "add a recovery code")),
+	SealTPM:  key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "seal with the TPM2 so the service unlocks at boot (sudo)")),
+	Reload:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 }
 
 // vaultSecrets are the names PUT /api/vault/secrets takes.
@@ -85,12 +84,30 @@ func (s *vaultScreen) keys() []key.Binding {
 		if s.plain {
 			ks = append(ks, vaultKeys.Migrate)
 		}
-		ks = append(ks, vaultKeys.Lock, vaultKeys.Put, vaultKeys.Backup, vaultKeys.Recovery, vaultKeys.Idle, vaultKeys.Rekdf, vaultKeys.Restore)
+		ks = append(ks, vaultKeys.Lock, vaultKeys.Put, vaultKeys.Backup, vaultKeys.Recovery, vaultKeys.Idle, vaultKeys.Restore)
 		if s.linux {
-			ks = append(ks, vaultKeys.SealTPM, vaultKeys.SealHost)
+			ks = append(ks, vaultKeys.SealTPM)
 		}
 	}
+	if len(ks) > 0 {
+		ks = append(ks, vaultKeys.Reload)
+	}
 	return ks
+}
+
+// menuExtras are the two rare vault actions that have no key of their own:
+// they are in the x menu only.
+func (s *vaultScreen) menuExtras(a *App) []menuItem {
+	if s.state != "unlocked" {
+		return nil
+	}
+	items := []menuItem{{label: "make the passphrase harder to crack (unlock gets slower)", hint: "menu only",
+		run: func(a *App) tea.Cmd { return a.runSelfPause("vault", "rekdf") }}}
+	if s.linux {
+		items = append(items, menuItem{label: "seal with the host key so the service unlocks at boot (sudo)", hint: "menu only",
+			run: func(a *App) tea.Cmd { return a.runSelfPause("vault", "seal", "--allow-host-key") }})
+	}
+	return items
 }
 
 // syncState takes the vault's state from the App: keys() has no App.
@@ -194,12 +211,10 @@ func (s *vaultScreen) key(a *App, k tea.KeyPressMsg) tea.Cmd {
 		})
 	case key.Matches(k, vaultKeys.Recovery):
 		return a.runSelfPause("vault", "add-recovery")
-	case key.Matches(k, vaultKeys.Rekdf):
-		return a.runSelfPause("vault", "rekdf")
+	case key.Matches(k, vaultKeys.Reload):
+		return s.load(a)
 	case key.Matches(k, vaultKeys.SealTPM) && s.linux:
 		return a.runSelfPause("vault", "seal", "--tpm2")
-	case key.Matches(k, vaultKeys.SealHost) && s.linux:
-		return a.runSelfPause("vault", "seal", "--allow-host-key")
 	}
 	return nil
 }

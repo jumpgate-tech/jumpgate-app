@@ -220,7 +220,7 @@ func newHostKeysModal(id string, recs []api.RecordedHostKeys) *listModal {
 	}
 	var rs []row
 	m := &listModal{title: "Host keys recorded for " + sanitizeLine(id), empty: "no host key recorded for this box",
-		act: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "forget, typed confirmation"))}
+		act: key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "forget, typed confirmation"))}
 	for _, r := range recs {
 		for _, k := range r.Keys {
 			rs = append(rs, row{r.HostPort, k})
@@ -248,7 +248,7 @@ func newHostKeysModal(id string, recs []api.RecordedHostKeys) *listModal {
 
 func newOrphansModal(os []orphan) *listModal {
 	m := &listModal{title: "Leftover containers", empty: "none: no gateway merge left a container behind",
-		act: key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "dismiss, typed confirmation")),
+		act: key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "dismiss, typed confirmation")),
 		why: func(int) string { return "" }}
 	for _, o := range os {
 		m.rows = append(m.rows, sanitizeLine(o.ContainerName)+" on "+sanitizeLine(o.TargetID)+", merged into "+sanitizeLine(o.MergedInto))

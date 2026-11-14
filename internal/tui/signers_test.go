@@ -39,7 +39,7 @@ func TestSignersShowsTheKeyAndBoxes(t *testing.T) {
 func TestTestSigningShowsTheVerifiedAnswer(t *testing.T) {
 	f := tuitest.NewFake()
 	f.CheckV = api.AgentCheck{Agent: "0x1234567890abcdef1234567890abcdef12345678", Version: "v0.9.0", ChainID: 369, SetUp: true, ElapsedMs: 120}
-	m := press(t, signersApp(t, f), "T")
+	m := press(t, signersApp(t, f), "t")
 	if !f.Called("CheckAgent box-a") {
 		t.Fatalf("calls %v", f.Calls)
 	}
@@ -100,7 +100,7 @@ func TestCreateKeyRunsKeysInitInTheForeground(t *testing.T) {
 		got = append([]string{name}, args...)
 		return exec.Command("true")
 	}
-	press(t, a, "K")
+	press(t, a, "ctrl+n")
 	if !slices.Equal(got, []string{"/usr/local/bin/jumpgate", "keys", "init"}) {
 		t.Fatalf("ran %v", got)
 	}
@@ -111,7 +111,7 @@ func TestCreateKeyIsRefusedWhenAKeyIsRecorded(t *testing.T) {
 	a.o.Self = "/usr/local/bin/jumpgate"
 	ran := false
 	a.o.Command = func(string, ...string) *exec.Cmd { ran = true; return exec.Command("true") }
-	m := press(t, a, "K")
+	m := press(t, a, "ctrl+n")
 	if ran || !strings.Contains(tuitest.Frame(m), "never replaces") {
 		t.Fatalf("ran=%v frame:\n%s", ran, tuitest.Frame(m))
 	}
@@ -122,7 +122,7 @@ func TestRestartFromSigners(t *testing.T) {
 	a := signersApp(t, f)
 	next := tuitest.NewFake()
 	a.o.Restart = func(context.Context) (Backend, error) { return next, nil }
-	m := press(t, a, "R")
+	m := press(t, a, "ctrl+r")
 	if m.(*App).be != Backend(next) || !strings.Contains(tuitest.Frame(m), "the server restarted") {
 		t.Fatalf("frame:\n%s", tuitest.Frame(m))
 	}
@@ -133,23 +133,23 @@ func TestRestartRefusalIsShown(t *testing.T) {
 	a.o.Restart = func(context.Context) (Backend, error) {
 		return nil, errors.New("the server on this port is not this client's")
 	}
-	if fr := tuitest.Frame(press(t, a, "R")); !strings.Contains(fr, "restart failed") || !strings.Contains(fr, "not this client's") {
+	if fr := tuitest.Frame(press(t, a, "ctrl+r")); !strings.Contains(fr, "restart failed") || !strings.Contains(fr, "not this client's") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 }
 
 func TestRestartIsHiddenWithoutAWayToDoIt(t *testing.T) {
 	a := signersApp(t, tuitest.NewFake())
-	if fr := tuitest.Frame(a); strings.Contains(fr, "[R] restart") {
+	if fr := tuitest.Frame(a); strings.Contains(fr, "[ctrl+r] restart") {
 		t.Fatalf("R offered with no Restart:\n%s", fr)
 	}
 	for _, k := range a.screens[scrSigners].keys() {
-		if k.Help().Key == "R" {
+		if k.Help().Key == "ctrl+r" {
 			t.Fatal("R in the key list")
 		}
 	}
 	a.o.Restart = func(context.Context) (Backend, error) { return nil, nil }
-	if fr := tuitest.Frame(a); !strings.Contains(fr, "[R] restart") {
+	if fr := tuitest.Frame(a); !strings.Contains(fr, "[ctrl+r] restart") {
 		t.Fatalf("R not offered:\n%s", fr)
 	}
 }
@@ -167,12 +167,12 @@ func TestSignersSanitizesEverything(t *testing.T) {
 	}
 	a := press(t, plain(f), "3").(*App)
 	noEscapes(t, "controller", a)
-	m := press(t, a, "T")
+	m := press(t, a, "t")
 	noEscapes(t, "check", m)
 	f2 := tuitest.NewFake()
 	f2.TargetsV, f2.ControllerV = f.TargetsV, f.ControllerV
 	f2.Err = map[string]error{"CheckAgent": errors.New("boom" + evil), "Controller": errors.New("ctl" + evil)}
-	b := press(t, plain(f2), "3", "T")
+	b := press(t, plain(f2), "3", "t")
 	noEscapes(t, "errors", b)
 }
 
@@ -196,7 +196,7 @@ func TestStaleSignerRepliesAreDropped(t *testing.T) {
 	}
 	// Leave and come back: results from the first visit do not return.
 	gen := s.gen
-	m = press(t, m, "T")
+	m = press(t, m, "t")
 	m = press(t, m, "1", "3")
 	if s.gen == gen {
 		t.Fatal("leaving and returning did not start a new generation")
@@ -229,7 +229,7 @@ func TestCreateKeyIsRefusedWhenUnrecorded(t *testing.T) {
 	a.o.Self = "/usr/local/bin/jumpgate"
 	ran := false
 	a.o.Command = func(string, ...string) *exec.Cmd { ran = true; return exec.Command("true") }
-	m, cmds := tuitest.Send(a, tuitest.Key("K"))
+	m, cmds := tuitest.Send(a, tuitest.Key("ctrl+n"))
 	if ran || len(cmds) != 0 {
 		t.Fatalf("K did something in unrecorded: ran=%v cmds=%d", ran, len(cmds))
 	}
@@ -250,7 +250,7 @@ func TestRestartEndsTheOldContext(t *testing.T) {
 	a := signersApp(t, tuitest.NewFake())
 	old := a.ctx
 	a.o.Restart = func(context.Context) (Backend, error) { return tuitest.NewFake(), nil }
-	press(t, a, "R")
+	press(t, a, "ctrl+r")
 	if old.Err() == nil || a.ctx.Err() != nil {
 		t.Fatalf("old ctx err=%v, new ctx err=%v", old.Err(), a.ctx.Err())
 	}

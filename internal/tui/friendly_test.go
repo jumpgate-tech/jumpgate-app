@@ -23,7 +23,7 @@ func TestActionsMenuOnAScreen(t *testing.T) {
 		t.Fatalf("x opened %T", m.(*App).modal)
 	}
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"[a]", "add a box", "[r]", "refresh now", "[D]", "[esc] close"} {
+	for _, want := range []string{"[a]", "add a box", "[r]", "refresh now", "[ctrl+d]", "[esc] close"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("menu lacks %q:\n%s", want, fr)
 		}
@@ -44,7 +44,7 @@ func TestActionsMenuOnAScreen(t *testing.T) {
 		t.Fatalf("clicking refresh: modal %T calls %v", m.(*App).modal, f.Calls)
 	}
 	// The menu's entry for a destructive action still asks for the name.
-	m = press(t, m, "x", "D")
+	m = press(t, m, "x", "ctrl+d")
 	if _, ok := m.(*App).modal.(*confirmModal); !ok {
 		t.Fatalf("remove from the menu: %T", m.(*App).modal)
 	}
@@ -170,14 +170,14 @@ func TestHelpAlwaysListsGuideAndInvite(t *testing.T) {
 func TestVPNDownAsksFirst(t *testing.T) {
 	f := vpnFake()
 	f.Routes["POST /api/vpns/office/down"] = map[string]any{}
-	m := press(t, vpnApp(t, f), "t")
+	m := press(t, vpnApp(t, f), "ctrl+t")
 	if _, ok := m.(*App).modal.(*yesNoModal); !ok || f.Called("Do POST /api/vpns/office/down") {
 		t.Fatalf("down ran without a question: %T", m.(*App).modal)
 	}
 	if m = press(t, m, "n"); f.Called("Do POST /api/vpns/office/down") || m.(*App).modal != nil {
 		t.Fatalf("n did not cancel: %v", f.Calls)
 	}
-	m = press(t, m, "t", "y")
+	m = press(t, m, "ctrl+t", "y")
 	if !f.Called("Do POST /api/vpns/office/down") {
 		t.Fatalf("y did not take it down: %v", f.Calls)
 	}

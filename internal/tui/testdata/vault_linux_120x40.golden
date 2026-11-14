@@ -11,7 +11,7 @@
 |  VPN            [5]||                                                                                                |
 |> Vault          [6]|| The vault is locked.  [u] unlock                                                               |
 |  Server         [7]||                                                                                                |
-|  Settings       [8]|| [x] more: idle lock, restore a backup                                                          |
+|  Settings       [8]|| [x] more: idle lock, restore a backup, reload                                                  |
 |--------------------||                                                                                                |
 |   fleet     3 boxes||                                                                                                |
 |>+ box-a      synced||                                                                                                |
@@ -37,4 +37,4 @@
 | job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision                                  |
 | job  box-b      migrate-names  step 4/8     [########............]                                                   |
 +----------------------------------------------------------------------------------------------------------------------+
- [u] unlock  [T] idle lock  [B] restore a backup  [?] more
+ [u] unlock  [t] idle lock  [ctrl+r] restore a backup  [r] reload  [?] more

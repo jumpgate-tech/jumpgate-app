@@ -84,7 +84,7 @@ func TestContainerHostileIDIsSanitized(t *testing.T) {
 	c["services"].([]any)[0].(map[string]any)["id"] = bad
 	f.Routes["GET "+ctrPath] = c
 	f.Routes["POST "+ctrPath+"/"+url.PathEscape(bad)+"/start"] = map[string]any{"status": map[string]any{"State": bad}}
-	m := press(t, containersHost(t, f), "s")
+	m := press(t, containersHost(t, f), "ctrl+s")
 	fr := tuitest.Frame(m)
 	for _, s := range []string{"\x1b[2J", "\x1b]52", "\x07"} {
 		if strings.Contains(fr, s) {
@@ -100,11 +100,11 @@ func TestContainerStartAtOnceStopTyped(t *testing.T) {
 	f := boxFake()
 	f.Routes["POST "+ctrPath+"/devnet/start"] = map[string]any{"status": map[string]any{"State": "running"}}
 	f.Routes["POST "+ctrPath+"/devnet/stop"] = map[string]any{"status": map[string]any{"State": "stopped"}}
-	m := press(t, containersHost(t, f), "s")
+	m := press(t, containersHost(t, f), "ctrl+s")
 	if !f.Called("Do POST " + ctrPath + "/devnet/start") {
 		t.Fatalf("calls %v", f.Calls)
 	}
-	m = press(t, m, "t")
+	m = press(t, m, "ctrl+t")
 	m = typed(t, m, "devne")
 	m = press(t, m, "enter")
 	if f.Called("Do POST " + ctrPath + "/devnet/stop") {
@@ -121,7 +121,7 @@ func TestContainerStartAtOnceStopTyped(t *testing.T) {
 }
 
 func TestContainerWipeAndResetNeedTheName(t *testing.T) {
-	for _, c := range []struct{ key, route string }{{"W", "wipe"}, {"X", "reset"}} {
+	for _, c := range []struct{ key, route string }{{"ctrl+w", "wipe"}} {
 		f := boxFake()
 		f.Routes["POST "+ctrPath+"/devnet/"+c.route] = map[string]any{"report": map[string]any{"ContainerRemoved": true}}
 		m := press(t, containersHost(t, f), c.key)
@@ -152,7 +152,7 @@ func TestContainerProvisionFollowsTheRun(t *testing.T) {
 	f := boxFake()
 	f.Routes["POST "+ctrPath+"/devnet/provision"] = map[string]string{"status": "started"}
 	f.SetupV = []api.SetupEvent{{StepID: "pull", Line: "pulling image"}, {StepID: "pull", Done: true}, {Done: true}}
-	m := press(t, containersHost(t, f), "p")
+	m := press(t, containersHost(t, f), "ctrl+p")
 	if !f.Called("WatchSetup box") {
 		t.Fatalf("calls %v", f.Calls)
 	}
@@ -172,13 +172,13 @@ func TestContainerConfigShowAndSet(t *testing.T) {
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "devnet.BlockTime: 2s") {
 		t.Fatalf("config not shown:\n%s", fr)
 	}
-	m = press(t, m, "E")
+	m = press(t, m, "ctrl+e")
 	m = typed(t, m, "{nope")
 	m = press(t, m, "enter")
 	if f.Called("Do PUT") {
 		t.Fatal("bad JSON was sent")
 	}
-	m = press(t, m, "esc", "E")
+	m = press(t, m, "esc", "ctrl+e")
 	m = typed(t, m, `{"BlockTime":"5s"}`)
 	m = press(t, m, "enter")
 	if b, _ := json.Marshal(f.Sent["PUT "+ctrPath+"/devnet/config"]); string(b) != `{"BlockTime":"5s"}` {
@@ -192,7 +192,7 @@ func TestContainerConfigShowAndSet(t *testing.T) {
 func TestClearServiceStateNeedsTheName(t *testing.T) {
 	f := tuitest.NewFake()
 	f.Routes["POST /api/targets/box/services/exec/clear"] = map[string]any{"cleared": true}
-	m := press(t, servicesHost(t, f), "C")
+	m := press(t, servicesHost(t, f), "ctrl+d")
 	m = typed(t, m, "beacon")
 	m = press(t, m, "enter")
 	if f.Called("Do POST") {
@@ -222,14 +222,14 @@ func TestToolsTab(t *testing.T) {
 	f := boxFake()
 	a := toolsHost(t, f)
 	fr := tuitest.Frame(a)
-	for _, want := range []string{"[Tools]", "[c] run checks", "rpc  ok"} {
+	for _, want := range []string{"[Tools]", "[ctrl+e] run checks", "rpc  ok"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("tools lack %q:\n%s", want, fr)
 		}
 	}
 	tuitest.Golden(t, "host_tools", fr)
 	f.Routes["GET /api/targets/box/diagnostics"] = map[string]any{"checks": []any{map[string]any{"name": "disk", "ok": false}}}
-	if fr := tuitest.Frame(press(t, a, "c")); !strings.Contains(fr, "disk  FAIL") {
+	if fr := tuitest.Frame(press(t, a, "ctrl+e")); !strings.Contains(fr, "disk  FAIL") {
 		t.Fatalf("run not shown:\n%s", fr)
 	}
 }
@@ -276,7 +276,7 @@ func TestSetupWizardStreams(t *testing.T) {
 	f := boxFake()
 	f.Routes["POST /api/targets/box/setup"] = map[string]string{"status": "started"}
 	f.SetupV = []api.SetupEvent{{StepID: "install", Line: "installing reth"}, {StepID: "install", Err: "no space left"}}
-	m := press(t, toolsHost(t, f), "w")
+	m := press(t, toolsHost(t, f), "ctrl+w")
 	m = typed(t, m, `{"ChainID":369}`)
 	m = press(t, m, "enter")
 	if b, _ := json.Marshal(f.Sent["POST /api/targets/box/setup"]); string(b) != `{"ChainID":369}` {

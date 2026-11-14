@@ -6,7 +6,7 @@ Run `jumpgate` with no arguments in a terminal, or open the terminal launcher fo
 
 Keys `1` to `8` switch screens. At 100 columns or more a list of screens and boxes sits on the left; narrower, the screens are tabs in the header.
 
-- **1 Fleet:** every box at once: link, network, sync, lag, peers, disk and firewall. `a` adds a box, `p` pairs or re-pairs it and `D` removes it. `v` switches to a table of addresses and pairing, where `u` upgrades a box's gate. Settings chooses the columns. `enter` opens a box, with the tabs Overview, Storage, Endpoints, Security, Logs, Services, Docker and Tools; Settings can hide any of them.
+- **1 Fleet:** every box at once: link, network, sync, lag, peers, disk and firewall. `a` adds a box, `p` pairs or re-pairs it and `ctrl+d` removes it. `v` switches to a table of addresses and pairing, where `ctrl+u` upgrades a box's gate. Settings chooses the columns. `enter` opens a box, with the tabs Overview, Storage, Endpoints, Security, Logs, Services, Docker and Tools; Settings can hide any of them.
 - **2 Jobs:** the jobs inbox, with each job's steps, lease and question. The "needs decision" count in the status line at the bottom is the number of jobs waiting for you across the fleet.
 - **3 Signers:** this controller's key and the boxes it signs for. Test signing, create or export the key.
 - **4 Gateways:** your RPC gateways: create, start, stop, provision and delete them, read their analytics and traffic, manage customer keys, and turn their modules on and off.
@@ -17,7 +17,7 @@ Keys `1` to `8` switch screens. At 100 columns or more a list of screens and box
 
 ## Keys
 
-The same key means the same thing on every screen: `r` reloads, `s` starts, `t` stops, `e` restarts, `n` makes a new one, `D` deletes or removes, and `x` lists everything you can do with the selected item.
+Plain keys only look and move: they never change a box. `r` reloads whatever you are looking at, on every screen, like a browser's reload. Anything that changes a box, the server or the vault is a Ctrl chord, so a stray key cannot restart or stop a node: `ctrl+r` restarts, `ctrl+s` starts, `ctrl+t` stops, `ctrl+n` makes a new one, `ctrl+d` deletes or removes, `ctrl+e` edits or runs checks, `ctrl+p` provisions or measures, and `ctrl+w` wipes or writes a backup. The footer and `?` show each chord, such as `[ctrl+r] restart`, and each one is a button you can click. Stopping, restarting, wiping and removing still ask you to type the name. `x` lists everything you can do with the selected item, each with its key.
 
 - `1` to `8`: switch screens.
 - Arrows or `h` `j` `k` `l`: move, and switch tabs.
@@ -25,14 +25,14 @@ The same key means the same thing on every screen: `r` reloads, `s` starts, `t` 
 - `esc`: go back.
 - `/`: filter.
 - `tab`: move between the list, the main area and the activity log. `[` and `]` show or hide the tree and the activity log, and `.` opens or closes the activity drawer.
-- `x`: the actions menu for the selected item: a filterable list of what you can do now, each with its key. Press `/` to filter, `enter` or a click to run one.
-- `m`: on an open box, its modules. See [Modules](modules.md). On the Storage tab `r` measures the disk.
+- `x`: the actions menu for the selected item: a filterable list of what you can do now, each with its key. Press `/` to filter, `enter` or a click to run one. A few rare actions are in this menu only.
+- `m`: on an open box, its modules. See [Modules](modules.md). On the Storage tab `ctrl+p` measures the disk now and `r` reads the last measurement again.
 - `:`: take a command.
 - `?`: show every key for the screen you are on. Press `F` there for this guide.
 - `g`: the setup checklist. `i` shows the one line that sets up a box for this controller.
-- `U`: unlock the vault, offered while it is locked. `L` on the Vault screen locks it, and asks first when jobs are running.
+- `U`: unlock the vault, offered while it is locked. `ctrl+k` locks it, from any screen, and asks first when jobs are running.
 - `q`: quit.
-- `R`: restart the server, offered when its version differs from this jumpgate.
+- `ctrl+r`: restart the server, offered when its version differs from this jumpgate. On an open box it restarts the selected service instead.
 
 Stopping or restarting a service asks you to type its name. Every other change that cannot be undone asks the same.
 

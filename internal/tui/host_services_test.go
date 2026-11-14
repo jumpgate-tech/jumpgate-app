@@ -61,7 +61,7 @@ func noEscapes(t *testing.T, what string, m tea.Model) {
 func TestServicesFrame(t *testing.T) {
 	a := servicesHost(t, tuitest.NewFake())
 	fr := tuitest.Frame(a)
-	for _, want := range []string{"SERVICES", "exec", "beacon", "active", "[s] start", "[t] stop", "[e] restart", "S  open an SSH shell"} {
+	for _, want := range []string{"SERVICES", "exec", "beacon", "active", "[ctrl+s] start", "[ctrl+t] stop", "[ctrl+r] restart", "S  open an SSH shell"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("services lack %q:\n%s", want, fr)
 		}
@@ -72,7 +72,7 @@ func TestServicesFrame(t *testing.T) {
 func TestStartNeedsNoConfirmation(t *testing.T) {
 	f := tuitest.NewFake()
 	f.ServiceV = api.ServiceResult{Active: true}
-	m := press(t, servicesHost(t, f), "s")
+	m := press(t, servicesHost(t, f), "ctrl+s")
 	if !f.Called("ServiceAction box exec start") {
 		t.Fatalf("calls %v", f.Calls)
 	}
@@ -85,7 +85,7 @@ func TestStartNeedsNoConfirmation(t *testing.T) {
 // send nothing.
 func TestStopNeedsTheExactServiceName(t *testing.T) {
 	f := tuitest.NewFake()
-	m := press(t, servicesHost(t, f), "j", "t")
+	m := press(t, servicesHost(t, f), "j", "ctrl+t")
 	if _, ok := m.(*App).modal.(*confirmModal); !ok {
 		t.Fatal("stop did not ask for confirmation")
 	}
@@ -100,7 +100,7 @@ func TestStopNeedsTheExactServiceName(t *testing.T) {
 	if m.(*App).modal != nil || f.Called("ServiceAction") {
 		t.Fatal("esc must cancel without a request")
 	}
-	m = press(t, m, "t")
+	m = press(t, m, "ctrl+t")
 	m = typed(t, m, " beacon ")
 	press(t, m, "enter")
 	if !f.Called("ServiceAction box beacon stop") {
@@ -110,7 +110,7 @@ func TestStopNeedsTheExactServiceName(t *testing.T) {
 
 func TestRestartAlsoNeedsTheName(t *testing.T) {
 	f := tuitest.NewFake()
-	m := press(t, servicesHost(t, f), "e")
+	m := press(t, servicesHost(t, f), "ctrl+r")
 	press(t, m, "enter") // nothing typed
 	if f.Called("ServiceAction") {
 		t.Fatal("a bare enter restarted the service")
@@ -301,7 +301,7 @@ func TestServiceResultsAreSanitized(t *testing.T) {
 
 // Leaving the box closes the confirmation or menu that belongs to it.
 func TestLeavingTheHostClosesItsModal(t *testing.T) {
-	for _, keys := range [][]string{{"x"}, {"j", "t"}} {
+	for _, keys := range [][]string{{"x"}, {"j", "ctrl+t"}} {
 		f := tuitest.NewFake()
 		a := press(t, servicesHost(t, f), keys...).(*App)
 		if a.modal == nil {

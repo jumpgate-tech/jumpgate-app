@@ -12,9 +12,9 @@ import (
 var services = []string{"exec", "beacon"}
 
 var svcKeys = struct{ Start, Stop, Restart, Shell, Actions key.Binding }{
-	Start:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "start (Services)")),
-	Stop:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "stop, typed confirmation (Services)")),
-	Restart: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "restart, typed confirmation (Services)")),
+	Start:   key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "start (Services)")),
+	Stop:    key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "stop, typed confirmation (Services)")),
+	Restart: key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "restart, typed confirmation (Services)")),
 	Shell:   key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "SSH shell on this box")),
 	Actions: key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "actions menu for the selected item")),
 }
@@ -135,7 +135,7 @@ func (h *hostScreen) viewServices(a *App, w int) string {
 		}
 		mark, hint := " ", ""
 		if i == h.svcCursor {
-			mark, hint = a.gl.Sel, "   [s] start  [t] stop  [e] restart  [C] clear"
+			mark, hint = a.gl.Sel, "   [ctrl+s] start  [ctrl+t] stop  [ctrl+r] restart  [ctrl+d] clear"
 		}
 		out += a.selIf(i == h.svcCursor, " %s %-7s %s%s", mark, sanitizeLine(svc), state, hint) + "\n"
 	}

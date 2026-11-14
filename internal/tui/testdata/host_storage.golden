@@ -4,7 +4,7 @@
  link: not read yet
  Overview  [Storage]  Endpoints  Security  Logs  Services  Docker  Tools
 
- DISK  measured 4m ago · [r] measure now
+ DISK  measured 4m ago · [ctrl+p] measure now
  exec      1.20 TB
  beacon    100 GB
  free      2.00 TB
@@ -21,4 +21,4 @@
 
 
 
- jobs n/a | [r] measure  [u] disk usage  [m] modules  [S] ssh  [?] more
+ jobs n/a | [ctrl+p] measure  [u] disk usage  [r] reload  [m] modules  [?] more

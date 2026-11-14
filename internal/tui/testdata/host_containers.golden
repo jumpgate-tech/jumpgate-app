@@ -9,8 +9,8 @@
    offers stop restart recreate wipe
    JSON-RPC  http://***/
 
- [s] start  [t] stop  [e] restart  [p] provision  [v] config  [E] edit
- [W] wipe  [X] reset the devnet
+ [ctrl+s] start  [ctrl+t] stop  [ctrl+r] restart  [ctrl+p] provision
+ [v] config  [ctrl+e] edit  [ctrl+w] wipe
 
 
 
@@ -21,4 +21,4 @@
 
 
 
- jobs n/a | [s] start  [t] stop  [e] restart  [p] provision  [?] more
+ jobs n/a | [ctrl+s] start  [ctrl+t] stop  [ctrl+r] restart  [?] more

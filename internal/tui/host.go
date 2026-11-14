@@ -15,8 +15,9 @@ import (
 	"github.com/valve-tech/jumpgate/internal/apiclient"
 )
 
-var hostKeys = struct{ Measure, Modules key.Binding }{
-	Measure: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "measure disk now (Storage)")),
+var hostKeys = struct{ Measure, Modules, Reload key.Binding }{
+	Reload:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
+	Measure: key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "measure the disk now (Storage)")),
 	Modules: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "modules")),
 }
 
@@ -246,14 +247,15 @@ func (h *hostScreen) keys() []key.Binding {
 	case "logs":
 		ks = append(ks, navKeys.Filter, logKeys.Follow, logKeys.Level, logKeys.Explain)
 	case "containers":
-		ks = append(ks, svcKeys.Start, svcKeys.Stop, svcKeys.Restart, boxKeys.Provision, boxKeys.Config, boxKeys.Edit, boxKeys.Wipe, boxKeys.Reset)
+		ks = append(ks, svcKeys.Start, svcKeys.Stop, svcKeys.Restart, boxKeys.Provision, boxKeys.Config, boxKeys.Edit, boxKeys.Wipe)
 	case "tools":
 		ks = append(ks, boxKeys.Diag, boxKeys.Latest, boxKeys.Monitor, boxKeys.Intent, boxKeys.Wizard)
 	}
-	return append(ks, hostKeys.Modules, svcKeys.Shell, svcKeys.Actions, navKeys.Left, navKeys.Right, globalKeys.Back)
+	return append(ks, hostKeys.Reload, hostKeys.Modules, svcKeys.Shell, svcKeys.Actions, navKeys.Left, navKeys.Right, globalKeys.Back)
 }
 
 func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
+	h.shownTab = h.tabName(a) // keys() has no App: keep it current between frames
 	if cmd, ok := h.boxUpdate(a, msg); ok {
 		return cmd
 	}
@@ -412,6 +414,8 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		case key.Matches(msg, svcKeys.Actions):
 			a.modal = newActions(a, h)
 			return nil
+		case key.Matches(msg, hostKeys.Reload):
+			return h.reload(a)
 		case key.Matches(msg, hostKeys.Modules): // Storage took m first
 			a.modal = newModulesModal(a, h)
 			return nil
@@ -423,11 +427,13 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			h.node = ""
 			h.tab--
 			h.scroll = 0
+			h.shownTab = h.tabName(a)
 			return h.load(a, h.tabName(a))
 		case key.Matches(msg, navKeys.Right):
 			h.node = ""
 			h.tab++
 			h.scroll = 0
+			h.shownTab = h.tabName(a)
 			return h.load(a, h.tabName(a))
 		}
 	}
@@ -462,6 +468,19 @@ func (h *hostScreen) itemAtRow(row int) (item, cursor int, ok bool) {
 	}
 	i, ok := h.ctrRows[row-2]
 	return i, h.ctrCursor, ok
+}
+
+// reload is r: read the open tab again. The live tabs (the logs, the
+// services' state) are kept current by their streams, so it says so.
+func (h *hostScreen) reload(a *App) tea.Cmd {
+	tab := h.tabName(a)
+	switch tab {
+	case "logs", "services":
+		a.flash = "this tab is live: it updates by itself"
+		return nil
+	}
+	delete(h.loaded, tab)
+	return h.load(a, tab)
 }
 
 // tabKey gives the visible tab first refusal of a key.

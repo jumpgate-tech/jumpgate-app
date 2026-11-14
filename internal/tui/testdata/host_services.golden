@@ -5,7 +5,7 @@
  Overview  Storage  Endpoints  Security  Logs  [Services]  Docker  Tools
 
  SERVICES
- ▸ exec    active     [s] start  [t] stop  [e] restart  [C] clear
+ ▸ exec    active     [ctrl+s] start  [ctrl+t] stop  [ctrl+r] restart  [ctrl+d]…
    beacon  active
 
  S  open an SSH shell on this box (system ssh, confirmed host keys only)
@@ -21,4 +21,4 @@
 
 
 
- jobs n/a | [s] start  [t] stop  [e] restart  [C] clear state  [?] more
+ jobs n/a | [ctrl+s] start  [ctrl+t] stop  [ctrl+r] restart  [?] more

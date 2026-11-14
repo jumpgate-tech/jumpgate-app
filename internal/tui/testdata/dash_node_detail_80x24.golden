@@ -21,4 +21,4 @@
  Health watch   on | Running
  Checkpointz    on | unit failed
 
- 1 running  [! 1 to decide] | [m] modules  [S] ssh  [x] more actions  [?] more
+ 1 running  [! 1 to decide] | [r] reload  [m] modules  [S] ssh  [?] more

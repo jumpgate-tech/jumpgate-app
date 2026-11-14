@@ -65,11 +65,11 @@ func TestASecondRestartWhileOneIsUnderWayIsANoOp(t *testing.T) {
 			if where == "global" {
 				a.skew = "server v0.8.0, this jumpgate v-test: press R to restart the server"
 			}
-			m, first := tuitest.Send(a, tuitest.Key("R"))
+			m, first := tuitest.Send(a, tuitest.Key("ctrl+r"))
 			if len(first) == 0 || first[0] == nil {
 				t.Fatal("R started no restart")
 			}
-			m, second := tuitest.Send(m, tuitest.Key("R"))
+			m, second := tuitest.Send(m, tuitest.Key("ctrl+r"))
 			for _, c := range second {
 				if c != nil {
 					c()
@@ -84,7 +84,7 @@ func TestASecondRestartWhileOneIsUnderWayIsANoOp(t *testing.T) {
 			}
 			// Once it is done, R works again.
 			m.(*App).skew = "skew"
-			if _, again := tuitest.Send(m, tuitest.Key("R")); len(again) == 0 || again[0] == nil {
+			if _, again := tuitest.Send(m, tuitest.Key("ctrl+r")); len(again) == 0 || again[0] == nil {
 				t.Fatal("R did nothing after the restart finished")
 			}
 		})

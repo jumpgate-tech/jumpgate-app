@@ -24,20 +24,19 @@ import (
 )
 
 var boxKeys = struct {
-	Clear, DU, Provision, Wipe, Reset, Config, Edit, Diag, Latest, Monitor, Intent, Wizard key.Binding
+	Clear, DU, Provision, Wipe, Config, Edit, Diag, Latest, Monitor, Intent, Wizard key.Binding
 }{
-	Clear:     key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "clear the service's state, typed confirmation (Services)")),
+	Clear:     key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "clear the service's state, typed confirmation (Services)")),
 	DU:        key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "disk usage by path (Storage)")),
-	Provision: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "provision the container (Docker)")),
-	Wipe:      key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "wipe the container, typed confirmation (Docker)")),
-	Reset:     key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "reset the devnet, typed confirmation (Docker)")),
+	Provision: key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "provision the container (Docker)")),
+	Wipe:      key.NewBinding(key.WithKeys("ctrl+w"), key.WithHelp("ctrl+w", "wipe the container, typed confirmation (Docker)")),
 	Config:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "show the container's config (Docker)")),
-	Edit:      key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "set the container's config as JSON (Docker)")),
-	Diag:      key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "run the checks (Tools)")),
+	Edit:      key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "set the container's config as JSON (Docker)")),
+	Diag:      key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "run the checks (Tools)")),
 	Latest:    key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload the latest checks (Tools)")),
 	Monitor:   key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "monitor on/off (Tools)")),
 	Intent:    key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "run an intent (Tools)")),
-	Wizard:    key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "node setup wizard (Tools)")),
+	Wizard:    key.NewBinding(key.WithKeys("ctrl+w"), key.WithHelp("ctrl+w", "node setup wizard (Tools)")),
 }
 
 // intentKinds are the kinds the generic route runs here (internal/intent/
@@ -304,11 +303,6 @@ func (h *hostScreen) containersKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 			return h.boxCall(a, tab, "wipe "+svc, http.MethodPost, base+"/wipe", map[string]string{"Confirm": svc}, reloadContainers)
 		})
 		return nil, true
-	case key.Matches(k, boxKeys.Reset):
-		typedThen(a, "reset "+svc+" on "+id, "The chain starts over: its data is deleted and the gateways in front of it restart.", svc, func() tea.Cmd {
-			return h.boxCall(a, tab, "reset "+svc, http.MethodPost, base+"/reset", nil, reloadContainers)
-		})
-		return nil, true
 	case key.Matches(k, boxKeys.Config):
 		return h.boxCall(a, tab, svc+" config", http.MethodGet, base+"/config", nil, nil), true
 	case key.Matches(k, boxKeys.Edit):
@@ -323,6 +317,16 @@ func (h *hostScreen) containersKey(a *App, k tea.KeyPressMsg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	return nil, false
+}
+
+// askReset is the devnet reset: it has no key (it is in the x menu) and asks
+// for the service's name.
+func (h *hostScreen) askReset(a *App, c containerView) {
+	svc, id := c.ID, h.id
+	base := tpath(id, "/containers/"+url.PathEscape(svc))
+	typedThen(a, "reset "+svc+" on "+id, "The chain starts over: its data is deleted and the gateways in front of it restart.", svc, func() tea.Cmd {
+		return h.boxCall(a, "containers", "reset "+svc, http.MethodPost, base+"/reset", nil, reloadContainers)
+	})
 }
 
 // jsonObject reads one JSON object typed into a field.
@@ -543,13 +547,13 @@ func (h *hostScreen) viewContainers(a *App, w, hgt int) string {
 			lines = append(lines, "   "+a.th.Warn.Render(sanitizeLine(wn)))
 		}
 	}
-	lines = append(lines, "", " [s] start  [t] stop  [e] restart  [p] provision  [v] config  [E] edit", " [W] wipe  [X] reset the devnet")
+	lines = append(lines, "", " [ctrl+s] start  [ctrl+t] stop  [ctrl+r] restart  [ctrl+p] provision", " [v] config  [ctrl+e] edit  [ctrl+w] wipe")
 	lines = append(lines, h.viewResult(a, "containers")...)
 	return strings.Join(lines, "\n")
 }
 
 func (h *hostScreen) viewTools(a *App, w, hgt int) string {
-	lines := []string{"", " [c] run checks  [r] latest  [M] monitor  [I] intent  [w] setup wizard"}
+	lines := []string{"", " [ctrl+e] run checks  [r] latest  [M] monitor  [I] intent  [ctrl+w] setup wizard"}
 	if h.monStop != nil {
 		state := "monitor " + h.monConn.String()
 		if h.monConn != apiclient.Live {

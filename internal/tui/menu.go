@@ -127,9 +127,9 @@ func (m *menuModal) view(a *App, w, h int) string {
 		if i == m.cursor {
 			mark = a.gl.Sel
 		}
-		keyCol := "     "
+		keyCol := "         "
 		if it.key != "" {
-			keyCol = pad("["+keyLabel(it.key, a.gl)+"]", 5)
+			keyCol = pad("["+keyLabel(it.key, a.gl)+"]", 9)
 		}
 		l := fmt.Sprintf(" %s %s %s", mark, keyCol, it.label)
 		if it.hint != "" {
@@ -168,8 +168,6 @@ func pressFor(b key.Binding) (tea.KeyPressMsg, bool) {
 		return tea.KeyPressMsg{}, false
 	}
 	switch ks[0] {
-	case "ctrl+l":
-		return tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl}, true
 	case "up":
 		return tea.KeyPressMsg{Code: tea.KeyUp}, true
 	case "down":
@@ -211,6 +209,10 @@ func (a *App) screenMenu() *menuModal {
 		seen[b.Help().Key] = true
 		h := b.Help()
 		m.all = append(m.all, menuItem{label: menuWords(h.Desc), key: h.Key, run: func(a *App) tea.Cmd { return a.press(k) }})
+	}
+	// Rare actions a screen offers with no key of their own.
+	if x, ok := cur.(interface{ menuExtras(a *App) []menuItem }); ok {
+		m.all = append(m.all, x.menuExtras(a)...)
 	}
 	return m
 }

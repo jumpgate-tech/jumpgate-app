@@ -118,14 +118,14 @@ func TestLockedRowsSayUnlockToRead(t *testing.T) {
 func TestHelpListsTheVaultKeysWhenRelevant(t *testing.T) {
 	m := sendFleet(t, newTestApp(t, tuitest.NewFake(), 100, 40, "unicode"), lockedFleet())
 	fr := ansi.Strip(tuitest.Frame(press(t, m, "?")))
-	if !strings.Contains(fr, "unlock the vault") || strings.Contains(fr, "ctrl+l") {
+	if !strings.Contains(fr, "unlock the vault") || strings.Contains(fr, "ctrl+k") {
 		t.Fatalf("locked help:\n%s", fr)
 	}
 	m = press(t, m, "?", "U")
 	m = press(t, typed(t, m, "pw"), "enter")
 	m = sendFleet(t, m, sampleFleet())
 	fr = ansi.Strip(tuitest.Frame(press(t, m, "?")))
-	if !strings.Contains(fr, "ctrl+l") || strings.Contains(fr, "unlock the vault") {
+	if !strings.Contains(fr, "ctrl+k") || strings.Contains(fr, "unlock the vault") {
 		t.Fatalf("unlocked help:\n%s", fr)
 	}
 }
@@ -133,7 +133,7 @@ func TestHelpListsTheVaultKeysWhenRelevant(t *testing.T) {
 func TestLockKeyLocks(t *testing.T) {
 	f := tuitest.NewFake()
 	f.VaultV.State = "unlocked"
-	m := press(t, newTestApp(t, f, 100, 30, "unicode"), "ctrl+l")
+	m := press(t, newTestApp(t, f, 100, 30, "unicode"), "ctrl+k")
 	if f.VaultV.State != "locked" || !strings.Contains(strings.Join(f.Calls, ","), "Lock") {
 		t.Fatalf("state %q calls %v", f.VaultV.State, f.Calls)
 	}

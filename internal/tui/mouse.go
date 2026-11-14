@@ -63,6 +63,9 @@ func buttonKey(label string) (tea.KeyPressMsg, bool) {
 		return tea.KeyPressMsg{}, false
 	}
 	w := f[0]
+	if c, ok := strings.CutPrefix(w, "ctrl+"); ok && len(c) == 1 && c[0] >= 'a' && c[0] <= 'z' {
+		return tea.KeyPressMsg{Code: rune(c[0]), Mod: tea.ModCtrl}, true // a chord: "[ctrl+r] restart"
+	}
 	switch strings.ToLower(w) {
 	case "esc":
 		return tea.KeyPressMsg{Code: tea.KeyEscape}, true

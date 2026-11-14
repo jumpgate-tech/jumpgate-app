@@ -41,12 +41,12 @@ func TestJobsEmptyState(t *testing.T) {
 	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: api.JobsInbox{At: testNow}, Has: true, State: apiclient.Live}
 	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "2")
 	fr := tuitest.Frame(m)
-	if !strings.Contains(fr, "No jobs.  [n] start one") {
+	if !strings.Contains(fr, "No jobs.  [ctrl+n] start one") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 	// The button works by click: n starts one.
 	a := m.(*App)
-	x, y := at(t, a, "[n] start one")
+	x, y := at(t, a, "[ctrl+n] start one")
 	if got := click(t, a, x+1, y); got.(*App).modal == nil {
 		t.Fatalf("clicking [n] opened nothing:\n%s", tuitest.Frame(got))
 	}

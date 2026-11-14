@@ -22,7 +22,7 @@ func gwApp(t *testing.T, f *tuitest.Fake) tea.Model {
 func TestGatewayStartShowsTheAnswer(t *testing.T) {
 	f := tuitest.NewFake()
 	f.Routes["POST /api/gateways/rpc-main/start"] = map[string]any{"status": map[string]any{"State": "running"}}
-	m := press(t, gwApp(t, f), "s")
+	m := press(t, gwApp(t, f), "ctrl+s")
 	fr := tuitest.Frame(m)
 	if !strings.Contains(fr, "start rpc-main") || !strings.Contains(fr, "status.State: running") {
 		t.Fatalf("frame:\n%s", fr)
@@ -31,7 +31,7 @@ func TestGatewayStartShowsTheAnswer(t *testing.T) {
 		t.Fatal("no reload after start")
 	}
 	f.Routes["POST /api/gateways/rpc-main/restart"] = errors.New("box offline")
-	if fr := tuitest.Frame(press(t, m, "e")); !strings.Contains(fr, "restart rpc-main: FAIL") || !strings.Contains(fr, "box offline") {
+	if fr := tuitest.Frame(press(t, m, "ctrl+r")); !strings.Contains(fr, "restart rpc-main: FAIL") || !strings.Contains(fr, "box offline") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 }
@@ -39,10 +39,10 @@ func TestGatewayStartShowsTheAnswer(t *testing.T) {
 // Stop, delete, provision and wipe run only after the typed confirmation.
 func TestGatewayDestructiveActionsAreTyped(t *testing.T) {
 	for _, c := range []struct{ k, route string }{
-		{"t", "POST /api/gateways/rpc-main/stop"},
-		{"D", "DELETE /api/gateways/rpc-main"},
-		{"P", "POST /api/gateways/rpc-main/provision"},
-		{"W", "POST /api/gateways/rpc-main/wipe"},
+		{"ctrl+t", "POST /api/gateways/rpc-main/stop"},
+		{"ctrl+d", "DELETE /api/gateways/rpc-main"},
+		{"ctrl+p", "POST /api/gateways/rpc-main/provision"},
+		{"ctrl+w", "POST /api/gateways/rpc-main/wipe"},
 	} {
 		f := tuitest.NewFake()
 		f.Routes[c.route] = map[string]any{}
@@ -69,7 +69,7 @@ func TestGatewayDestructiveActionsAreTyped(t *testing.T) {
 func TestGatewayCreate(t *testing.T) {
 	f := tuitest.NewFake()
 	f.Routes["POST /api/gateways"] = map[string]any{"id": "gw2"}
-	m := press(t, gwApp(t, f), "n")
+	m := press(t, gwApp(t, f), "ctrl+n")
 	m = press(t, typed(t, m, "bad id!"), "enter")
 	if fr := tuitest.Frame(m); !strings.Contains(fr, plainNameMiss) {
 		t.Fatalf("frame:\n%s", fr)
@@ -89,7 +89,7 @@ func TestGatewayReadsAndChainAsk(t *testing.T) {
 		f.Routes["GET "+r] = map[string]any{"requests": 12}
 	}
 	m := gwApp(t, f)
-	for _, k := range []string{"enter", "v", "a", "A", "T", "y", "L", "o", "M"} {
+	for _, k := range []string{"enter", "v", "a", "A", "t", "y", "L", "o", "M"} {
 		m = press(t, m, k)
 	}
 	m = press(t, m, "K")
@@ -118,7 +118,7 @@ func TestGatewayReadsAndChainAsk(t *testing.T) {
 func TestGatewayConfigIsJSON(t *testing.T) {
 	f := tuitest.NewFake()
 	f.Routes["PUT /api/gateways/rpc-main/config"] = map[string]any{}
-	m := press(t, typed(t, press(t, gwApp(t, f), "G"), "{nope"), "enter")
+	m := press(t, typed(t, press(t, gwApp(t, f), "ctrl+e"), "{nope"), "enter")
 	if !strings.Contains(tuitest.Frame(m), "that is not JSON") || f.Called("Do PUT") {
 		t.Fatalf("frame:\n%s", tuitest.Frame(m))
 	}
@@ -134,7 +134,7 @@ func TestGatewayCustomerKeyShownOnce(t *testing.T) {
 	const raw = "jg_live_0123456789abcdef"
 	f := tuitest.NewFake()
 	f.Routes["POST /api/gateways/rpc-main/keys"] = map[string]string{"id": "k1", "key": raw}
-	m := press(t, gwApp(t, f), "+")
+	m := press(t, gwApp(t, f), "ctrl+y")
 	m = press(t, typed(t, m, "acme"), "enter")
 	if b, _ := json.Marshal(f.Sent["POST /api/gateways/rpc-main/keys"]); string(b) != `{"label":"acme"}` {
 		t.Fatalf("sent %s", b)
@@ -162,7 +162,7 @@ func TestGatewayCustomerKeyShownOnce(t *testing.T) {
 func TestGatewayRevokeIsTyped(t *testing.T) {
 	f := tuitest.NewFake()
 	f.Routes["POST /api/gateways/rpc-main/keys/k1/revoke"] = map[string]string{"status": "revoked"}
-	m := press(t, typed(t, press(t, gwApp(t, f), "-"), "k1"), "enter")
+	m := press(t, typed(t, press(t, gwApp(t, f), "ctrl+o"), "k1"), "enter")
 	if _, ok := m.(*App).modal.(*confirmModal); !ok || f.Called("Do POST") {
 		t.Fatalf("no confirmation: %T", m.(*App).modal)
 	}

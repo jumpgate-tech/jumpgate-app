@@ -22,27 +22,27 @@ var gatewayKeys = struct {
 	Keys, NewKey, Revoke, Chains, Chain, Docker, StartDocker, Host key.Binding
 }{
 	Reload:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
-	New:         key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new gateway")),
-	Delete:      key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete, typed confirmation")),
-	Start:       key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "start")),
-	Stop:        key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "stop, typed confirmation")),
-	Restart:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "restart")),
-	Config:      key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "replace the config (JSON)")),
-	Provision:   key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "provision, typed confirmation")),
-	Wipe:        key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "wipe its data, typed confirmation")),
-	Trust:       key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "trust its certificate here")),
+	New:         key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "new gateway")),
+	Delete:      key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "delete, typed confirmation")),
+	Start:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "start")),
+	Stop:        key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "stop, typed confirmation")),
+	Restart:     key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "restart")),
+	Config:      key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "replace the config (JSON)")),
+	Provision:   key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "provision, typed confirmation")),
+	Wipe:        key.NewBinding(key.WithKeys("ctrl+w"), key.WithHelp("ctrl+w", "wipe its data, typed confirmation")),
+	Trust:       key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "trust its certificate here")),
 	TLS:         key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "verify TLS")),
 	Caps:        key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "capabilities")),
 	Known:       key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "known set of one chain")),
 	Analytics:   key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "analytics")),
-	Traffic:     key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "traffic")),
+	Traffic:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "traffic")),
 	Keys:        key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "customer API keys")),
-	NewKey:      key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "new customer key (shown once)")),
-	Revoke:      key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "revoke a customer key")),
+	NewKey:      key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "new customer key (shown once)")),
+	Revoke:      key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o", "revoke a customer key")),
 	Chains:      key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "chain list")),
 	Chain:       key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "one chain")),
 	Docker:      key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "Docker readiness")),
-	StartDocker: key.NewBinding(key.WithKeys("O"), key.WithHelp("O", "start Docker here")),
+	StartDocker: key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "start Docker here")),
 	Host:        key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "this machine")),
 }
 
@@ -291,7 +291,7 @@ func newCustomerKey(a *App, gw, label string) tea.Cmd {
 }
 
 func (s *gatewaysScreen) view(a *App, w, h int) string {
-	head := truncate(a.th.Dim.Render(" [n] new  [s] start  [t] stop  [e] restart  [D] delete  [m] modules  [?] more"), w, a.gl.Ellipsis) // the title says Gateways
+	head := truncate(a.th.Dim.Render(" [ctrl+n] new  [ctrl+s] start  [ctrl+t] stop  [ctrl+r] restart  [ctrl+d] delete  [m] modules  [?] more"), w, a.gl.Ellipsis) // the title says Gateways
 	res := s.res.view(a)
 	switch {
 	case s.err != nil && !s.has:

@@ -1,24 +1,24 @@
  jumpgate  Fleet [Jobs] Signers Gateways VPN Vault Server Settings   connecting
  connecting to the server… no readings yet
- Help: keys everywhere  ([F] the full guide  [esc] close)  ~ means stale
+ Help  ([F] the full guide  [esc] close)  ~ means stale
+
+look (plain keys)
   1-8          views
   tab          focus: nav, main, log (esc: back to the nav)
-  [ ]          tree / activity log
-  ?            help
-  :            command
+  [ ] .        tree, activity log, activity drawer
+  ? :          help; take a command
   x            actions menu for the selected item
-  .            activity drawer
   esc          back
-  q            quit
-  ctrl+c       quit now
-  g            setup guide
-  i            invite a box: one line to run on it
+  q ctrl+c     quit; ctrl+c quits at once
+  g i          setup guide; invite a box (one line to run on it)
   arrows/hjkl  move; left and right switch tabs
-  enter        open
-  /            filter
-keys here
+  enter /      open; filter
   d            answer the selected job's question
-  a            take over a job whose controller went silent
   r            reload
-  n            start a job on a box
+change (Ctrl chords)
+  ctrl+t       take over a job whose controller went silent
+  ctrl+n       start a job on a box
+
+
+
  jobs n/a | [?] more

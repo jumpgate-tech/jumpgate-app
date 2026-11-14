@@ -44,6 +44,9 @@ func Key(s string) tea.KeyPressMsg {
 	case "ctrl+u":
 		return tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}
 	}
+	if len(s) == 6 && s[:5] == "ctrl+" && s[5] >= 'a' && s[5] <= 'z' {
+		return tea.KeyPressMsg{Code: rune(s[5]), Mod: tea.ModCtrl}
+	}
 	r := []rune(s)
 	if len(r) != 1 {
 		panic("tuitest: unknown key " + s)

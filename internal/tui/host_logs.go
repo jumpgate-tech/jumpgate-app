@@ -39,7 +39,7 @@ const (
 var logKeys = struct{ Level, Follow, Explain key.Binding }{
 	Level:   key.NewBinding(key.WithKeys("!"), key.WithHelp("!", "level: all, warn+, error+")),
 	Follow:  key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "follow the newest line")),
-	Explain: key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "explain the errors (AI)")),
+	Explain: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "explain the errors (AI)")),
 }
 
 var levelNames = []string{"all levels", "warn and above", "error and above"}

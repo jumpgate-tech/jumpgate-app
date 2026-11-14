@@ -14,9 +14,9 @@ import (
 )
 
 var jobKeys = struct{ Decide, Adopt, Reload, Start key.Binding }{
-	Start:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "start a job on a box")),
+	Start:  key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "start a job on a box")),
 	Decide: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "answer the selected job's question")),
-	Adopt:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "take over a job whose controller went silent")),
+	Adopt:  key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "take over a job whose controller went silent")),
 	Reload: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 }
 
@@ -311,7 +311,7 @@ func (s *jobsScreen) view(a *App, w, h int) string {
 		return b.String()
 	}
 	if len(s.in.Jobs) == 0 {
-		b.WriteString("\n " + a.th.Dim.Render("No jobs.") + "  [n] start one\n")
+		b.WriteString("\n " + a.th.Dim.Render("No jobs.") + "  [ctrl+n] start one\n")
 	}
 	for i, j := range s.in.Jobs {
 		mark := "  "

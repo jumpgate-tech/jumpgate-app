@@ -189,11 +189,13 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 	delete(all, "Lock")
 	delete(all, "Copy") // listed while the invite shows: TestHelpListsTheGuideKeysWhenRelevant
 	// The moving keys share one row.
-	for _, n := range []string{"Up", "Down", "Left", "Right"} {
+	for _, n := range []string{"Up", "Down", "Left", "Right", "Panels", "Drawer", "Quit", "ForceQuit", "Guide", "Invite", "Help", "Palette", "Enter", "Filter"} {
 		delete(all, n)
 	}
-	if !strings.Contains(fr, movingLabel+" ") || !strings.Contains(fr, movingHelp) {
-		t.Errorf("help lacks the moving keys row:\n%s", fr)
+	for _, g := range helpGroups() {
+		if !strings.Contains(fr, g.label+" ") || !strings.Contains(fr, g.desc) {
+			t.Errorf("help lacks the row %q:\n%s", g.label, fr)
+		}
 	}
 	for name, b := range all {
 		h := b.Help()

@@ -15,10 +15,10 @@ import (
 )
 
 var signerKeys = struct{ Test, Create, Export, Restart, Reload key.Binding }{
-	Test:    key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "test signing on the selected box")),
-	Create:  key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "create this controller's key")),
-	Export:  key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "export a keystore v3 file")),
-	Restart: key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restart the server (loads a new key)")),
+	Test:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "test signing on the selected box")),
+	Create:  key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "create this controller's key")),
+	Export:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export a keystore v3 file")),
+	Restart: key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "restart the server (loads a new key)")),
 	Reload:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 }
 
@@ -221,7 +221,7 @@ func (s *signersScreen) view(a *App, w, h int) string {
 	case !s.ctlHas:
 		lines = append(lines, " "+a.th.Dim.Render("loading"+a.gl.Ellipsis))
 	case s.ctl.State == "missing":
-		lines = append(lines, " "+a.th.Warn.Render("no key yet")+": [K] create one (jumpgate keys init)")
+		lines = append(lines, " "+a.th.Warn.Render("no key yet")+": [ctrl+n] create one (jumpgate keys init)")
 	default:
 		addr := sanitizeLine(s.ctl.Address)
 		if addr == "" {
@@ -276,9 +276,9 @@ func (s *signersScreen) view(a *App, w, h int) string {
 	for len(lines) < h-1 {
 		lines = append(lines, "")
 	}
-	bar := " [T] test signing  [K] create a key  [E] export  "
+	bar := " [t] test signing  [ctrl+n] create a key  [e] export  "
 	if a.o.Restart != nil {
-		bar += "[R] restart the server  "
+		bar += "[ctrl+r] restart the server  "
 	}
 	return strings.Join(append(lines, bar+"[r] reload"), "\n")
 }

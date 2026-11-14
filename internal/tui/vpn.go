@@ -63,14 +63,14 @@ var vpnKeys = struct {
 }{
 	Switch:     key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "clients / servers")),
 	Reload:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
-	New:        key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
-	Up:         key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "bring the tunnel up")),
-	Down:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "take the tunnel down, asks first")),
-	Status:     key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "status")),
-	Delete:     key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete, typed confirmation")),
-	Endpoint:   key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "server: endpoint")),
-	AddPeer:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "server: add a peer (config shown once)")),
-	RemovePeer: key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "server: remove a peer")),
+	New:        key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "new")),
+	Up:         key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "bring the tunnel up")),
+	Down:       key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "take the tunnel down, asks first")),
+	Status:     key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status")),
+	Delete:     key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "delete, typed confirmation")),
+	Endpoint:   key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "server: endpoint")),
+	AddPeer:    key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "server: add a peer (config shown once)")),
+	RemovePeer: key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o", "server: remove a peer")),
 }
 
 type vpnScreen struct {
@@ -329,7 +329,7 @@ func (s *vpnScreen) view(a *App, w, h int) string {
 	if s.servers {
 		other = "clients"
 	}
-	head := truncate(" [v] "+other+"  [n] new  [s] up  [t] down  [S] status  [D] delete  [x] more", w, a.gl.Ellipsis)
+	head := truncate(" [v] "+other+"  [ctrl+n] new  [ctrl+s] up  [ctrl+t] down  [s] status  [ctrl+d] delete  [x] more", w, a.gl.Ellipsis)
 	if !s.has {
 		return head + "\n\n " + a.th.Dim.Render("loading"+a.gl.Ellipsis)
 	}

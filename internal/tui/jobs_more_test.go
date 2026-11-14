@@ -37,13 +37,13 @@ func TestJobDetailStreamsOutput(t *testing.T) {
 func TestStartJobNeedsTheBoxTyped(t *testing.T) {
 	f := tuitest.NewFake()
 	f.Routes["POST /api/jobs/box-a"] = api.JobView{Target: "box-a", ID: "abc", State: "running"}
-	m := press(t, jobsApp(t, f, "unicode"), "n")
+	m := press(t, jobsApp(t, f, "unicode"), "ctrl+n")
 	m = typed(t, m, "rm-rf")
 	m = press(t, m, "enter")
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "not a job kind") {
 		t.Fatalf("unknown kind accepted:\n%s", fr)
 	}
-	m = press(t, m, "esc", "n")
+	m = press(t, m, "esc", "ctrl+n")
 	m = typed(t, m, "node.migrate-names")
 	m = press(t, m, "enter", "enter")
 	if f.Called("Do POST /api/jobs/box-a") {
@@ -70,7 +70,7 @@ func TestGatewayModuleToggle(t *testing.T) {
 	if !strings.Contains(fr, "1 [ ] Private send") || strings.Contains(fr, "watch") {
 		t.Fatalf("modal:\n%s", fr)
 	}
-	m = press(t, m, "1")
+	m = press(t, m, "1", "ctrl+t")
 	if b, _ := json.Marshal(f.Sent["PUT /api/gateways/rpc-main/modules/private-send"]); string(b) != `{"enabled":true}` {
 		t.Fatalf("sent %s; calls %v", b, f.Calls)
 	}

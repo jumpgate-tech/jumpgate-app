@@ -51,7 +51,7 @@ func guideSteps(f guideFacts) []guideStep {
 		why: "The dashboard, the CLI and every gate talk to this one server."}
 	srv.how = "Running."
 	if !f.connected {
-		srv.how, srv.press = "Server: press s to start it.", []string{"s"}
+		srv.how, srv.press = "Server: press ctrl+s to start it.", []string{"ctrl+s"}
 	}
 	add(srv)
 
@@ -69,7 +69,7 @@ func guideSteps(f guideFacts) []guideStep {
 	case "none":
 		v.how, v.press = "Vault: press I to create it.", []string{"I"}
 	case "unusable":
-		v.how, v.press = "Its file cannot be used. Vault: press B to restore a backup.", []string{"B"}
+		v.how, v.press = "Its file cannot be used. Vault: press ctrl+r to restore a backup.", []string{"ctrl+r"}
 	default:
 		v.how = "Not read yet: connect to the server first."
 	}
@@ -91,7 +91,7 @@ func guideSteps(f guideFacts) []guideStep {
 	case f.vault == nil || state == "none":
 		r.how = "Create the vault first."
 	default:
-		r.how, r.press = "Vault: press a; the code prints once.", []string{"a"}
+		r.how, r.press = "Vault: press ctrl+n; the code prints once.", []string{"ctrl+n"}
 	}
 	add(r)
 
@@ -103,7 +103,7 @@ func guideSteps(f guideFacts) []guideStep {
 		case k.done:
 			k.how = "Present."
 		case c.State == "missing":
-			k.how, k.press = "Signers: press K to create it.", []string{"K"}
+			k.how, k.press = "Signers: press ctrl+n to create it.", []string{"ctrl+n"}
 		default:
 			k.how = "Signers: the key is " + sanitizeLine(c.State) + "; see the reason there."
 		}
@@ -159,7 +159,7 @@ func guideSteps(f guideFacts) []guideStep {
 	case sealed:
 		s.how = "Sealed."
 	case f.goos == "linux":
-		s.how = "Vault: press Z to seal with the TPM2, or S with the host key."
+		s.how = "Vault: press ctrl+s to seal with the TPM2, or pick the host key in the x menu."
 	default:
 		s.how = "On the Linux service: jumpgate vault seal."
 	}
@@ -194,7 +194,7 @@ func guideSteps(f guideFacts) []guideStep {
 	case f.gateways < 0:
 		g.how = "Not read yet."
 	default:
-		g.how, g.press = "Gateways: press n to add one.", []string{"n"}
+		g.how, g.press = "Gateways: press ctrl+n to add one.", []string{"ctrl+n"}
 	}
 	add(g)
 	return steps
@@ -365,6 +365,9 @@ func (a *App) stepKeys(keys stepKeysMsg) tea.Cmd {
 
 // keyPress is the key press of one key name.
 func keyPress(k string) tea.KeyPressMsg {
+	if p, ok := buttonKey(k); ok && len(k) > 1 {
+		return p // a chord such as ctrl+s
+	}
 	r := []rune(k)
 	return tea.KeyPressMsg{Code: r[0], Text: k}
 }

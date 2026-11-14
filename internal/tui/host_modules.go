@@ -350,8 +350,9 @@ func newModulesModal(a *App, h *hostScreen) *modulesModal {
 	return &modulesModal{h: h, pub: map[string]string{}}
 }
 
-var modKeys = struct{ Public, Copy key.Binding }{
-	Public: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "change who can reach a node module")),
+var modKeys = struct{ Public, Copy, Toggle key.Binding }{
+	Toggle: key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "turn the selected module on or off")),
+	Public: key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "change who can reach a node module")),
 	Copy:   key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy a bootnode's enode or ENR")),
 }
 
@@ -425,7 +426,7 @@ func (m *modulesModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.cursor = max(m.cursor-1, 0)
 	case key.Matches(k, navKeys.Down):
 		m.cursor = min(m.cursor+1, max(len(cards)-1, 0))
-	case key.Matches(k, navKeys.Enter):
+	case key.Matches(k, modKeys.Toggle):
 		if m.cursor < len(cards) && !m.busy {
 			return false, m.toggle(a, cards[m.cursor])
 		}
@@ -592,7 +593,7 @@ func (m *modulesModal) typing() bool {
 	return m.confirm != nil || m.fieldsFor != nil || m.askPost != ""
 }
 
-// click on a module's row selects it; enter (or its button) turns it on or off.
+// click on a module's row selects it; ctrl+t (or its button) turns it on or off.
 func (m *modulesModal) click(a *App, row, _ int, _ bool) (done, handled bool, cmd tea.Cmd) {
 	i, ok := m.cardRows[row]
 	if !ok {
@@ -722,7 +723,7 @@ func (m *modulesModal) view(a *App, w, _ int) string {
 		}
 		return out + "\n " + a.th.Dim.Render("tab to move, enter to turn on, [esc] go back")
 	}
-	out := fmt.Sprintf(" %s %s\n\n", a.th.Title.Render("MODULES"), a.th.Dim.Render("for "+sanitizeLine(m.h.id)+" ([enter] turn on or off  [esc] close)"))
+	out := fmt.Sprintf(" %s %s\n\n", a.th.Title.Render("MODULES"), a.th.Dim.Render("for "+sanitizeLine(m.h.id)+" ([ctrl+t] turn on or off  [esc] close)"))
 	m.cardRows = map[int]int{}
 	cards := m.cards(a)
 	if len(cards) == 0 {

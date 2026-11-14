@@ -5,7 +5,7 @@
 ▸ 10.0.0.5:22  ssh-ed25519  SHA256:abc  jumpgate
   10.0.0.5:22  ssh-rsa  SHA256:def  openssh
 
- [f] forget, typed confirmation   [esc] close
+ [ctrl+f] forget, typed confirmation   [esc] close
 
 
 

@@ -16,7 +16,7 @@ jumpgate lock                            # the server forgets the vault key
 
 The passphrase is typed on the terminal, or sent as one line on standard input with `--stdin`; it is never taken from a command-line argument or the environment. On macOS and Windows, `vault init` also adds a slot that your login's key store unlocks, so the server unlocks at start with no prompt; `--keystore none` leaves that out.
 
-In the TUI the Vault screen (`6`) does the same with keys: `u` unlocks, `L` locks (it asks first when jobs are running), `I` creates the vault, `a` adds a recovery code. `U` unlocks from any screen while the vault is locked, and `ctrl+l` locks it. `x` lists what you can do in the vault's current state.
+In the TUI the Vault screen (`6`) does the same with keys: `u` unlocks, `ctrl+k` locks (it asks first when jobs are running), `I` creates the vault, `ctrl+n` adds a recovery code. `U` unlocks from any screen while the vault is locked, and `ctrl+k` locks it from any screen. `x` lists what you can do in the vault's current state.
 
 ## Plain secrets
 
@@ -32,7 +32,7 @@ jumpgate vault rekdf                     # raise the passphrase's argon2id cost
 
 A backup is useless without the passphrase. A TPM or key-store slot does not travel with it. Restore needs the server stopped (`jumpgate stop`), checks the file before it touches anything, and with `--replace` keeps the old vault as `vault.bak-TIME` beside it.
 
-In the TUI, `b` backs up, `B` restores (it asks you to type `restore`) and `K` makes the passphrase harder to crack at the price of a slower unlock: the same as `jumpgate vault rekdf`, which raises the key-derivation (argon2id) cost.
+In the TUI, `ctrl+w` backs up and `ctrl+r` restores (it asks you to type `restore`). Making the passphrase harder to crack at the price of a slower unlock is in the `x` menu: the same as `jumpgate vault rekdf`, which raises the key-derivation (argon2id) cost.
 
 ## Tokens for the relay
 
@@ -47,7 +47,7 @@ jumpgate vault seal --tpm2               # bind it to this machine's TPM2
 jumpgate vault seal --allow-host-key     # or to the host key, with no TPM2
 ```
 
-The host key protects only against copying the vault file alone, so prefer the TPM2. On the Vault screen the keys are `Z` (TPM2) and `S` (host key). Without a seal you unlock the service by hand after each restart.
+The host key protects only against copying the vault file alone, so prefer the TPM2. On the Vault screen `ctrl+s` seals with the TPM2 and the host key is in the `x` menu. Without a seal you unlock the service by hand after each restart.
 
 ## Idle lock
 

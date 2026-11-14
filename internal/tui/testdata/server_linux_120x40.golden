@@ -10,7 +10,7 @@
 |  Gateways       [4]|| web app    127.0.0.1:7788                                                                      |
 |  VPN            [5]|| relay      off, meter off, key admin off                                                       |
 |  Vault          [6]||                                                                                                |
-|> Server         [7]|| [u] check for an update   [o] open in the browser   [t] stop the server                        |
+|> Server         [7]|| [r] reload   [u] check for an update   [o] open in the browser   [ctrl+t] stop the server      |
 |  Settings       [8]||                                                                                                |
 |--------------------|| JUMPGATE SERVICE (asks for sudo on the terminal)                                               |
 |   fleet     3 boxes|| [I] install the systemd service                                                                |
@@ -37,4 +37,4 @@
 | job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision                                  |
 | job  box-b      migrate-names  step 4/8     [########............]                                                   |
 +----------------------------------------------------------------------------------------------------------------------+
- [u] check for an update  [o] open in the browser  [t] stop the server  [I] install service  [?] more
+ [r] reload  [u] check for an update  [o] open in the browser  [ctrl+t] stop the server  [I] install service  [?] more

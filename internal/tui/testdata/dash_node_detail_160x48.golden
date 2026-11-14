@@ -45,4 +45,4 @@
 | job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision                                                                          |
 | job  box-b      migrate-names  step 4/8     [########............]                                                                                           |
 +--------------------------------------------------------------------------------------------------------------------------------------------------------------+
- [m] modules  [S] ssh  [x] more actions  left/right tab  [esc] back  [?] more
+ [r] reload  [m] modules  [S] ssh  [x] more actions  left/right tab  [esc] back  [?] more

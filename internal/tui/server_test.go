@@ -35,12 +35,12 @@ func TestServerView(t *testing.T) {
 	m := serverApp(t, f, "linux")
 	fr := tuitest.Frame(m)
 	for _, want := range []string{"Server", "v0.7.0 is out", "your own server, pid 4242, up 2h", "127.0.0.1:7788",
-		"[t] stop the server", "[o] open in the browser", "[I] install the systemd service"} {
+		"[ctrl+t] stop the server", "[o] open in the browser", "[I] install the systemd service"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("no %q:\n%s", want, fr)
 		}
 	}
-	if strings.Contains(fr, "[s] start the server") {
+	if strings.Contains(fr, "[ctrl+s] start the server") {
 		t.Errorf("start offered while the server answers:\n%s", fr)
 	}
 	tuitest.Golden(t, "server_linux_120x40", fr)
@@ -136,7 +136,7 @@ func TestRunSelfWithoutAnExecutable(t *testing.T) {
 func TestServerStopIsTypedConfirm(t *testing.T) {
 	f := tuitest.NewFake()
 	f.Routes["POST /api/shutdown"] = nil
-	m := press(t, serverApp(t, f, "linux"), "t")
+	m := press(t, serverApp(t, f, "linux"), "ctrl+t")
 	if _, ok := m.(*App).modal.(*confirmModal); !ok {
 		t.Fatal("x did not ask for a typed confirmation")
 	}
@@ -167,10 +167,10 @@ func TestServerStartWhenNoneAnswers(t *testing.T) {
 	nf := tuitest.NewFake()
 	a.o.Start = func(context.Context) (Backend, error) { return nf, nil }
 	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{State: apiclient.Retrying, Err: errors.New("dial: refused")}})
-	if fr := tuitest.Frame(m); !strings.Contains(fr, "No server answers.  [s] start the server") || strings.Contains(fr, "[t] stop") {
+	if fr := tuitest.Frame(m); !strings.Contains(fr, "No server answers.  [ctrl+s] start the server") || strings.Contains(fr, "[ctrl+t] stop") {
 		t.Fatalf("no start offered, or a stop beside it:\n%s", fr)
 	}
-	m = press(t, m, "s")
+	m = press(t, m, "ctrl+s")
 	if m.(*App).be != nf || m.(*App).flash != "the server started" {
 		t.Fatalf("start: flash %q", m.(*App).flash)
 	}

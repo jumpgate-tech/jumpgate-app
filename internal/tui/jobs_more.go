@@ -149,11 +149,12 @@ type gwCatalogMsg struct {
 // gwModulesModal lists the catalog's gateway modules for one gateway; a
 // number turns that one on or off.
 type gwModulesModal struct {
-	g    api.GatewaySummary
-	cat  []api.CatalogModule // gateway modules only
-	has  bool
-	err  error
-	busy bool
+	g      api.GatewaySummary
+	cat    []api.CatalogModule // gateway modules only
+	has    bool
+	err    error
+	busy   bool
+	cursor int
 }
 
 func newGwModules(a *App, g api.GatewaySummary) (*gwModulesModal, tea.Cmd) {
@@ -171,10 +172,24 @@ func (m *gwModulesModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	if k.String() == "esc" {
 		return true, nil
 	}
-	for i, c := range m.cat {
-		if k.String() != fmt.Sprint(i+1) || m.busy || i >= 9 {
-			continue
+	m.cursor = min(m.cursor, max(len(m.cat)-1, 0))
+	// A number or the arrows select; turning one on or off is a change, so ctrl+t.
+	for i := range m.cat {
+		if k.String() == fmt.Sprint(i+1) && i < 9 {
+			m.cursor = i
+			return false, nil
 		}
+	}
+	switch {
+	case key.Matches(k, navKeys.Up):
+		m.cursor = max(m.cursor-1, 0)
+	case key.Matches(k, navKeys.Down):
+		m.cursor = min(m.cursor+1, max(len(m.cat)-1, 0))
+	case key.Matches(k, modKeys.Toggle):
+		if m.cursor >= len(m.cat) || m.busy {
+			return false, nil
+		}
+		c := m.cat[m.cursor]
 		gid, mod, want := m.g.ID, c.ID, !m.on(c.ID)
 		m.busy = true
 		return false, a.do("gateway module", func(ctx context.Context, be Backend) tea.Msg {
@@ -209,9 +224,13 @@ func (m *gwModulesModal) view(a *App, w, _ int) string {
 		if name == "" {
 			name = c.ID
 		}
-		b.WriteString(truncate(fmt.Sprintf(" %d %s %s", i+1, mark, sanitizeLine(name)), w, a.gl.Ellipsis) + "\n")
+		sel := " "
+		if i == m.cursor {
+			sel = a.gl.Sel
+		}
+		b.WriteString(truncate(fmt.Sprintf("%s%d %s %s", sel, i+1, mark, sanitizeLine(name)), w, a.gl.Ellipsis) + "\n")
 	}
-	return b.String() + "\n " + a.th.Dim.Render("a number, or a click on a row, turns it on or off; [esc] closes")
+	return b.String() + "\n " + a.th.Dim.Render("a number or a click selects; [ctrl+t] turns it on or off; [esc] closes")
 }
 
 // click on a module's row is its number key.
@@ -220,8 +239,8 @@ func (m *gwModulesModal) click(a *App, row, _ int, _ bool) (done, handled bool, 
 	if i < 0 || i >= len(m.cat) || i > 8 {
 		return false, false, nil
 	}
-	done, cmd = m.key(a, tea.KeyPressMsg{Code: rune('1' + i), Text: string(rune('1' + i))})
-	return done, true, cmd
+	m.cursor = i
+	return false, true, nil
 }
 
 // gwModulesUpdate takes the modal's replies; ok is false for any other.

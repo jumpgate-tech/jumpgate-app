@@ -15,10 +15,10 @@ func TestVaultOffersOnlyWhatFitsItsState(t *testing.T) {
 		state       string
 		want, never []string
 	}{
-		{"none", []string{"No vault yet.  [I] create the vault", "[B] restore a backup"}, []string{"[L]", "[u] unlock", "[p] put", "[b] back up", "[m] "}},
-		{"locked", []string{"The vault is locked.  [u] unlock"}, []string{"[L]", "[I]", "[p] put"}},
-		{"unusable", []string{"The vault file cannot be used.  [B] restore a backup"}, []string{"[L]", "[u]", "[I]"}},
-		{"unlocked", []string{"[L] lock", "[p] put a secret", "[b] back up", "[a] recovery code", "[x] more: "}, []string{"[u] unlock", "[I]", "The vault is locked", "KDF"}},
+		{"none", []string{"No vault yet.  [I] create the vault", "[ctrl+r] restore a backup"}, []string{"[ctrl+k]", "[u] unlock", "[p] put", "[ctrl+w] back up", "[m] "}},
+		{"locked", []string{"The vault is locked.  [u] unlock"}, []string{"[ctrl+k]", "[I]", "[p] put"}},
+		{"unusable", []string{"The vault file cannot be used.  [ctrl+r] restore a backup"}, []string{"[ctrl+k]", "[u]", "[I]"}},
+		{"unlocked", []string{"[ctrl+k] lock", "[p] put a secret", "[ctrl+w] back up", "[ctrl+n] recovery code", "[x] more: "}, []string{"[u] unlock", "[I]", "The vault is locked", "KDF"}},
 	} {
 		f := tuitest.NewFake()
 		f.VaultV = api.VaultView{State: c.state, Slots: []string{"passphrase"}}
@@ -42,29 +42,29 @@ func TestVaultOffersOnlyWhatFitsItsState(t *testing.T) {
 		for _, it := range menu.all {
 			keys = append(keys, it.key)
 		}
-		got := strings.Join(keys, "")
+		got := strings.Join(keys, " ")
 		switch c.state {
 		case "none":
-			if got != "IB" {
+			if got != "I ctrl+r r" {
 				t.Errorf("none: menu %q", got)
 			}
 		case "locked":
-			if got != "uTB" {
+			if got != "u t ctrl+r r" {
 				t.Errorf("locked: menu %q", got)
 			}
 		case "unusable":
-			if got != "B" {
+			if got != "ctrl+r r" {
 				t.Errorf("unusable: menu %q", got)
 			}
 		case "unlocked":
-			if !strings.Contains(got, "L") || !strings.Contains(got, "Z") || !strings.Contains(got, "K") || strings.Contains(got, "u") {
+			// The two rare actions are in the menu with no key.
+			if !strings.Contains(strings.Join(menuLabels(menu), "|"), "harder to crack") || !strings.Contains(strings.Join(menuLabels(menu), "|"), "host key") {
+				t.Errorf("unlocked: the menu lacks the key-less actions: %v", menuLabels(menu))
+			}
+			if !strings.Contains(got, "ctrl+k") || !strings.Contains(got, "ctrl+s") || strings.Contains(got, "u ") {
 				t.Errorf("unlocked: menu %q", got)
 			}
 		}
-	}
-	// The plain-language name for the key-derivation key; the precise term is in the guide.
-	if d := vaultKeys.Rekdf.Help().Desc; strings.Contains(d, "KDF") || !strings.Contains(d, "harder to crack") {
-		t.Errorf("rekdf desc %q", d)
 	}
 }
 
@@ -78,7 +78,7 @@ func TestServerOffersOnlyWhatFitsItsState(t *testing.T) {
 	for _, it := range menu.all {
 		keys += it.key
 	}
-	if !strings.Contains(keys, "t") || !strings.Contains(keys, "I") || strings.Contains(keys, "s") {
+	if !strings.Contains(keys, "ctrl+t") || !strings.Contains(keys, "I") || strings.Contains(keys, "ctrl+s") {
 		t.Errorf("a live own-server: menu %q", keys)
 	}
 	a.o.Server = func() ServerInfo { return ServerInfo{PID: 1, System: true, HTTPAddr: "127.0.0.1:7788"} }
@@ -91,4 +91,12 @@ func TestServerOffersOnlyWhatFitsItsState(t *testing.T) {
 	if strings.Contains(keys, "I") {
 		t.Errorf("the install is offered to the running service: %q", keys)
 	}
+}
+
+func menuLabels(m *menuModal) []string {
+	var out []string
+	for _, it := range m.all {
+		out = append(out, it.label)
+	}
+	return out
 }

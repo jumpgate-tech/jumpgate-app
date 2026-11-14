@@ -21,10 +21,11 @@ import (
 // re-run this jumpgate in the foreground (runSelf), so sudo and the vault
 // passphrase are asked on the real terminal and never pass through the TUI.
 
-var serverKeys = struct{ Check, Start, Stop, Open, Install, Setup, SelfOnly key.Binding }{
+var serverKeys = struct{ Check, Start, Stop, Open, Install, Setup, SelfOnly, Reload key.Binding }{
+	Reload:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 	Check:    key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "check for an update now")),
-	Start:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "start the server")),
-	Stop:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "stop the server, typed confirmation")),
+	Start:    key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "start the server")),
+	Stop:     key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "stop the server, typed confirmation")),
 	Open:     key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open the web app in the browser")),
 	Install:  key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "install the systemd service (sudo)")),
 	Setup:    key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "set up the service: vault key, unlock, pair this machine (sudo)")),
@@ -83,7 +84,7 @@ func (s *serverScreen) keys() []key.Binding {
 	if s.canStart {
 		ks = append(ks, serverKeys.Start)
 	}
-	ks = append(ks, serverKeys.Check)
+	ks = append(ks, serverKeys.Reload, serverKeys.Check)
 	if s.canOpen {
 		ks = append(ks, serverKeys.Open)
 	}
@@ -152,6 +153,8 @@ func (s *serverScreen) update(a *App, msg tea.Msg) tea.Cmd {
 func (s *serverScreen) key(a *App, k tea.KeyPressMsg) tea.Cmd {
 	linux := a.o.GOOS == "linux"
 	switch {
+	case key.Matches(k, serverKeys.Reload):
+		return s.loadUpdate(a, false)
 	case key.Matches(k, serverKeys.Check):
 		return s.loadUpdate(a, true)
 	case key.Matches(k, serverKeys.Start):

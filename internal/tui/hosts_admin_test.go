@@ -14,23 +14,23 @@ import (
 func TestHostsUpgradeTheGate(t *testing.T) {
 	f := tuitest.NewFake()
 	f.Routes["POST /api/targets/box-a/agent/upgrade"] = api.AgentUpgradeView{Upgraded: true, From: "v0.5.0", To: "v0.6.0"}
-	m := press(t, hostsApp(t, f, "linux"), "u")
+	m := press(t, hostsApp(t, f, "linux"), "ctrl+u")
 	if fl := m.(*App).flash; fl != "gate on box-a: v0.5.0 -> v0.6.0" {
 		t.Fatalf("flash %q", fl)
 	}
 	f.Routes["POST /api/targets/box-a/agent/upgrade"] = api.AgentUpgradeView{To: "v0.6.0"}
-	if fl := press(t, m, "u").(*App).flash; fl != "the gate on box-a is already v0.6.0" {
+	if fl := press(t, m, "ctrl+u").(*App).flash; fl != "the gate on box-a is already v0.6.0" {
 		t.Fatalf("flash %q", fl)
 	}
 	f.Routes["POST /api/targets/box-a/agent/upgrade"] = errors.New("box offline")
-	if fl := press(t, m, "u").(*App).flash; !strings.Contains(fl, "upgrade the gate on box-a: box offline") {
+	if fl := press(t, m, "ctrl+u").(*App).flash; !strings.Contains(fl, "upgrade the gate on box-a: box offline") {
 		t.Fatalf("flash %q", fl)
 	}
 }
 
 func TestHostsUpgradeNeedsAGate(t *testing.T) {
 	f := tuitest.NewFake()
-	m := press(t, hostsApp(t, f, "linux"), "down", "u")
+	m := press(t, hostsApp(t, f, "linux"), "down", "ctrl+u")
 	if f.Called("Do POST") || !strings.Contains(m.(*App).flash, "no gate yet") {
 		t.Fatalf("flash %q, calls %v", m.(*App).flash, f.Calls)
 	}
@@ -45,18 +45,18 @@ func TestHostsForgetAHostKey(t *testing.T) {
 	f.Routes["POST /api/hostkeys/forget"] = nil
 	m := press(t, hostsApp(t, f, "linux"), "H")
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"Host keys recorded for box-a", "10.0.0.5:22  ssh-ed25519  SHA256:abc  jumpgate", "SHA256:def  openssh", "[f] forget"} {
+	for _, want := range []string{"Host keys recorded for box-a", "10.0.0.5:22  ssh-ed25519  SHA256:abc  jumpgate", "SHA256:def  openssh", "[ctrl+f] forget"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("no %q:\n%s", want, fr)
 		}
 	}
 	tuitest.Golden(t, "hosts_hostkeys", fr)
 	// The OpenSSH key is never forgotten.
-	m = press(t, m, "down", "f")
+	m = press(t, m, "down", "ctrl+f")
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "never edits") {
 		t.Fatalf("openssh key offered:\n%s", fr)
 	}
-	m = press(t, m, "up", "f")
+	m = press(t, m, "up", "ctrl+f")
 	if _, ok := m.(*App).modal.(*confirmModal); !ok || f.Called("Do POST /api/hostkeys/forget") {
 		t.Fatalf("forget without a typed confirmation: %T %v", m.(*App).modal, f.Calls)
 	}
@@ -85,7 +85,7 @@ func TestHostsLeftoverContainers(t *testing.T) {
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "erpc-gw2 on box-a, merged into gw1") {
 		t.Fatalf("no row:\n%s", fr)
 	}
-	m = press(t, m, "D")
+	m = press(t, m, "ctrl+d")
 	m = press(t, typed(t, m, "gw1"), "enter")
 	if f.Called("Do DELETE") {
 		t.Fatalf("dismissed on the wrong name")
@@ -104,7 +104,7 @@ func TestHostsLeftoverContainers(t *testing.T) {
 func TestSignersExportKeystore(t *testing.T) {
 	a := signersApp(t, tuitest.NewFake())
 	ran := recordSelf(a)
-	m := press(t, typed(t, press(t, a, "E"), "-x"), "enter")
+	m := press(t, typed(t, press(t, a, "e"), "-x"), "enter")
 	if len(*ran) != 0 {
 		t.Fatalf("a flag went through: %v", *ran)
 	}
@@ -129,7 +129,7 @@ func TestSignersServiceCreatesItsKey(t *testing.T) {
 	a := signersApp(t, f)
 	ran := recordSelf(a)
 	a.o.Server = func() ServerInfo { return ServerInfo{System: true} }
-	m := typed(t, press(t, a, "K"), "SECRETpass")
+	m := typed(t, press(t, a, "ctrl+n"), "SECRETpass")
 	m = press(t, m, "enter")
 	m = typed(t, m, "SECRETpasX")
 	m = press(t, m, "enter")

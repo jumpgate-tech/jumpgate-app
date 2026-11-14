@@ -20,5 +20,5 @@
 
 
 
- [T] test signing  [K] create a key  [E] export  [r] reload
- jobs n/a | [T] test  [K] create key  [E] export  [r] reload  [?] more
+ [t] test signing  [ctrl+n] create a key  [e] export  [r] reload
+ jobs n/a | [t] test  [ctrl+n] create key  [e] export  [r] reload  [?] more

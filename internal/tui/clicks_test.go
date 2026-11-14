@@ -50,7 +50,7 @@ func TestClickBoxTabs(t *testing.T) {
 		t.Fatalf("tab %q", h.tabName(m.(*App)))
 	}
 	// The footer's buttons are the tab's own keys: clicking [e] restarts, which asks first.
-	x, y = at(t, m, "[e] restart")
+	x, y = at(t, m, "[ctrl+r] restart")
 	if got := click(t, m, x+1, y); func() bool { _, ok := got.(*App).modal.(*confirmModal); return !ok }() {
 		t.Fatalf("clicking [e] restart: modal %T", got.(*App).modal)
 	}
@@ -182,7 +182,7 @@ func TestClickYesNo(t *testing.T) {
 		f := vpnFake()
 		f.Routes["POST /api/vpns/office/down"] = map[string]any{}
 		a, _ := mouseApp(t, f, 100, 30)
-		return f, press(t, a, "5", "t").(*App)
+		return f, press(t, a, "5", "ctrl+t").(*App)
 	}
 	f, m := ask()
 	x, y := at(t, m, "loses its path")
@@ -239,7 +239,7 @@ func TestClickModulesModalRows(t *testing.T) {
 		t.Fatal("a click changed a module")
 	}
 	// The enter button does what enter does.
-	x, y = at(t, m, "[enter] turn on or off")
+	x, y = at(t, m, "[ctrl+t] turn on or off")
 	click(t, m, x+1, y)
 	if _, asked := m.(*App).modal.(*modulesModal); !asked {
 		t.Fatalf("modal %T", m.(*App).modal)

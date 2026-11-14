@@ -50,11 +50,11 @@ func TestVPNUpDownStatusDelete(t *testing.T) {
 	f.Routes["GET /api/vpn-servers/home/status"] = map[string]any{"peers": 1}
 	f.Routes["GET /api/vpn-servers/home"] = map[string]any{"id": "home"}
 	f.Routes["DELETE /api/vpn-servers/home"] = nil
-	m := press(t, vpnApp(t, f), "s", "t", "y", "S")
+	m := press(t, vpnApp(t, f), "ctrl+s", "ctrl+t", "y", "s")
 	if !strings.Contains(tuitest.Frame(m), "handshake: 12s ago") {
 		t.Fatalf("frame:\n%s", tuitest.Frame(m))
 	}
-	m = press(t, m, "v", "s", "S", "enter", "D")
+	m = press(t, m, "v", "ctrl+s", "s", "enter", "ctrl+d")
 	if _, ok := m.(*App).modal.(*confirmModal); !ok || f.Called("Do DELETE") {
 		t.Fatalf("delete without a typed confirmation: %T", m.(*App).modal)
 	}
@@ -73,7 +73,7 @@ func TestVPNClientSaveMasksTheConfig(t *testing.T) {
 	f := vpnFake()
 	f.Routes["POST /api/vpns"] = map[string]any{}
 	m := vpnApp(t, f)
-	m = press(t, typed(t, press(t, m, "n"), "lab"), "enter")
+	m = press(t, typed(t, press(t, m, "ctrl+n"), "lab"), "enter")
 	m = press(t, m, "enter")                    // provider: bring-your-own
 	m = press(t, m, "enter")                    // interface: wg0
 	m = press(t, typed(t, m, "box-a"), "enter") // box
@@ -102,7 +102,7 @@ func TestVPNClientBodyKeepsTheConfigLines(t *testing.T) {
 		_ = json.Unmarshal(in.(apiclient.RawJSON), &got)
 		return map[string]any{}, nil
 	}
-	m := press(t, typed(t, press(t, vpnApp(t, f), "n"), "lab"), "enter", "enter", "enter", "enter")
+	m := press(t, typed(t, press(t, vpnApp(t, f), "ctrl+n"), "lab"), "enter", "enter", "enter", "enter")
 	m, _ = tuitest.Send(m, tea.PasteMsg{Content: "[Interface]\r\nPrivateKey = K=\r\n"})
 	press(t, m, "enter")
 	if got["config"] != "[Interface]\nPrivateKey = K=\n" || got["id"] != "lab" || got["interface"] != "wg0" || got["provider"] != "bring-your-own" || got["targetId"] != "" {
@@ -115,7 +115,7 @@ func TestVPNAddPeerShowsTheConfigOnce(t *testing.T) {
 	const conf = "[Interface]\nPrivateKey = DEVICEKEY=\n"
 	f := vpnFake()
 	f.Routes["POST /api/vpn-servers/home/peers"] = map[string]any{"name": "laptop", "publicKey": "X=", "allowedIp": "10.8.0.3/32", "config": conf}
-	m := press(t, vpnApp(t, f), "v", "p")
+	m := press(t, vpnApp(t, f), "v", "ctrl+p")
 	m = press(t, typed(t, m, "laptop"), "enter")
 	m = press(t, typed(t, press(t, m, "ctrl+u"), "full"), "enter")
 	if b, _ := json.Marshal(f.Sent["POST /api/vpn-servers/home/peers"]); string(b) != `{"fullTunnel":true,"name":"laptop"}` {
@@ -140,12 +140,12 @@ func TestVPNEndpointAndRemovePeer(t *testing.T) {
 	f := vpnFake()
 	f.Routes["POST /api/vpn-servers/home/endpoint"] = map[string]any{}
 	f.Routes["POST /api/vpn-servers/home/peers/remove"] = nil
-	m := press(t, vpnApp(t, f), "v", "E")
+	m := press(t, vpnApp(t, f), "v", "ctrl+e")
 	m = press(t, typed(t, m, "vpn2.example.org"), "enter")
 	if b, _ := json.Marshal(f.Sent["POST /api/vpn-servers/home/endpoint"]); string(b) != `{"endpointHost":"vpn2.example.org"}` {
 		t.Fatalf("sent %s", b)
 	}
-	m = press(t, typed(t, press(t, m, "-"), "tablet"), "enter")
+	m = press(t, typed(t, press(t, m, "ctrl+o"), "tablet"), "enter")
 	if !strings.Contains(tuitest.Frame(m), "no peer by that name") {
 		t.Fatalf("frame:\n%s", tuitest.Frame(m))
 	}
@@ -162,7 +162,7 @@ func TestVPNEndpointAndRemovePeer(t *testing.T) {
 func TestVPNServerCreate(t *testing.T) {
 	f := vpnFake()
 	f.Routes["POST /api/vpn-servers"] = map[string]any{"server": map[string]any{"id": "s2"}}
-	m := press(t, typed(t, press(t, vpnApp(t, f), "v", "n"), "s2"), "enter")
+	m := press(t, typed(t, press(t, vpnApp(t, f), "v", "ctrl+n"), "s2"), "enter")
 	m = press(t, typed(t, m, "box-a"), "enter")
 	press(t, m, "enter")
 	if b, _ := json.Marshal(f.Sent["POST /api/vpn-servers"]); string(b) != `{"id":"s2","targetId":"box-a"}` {

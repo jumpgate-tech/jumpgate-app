@@ -86,7 +86,8 @@ func (s *settingsScreen) clickRow(a *App, row int) (tea.Cmd, bool) {
 
 func (s *settingsScreen) keys() []key.Binding {
 	return []key.Binding{navKeys.Up, navKeys.Down,
-		key.NewBinding(key.WithKeys("space"), key.WithHelp("space/enter", "toggle or change"))}
+		key.NewBinding(key.WithKeys("space"), key.WithHelp("space/enter", "toggle or change")),
+		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload"))}
 }
 
 // begin starts a visit: earlier commands end and their replies are dropped.
@@ -490,6 +491,8 @@ func (s *settingsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			s.cursor = min(s.cursor+1, len(items)-1)
 		case msg.String() == "space" || msg.String() == "enter":
 			return items[s.cursor].act(a, s)
+		case msg.String() == "r":
+			return tea.Batch(a.fetchPrefs(), s.update(a, enterMsg{}))
 		}
 	}
 	return nil

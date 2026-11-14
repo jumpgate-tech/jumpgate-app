@@ -136,13 +136,13 @@ func TestPairThisMachineRunsTheCLIInTheForeground(t *testing.T) {
 
 func TestRemoveNeedsTheHostName(t *testing.T) {
 	f := tuitest.NewFake()
-	m := press(t, hostsApp(t, f, "linux"), "j", "D")
+	m := press(t, hostsApp(t, f, "linux"), "j", "ctrl+d")
 	m = typed(t, m, "box-a")
 	m = press(t, m, "enter")
 	if f.Called("RemoveTarget") {
 		t.Fatal("the wrong name removed a box")
 	}
-	m = press(t, m, "esc", "D")
+	m = press(t, m, "esc", "ctrl+d")
 	m = typed(t, m, "box-b")
 	press(t, m, "enter")
 	if !f.Called("RemoveTarget box-b") {
@@ -317,7 +317,7 @@ func TestRemoveRefusesAnUnshowableName(t *testing.T) {
 	f := tuitest.NewFake()
 	f.TargetsV = []api.TargetView{{ID: "bad\x1b[2Jname", Mode: "ssh", SSH: &api.SSHView{User: "r", Host: "h"}}}
 	a := newTestApp(t, f, 80, 24, "unicode")
-	m := press(t, a, "v", "D")
+	m := press(t, a, "v", "ctrl+d")
 	m = press(t, m, "enter")
 	m = typed(t, m, "badname")
 	press(t, m, "enter")
@@ -583,7 +583,7 @@ func TestFleetHostModeV(t *testing.T) {
 func TestFleetRemoveActsOnSelection(t *testing.T) {
 	f := tuitest.NewFake()
 	f.TargetsV = sampleTargets()
-	m := press(t, fleetApp(t, f, "ascii", apiclient.Live), "j", "D")
+	m := press(t, fleetApp(t, f, "ascii", apiclient.Live), "j", "ctrl+d")
 	_, ok := m.(*App).modal.(*confirmModal)
 	if !ok || !strings.Contains(tuitest.Frame(m), "remove box-b") {
 		t.Fatalf("modal %T:\n%s", m.(*App).modal, tuitest.Frame(m))

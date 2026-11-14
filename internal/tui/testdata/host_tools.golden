@@ -4,7 +4,7 @@
  link: not read yet
  Overview  Storage  Endpoints  Security  Logs  Services  Docker  [Tools]
 
- [c] run checks  [r] latest  [M] monitor  [I] intent  [w] setup wizard
+ [ctrl+e] run checks  [r] latest  [M] monitor  [I] intent  [ctrl+w] setup wizard
 
  latest diagnostics
    at: ***
@@ -21,4 +21,4 @@
 
 
 
- jobs n/a | [c] run checks  [r] reload  [M] monitor  [I] intent  [?] more
+ jobs n/a | [ctrl+e] run checks  [r] reload  [M] monitor  [I] intent  [?] more

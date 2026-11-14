@@ -13,13 +13,18 @@ func newActions(_ *App, h *hostScreen) *menuModal {
 	if h != nil {
 		m.title = "ACTIONS for " + sanitizeLine(h.id)
 	}
-	keyOf := map[string]string{"restart": "e", "stop": "t", "start": "s"}
+	keyOf := map[string]string{"restart": "ctrl+r", "stop": "ctrl+t", "start": "ctrl+s"}
 	for _, svc := range services {
 		for _, act := range []string{"restart", "stop", "start"} {
 			svc, act := svc, act
 			m.all = append(m.all, menuItem{label: act + " " + svc, hint: "Services tab: " + keyOf[act],
 				run: func(a *App) tea.Cmd { return h.serviceAction(a, svc, act) }})
 		}
+	}
+	if h != nil && h.shownTab == "containers" && h.ctrCursor < len(h.ctr.Services) {
+		c := h.ctr.Services[h.ctrCursor]
+		m.all = append(m.all, menuItem{label: "reset the devnet " + sanitizeLine(c.ID), hint: "asks for its name; menu only",
+			run: func(a *App) tea.Cmd { h.askReset(a, c); return nil }})
 	}
 	m.all = append(m.all,
 		menuItem{label: "measure disk", hint: "Storage tab: " + hostKeys.Measure.Help().Key, run: func(a *App) tea.Cmd {

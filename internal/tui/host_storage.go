@@ -27,7 +27,7 @@ func (h *hostScreen) viewStorage(a *App, w int) string {
 		return "\n " + a.th.Dim.Render("reading the disk"+a.gl.Ellipsis)
 	}
 	d := h.disk
-	state := "measured " + formatAge(a.now().Sub(d.At)) + " ago " + a.gl.Sep + " [r] measure now"
+	state := "measured " + formatAge(a.now().Sub(d.At)) + " ago " + a.gl.Sep + " [ctrl+p] measure now"
 	if h.measuring {
 		state = "measuring" + a.gl.Ellipsis
 	}

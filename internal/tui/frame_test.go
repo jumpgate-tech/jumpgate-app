@@ -363,7 +363,7 @@ func TestModalInsideFrame(t *testing.T) {
 	m := press(t, dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "auto"), "?")
 	fr := tuitest.Frame(m)
 	lines := strings.Split(fr, "\n")
-	if !strings.HasPrefix(lines[0], " jumpgate  server live") || !strings.Contains(fr, "+- Activity") || !strings.Contains(fr, "keys everywhere") || !strings.Contains(fr, "+- Views") {
+	if !strings.HasPrefix(lines[0], " jumpgate  server live") || !strings.Contains(fr, "+- Activity") || !strings.Contains(fr, "look (plain keys)") || !strings.Contains(fr, "+- Views") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 	if m.(*App).modal == nil {

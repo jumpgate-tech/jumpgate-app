@@ -93,10 +93,10 @@ func TestStorageLoadsAndMeasures(t *testing.T) {
 		}
 	}
 	tuitest.Golden(t, "host_storage", fr)
-	m, cmds = tuitest.Send(m, tuitest.Key("r"))
+	m, cmds = tuitest.Send(m, tuitest.Key("ctrl+p"))
 	tuitest.Settle(m, cmds...)
 	if !f.Called("MeasureDisk box") {
-		t.Fatal("r did not measure")
+		t.Fatal("ctrl+p did not measure")
 	}
 }
 
@@ -243,7 +243,7 @@ func TestHostScreensCannotBeEscaped(t *testing.T) {
 		m, cmds := tuitest.Send(m, tuitest.Key("right"))
 		m = tuitest.Settle(m, cmds...)
 		requireClean(t, "storage", m.View().Content)
-		m, cmds = tuitest.Send(m, tuitest.Key("r"))
+		m, cmds = tuitest.Send(m, tuitest.Key("ctrl+p"))
 		m = tuitest.Settle(m, cmds...)
 		requireClean(t, "storage after a failed measure", m.View().Content)
 		a.detail.(*hostScreen).tab = 6 // the hostile tab name
@@ -301,7 +301,7 @@ func TestHostDiskCallsRunOnTheHostContext(t *testing.T) {
 	h := a.detail.(*hostScreen)
 	h.tab = 1 // storage
 	tuitest.Run(h.load(a, "storage"))
-	tuitest.Run(func() tea.Cmd { c, _ := h.tabKey(a, tuitest.Key("r")); return c }())
+	tuitest.Run(func() tea.Cmd { c, _ := h.tabKey(a, tuitest.Key("ctrl+p")); return c }())
 	if len(be.diskCtx) != 1 || len(be.measureCtx) != 1 {
 		t.Fatal("Disk and MeasureDisk were not both called")
 	}

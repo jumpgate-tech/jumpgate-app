@@ -18,7 +18,7 @@ func TestModulesModalTurnsOnWatch(t *testing.T) {
 		}
 	}
 	f.SetModuleV = api.SetModuleResult{Status: "started"}
-	m := press(t, openTestHost(t, f, "unicode"), "m", "down", "down", "down", "enter")
+	m := press(t, openTestHost(t, f, "unicode"), "m", "down", "down", "down", "ctrl+t")
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "endpoints") {
 		t.Fatalf("no endpoints field:\n%s", fr)
 	}

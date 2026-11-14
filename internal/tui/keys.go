@@ -22,10 +22,10 @@ var globalKeys = struct {
 	Back:      key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 	Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 	ForceQuit: key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit now")),
-	Restart:   key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restart the server")),
+	Restart:   key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "restart the server")),
 	Unlock:    key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "unlock the vault")),
 	// ctrl+l, not L: L pairs this machine on the hosts view.
-	Lock:   key.NewBinding(key.WithKeys("ctrl+l"), key.WithHelp("ctrl+l", "lock the vault")),
+	Lock:   key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "lock the vault")),
 	Guide:  key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "setup guide")),
 	Invite: key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "invite a box: one line to run on it")),
 	// c copies only while the invite shows; elsewhere it is the view's.

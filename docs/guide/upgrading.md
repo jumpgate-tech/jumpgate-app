@@ -2,7 +2,7 @@
 
 ## The controller
 
-Download the new release and replace the app or the binary. The background server from the old version may still be running: commands warn you when the server is a different jumpgate version. Run `jumpgate stop` to replace it; the next command or app launch starts the new one. When the versions differ, the TUI also offers `R` to restart the server.
+Download the new release and replace the app or the binary. The background server from the old version may still be running: commands warn you when the server is a different jumpgate version. Run `jumpgate stop` to replace it; the next command or app launch starts the new one. When the versions differ, the TUI also offers `ctrl+r` to restart the server.
 
 If the app finds a server already running with different options, it prints which options are not in effect. Run `jumpgate stop` and launch again to apply them.
 
@@ -16,7 +16,7 @@ After you upgrade the controller, replace each box's gate with the controller's:
 jumpgate hosts upgrade box-a
 ```
 
-It reports the gate's version before and after, or that it is already current. In the TUI, `u` on the table of addresses and pairing (`v` on the Fleet) does the same.
+It reports the gate's version before and after, or that it is already current. In the TUI, `ctrl+u` on the table of addresses and pairing (`v` on the Fleet) does the same.
 
 Running `jumpgate hosts add` again on an existing name re-pairs the address on record. That finishes an interrupted pairing. It refuses a different address (`--ssh`, `--jump`, or `--local` instead of `--ssh`). To point the name somewhere else, remove the host in the app or with `:remove NAME` in the TUI, then add it again.
 

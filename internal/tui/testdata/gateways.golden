@@ -1,6 +1,6 @@
  jumpgate  Fleet Jobs Signers [Gateways] VPN Vault Server Settings   connecting
  connecting to the server… no readings yet
- [n] new  [s] start  [t] stop  [e] restart  [D] delete  [m] modules  [?] more
+ [ctrl+n] new  [ctrl+s] start  [ctrl+t] stop  [ctrl+r] restart  [ctrl+d] delete…
 
 ▸rpc-main       on box          running   https://rpc.example.org/
    PulseChain (369)  https://rpc.example.org/369
@@ -21,4 +21,4 @@
 
 
 
- jobs n/a | [enter] open  [m] modules  [r] reload  [n] new  [D] delete  [?] more
+ jobs n/a | [enter] open  [m] modules  [r] reload  [ctrl+n] new  [?] more

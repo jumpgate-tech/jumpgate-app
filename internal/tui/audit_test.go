@@ -53,9 +53,9 @@ func TestServerStringsCannotEscape(t *testing.T) {
 		m := plain(t, press(t, newTestApp(t, f, 100, 30, "unicode"), "4"))
 		noEscape(t, "list", m)
 		noEscape(t, "analytics", press(t, m, "A"))
-		noEscape(t, "error", press(t, m, "s"))
-		noEscape(t, "provision confirm", press(t, m, "P"))
-		m = press(t, m, "esc", "+")
+		noEscape(t, "error", press(t, m, "ctrl+s"))
+		noEscape(t, "provision confirm", press(t, m, "ctrl+p"))
+		m = press(t, m, "esc", "ctrl+y")
 		m = press(t, typed(t, m, "x"), "enter")
 		if _, ok := m.(*App).modal.(*onceModal); !ok {
 			t.Fatalf("no show-once modal: %T", m.(*App).modal)
@@ -74,7 +74,7 @@ func TestServerStringsCannotEscape(t *testing.T) {
 		m = press(t, m, "v")
 		noEscape(t, "servers", m)
 		noEscape(t, "status", press(t, m, "s"))
-		m = press(t, typed(t, press(t, m, "p"), "laptop"), "enter")
+		m = press(t, typed(t, press(t, m, "ctrl+p"), "laptop"), "enter")
 		m = press(t, m, "enter")
 		if _, ok := m.(*App).modal.(*onceModal); !ok {
 			t.Fatalf("no show-once modal: %T", m.(*App).modal)

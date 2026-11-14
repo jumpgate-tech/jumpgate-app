@@ -37,7 +37,7 @@ var shortDesc = map[string]string{
 	"open the web app in the browser": "open in the browser", "install the systemd service (sudo)": "install service",
 	"set up the service: vault key, unlock, pair this machine (sudo)": "set up service", "set up the service, self-only (sudo)": "self-only",
 	"SSH shell on this box": "ssh", "actions menu for the selected item": "more actions",
-	"measure disk now (Storage)": "measure", "disk usage by path (Storage)": "disk usage",
+	"measure the disk now (Storage)": "measure", "disk usage by path (Storage)": "disk usage",
 	"start (Services)": "start", "restart, typed confirmation (Services)": "restart", "stop, typed confirmation (Services)": "stop",
 	"clear the service's state, typed confirmation (Services)": "clear state",
 	"follow the newest line":                                   "follow", "level: all, warn+, error+": "level", "explain the errors (AI)": "explain",

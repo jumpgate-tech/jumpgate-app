@@ -45,4 +45,4 @@
 | job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision                                                                          |
 | job  box-b      migrate-names  step 4/8     [########............]                                                                                           |
 +--------------------------------------------------------------------------------------------------------------------------------------------------------------+
- [enter] open  [a] add  [p] pair  [/] filter  [s] sort  [r] refresh  [v] addresses  [c] columns  [L] this machine  [D] remove  [?] more
+ [enter] open  [a] add  [p] pair  [/] filter  [s] sort  [r] refresh  [v] addresses  [c] columns  [L] this machine  [ctrl+d] remove  [?] more

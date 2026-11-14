@@ -81,7 +81,7 @@ func TestModulesModalNeedsTypedRestart(t *testing.T) {
 	f := modulesFake()
 	f.TargetsV[0].Wire.Modules = nil
 	f.SetModuleV = api.SetModuleResult{Status: "started"}
-	m := press(t, openTestHost(t, f, "unicode"), "m", "enter")
+	m := press(t, openTestHost(t, f, "unicode"), "m", "ctrl+t")
 	fr := tuitest.Frame(m)
 	if !strings.Contains(fr, "This restarts reth on box. The beacon keeps running.") {
 		t.Fatalf("no restart line:\n%s", fr)
@@ -107,7 +107,7 @@ func TestModulesModalTurnsABoxModuleOff(t *testing.T) {
 	f.TargetsV[0].Modules = []catalog.BoxModule{{ID: "el-bootnode", ChainID: 369}}
 	f.SetModuleV = api.SetModuleResult{Status: "started"}
 	f.SetupV = []api.SetupEvent{{StepID: "modules", Line: "stopping jumpgate-mod-el-bootnode-369"}, {Done: true}}
-	m := press(t, openTestHost(t, f, "unicode"), "m", "down", "enter")
+	m := press(t, openTestHost(t, f, "unicode"), "m", "down", "ctrl+t")
 	if !f.Called("SetModule box el-bootnode") || f.LastSetModule.Enabled || f.LastSetModule.ChainID != 369 {
 		t.Fatalf("calls %v, req %+v", f.Calls, f.LastSetModule)
 	}
@@ -149,7 +149,7 @@ func TestModulesModalCopiesBootnodeIdentity(t *testing.T) {
 func TestModulesModalBoxFields(t *testing.T) {
 	f := modulesFake()
 	f.SetModuleV = api.SetModuleResult{Status: "started"}
-	m := press(t, openTestHost(t, f, "unicode"), "m", "down", "enter")
+	m := press(t, openTestHost(t, f, "unicode"), "m", "down", "ctrl+t")
 	fr := tuitest.Frame(m)
 	if !strings.Contains(fr, "30301") || !strings.Contains(fr, "public IP") {
 		t.Fatalf("no fields:\n%s", fr)
@@ -167,7 +167,7 @@ func TestModulesModalBoxFields(t *testing.T) {
 // A disabled module never sends a request; its reason is shown.
 func TestModulesModalDisabledSendsNothing(t *testing.T) {
 	f := modulesFake()
-	m := press(t, openTestHost(t, f, "unicode"), "m", "down", "down", "enter")
+	m := press(t, openTestHost(t, f, "unicode"), "m", "down", "down", "ctrl+t")
 	if f.Called("SetModule") {
 		t.Fatal("a disabled module was sent")
 	}
@@ -181,13 +181,13 @@ func TestModulesModalDisabledSendsNothing(t *testing.T) {
 func TestModulesModalPublicChoice(t *testing.T) {
 	f := modulesFake()
 	f.SetModuleV = api.SetModuleResult{Status: "saved"}
-	m := press(t, openTestHost(t, f, "unicode"), "m", "p")
+	m := press(t, openTestHost(t, f, "unicode"), "m", "ctrl+p")
 	if !f.Called("SetModule box msgboard") || f.LastSetModule.Public != "read" || !f.LastSetModule.Enabled {
 		t.Fatalf("calls %v, req %+v", f.Calls, f.LastSetModule)
 	}
 	f.Calls = nil
 	// Moving to post shows the D11 warning first and sends nothing yet.
-	m = press(t, m, "p")
+	m = press(t, m, "ctrl+p")
 	if f.Called("SetModule") {
 		t.Fatal("post was sent before the warning was seen")
 	}
@@ -198,7 +198,7 @@ func TestModulesModalPublicChoice(t *testing.T) {
 	if f.Called("SetModule") || m.(*App).modal == nil {
 		t.Fatal("esc on the warning sent post or closed the modal")
 	}
-	m = press(t, m, "p", "enter")
+	m = press(t, m, "ctrl+p", "enter")
 	if !f.Called("SetModule box msgboard") || f.LastSetModule.Public != "post" {
 		t.Fatalf("calls %v, req %+v", f.Calls, f.LastSetModule)
 	}
@@ -215,7 +215,7 @@ func TestModulesModalPublicNeedsPublicGatewayAndOptions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := modulesFake()
 			edit(f)
-			m := press(t, openTestHost(t, f, "unicode"), "m", "p")
+			m := press(t, openTestHost(t, f, "unicode"), "m", "ctrl+p")
 			if f.Called("SetModule") || strings.Contains(tuitest.Frame(m), "p to change") {
 				t.Fatalf("p offered:\n%s", tuitest.Frame(m))
 			}
@@ -233,7 +233,7 @@ func TestModulesOnButHiddenCanBeTurnedOff(t *testing.T) {
 	if fr := tuitest.Frame(a); !strings.Contains(fr, "Health watch") {
 		t.Fatalf("an on module was hidden:\n%s", fr)
 	}
-	press(t, a, "m", "down", "down", "down", "enter")
+	press(t, a, "m", "down", "down", "down", "ctrl+t")
 	if !f.Called("SetModule box watch") || f.LastSetModule.Enabled {
 		t.Fatalf("calls %v, req %+v", f.Calls, f.LastSetModule)
 	}

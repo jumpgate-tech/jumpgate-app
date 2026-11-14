@@ -71,7 +71,7 @@ func TestGuideFreshInstall(t *testing.T) {
 	if s := stepOf(f, "recovery"); !strings.Contains(s.how, "Create the vault first") {
 		t.Errorf("recovery: %q", s.how)
 	}
-	if s := stepOf(f, "key"); s.screen != scrSigners || strings.Join(s.press, "") != "K" {
+	if s := stepOf(f, "key"); s.screen != scrSigners || strings.Join(s.press, "") != "ctrl+n" {
 		t.Errorf("key: %+v", s)
 	}
 	if s := stepOf(f, "box"); s.screen != scrFleet || strings.Join(s.press, "") != "a" {

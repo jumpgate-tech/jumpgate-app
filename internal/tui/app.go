@@ -552,7 +552,7 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(k, globalKeys.Quit) && a.detail == nil:
 		a.cancel()
 		return tea.Quit
-	case key.Matches(k, globalKeys.Restart) && a.canRestart():
+	case key.Matches(k, globalKeys.Restart) && a.canRestart() && a.detail == nil: // an open box's ctrl+r restarts a service
 		return a.restart()
 	case key.Matches(k, globalKeys.Unlock):
 		a.modal = newUnlock()

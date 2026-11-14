@@ -67,10 +67,10 @@ func TestGuideStepsNameRealThings(t *testing.T) {
 	if s := stepOf(gFacts(func(f *guideFacts) { f.modsKnown = true }), "module"); !strings.Contains(s.how, "press m") {
 		t.Errorf("module: %q", s.how)
 	}
-	if s := stepOf(gFacts(func(f *guideFacts) { f.gateways = 0 }), "gateway"); !strings.Contains(s.how, "press n") || strings.Join(s.press, "") != "n" {
+	if s := stepOf(gFacts(func(f *guideFacts) { f.gateways = 0 }), "gateway"); !strings.Contains(s.how, "press ctrl+n") || strings.Join(s.press, "") != "ctrl+n" {
 		t.Errorf("gateway: %+v", s)
 	}
-	if s := stepOf(gFacts(func(f *guideFacts) { f.vault = gVault("unusable") }), "vault"); !strings.Contains(s.how, "press B") {
+	if s := stepOf(gFacts(func(f *guideFacts) { f.vault = gVault("unusable") }), "vault"); !strings.Contains(s.how, "press ctrl+r") {
 		t.Errorf("vault: %q", s.how)
 	}
 }
@@ -85,7 +85,7 @@ func TestGuideWrapsWhyAndDo(t *testing.T) {
 	}
 	fr := tuitest.Frame(m)
 	flat := strings.Join(strings.Fields(fr), " ")
-	for _, want := range []string{"It holds the controller key and the tokens, encrypted with your passphrase.", "Its file cannot be used. Vault: press B to restore a backup."} {
+	for _, want := range []string{"It holds the controller key and the tokens, encrypted with your passphrase.", "Its file cannot be used. Vault: press ctrl+r to restore a backup."} {
 		if !strings.Contains(flat, want) {
 			t.Errorf("guide lacks the whole sentence %q:\n%s", want, fr)
 		}
