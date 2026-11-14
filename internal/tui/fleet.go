@@ -521,6 +521,15 @@ func (s *fleetScreen) view(a *App, w, h int) string {
 		return strings.Join(append(out, " "+a.th.Dim.Render("waiting for the fleet"+a.gl.Ellipsis)), "\n")
 	}
 	rows, hidden := s.rows(a)
+	if len(a.fleet.Rows) == 0 {
+		// First run: say what to do, and make each way a button.
+		out = append(out, "",
+			" "+a.th.Title.Render("No boxes yet."),
+			"",
+			" [a] add a box over SSH",
+			" [i] one line to run on the box",
+			" [g] setup guide")
+	}
 	room := max(h-3, 1)
 	if s.cursor < s.offset {
 		s.offset = s.cursor

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/valve-tech/jumpgate/internal/api"
 	"github.com/valve-tech/jumpgate/internal/apiclient"
@@ -68,7 +69,7 @@ func guideSteps(f guideFacts) []guideStep {
 	case "none":
 		v.how, v.press = "Vault: press I to create it.", []string{"I"}
 	case "unusable":
-		v.how, v.press = "Its file cannot be used. Vault: press r to restore a backup.", []string{"r"}
+		v.how, v.press = "Its file cannot be used. Vault: press B to restore a backup.", []string{"B"}
 	default:
 		v.how = "Not read yet: connect to the server first."
 	}
@@ -119,7 +120,7 @@ func guideSteps(f guideFacts) []guideStep {
 		why: "A box is a machine that runs your node and its gate."}
 	b.how = "Added."
 	if !b.done {
-		b.how, b.press = "Fleet, hosts view: press a to add one over SSH, or i for a line to run on the box.", []string{"v", "a"}
+		b.how, b.press = "Fleet: press a to add one over SSH, or i for a line to run on the box.", []string{"a"}
 	}
 	add(b)
 
@@ -140,7 +141,7 @@ func guideSteps(f guideFacts) []guideStep {
 	case len(rows) == 0:
 		p.how = "Add a box first."
 	case pairedN == 0:
-		p.how, p.press = "Fleet, hosts view: select the box and press p to pair it.", []string{"v"}
+		p.how = "Fleet: select the box and press p to pair it."
 	default:
 		p.how = "Fleet: see what is wrong with the box."
 	}
@@ -158,14 +159,14 @@ func guideSteps(f guideFacts) []guideStep {
 	case sealed:
 		s.how = "Sealed."
 	case f.goos == "linux":
-		s.how = "Vault: press s to seal with the TPM2, or S with the host key."
+		s.how = "Vault: press Z to seal with the TPM2, or S with the host key."
 	default:
 		s.how = "On the Linux service: jumpgate vault seal."
 	}
 	add(s)
 
 	add(guideStep{id: "second", title: "A second box", done: len(rows) >= 2, optional: true, screen: scrFleet,
-		why: "Two boxes keep a node up while one is down or upgrading.", how: map[bool]string{true: "Added.", false: "Fleet, hosts view: press a."}[len(rows) >= 2]})
+		why: "Two boxes keep a node up while one is down or upgrading.", how: map[bool]string{true: "Added.", false: "Fleet: press a."}[len(rows) >= 2]})
 
 	on := false
 	for _, m := range f.mods {
@@ -179,7 +180,7 @@ func guideSteps(f guideFacts) []guideStep {
 	case on:
 		m.how = "On."
 	case f.modsKnown:
-		m.how = "Open a box, its Modules tab, and press space on a module."
+		m.how = "Fleet: open a box with enter, press m, then enter on a module."
 	default:
 		m.how = "Not checked yet: expand a box in the tree."
 	}
@@ -193,7 +194,7 @@ func guideSteps(f guideFacts) []guideStep {
 	case f.gateways < 0:
 		g.how = "Not read yet."
 	default:
-		g.how = "Gateways: add one in the web app (jumpgate open)."
+		g.how, g.press = "Gateways: press n to add one.", []string{"n"}
 	}
 	add(g)
 	return steps
@@ -305,8 +306,9 @@ func (a *App) maybeGuide() {
 
 // guideModal is the checklist; enter runs the selected step's action.
 type guideModal struct {
-	cursor int
-	moved  bool // the person picked a step; until then the cursor follows the next one
+	cursor  int
+	moved   bool  // the person picked a step; until then the cursor follows the next one
+	rowStep []int // the step on each drawn line, -1 for none, for clicks
 }
 
 func newGuide(a *App) *guideModal {
@@ -375,10 +377,16 @@ func (g *guideModal) view(a *App, w, h int) string {
 	}
 	g.cursor = min(g.cursor, len(steps)-1)
 	var lines []string
+	g.rowStep = g.rowStep[:0]
+	add := func(l string, step int) {
+		lines = append(lines, l)
+		g.rowStep = append(g.rowStep, step)
+	}
 	n := 0
 	for i, s := range steps {
 		if s.optional && (i == 0 || !steps[i-1].optional) {
-			lines = append(lines, "", "  optional:")
+			add("", -1)
+			add("  optional:", -1)
 		}
 		n++
 		mark := a.th.Warn.Render("todo")
@@ -394,14 +402,42 @@ func (g *guideModal) view(a *App, w, h int) string {
 		} else {
 			l = "  " + l
 		}
-		lines = append(lines, truncate(l, w, a.gl.Ellipsis))
+		add(truncate(l, w, a.gl.Ellipsis), i)
 	}
 	s := steps[g.cursor]
-	lines = append(lines, "", truncate("  why: "+s.why, w, a.gl.Ellipsis), truncate("  do:  "+s.how, w, a.gl.Ellipsis), "")
+	add("", -1)
+	// why and do wrap under their labels rather than being cut at the edge,
+	// at most three lines each.
+	for _, f := range []struct{ label, text string }{{"why: ", s.why}, {"do:  ", s.how}} {
+		wrapped := strings.Split(ansi.Wrap(f.text, max(w-9, 10), ""), "\n")
+		if len(wrapped) > 3 {
+			wrapped = append(wrapped[:2], truncate(strings.Join(wrapped[2:], " "), max(w-9, 10), a.gl.Ellipsis))
+		}
+		for i, l := range wrapped {
+			prefix := "  " + f.label
+			if i > 0 {
+				prefix = "        "
+			}
+			add(prefix+l, -1)
+		}
+	}
+	add("", -1)
 	foot := "  [esc] close"
 	if s.screen != noScreen || len(s.press) > 0 {
 		foot = "  [enter] go there  [esc] close"
 	}
-	lines = append(lines, a.th.Dim.Render(foot))
+	add(a.th.Dim.Render(foot)+a.th.Dim.Render("   (click a step to go there)"), -1)
 	return strings.Join(lines, "\n")
+}
+
+// click on a step goes there, as enter does.
+func (g *guideModal) click(a *App, row, _ int) (done, handled bool, cmd tea.Cmd) {
+	if row < 0 || row >= len(g.rowStep) || g.rowStep[row] < 0 {
+		return false, false, nil
+	}
+	steps := guideSteps(a.facts())
+	i := min(g.rowStep[row], len(steps)-1)
+	g.cursor, g.moved = i, true
+	a.modal = nil
+	return true, true, a.runStep(steps[i])
 }

@@ -273,6 +273,9 @@ func (a *App) tileStyle(t tile, s string) string {
 // noReadings is the strip before the fleet has been read: one phrase, not a
 // tile of n/a for every reading.
 func (a *App) noReadings() string {
+	if a.fleetHas && len(a.fleet.Rows) == 0 {
+		return "no boxes yet: nothing to read"
+	}
 	switch a.conn {
 	case apiclient.Retrying:
 		return "the server is not answering" + a.gl.Ellipsis + " no readings yet"
@@ -287,7 +290,7 @@ func (a *App) noReadings() string {
 func (a *App) kpiView(r rect) string {
 	al, known := a.currentAlerts()
 	ts := kpis(a.alertInput(), al, known)
-	if !a.fleetHas {
+	if !a.fleetHas || len(a.fleet.Rows) == 0 {
 		msg := a.noReadings()
 		a.kpiHits = append(a.kpiHits[:0], tileHit{0, r.W, "Boxes"})
 		if r.H < 4 {

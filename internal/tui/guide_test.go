@@ -74,7 +74,7 @@ func TestGuideFreshInstall(t *testing.T) {
 	if s := stepOf(f, "key"); s.screen != scrSigners || strings.Join(s.press, "") != "K" {
 		t.Errorf("key: %+v", s)
 	}
-	if s := stepOf(f, "box"); s.screen != scrFleet || strings.Join(s.press, "") != "va" {
+	if s := stepOf(f, "box"); s.screen != scrFleet || strings.Join(s.press, "") != "a" {
 		t.Errorf("box: %+v", s)
 	}
 }
