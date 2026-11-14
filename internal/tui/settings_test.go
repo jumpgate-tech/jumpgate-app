@@ -405,12 +405,12 @@ func TestSettingsStaleRepliesAreDropped(t *testing.T) {
 func TestMouseAndGlyphPreferencesApply(t *testing.T) {
 	f := tuitest.NewFake()
 	m := press(t, pick(t, settingsApp(t, f), "Mouse"), "space")
-	if !m.(*App).prefs.Mouse || m.(*App).View().MouseMode == 0 {
-		t.Fatal("mouse not enabled")
+	if m.(*App).prefs.MouseOn() || m.(*App).View().MouseMode != 0 {
+		t.Fatal("mouse not disabled")
 	}
 	m = press(t, pick(t, m.(*App), "Mouse"), "space")
-	if m.(*App).View().MouseMode != 0 {
-		t.Fatal("mouse not disabled")
+	if !m.(*App).prefs.MouseOn() || m.(*App).View().MouseMode == 0 {
+		t.Fatal("mouse not enabled")
 	}
 	// newTestApp starts on unicode; one press is ascii, and it applies.
 	m = press(t, pick(t, m.(*App), "Glyphs"), "space")

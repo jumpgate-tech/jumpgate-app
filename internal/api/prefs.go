@@ -64,10 +64,18 @@ type UIPrefs struct {
 	Compact        bool     `json:"compact"`
 	ShowEstimates  bool     `json:"showEstimates"`
 	Bell           bool     `json:"bell"`
-	Mouse          bool     `json:"mouse"`
-	Glyphs         string   `json:"glyphs"` // "auto" | "unicode" | "ascii"
-	Drawer         string   `json:"drawer"` // "auto" | "open" | "min"; auto minimizes a short window
+	// Mouse is a pointer so "never chosen" (nil, which means on) is told from
+	// "turned off" (false): a stored false stays off, a missing one is on.
+	Mouse  *bool  `json:"mouse,omitempty"`
+	Glyphs string `json:"glyphs"` // "auto" | "unicode" | "ascii"
+	Drawer string `json:"drawer"` // "auto" | "open" | "min"; auto minimizes a short window
 }
+
+// MouseOn reports whether mouse input is on: it is, unless it was turned off.
+func (p UIPrefs) MouseOn() bool { return p.Mouse == nil || *p.Mouse }
+
+// WithMouse is p with the mouse choice set explicitly.
+func (p UIPrefs) WithMouse(on bool) UIPrefs { p.Mouse = &on; return p }
 
 // DefaultPrefs is what a new controller shows.
 func DefaultPrefs() UIPrefs {
@@ -80,7 +88,7 @@ func DefaultPrefs() UIPrefs {
 	return UIPrefs{
 		FleetColumns: cols, HostTabs: slices.Clone(HostTabs), Chains: []int{},
 		RefreshSeconds: 15, Units: "GB", ShowEstimates: true, Glyphs: "auto", Drawer: "auto",
-	}
+	}.WithMouse(true)
 }
 
 // WithDefaults fills every zero-valued field from DefaultPrefs, so a stored
@@ -101,6 +109,9 @@ func (p UIPrefs) WithDefaults() UIPrefs {
 	}
 	if p.Units == "" {
 		p.Units = d.Units
+	}
+	if p.Mouse == nil {
+		p = p.WithMouse(true)
 	}
 	if p.Glyphs == "" {
 		p.Glyphs = d.Glyphs

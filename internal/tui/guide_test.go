@@ -195,7 +195,7 @@ func TestGuideEnterRunsTheStepsAction(t *testing.T) {
 
 func TestGuideClickOnTheStrip(t *testing.T) {
 	a := guideApp(t, tuitest.NewFake(), []api.FleetRow{{ID: "b"}}, api.VaultView{State: "locked"}, api.ControllerView{})
-	a.prefs.Mouse = true
+	a.prefs = a.prefs.WithMouse(true)
 	tuitest.Frame(a)
 	line := a.shown["header"].lines[0]
 	x := strings.Index(line, "setup")
@@ -332,7 +332,7 @@ func TestInviteLineClicks(t *testing.T) {
 	f.ServerVersion = "v0.6.0"
 	f.PairingV = api.PairingInfo{Controller: "0x1234567890abcdef1234567890abcdef12345678", TransportKey: testKey}
 	a := dashApp(t, f, 120, 40, "ascii", "auto")
-	a.prefs.Mouse = true
+	a.prefs = a.prefs.WithMouse(true)
 	m := press(t, a, "i")
 	fr := tuitest.Frame(m)
 	if strings.Contains(fr, "choose columns") {

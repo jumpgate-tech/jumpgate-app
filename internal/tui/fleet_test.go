@@ -173,7 +173,7 @@ func TestFleetMouseClickSelects(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := tuitest.NewFake()
-			f.PrefsV.Mouse = true
+			f.PrefsV = f.PrefsV.WithMouse(true)
 			a := fleetApp(t, f, "ascii", apiclient.Live)
 			m, _ := tuitest.Send(a, tea.WindowSizeMsg{Width: c.w, Height: c.h})
 			tuitest.Frame(m) // a click follows a render

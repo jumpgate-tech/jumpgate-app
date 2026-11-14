@@ -94,6 +94,10 @@ func clonePrefs(p api.UIPrefs) api.UIPrefs {
 	p.FleetColumns = slices.Clone(p.FleetColumns)
 	p.HostTabs = slices.Clone(p.HostTabs)
 	p.Chains = slices.Clone(p.Chains)
+	if p.Mouse != nil {
+		m := *p.Mouse
+		p.Mouse = &m
+	}
 	return p
 }
 
@@ -265,7 +269,7 @@ func (s *settingsScreen) items(a *App) []settingItem {
 		flag("Compact rows", func(p api.UIPrefs) bool { return p.Compact }, func(p *api.UIPrefs, v bool) { p.Compact = v }),
 		flag("Show estimates", func(p api.UIPrefs) bool { return p.ShowEstimates }, func(p *api.UIPrefs, v bool) { p.ShowEstimates = v }),
 		flag("Bell on jobs that need you", func(p api.UIPrefs) bool { return p.Bell }, func(p *api.UIPrefs, v bool) { p.Bell = v }),
-		flag("Mouse (off keeps text selectable)", func(p api.UIPrefs) bool { return p.Mouse }, func(p *api.UIPrefs, v bool) { p.Mouse = v }),
+		flag("Mouse (Shift or Option+drag selects text)", func(p api.UIPrefs) bool { return p.MouseOn() }, func(p *api.UIPrefs, v bool) { *p = p.WithMouse(v) }),
 	)
 	items = append(items,
 		settingItem{"AI EXPLAIN", "AI provider",

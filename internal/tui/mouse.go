@@ -140,7 +140,7 @@ func (a *App) press(k tea.KeyPressMsg) tea.Cmd {
 
 // click handles a left click: it focuses the region under it and acts.
 func (a *App) click(m tea.MouseClickMsg) tea.Cmd {
-	if !a.prefs.Mouse || m.Button != tea.MouseLeft || a.w < minW || a.h < minH {
+	if !a.prefs.MouseOn() || m.Button != tea.MouseLeft || a.w < minW || a.h < minH {
 		return nil
 	}
 	now := a.clock()
@@ -339,7 +339,7 @@ func (a *App) clickMain(x, y int, double bool) tea.Cmd {
 
 // wheel scrolls the region under the pointer.
 func (a *App) wheel(m tea.MouseWheelMsg) tea.Cmd {
-	if !a.prefs.Mouse || a.modal != nil || a.w < minW || a.h < minH {
+	if !a.prefs.MouseOn() || a.modal != nil || a.w < minW || a.h < minH {
 		return nil
 	}
 	up := m.Button == tea.MouseWheelUp

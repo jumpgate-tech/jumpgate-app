@@ -24,7 +24,7 @@ func mouseApp(t *testing.T, f *tuitest.Fake, w, h int) (*App, *time.Time) {
 	t.Helper()
 	a := dashApp(t, f, w, h, "ascii", "auto")
 	p := a.prefs
-	p.Mouse = true
+	p = p.WithMouse(true)
 	a.setPrefs(p)
 	now := time.Unix(1_000_000, 0)
 	a.clock = func() time.Time { return now }

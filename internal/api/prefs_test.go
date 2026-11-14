@@ -2,6 +2,7 @@
 package api
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -76,8 +77,31 @@ func TestPrefsValidate(t *testing.T) {
 }
 
 func TestWithDefaultsFillsZeroValues(t *testing.T) {
-	p := UIPrefs{Mouse: true}.WithDefaults()
-	if !p.Mouse || len(p.FleetColumns) == 0 || p.RefreshSeconds != 15 || p.Units != "GB" || p.Glyphs != "auto" || len(p.HostTabs) != len(HostTabs) {
+	p := UIPrefs{}.WithMouse(true).WithDefaults()
+	if !p.MouseOn() || len(p.FleetColumns) == 0 || p.RefreshSeconds != 15 || p.Units != "GB" || p.Glyphs != "auto" || len(p.HostTabs) != len(HostTabs) {
 		t.Fatalf("%+v", p)
+	}
+}
+
+// The mouse is on unless it was turned off: a block with no mouse field (a
+// new install, an old block) is on, and a stored false stays off.
+func TestMouseDefaultsOnButStoredFalseStaysOff(t *testing.T) {
+	if !DefaultPrefs().MouseOn() {
+		t.Fatal("default prefs: mouse is off")
+	}
+	for body, want := range map[string]bool{`{}`: true, `{"units":"GiB"}`: true, `{"mouse":true}`: true, `{"mouse":false}`: false} {
+		var p UIPrefs
+		if err := json.Unmarshal([]byte(body), &p); err != nil {
+			t.Fatal(err)
+		}
+		if got := p.WithDefaults().MouseOn(); got != want {
+			t.Errorf("%s: mouse on = %v, want %v", body, got, want)
+		}
+	}
+	// A false survives a round trip through the server's save.
+	raw, _ := json.Marshal(DefaultPrefs().WithMouse(false))
+	var back UIPrefs
+	if err := json.Unmarshal(raw, &back); err != nil || back.WithDefaults().MouseOn() {
+		t.Fatalf("false did not survive: %s %v", raw, err)
 	}
 }

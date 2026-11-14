@@ -599,7 +599,7 @@ func (a *App) restart() tea.Cmd {
 func (a *App) View() tea.View {
 	v := tea.NewView(a.render())
 	v.AltScreen = true
-	if a.prefs.Mouse {
+	if a.prefs.MouseOn() {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	return v
