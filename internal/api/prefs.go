@@ -66,7 +66,9 @@ type UIPrefs struct {
 	Bell           bool     `json:"bell"`
 	// Mouse is a pointer so "never chosen" (nil, which means on) is told from
 	// "turned off" (false): a stored false stays off, a missing one is on.
-	Mouse  *bool  `json:"mouse,omitempty"`
+	// It lives under a new key: the old "mouse" was a plain bool that every
+	// save wrote as false, so it says nothing about a choice and is ignored.
+	Mouse  *bool  `json:"mouse_on,omitempty"`
 	Glyphs string `json:"glyphs"` // "auto" | "unicode" | "ascii"
 	Drawer string `json:"drawer"` // "auto" | "open" | "min"; auto minimizes a short window
 }

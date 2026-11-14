@@ -85,11 +85,11 @@ func TestWithDefaultsFillsZeroValues(t *testing.T) {
 
 // The mouse is on unless it was turned off: a block with no mouse field (a
 // new install, an old block) is on, and a stored false stays off.
-func TestMouseDefaultsOnButStoredFalseStaysOff(t *testing.T) {
+func TestMouseDefaultsOnButAChosenOffStaysOff(t *testing.T) {
 	if !DefaultPrefs().MouseOn() {
 		t.Fatal("default prefs: mouse is off")
 	}
-	for body, want := range map[string]bool{`{}`: true, `{"units":"GiB"}`: true, `{"mouse":true}`: true, `{"mouse":false}`: false} {
+	for body, want := range map[string]bool{`{}`: true, `{"units":"GiB"}`: true, `{"mouse":true}`: true, `{"mouse":false}`: true, `{"mouse_on":true}`: true, `{"mouse_on":false}`: false} {
 		var p UIPrefs
 		if err := json.Unmarshal([]byte(body), &p); err != nil {
 			t.Fatal(err)
