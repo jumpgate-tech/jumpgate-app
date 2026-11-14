@@ -39,7 +39,7 @@ func TestGatewayStartShowsTheAnswer(t *testing.T) {
 // Stop, delete, provision and wipe run only after the typed confirmation.
 func TestGatewayDestructiveActionsAreTyped(t *testing.T) {
 	for _, c := range []struct{ k, route string }{
-		{"x", "POST /api/gateways/rpc-main/stop"},
+		{"t", "POST /api/gateways/rpc-main/stop"},
 		{"D", "DELETE /api/gateways/rpc-main"},
 		{"P", "POST /api/gateways/rpc-main/provision"},
 		{"W", "POST /api/gateways/rpc-main/wipe"},
@@ -89,7 +89,7 @@ func TestGatewayReadsAndChainAsk(t *testing.T) {
 		f.Routes["GET "+r] = map[string]any{"requests": 12}
 	}
 	m := gwApp(t, f)
-	for _, k := range []string{"enter", "v", "a", "A", "t", "y", "L", "o", "H"} {
+	for _, k := range []string{"enter", "v", "a", "A", "T", "y", "L", "o", "M"} {
 		m = press(t, m, k)
 	}
 	m = press(t, m, "K")

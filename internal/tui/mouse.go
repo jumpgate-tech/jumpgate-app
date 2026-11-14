@@ -134,7 +134,9 @@ func in(x, y int, r rect) bool { return x >= r.X && x < r.X+r.W && y >= r.Y && y
 
 // press runs a key as if typed.
 func (a *App) press(k tea.KeyPressMsg) tea.Cmd {
-	a.flash = ""
+	if !a.flashErr {
+		a.flash = ""
+	}
 	return a.key(k)
 }
 
@@ -160,6 +162,9 @@ func (a *App) click(m tea.MouseClickMsg) tea.Cmd {
 		return a.clickKPI(m.X)
 	case m.Y == a.h-1:
 		return a.clickLast(m.X, l)
+	case l.Flash.H > 0 && in(m.X, m.Y, l.Flash):
+		a.flash, a.flashErr = "", false // a click on an error dismisses it
+		return nil
 	case l.Invite.H > 0 && m.Y == l.Invite.Y:
 		if p, ok := a.shown["invite"]; ok && len(p.lines) > 0 {
 			if k, ok := buttonAt(p.lines[0], m.X); ok {
@@ -192,18 +197,40 @@ func (a *App) click(m tea.MouseClickMsg) tea.Cmd {
 	return nil
 }
 
+// modalClicker is a modal whose rows take a click: a menu entry, a guide
+// step, a topic. row and col are in the modal's own text, from its first
+// line; handled says the click was on one of its rows, done that the modal
+// is finished.
+type modalClicker interface {
+	click(a *App, row, col int) (done, handled bool, cmd tea.Cmd)
+}
+
 // clickModal: a modal with a text field (the typed confirm, the passphrase)
-// takes no clicks, so a click can never confirm or submit it. Other modals
-// take a click on a [k] button as the key, once the flush window has passed.
+// takes no click but "[esc]", which only cancels, so a click can never confirm
+// or submit it. Other modals take a click on a row or a [k] button, once the
+// flush window has passed.
 func (a *App) clickModal(x, y int) tea.Cmd {
-	if _, typed := a.modal.(pasteTaker); typed || a.flushing() {
+	if a.flushing() {
 		return nil
 	}
 	p, ok := a.shown["main"]
 	if !ok || y < p.y || y-p.y >= len(p.lines) {
 		return nil
 	}
-	if k, ok := buttonAt(p.lines[y-p.y], x-p.x); ok {
+	row, col := y-p.y, x-p.x
+	_, typed := a.modal.(pasteTaker)
+	if mc, ok := a.modal.(modalClicker); ok && !typed {
+		if done, handled, cmd := mc.click(a, row, col); handled {
+			if done {
+				a.modal = nil
+			}
+			return cmd
+		}
+	}
+	if k, ok := buttonAt(p.lines[row], col); ok {
+		if typed && k.String() != "esc" {
+			return nil
+		}
 		return a.press(k)
 	}
 	return nil
@@ -256,15 +283,11 @@ func (a *App) clickLast(x int, l layout) tea.Cmd {
 		return nil
 	}
 	line := p.lines[0]
-	if !l.DrawerOpen {
-		if i := strings.Index(line, " | "); i >= 0 && x < ansi.StringWidth(line[:i]) {
-			left := line[:i]
-			if d := strings.Index(left, "needs decision]"); d >= 0 && x >= ansi.StringWidth(left[:strings.LastIndex(left[:d], "[")]) &&
-				x < ansi.StringWidth(left[:d+len("needs decision]")]) {
-				return a.openScreen(scrJobs)
-			}
-			return a.toggleDrawer()
+	if !l.DrawerOpen && a.leftEnd > 0 && x < a.leftEnd {
+		if a.needsX1 > a.needsX0 && x >= a.needsX0 && x < a.needsX1 {
+			return a.openScreen(scrJobs)
 		}
+		return a.toggleDrawer()
 	}
 	if k, ok := buttonAt(line, x); ok {
 		return a.press(k)

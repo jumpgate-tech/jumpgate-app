@@ -39,7 +39,7 @@ func TestSignersShowsTheKeyAndBoxes(t *testing.T) {
 func TestTestSigningShowsTheVerifiedAnswer(t *testing.T) {
 	f := tuitest.NewFake()
 	f.CheckV = api.AgentCheck{Agent: "0x1234567890abcdef1234567890abcdef12345678", Version: "v0.9.0", ChainID: 369, SetUp: true, ElapsedMs: 120}
-	m := press(t, signersApp(t, f), "t")
+	m := press(t, signersApp(t, f), "T")
 	if !f.Called("CheckAgent box-a") {
 		t.Fatalf("calls %v", f.Calls)
 	}
@@ -167,12 +167,12 @@ func TestSignersSanitizesEverything(t *testing.T) {
 	}
 	a := press(t, plain(f), "3").(*App)
 	noEscapes(t, "controller", a)
-	m := press(t, a, "t")
+	m := press(t, a, "T")
 	noEscapes(t, "check", m)
 	f2 := tuitest.NewFake()
 	f2.TargetsV, f2.ControllerV = f.TargetsV, f.ControllerV
 	f2.Err = map[string]error{"CheckAgent": errors.New("boom" + evil), "Controller": errors.New("ctl" + evil)}
-	b := press(t, plain(f2), "3", "t")
+	b := press(t, plain(f2), "3", "T")
 	noEscapes(t, "errors", b)
 }
 
@@ -196,7 +196,7 @@ func TestStaleSignerRepliesAreDropped(t *testing.T) {
 	}
 	// Leave and come back: results from the first visit do not return.
 	gen := s.gen
-	m = press(t, m, "t")
+	m = press(t, m, "T")
 	m = press(t, m, "1", "3")
 	if s.gen == gen {
 		t.Fatal("leaving and returning did not start a new generation")

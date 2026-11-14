@@ -85,7 +85,7 @@ func TestHostsLeftoverContainers(t *testing.T) {
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "erpc-gw2 on box-a, merged into gw1") {
 		t.Fatalf("no row:\n%s", fr)
 	}
-	m = press(t, m, "d")
+	m = press(t, m, "D")
 	m = press(t, typed(t, m, "gw1"), "enter")
 	if f.Called("Do DELETE") {
 		t.Fatalf("dismissed on the wrong name")
@@ -104,7 +104,7 @@ func TestHostsLeftoverContainers(t *testing.T) {
 func TestSignersExportKeystore(t *testing.T) {
 	a := signersApp(t, tuitest.NewFake())
 	ran := recordSelf(a)
-	m := press(t, typed(t, press(t, a, "e"), "-x"), "enter")
+	m := press(t, typed(t, press(t, a, "E"), "-x"), "enter")
 	if len(*ran) != 0 {
 		t.Fatalf("a flag went through: %v", *ran)
 	}

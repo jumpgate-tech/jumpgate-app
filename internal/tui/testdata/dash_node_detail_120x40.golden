@@ -37,4 +37,4 @@
 | job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision                                  |
 | job  box-b      migrate-names  step 4/8     [########............]                                                   |
 +----------------------------------------------------------------------------------------------------------------------+
- left/right tab  [esc] back  [m] measure disk now (Storage)  [m] modules (other tabs)  [S] SSH shell on this box  [x] a~
+ [m] modules  [S] ssh  [x] more actions  left/right tab  [esc] back  [?] more

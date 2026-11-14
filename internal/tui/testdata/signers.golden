@@ -21,4 +21,4 @@
 
 
  t test signing  K create a key  e export  r reload
- jobs n/a | ↑↓ select  [t] test signing on the selected box  [K] create this co…
+ jobs n/a | [T] test  [K] create key  [E] export  [r] reload  [?] more

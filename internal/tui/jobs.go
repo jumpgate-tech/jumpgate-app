@@ -134,7 +134,7 @@ func (s *jobsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		return nil
 	case jobActionMsg:
 		if msg.err != nil {
-			a.flash = sanitizeLine(msg.what) + ": " + a.errText(msg.err)
+			a.setErr(sanitizeLine(msg.what) + ": " + a.errText(msg.err))
 			return nil
 		}
 		a.flash = sanitizeLine(msg.what + " sent; the box answered " + msg.v.State)
@@ -181,7 +181,7 @@ func (s *jobsScreen) decide(a *App) tea.Cmd {
 	case !ok || j.Question == nil:
 		a.flash = "this job is not waiting on a decision"
 	case !j.Question.Signable:
-		a.flash = "this decision needs an " + sanitizeLine(j.Question.Tier) + "-tier signature (a hardware or browser wallet); jumpgate cannot make one yet"
+		a.setErr("this decision needs an " + sanitizeLine(j.Question.Tier) + "-tier signature (a hardware or browser wallet); jumpgate cannot make one yet")
 	case !j.Lease.Mine && j.Lease.Fresh:
 		a.flash = "controller " + shortAddr(sanitizeLine(j.Lease.Owner), a.gl) + " holds this job; you are watching it"
 	case !j.Lease.Mine:

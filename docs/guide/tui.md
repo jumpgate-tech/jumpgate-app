@@ -6,7 +6,7 @@ Run `jumpgate` with no arguments in a terminal, or open the terminal launcher fo
 
 Keys `1` to `8` switch screens. At 100 columns or more a list of screens and boxes sits on the left; narrower, the screens are tabs in the header.
 
-- **1 Fleet:** every box at once: link, network, sync, lag, peers, disk and firewall. `a` adds a box, `p` pairs or re-pairs it and `d` removes it. `v` switches to a table of addresses and pairing, where `u` upgrades a box's gate. Settings chooses the columns. `enter` opens a box, with the tabs Overview, Storage, Endpoints, Security, Logs, Services, Docker and Tools; Settings can hide any of them.
+- **1 Fleet:** every box at once: link, network, sync, lag, peers, disk and firewall. `a` adds a box, `p` pairs or re-pairs it and `D` removes it. `v` switches to a table of addresses and pairing, where `u` upgrades a box's gate. Settings chooses the columns. `enter` opens a box, with the tabs Overview, Storage, Endpoints, Security, Logs, Services, Docker and Tools; Settings can hide any of them.
 - **2 Jobs:** the jobs inbox, with each job's steps, lease and question. The "needs decision" count in the status line at the bottom is the number of jobs waiting for you across the fleet.
 - **3 Signers:** this controller's key and the boxes it signs for. Test signing, create or export the key.
 - **4 Gateways:** your RPC gateways: create, start, stop, provision and delete them, read their analytics and traffic, manage customer keys, and turn their modules on and off.
@@ -17,18 +17,20 @@ Keys `1` to `8` switch screens. At 100 columns or more a list of screens and box
 
 ## Keys
 
+The same key means the same thing on every screen: `r` reloads, `s` starts, `t` stops, `e` restarts, `n` makes a new one, `D` deletes or removes, and `x` lists everything you can do with the selected item.
+
 - `1` to `8`: switch screens.
 - Arrows or `h` `j` `k` `l`: move, and switch tabs.
 - `enter`: open.
 - `esc`: go back.
 - `/`: filter.
 - `tab`: move between the list, the main area and the activity log. `[` and `]` show or hide the tree and the activity log, and `.` opens or closes the activity drawer.
-- `x`: the actions for an open box.
-- `m`: on an open box, its modules. See [Modules](modules.md). On the Storage tab `m` measures the disk, so use another tab.
+- `x`: the actions menu for the selected item: a filterable list of what you can do now, each with its key. Press `/` to filter, `enter` or a click to run one.
+- `m`: on an open box, its modules. See [Modules](modules.md). On the Storage tab `r` measures the disk.
 - `:`: take a command.
 - `?`: show every key for the screen you are on. Press `F` there for this guide.
 - `g`: the setup checklist. `i` shows the one line that sets up a box for this controller.
-- `U`: unlock the vault, offered while it is locked.
+- `U`: unlock the vault, offered while it is locked. `L` on the Vault screen locks it, and asks first when jobs are running.
 - `q`: quit.
 - `R`: restart the server, offered when its version differs from this jumpgate.
 

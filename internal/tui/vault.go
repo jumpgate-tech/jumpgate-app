@@ -23,16 +23,16 @@ import (
 
 var vaultKeys = struct{ Unlock, Lock, Idle, Put, Init, Migrate, Backup, Restore, Recovery, Rekdf, SealTPM, SealHost key.Binding }{
 	Unlock:   key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unlock")),
-	Lock:     key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "lock")),
-	Idle:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "idle lock minutes")),
+	Lock:     key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "lock")),
+	Idle:     key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "idle lock minutes")),
 	Put:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "put relay-token or admin-token")),
 	Init:     key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "create the vault")),
 	Migrate:  key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "move plain secrets into the vault")),
 	Backup:   key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "back up to a file")),
-	Restore:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restore from a file, typed confirmation")),
+	Restore:  key.NewBinding(key.WithKeys("B"), key.WithHelp("B", "restore from a file, typed confirmation")),
 	Recovery: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add a recovery code")),
 	Rekdf:    key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "raise the KDF cost")),
-	SealTPM:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "seal with the TPM2 (sudo)")),
+	SealTPM:  key.NewBinding(key.WithKeys("Z"), key.WithHelp("Z", "seal with the TPM2 (sudo)")),
 	SealHost: key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "seal with the host key (sudo)")),
 }
 
@@ -119,7 +119,7 @@ func (s *vaultScreen) key(a *App, k tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(k, vaultKeys.Unlock):
 		a.modal = newUnlock()
 	case key.Matches(k, vaultKeys.Lock):
-		return a.lockVault()
+		return a.requestLock()
 	case key.Matches(k, vaultKeys.Idle):
 		cur := ""
 		if s.idleHas {

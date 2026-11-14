@@ -24,7 +24,7 @@ import (
 var serverKeys = struct{ Check, Start, Stop, Open, Install, Setup, SelfOnly key.Binding }{
 	Check:    key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "check for an update now")),
 	Start:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "start the server")),
-	Stop:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop the server, typed confirmation")),
+	Stop:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "stop the server, typed confirmation")),
 	Open:     key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open the web app in the browser")),
 	Install:  key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "install the systemd service (sudo)")),
 	Setup:    key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "set up the service: vault key, unlock, pair this machine (sudo)")),
@@ -181,7 +181,7 @@ func (a *App) selfDone(m selfDoneMsg) tea.Cmd {
 	case errors.As(m.err, &ee):
 		a.flash = fmt.Sprintf("%s: exit %d", what, ee.ExitCode())
 	default:
-		a.flash = what + ": " + a.errText(m.err)
+		a.setErr(what + ": " + a.errText(m.err))
 	}
 	return loadGuide(a)
 }

@@ -50,11 +50,11 @@ func TestVPNUpDownStatusDelete(t *testing.T) {
 	f.Routes["GET /api/vpn-servers/home/status"] = map[string]any{"peers": 1}
 	f.Routes["GET /api/vpn-servers/home"] = map[string]any{"id": "home"}
 	f.Routes["DELETE /api/vpn-servers/home"] = nil
-	m := press(t, vpnApp(t, f), "u", "d", "s")
+	m := press(t, vpnApp(t, f), "s", "t", "y", "S")
 	if !strings.Contains(tuitest.Frame(m), "handshake: 12s ago") {
 		t.Fatalf("frame:\n%s", tuitest.Frame(m))
 	}
-	m = press(t, m, "v", "u", "s", "enter", "D")
+	m = press(t, m, "v", "s", "S", "enter", "D")
 	if _, ok := m.(*App).modal.(*confirmModal); !ok || f.Called("Do DELETE") {
 		t.Fatalf("delete without a typed confirmation: %T", m.(*App).modal)
 	}
@@ -140,12 +140,12 @@ func TestVPNEndpointAndRemovePeer(t *testing.T) {
 	f := vpnFake()
 	f.Routes["POST /api/vpn-servers/home/endpoint"] = map[string]any{}
 	f.Routes["POST /api/vpn-servers/home/peers/remove"] = nil
-	m := press(t, vpnApp(t, f), "v", "e")
+	m := press(t, vpnApp(t, f), "v", "E")
 	m = press(t, typed(t, m, "vpn2.example.org"), "enter")
 	if b, _ := json.Marshal(f.Sent["POST /api/vpn-servers/home/endpoint"]); string(b) != `{"endpointHost":"vpn2.example.org"}` {
 		t.Fatalf("sent %s", b)
 	}
-	m = press(t, typed(t, press(t, m, "x"), "tablet"), "enter")
+	m = press(t, typed(t, press(t, m, "-"), "tablet"), "enter")
 	if !strings.Contains(tuitest.Frame(m), "no peer by that name") {
 		t.Fatalf("frame:\n%s", tuitest.Frame(m))
 	}

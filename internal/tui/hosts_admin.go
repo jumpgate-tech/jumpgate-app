@@ -108,7 +108,7 @@ func adminMsg(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		id := sanitizeLine(msg.id)
 		switch {
 		case msg.err != nil:
-			a.flash = "upgrade the gate on " + id + ": " + a.errText(msg.err)
+			a.setErr("upgrade the gate on " + id + ": " + a.errText(msg.err))
 		case msg.v.Upgraded:
 			a.flash = "gate on " + id + ": " + sanitizeLine(msg.v.From) + " -> " + sanitizeLine(msg.v.To)
 		default:
@@ -117,7 +117,7 @@ func adminMsg(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return loadTargets(a), true
 	case hostKeysMsg:
 		if msg.err != nil {
-			a.flash = "host keys for " + sanitizeLine(msg.id) + ": " + a.errText(msg.err)
+			a.setErr("host keys for " + sanitizeLine(msg.id) + ": " + a.errText(msg.err))
 			return nil, true
 		}
 		if a.modal == nil {
@@ -126,14 +126,14 @@ func adminMsg(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	case forgotMsg:
 		if msg.err != nil {
-			a.flash = "forget " + sanitizeLine(msg.fp) + ": " + a.errText(msg.err)
+			a.setErr("forget " + sanitizeLine(msg.fp) + ": " + a.errText(msg.err))
 		} else {
 			a.flash = "forgot " + sanitizeLine(msg.fp) + " for " + sanitizeLine(msg.hostPort) + "; the next connection asks to confirm the key again"
 		}
 		return nil, true
 	case orphansMsg:
 		if msg.err != nil {
-			a.flash = "leftover containers: " + a.errText(msg.err)
+			a.setErr("leftover containers: " + a.errText(msg.err))
 			return nil, true
 		}
 		if a.modal == nil {
@@ -142,7 +142,7 @@ func adminMsg(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	case dismissedMsg:
 		if msg.err != nil {
-			a.flash = "dismiss " + sanitizeLine(msg.name) + ": " + a.errText(msg.err)
+			a.setErr("dismiss " + sanitizeLine(msg.name) + ": " + a.errText(msg.err))
 		} else {
 			a.flash = "dismissed " + sanitizeLine(msg.name) + "; the container itself was not touched"
 		}
@@ -239,7 +239,7 @@ func newHostKeysModal(id string, recs []api.RecordedHostKeys) *listModal {
 
 func newOrphansModal(os []orphan) *listModal {
 	m := &listModal{title: "Leftover containers", empty: "none: no gateway merge left a container behind",
-		act: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "dismiss, typed confirmation")),
+		act: key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "dismiss, typed confirmation")),
 		why: func(int) string { return "" }}
 	for _, o := range os {
 		m.rows = append(m.rows, sanitizeLine(o.ContainerName)+" on "+sanitizeLine(o.TargetID)+", merged into "+sanitizeLine(o.MergedInto))

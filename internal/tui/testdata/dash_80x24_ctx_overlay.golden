@@ -21,4 +21,4 @@
                                               |                                |
                                               |                                |
  3 boxes | sort: host | ~ stale  * this machin+--------------------------------+
- jobs 1 running  [! 1 needs decision] | up/dn scroll  [?] help
+ jobs 1 running  [! 1 needs decision] | up/dn scroll  [?] more

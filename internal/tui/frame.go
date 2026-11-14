@@ -100,6 +100,11 @@ func (a *App) frame() string {
 		a.keep("invite", "", 0, l.Invite.Y, inv)
 		parts = append(parts, inv)
 	}
+	if l.Flash.H > 0 {
+		fl := strings.Join(a.errorRows(a.w), "\n")
+		a.keep("flash", "", 0, l.Flash.Y, fl)
+		parts = append(parts, fl)
+	}
 	last := a.drawerLine(a.w)
 	if l.DrawerOpen {
 		dv := a.drawerView(l.Drawer, l.DrawerCompact)
@@ -320,38 +325,54 @@ func (a *App) jobsRunning() string {
 	return fmt.Sprintf("jobs %d running", n)
 }
 
-// drawerLine is the minimized drawer: counts (or the flash), then hints.
+// drawerLine is the minimized drawer: counts (or the flash), then buttons.
 // The drawer never opens itself; a pending decision is highlighted here.
+// The counts give way before the buttons do, and "[?] more" always stays.
 func (a *App) drawerLine(w int) string {
-	left := a.flash
-	if left == "" {
-		// The alert count is in the header already: every fact once.
-		parts := []string{a.jobsRunning()}
-		if n := a.needCount(); n > 0 {
-			parts = append(parts, a.th.Warn.Render(fmt.Sprintf("[! %d needs decision]", n)))
+	items := a.hintItems()
+	a.needsX0, a.needsX1, a.leftEnd = 0, 0, 0
+	if a.flash != "" && !a.flashErr {
+		// A notice takes the counts' place; it is cut, never the buttons' end.
+		left := " " + a.flash
+		room := w - lipgloss.Width(left) - 3
+		if room < lipgloss.Width("[?] more") {
+			left = truncate(left, max(w-3-lipgloss.Width("[?] more"), 1), a.gl.Ellipsis)
+			room = lipgloss.Width("[?] more")
 		}
-		left = strings.Join(parts, "  ")
+		return left + " | " + fitHints(items, room)
 	}
-	return truncate(" "+left+" | "+a.hints(), w, a.gl.Ellipsis)
+	// The alert count is in the header already: every fact once.
+	build := func(short bool) (plain, styled string, x0, x1 int) {
+		run := a.jobsRunning()
+		if short {
+			run = strings.TrimPrefix(run, "jobs ")
+			if run == "n/a" {
+				run = "jobs n/a"
+			}
+		}
+		plain, styled = " "+run, " "+run
+		if n := a.needCount(); n > 0 {
+			word := "needs decision"
+			if short {
+				word = "to decide"
+			}
+			b := fmt.Sprintf("[! %d %s]", n, word)
+			x0, x1 = lipgloss.Width(plain)+2, lipgloss.Width(plain)+2+lipgloss.Width(b)
+			plain += "  " + b
+			styled += "  " + a.th.Warn.Render(b)
+		}
+		return plain, styled, x0, x1
+	}
+	plain, styled, x0, x1 := build(false)
+	if hintsKept(items, w-lipgloss.Width(plain)-3) < min(len(items), 4) {
+		plain, styled, x0, x1 = build(true)
+	}
+	a.needsX0, a.needsX1, a.leftEnd = x0, x1, lipgloss.Width(plain)
+	return styled + " | " + fitHints(items, w-lipgloss.Width(plain)-3)
 }
 
-// hints are the focused pane's keys on one line, each key a button the
-// mouse can press; help (?) lists the rest.
-func (a *App) hints() string {
-	var hs []string
-	switch {
-	case a.modal != nil:
-	case a.focus == focusTree:
-		hs = []string{a.gl.UpDown + " select", "[space] expand", "[enter] open"}
-	case a.focus == focusLog:
-		hs = []string{a.gl.UpDown + " scroll"}
-	default:
-		hs = a.paneHints(a.current().keys())
-	}
-	return strings.Join(append(hs, "[?] help"), "  ")
-}
-
-// paneHints is a screen's keys as hints: the arrows folded into one each.
+// paneHints is a screen's keys as hints: the arrows are not listed (they
+// work everywhere), and a tab key is one hint for both directions.
 func (a *App) paneHints(bs []key.Binding) []string {
 	var hs []string
 	for _, b := range bs {
@@ -359,16 +380,13 @@ func (a *App) paneHints(bs []key.Binding) []string {
 			continue // c copies the invite while it shows
 		}
 		switch b.Help() {
-		case navKeys.Up.Help(), navKeys.Left.Help():
-			continue
-		case navKeys.Down.Help():
-			hs = append(hs, a.gl.UpDown+" select")
+		case navKeys.Up.Help(), navKeys.Left.Help(), navKeys.Down.Help():
 			continue
 		case navKeys.Right.Help():
 			hs = append(hs, "left/right tab")
 			continue
 		}
-		hs = append(hs, "["+keyLabel(b.Help().Key, a.gl)+"] "+b.Help().Desc)
+		hs = append(hs, a.button(b))
 	}
 	return hs
 }
@@ -498,7 +516,7 @@ func (a *App) drawerView(r rect, compact bool) string {
 		iw = r.W - 3
 	}
 	lines := a.activity(iw)
-	if a.flash != "" {
+	if a.flash != "" && !a.flashErr { // an error has its own rows above
 		lines = append([]string{truncate(a.flash, iw, a.gl.Ellipsis)}, lines...)
 	}
 	room := r.H

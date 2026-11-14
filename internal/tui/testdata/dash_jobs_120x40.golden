@@ -37,4 +37,4 @@
 | job  box-b      migrate-names  step 4/8     [########............]                                                   |
 | sync box-b      exec           21.1M/21.3M  [####################] 99.1% ~ stale                                     |
 +----------------------------------------------------------------------------------------------------------------------+
- up/dn select  [enter] open  [d] answer the selected job's question  [a] adopt a job whose controller went silent  [r] ~
+ [enter] open  [d] decide  [a] take over  [r] reload  [n] new job  [?] more

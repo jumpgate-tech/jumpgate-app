@@ -21,4 +21,4 @@
 
 
  / filter  ! level  f follow  ·  ↑↓ scroll  e explain
- jobs n/a | left/right tab  [esc] back  [m] measure disk now (Storage)  [m] mod…
+ jobs n/a | [/] filter  [f] follow  [!] level  [E] explain  [?] more

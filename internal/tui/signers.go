@@ -15,9 +15,9 @@ import (
 )
 
 var signerKeys = struct{ Test, Create, Export, Restart, Reload key.Binding }{
-	Test:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "test signing on the selected box")),
+	Test:    key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "test signing on the selected box")),
 	Create:  key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "create this controller's key")),
-	Export:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export a keystore v3 file")),
+	Export:  key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "export a keystore v3 file")),
 	Restart: key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restart the server (loads a new key)")),
 	Reload:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 }
@@ -128,7 +128,7 @@ func (s *signersScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 	case keysInitDoneMsg:
 		if msg.err != nil {
-			a.flash = "keys init did not finish: " + a.errText(msg.err)
+			a.setErr("keys init did not finish: " + a.errText(msg.err))
 		} else {
 			a.flash = "key created; press R to restart the server so it loads the key"
 			if a.o.Restart == nil {

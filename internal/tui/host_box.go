@@ -32,9 +32,9 @@ var boxKeys = struct {
 	Wipe:      key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "wipe the container, typed confirmation (Docker)")),
 	Reset:     key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "reset the devnet, typed confirmation (Docker)")),
 	Config:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "show the container's config (Docker)")),
-	Edit:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "set the container's config as JSON (Docker)")),
-	Diag:      key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "run diagnostics (Tools)")),
-	Latest:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "latest diagnostics (Tools)")),
+	Edit:      key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "set the container's config as JSON (Docker)")),
+	Diag:      key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "run the checks (Tools)")),
+	Latest:    key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload the latest checks (Tools)")),
 	Monitor:   key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "monitor on/off (Tools)")),
 	Intent:    key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "run an intent (Tools)")),
 	Wizard:    key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "node setup wizard (Tools)")),
@@ -202,7 +202,7 @@ func (h *hostScreen) boxUpdate(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		if msg.err != nil {
 			h.setResult(msg.tab, boxResult{head: sanitizeLine(msg.head) + ": FAIL", lines: []string{a.errText(msg.err)}, bad: true})
-			a.flash = sanitizeLine(msg.head) + " failed"
+			a.setErr(sanitizeLine(msg.head) + " failed")
 			return nil, true
 		}
 		h.setResult(msg.tab, boxResult{head: sanitizeLine(msg.head), lines: jsonLines(msg.v)})
@@ -535,13 +535,13 @@ func (h *hostScreen) viewContainers(a *App, w, hgt int) string {
 			lines = append(lines, "   "+a.th.Warn.Render(sanitizeLine(wn)))
 		}
 	}
-	lines = append(lines, "", " s start  t stop  r restart  p provision  W wipe  X reset  v config  e edit")
+	lines = append(lines, "", " [s] start  [t] stop  [e] restart  [p] provision  [v] config  [E] edit", " [W] wipe  [X] reset the devnet")
 	lines = append(lines, h.viewResult(a, "containers")...)
 	return strings.Join(lines, "\n")
 }
 
 func (h *hostScreen) viewTools(a *App, w, hgt int) string {
-	lines := []string{"", " D run diagnostics  d latest  M monitor  I intent  w setup wizard"}
+	lines := []string{"", " [c] run checks  [r] latest  [M] monitor  [I] intent  [w] setup wizard"}
 	if h.monStop != nil {
 		state := "monitor " + h.monConn.String()
 		if h.monConn != apiclient.Live {

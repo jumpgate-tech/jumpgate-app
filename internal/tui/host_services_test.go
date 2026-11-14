@@ -61,7 +61,7 @@ func noEscapes(t *testing.T, what string, m tea.Model) {
 func TestServicesFrame(t *testing.T) {
 	a := servicesHost(t, tuitest.NewFake())
 	fr := tuitest.Frame(a)
-	for _, want := range []string{"SERVICES", "exec", "beacon", "active", "s start", "t stop", "r restart", "S  open an SSH shell"} {
+	for _, want := range []string{"SERVICES", "exec", "beacon", "active", "[s] start", "[t] stop", "[e] restart", "S  open an SSH shell"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("services lack %q:\n%s", want, fr)
 		}
@@ -110,7 +110,7 @@ func TestStopNeedsTheExactServiceName(t *testing.T) {
 
 func TestRestartAlsoNeedsTheName(t *testing.T) {
 	f := tuitest.NewFake()
-	m := press(t, servicesHost(t, f), "r")
+	m := press(t, servicesHost(t, f), "e")
 	press(t, m, "enter") // nothing typed
 	if f.Called("ServiceAction") {
 		t.Fatal("a bare enter restarted the service")
@@ -213,7 +213,8 @@ func TestActionsMenuRunsTheChosenAction(t *testing.T) {
 // No path from the menu stops or restarts without the typed word; start and
 // the others do not need it.
 func TestActionsMenuStopAndRestartAlwaysConfirm(t *testing.T) {
-	for i, item := range newActions(nil, nil).items {
+	for i, it := range newActions(nil, nil).all {
+		item := it.label
 		f := tuitest.NewFake()
 		m := press(t, openTestHost(t, f, "unicode"), "x")
 		for j := 0; j < i; j++ {

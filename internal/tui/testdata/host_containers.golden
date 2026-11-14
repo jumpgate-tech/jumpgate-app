@@ -9,7 +9,8 @@
    offers stop restart recreate wipe
    JSON-RPC  http://***/
 
- s start  t stop  r restart  p provision  W wipe  X reset  v config  e edit
+ [s] start  [t] stop  [e] restart  [p] provision  [v] config  [E] edit
+ [W] wipe  [X] reset the devnet
 
 
 
@@ -20,5 +21,4 @@
 
 
 
-
- jobs n/a | left/right tab  [esc] back  [m] measure disk now (Storage)  [m] mod…
+ jobs n/a | [s] start  [t] stop  [e] restart  [p] provision  [?] more

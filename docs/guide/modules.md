@@ -10,7 +10,7 @@ A module you do not see is not for this chain, so nothing is wrong. A module you
 
 ## Turning one on
 
-- **A box's modules.** Open the box and press `m` (on the Storage tab `m` measures the disk, so use another tab). Move to a module and press `enter` to turn it on or off. A box module asks for its settings first: `tab` moves between the fields and `enter` turns it on. The progress shows under the module.
+- **A box's modules.** Open the box and press `m`. Move to a module and press `enter` to turn it on or off. A box module asks for its settings first: `tab` moves between the fields and `enter` turns it on. The progress shows under the module.
 - **A node module's reach.** A node module is local to the node unless the node is behind a public gateway. Then `p` cycles it between local only, public reads, and public reads and posting. Allowing posting asks you to confirm.
 - **A gateway's modules.** On the Gateways screen, `m` lists the selected gateway's modules; press a module's number to turn it on or off.
 

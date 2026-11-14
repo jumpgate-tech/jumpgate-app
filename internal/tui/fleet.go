@@ -52,8 +52,8 @@ func (s *fleetScreen) keys() []key.Binding {
 	if s.hostMode {
 		return append(s.hosts.keys(), fleetKeys.Mode)
 	}
-	return []key.Binding{navKeys.Up, navKeys.Down, navKeys.Enter, navKeys.Filter, fleetKeys.Sort, fleetKeys.Columns, fleetKeys.Refresh, fleetKeys.Mode,
-		hostsKeys.Add, hostsKeys.Pair, hostsKeys.Local, hostsKeys.Remove}
+	return []key.Binding{navKeys.Up, navKeys.Down, navKeys.Enter, hostsKeys.Add, hostsKeys.Pair, navKeys.Filter, fleetKeys.Sort, fleetKeys.Refresh,
+		fleetKeys.Mode, fleetKeys.Columns, hostsKeys.Local, hostsKeys.Remove}
 }
 
 // selectID moves the table's cursor to the box id, when it is listed.

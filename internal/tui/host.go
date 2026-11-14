@@ -16,8 +16,8 @@ import (
 )
 
 var hostKeys = struct{ Measure, Modules key.Binding }{
-	Measure: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "measure disk now (Storage)")),
-	Modules: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "modules (other tabs)")),
+	Measure: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "measure disk now (Storage)")),
+	Modules: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "modules")),
 }
 
 // statusStaleAfter: three missed 5 s readings.
@@ -113,7 +113,8 @@ type hostScreen struct {
 	svcCursor int
 	svcLast   string
 
-	scroll int // first visible line of the Endpoints or Security tab; clamped when drawn
+	shownTab string // the tab view drew last, for keys()
+	scroll   int    // first visible line of the Endpoints or Security tab; clamped when drawn
 
 	modCat       []api.CatalogModule
 	modTarget    *api.TargetView // this box's record: its wire and box modules
@@ -152,8 +153,8 @@ func (a *App) closeDetail() {
 	if h, ok := a.detail.(*hostScreen); ok {
 		h.cancel()
 		switch m := a.modal.(type) { // a menu or confirmation for this box goes with it
-		case *actionsModal:
-			if m.h == h {
+		case *menuModal:
+			if m.h == h && h != nil {
 				a.modal = nil
 			}
 		case *confirmModal:
@@ -232,8 +233,23 @@ func (h *hostScreen) load(a *App, tab string) tea.Cmd {
 
 func (h *hostScreen) capturing() bool { return h.logEditing }
 
+// keys are the open tab's own keys first, then the ones every tab has.
+// keys() has no App: view records the tab it drew.
 func (h *hostScreen) keys() []key.Binding {
-	return []key.Binding{navKeys.Left, navKeys.Right, globalKeys.Back, hostKeys.Measure, hostKeys.Modules, svcKeys.Shell, svcKeys.Actions}
+	var ks []key.Binding
+	switch h.shownTab {
+	case "storage":
+		ks = append(ks, hostKeys.Measure, boxKeys.DU)
+	case "services":
+		ks = append(ks, svcKeys.Start, svcKeys.Stop, svcKeys.Restart, boxKeys.Clear)
+	case "logs":
+		ks = append(ks, navKeys.Filter, logKeys.Follow, logKeys.Level, logKeys.Explain)
+	case "containers":
+		ks = append(ks, svcKeys.Start, svcKeys.Stop, svcKeys.Restart, boxKeys.Provision, boxKeys.Config, boxKeys.Edit, boxKeys.Wipe, boxKeys.Reset)
+	case "tools":
+		ks = append(ks, boxKeys.Diag, boxKeys.Latest, boxKeys.Monitor, boxKeys.Intent, boxKeys.Wizard)
+	}
+	return append(ks, hostKeys.Modules, svcKeys.Shell, svcKeys.Actions, navKeys.Left, navKeys.Right, globalKeys.Back)
 }
 
 func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
@@ -380,7 +396,7 @@ func (h *hostScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if msg.err != nil {
-			a.flash = "the ssh session ended: " + sanitizeLine(msg.err.Error())
+			a.setErr("the ssh session ended: " + sanitizeLine(msg.err.Error()))
 		} else {
 			a.flash = "back from " + sanitizeLine(msg.id)
 		}
@@ -472,6 +488,7 @@ func (h *hostScreen) tabUpdate(a *App, msg tea.Msg) tea.Cmd {
 }
 
 func (h *hostScreen) view(a *App, w, hgt int) string {
+	h.shownTab = h.tabName(a)
 	// The box's name is in the breadcrumb (main's title): not repeated here.
 	head := " link n/a"
 	if row, ok := a.fleet.Row(h.id); ok {

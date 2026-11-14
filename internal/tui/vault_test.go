@@ -80,12 +80,12 @@ func TestVaultCommandsRunSelf(t *testing.T) {
 	a := vaultApp(t, f, "linux")
 	ran := recordSelf(a)
 	var m tea.Model = press(t, a, "I", "m", "b")
-	m = press(t, typed(t, m, "/tmp/v.bak"), "enter", "r")
+	m = press(t, typed(t, m, "/tmp/v.bak"), "enter", "B")
 	m = press(t, typed(t, m, "/tmp/v.bak"), "enter")
 	if len(*ran) != 3 {
 		t.Fatalf("restore ran before its confirmation: %v", *ran)
 	}
-	m = press(t, typed(t, m, "restore"), "enter", "a", "K", "s", "S")
+	m = press(t, typed(t, m, "restore"), "enter", "a", "K", "Z", "S")
 	want := []string{"vault init", "vault migrate", "vault backup /tmp/v.bak", "vault restore /tmp/v.bak",
 		"vault add-recovery", "vault rekdf", "vault seal --tpm2", "vault seal --allow-host-key"}
 	if len(*ran) != len(want) {
@@ -110,7 +110,7 @@ func TestVaultCommandsRunSelf(t *testing.T) {
 func TestVaultSealOffLinuxAndBadPaths(t *testing.T) {
 	a := vaultApp(t, tuitest.NewFake(), "darwin")
 	ran := recordSelf(a)
-	fr := tuitest.Frame(press(t, a, "s", "S"))
+	fr := tuitest.Frame(press(t, a, "Z", "S"))
 	if strings.Contains(fr, "[s] seal") || len(*ran) != 0 {
 		t.Fatalf("seal off Linux: ran %v\n%s", *ran, fr)
 	}
@@ -193,7 +193,7 @@ func TestVaultPutRefusesAnUnknownName(t *testing.T) {
 
 func TestVaultIdleLock(t *testing.T) {
 	f := tuitest.NewFake()
-	m := press(t, vaultApp(t, f, "linux"), "t", "backspace", "backspace")
+	m := press(t, vaultApp(t, f, "linux"), "T", "backspace", "backspace")
 	m = press(t, typed(t, m, "9999"), "enter")
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "0 to 1440") || f.Called("SaveSettings") {
 		t.Fatalf("9999 went through:\n%s", fr)
@@ -214,8 +214,40 @@ func TestVaultUnlockAndLockKeys(t *testing.T) {
 	if _, ok := m.(*App).modal.(*unlockModal); !ok {
 		t.Fatalf("u: %T", m.(*App).modal)
 	}
-	m = press(t, m, "esc", "l")
+	m = press(t, m, "esc", "L")
+	if _, ok := m.(*App).modal.(*yesNoModal); ok {
+		m = press(t, m, "y") // jobs are running in the sample fleet: it asks first
+	}
 	if !f.Called("Lock") {
-		t.Fatalf("l did not lock: %v", f.Calls)
+		t.Fatalf("L did not lock: %v", f.Calls)
+	}
+}
+
+// Locking pauses running jobs, so it asks first; with none running it does not.
+func TestVaultLockAsksOnlyWhenJobsRun(t *testing.T) {
+	f := tuitest.NewFake()
+	a := vaultApp(t, f, "linux")
+	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: api.Fleet{Rows: []api.FleetRow{{ID: "box", Jobs: &api.JobsSummary{Running: 2}}}}, Has: true, State: apiclient.Live}})
+	m = press(t, m, "L")
+	yn, ok := m.(*App).modal.(*yesNoModal)
+	if !ok || f.Called("Lock") {
+		t.Fatalf("no question before locking with jobs running: %T", m.(*App).modal)
+	}
+	if fr := tuitest.Frame(m); !strings.Contains(fr, "2 jobs are running") || !strings.Contains(fr, "[y] lock it") {
+		t.Fatalf("frame:\n%s", fr)
+	}
+	_ = yn
+	m = press(t, m, "n")
+	if f.Called("Lock") || m.(*App).modal != nil {
+		t.Fatalf("n locked or kept the question: %v", f.Calls)
+	}
+	m = press(t, m, "y") // not a key here: nothing locks
+	if f.Called("Lock") {
+		t.Fatal("a stray y locked")
+	}
+	m, _ = tuitest.Send(m, fleetMsg{u: apiclient.Update[api.Fleet]{Value: api.Fleet{Rows: []api.FleetRow{{ID: "box", Jobs: &api.JobsSummary{}}}}, Has: true, State: apiclient.Live}})
+	press(t, m, "L")
+	if !f.Called("Lock") {
+		t.Fatal("L with no job running did not lock at once")
 	}
 }

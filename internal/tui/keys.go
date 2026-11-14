@@ -10,13 +10,14 @@ import (
 // help screen lists every field here (help.go), so a key added here is
 // documented by adding it.
 var globalKeys = struct {
-	Screens, Focus, Panels, Help, Palette, Drawer, Back, Quit, ForceQuit, Restart, Unlock, Lock, Guide, Invite, Copy key.Binding
+	Screens, Focus, Panels, Help, Palette, Menu, Drawer, Back, Quit, ForceQuit, Restart, Unlock, Lock, Guide, Invite, Copy key.Binding
 }{
 	Screens:   key.NewBinding(key.WithKeys("1", "2", "3", "4", "5", "6", "7", "8"), key.WithHelp("1-8", "views")),
 	Focus:     key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "focus: nav, main, log (esc: back to the nav)")),
 	Panels:    key.NewBinding(key.WithKeys("[", "]"), key.WithHelp("[ ]", "tree / activity log")),
 	Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	Palette:   key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "command")),
+	Menu:      key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "actions menu for the selected item")),
 	Drawer:    key.NewBinding(key.WithKeys("."), key.WithHelp(".", "activity drawer")),
 	Back:      key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 	Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),

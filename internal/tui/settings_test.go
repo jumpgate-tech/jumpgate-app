@@ -111,7 +111,7 @@ func TestSettingsPrefsRefusedShowsTheHintAndReverts(t *testing.T) {
 	a := settingsApp(t, f)
 	m := press(t, pick(t, a, "JOBS"), "space")
 	fr := tuitest.Frame(m)
-	if !strings.Contains(fr, "keep at least one column") {
+	if !strings.Contains(strings.Join(strings.Fields(fr), " "), "keep at least one column") { // the error wraps
 		t.Fatalf("hint missing:\n%s", fr)
 	}
 	if slices.Contains(m.(*App).prefs.FleetColumns, "jobs") {

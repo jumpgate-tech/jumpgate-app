@@ -37,4 +37,4 @@
 | job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision                                  |
 | job  box-b      migrate-names  step 4/8     [########............]                                                   |
 +----------------------------------------------------------------------------------------------------------------------+
- [u] unlock  [l] lock  [t] idle lock minutes  [p] put relay-token or admin-token  [I] create the vault  [m] move plain ~
+ [u] unlock  [L] lock  [T] idle lock  [p] put a secret  [I] create  [m] move secrets in  [b] back up  [B] restore  [a] ~

@@ -25,7 +25,7 @@ var gatewayKeys = struct {
 	New:         key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new gateway")),
 	Delete:      key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete, typed confirmation")),
 	Start:       key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "start")),
-	Stop:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop, typed confirmation")),
+	Stop:        key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "stop, typed confirmation")),
 	Restart:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "restart")),
 	Config:      key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "replace the config (JSON)")),
 	Provision:   key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "provision, typed confirmation")),
@@ -35,7 +35,7 @@ var gatewayKeys = struct {
 	Caps:        key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "capabilities")),
 	Known:       key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "known set of one chain")),
 	Analytics:   key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "analytics")),
-	Traffic:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "traffic")),
+	Traffic:     key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "traffic")),
 	Keys:        key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "customer API keys")),
 	NewKey:      key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "new customer key (shown once)")),
 	Revoke:      key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "revoke a customer key")),
@@ -43,7 +43,7 @@ var gatewayKeys = struct {
 	Chain:       key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "one chain")),
 	Docker:      key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "Docker readiness")),
 	StartDocker: key.NewBinding(key.WithKeys("O"), key.WithHelp("O", "start Docker here")),
-	Host:        key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "this machine")),
+	Host:        key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "this machine")),
 }
 
 // plainName is an id the server accepts in a path: letters, digits, '.',
@@ -114,7 +114,7 @@ func (s *gatewaysScreen) update(a *App, msg tea.Msg) tea.Cmd {
 	case gwKeyMsg:
 		if msg.err != nil {
 			s.res = resultPane{head: "new key on " + sanitizeLine(msg.gw) + ": FAIL", lines: []string{a.errText(msg.err)}, bad: true, has: true}
-			a.flash = "new key on " + sanitizeLine(msg.gw) + " failed"
+			a.setErr("new key on " + sanitizeLine(msg.gw) + " failed")
 			return nil
 		}
 		s.res = resultPane{head: "new key " + sanitizeLine(msg.id) + " on " + sanitizeLine(msg.gw), lines: []string{"shown once in the window; y lists the keys"}, has: true}
@@ -280,7 +280,7 @@ func newCustomerKey(a *App, gw, label string) tea.Cmd {
 }
 
 func (s *gatewaysScreen) view(a *App, w, h int) string {
-	head := truncate(a.th.Dim.Render(" n new  s/x/e start/stop/restart  D delete  m modules  ? every key"), w, a.gl.Ellipsis) // the title says Gateways
+	head := truncate(a.th.Dim.Render(" [n] new  [s] start  [t] stop  [e] restart  [D] delete  [m] modules  [?] more"), w, a.gl.Ellipsis) // the title says Gateways
 	res := s.res.view(a)
 	switch {
 	case s.err != nil && !s.has:

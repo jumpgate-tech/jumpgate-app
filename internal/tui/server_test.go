@@ -136,7 +136,7 @@ func TestRunSelfWithoutAnExecutable(t *testing.T) {
 func TestServerStopIsTypedConfirm(t *testing.T) {
 	f := tuitest.NewFake()
 	f.Routes["POST /api/shutdown"] = nil
-	m := press(t, serverApp(t, f, "linux"), "x")
+	m := press(t, serverApp(t, f, "linux"), "t")
 	if _, ok := m.(*App).modal.(*confirmModal); !ok {
 		t.Fatal("x did not ask for a typed confirmation")
 	}

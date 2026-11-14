@@ -6,14 +6,14 @@
   [ ]          tree / activity log
   ?            help
   :            command
+  x            actions menu for the selected item
   .            activity drawer
   esc          back
   q            quit
   ctrl+c       quit now
-  ↑/k          up
-  ↓/j          down
-  ←/h          previous tab
-  →/l          next tab
+  g            setup guide
+  i            invite a box: one line to run on it
+  arrows/hjkl  move; left and right switch tabs
   enter        open
   /            filter
 keys here
@@ -21,4 +21,4 @@ keys here
   a            adopt a job whose controller went silent
   r            reload
   n            start a job on a box
- jobs n/a | [?] help
+ jobs n/a | [?] more

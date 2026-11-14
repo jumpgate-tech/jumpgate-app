@@ -149,7 +149,7 @@ func TestClickDrawerTogglesIt(t *testing.T) {
 		t.Fatalf("click on the minimized drawer saved %q:\n%s", g.LastPrefs.Drawer, tuitest.Frame(b))
 	}
 	c, _ := mouseApp(t, tuitest.NewFake(), 80, 24)
-	x, y := at(t, c, "needs decision]")
+	x, y := at(t, c, "to decide]")
 	if m := click(t, c, x, y); m.(*App).active != scrJobs {
 		t.Fatalf("click on the decision count: active %v", m.(*App).active)
 	}

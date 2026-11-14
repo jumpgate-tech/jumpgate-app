@@ -37,4 +37,4 @@
 | job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision                                  |
 | job  box-b      migrate-names  step 4/8     [########............]                                                   |
 +----------------------------------------------------------------------------------------------------------------------+
- up/dn select  [enter] open  [/] filter  [s] sort: host, sync, disk, lag  [r] refresh now  [v] table: fleet / addresses~
+ [enter] open  [a] add  [p] pair  [/] filter  [s] sort  [r] refresh  [v] addresses  [L] this machine  [D] remove  [?] m~

@@ -15,17 +15,33 @@ type helpModal struct {
 	offset int
 }
 
+// The help row for the keys that move: ${arrows} and h j k l.
+const (
+	movingLabel = "arrows/hjkl"
+	movingHelp  = "move; left and right switch tabs"
+)
+
 func newHelp(a *App) *helpModal {
 	row := func(b key.Binding) string {
 		return fmt.Sprintf("  %-12s %s", keyLabel(b.Help().Key, a.gl), b.Help().Desc)
 	}
 	lines := []string{"keys everywhere"}
 	listed := map[key.Help]bool{}
+	moved := false
 	for _, b := range append(keyList(globalKeys), keyList(navKeys)...) {
-		if a.offers(b) {
-			lines = append(lines, row(b))
-			listed[b.Help()] = true
+		if !a.offers(b) {
+			continue
 		}
+		listed[b.Help()] = true
+		// The four moving keys share one row, so the list fits 80x24.
+		if menuSkip(b) && b.Help() != globalKeys.Back.Help() {
+			if !moved {
+				lines = append(lines, fmt.Sprintf("  %-12s %s", movingLabel, movingHelp))
+				moved = true
+			}
+			continue
+		}
+		lines = append(lines, row(b))
 	}
 	// A screen's own keys, less the ones already listed above.
 	var here []string
@@ -51,12 +67,10 @@ func (a *App) offers(b key.Binding) bool {
 		// The vault keys are listed when they are the news, so the help
 		// still fits 80x24; both keys work at any time.
 		return a.fleetHas && a.fleet.Locked
-	// The guide and invite keys, like the vault's, are listed while they
-	// are the news (the help must fit 80x24); they work at any time.
-	case globalKeys.Guide.Help():
-		return a.setupSegment() != ""
-	case globalKeys.Invite.Help():
-		return a.inviteOn || a.setupSegment() != ""
+	// The guide and invite keys are always listed: they are how a new person
+	// finds the way in, and they work at any time.
+	case globalKeys.Guide.Help(), globalKeys.Invite.Help():
+		return true
 	case globalKeys.Copy.Help():
 		return a.inviteOn && a.invite != ""
 	case globalKeys.Lock.Help():

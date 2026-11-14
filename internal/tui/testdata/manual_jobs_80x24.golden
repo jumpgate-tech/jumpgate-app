@@ -21,4 +21,4 @@
   • The node is the job's. While a job on a box has not finished, the box
     refuses service start, stop and restart, and the controller refuses node
  22%  ↑↓ pgup/pgdn scroll  ←/→ topic  esc topics  q close
- jobs n/a | [?] help
+ jobs n/a | [?] more

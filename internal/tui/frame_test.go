@@ -71,7 +71,7 @@ func TestDrawerToggleSaves(t *testing.T) {
 func TestDrawerAutoMinimizedAt80x24(t *testing.T) {
 	a := dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto")
 	last := lastLine(tuitest.Frame(a))
-	if !strings.HasPrefix(last, " jobs") || !strings.Contains(last, "[enter] open") {
+	if !strings.Contains(last, " running") || !strings.Contains(last, "[enter] open") {
 		t.Fatalf("last line %q", last)
 	}
 	if a.drawerOpen() {
@@ -93,7 +93,7 @@ func TestDrawerLineFailsClosed(t *testing.T) {
 func TestDrawerHighlightsDecisionNoOpen(t *testing.T) {
 	a := dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto")
 	fr := tuitest.Frame(a)
-	if last := lastLine(fr); !strings.Contains(last, "jobs 1 running  [! 1 needs decision] | ") {
+	if last := lastLine(fr); !strings.Contains(last, " 1 running  [! 1 to decide] | ") {
 		t.Fatalf("last line %q", last)
 	}
 	if strings.Contains(fr, "Activity") || a.drawerOpen() {

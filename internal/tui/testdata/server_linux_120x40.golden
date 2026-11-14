@@ -37,4 +37,4 @@
 | job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision                                  |
 | job  box-b      migrate-names  step 4/8     [########............]                                                   |
 +----------------------------------------------------------------------------------------------------------------------+
- [u] check for an update now  [x] stop the server, typed confirmation  [o] open the web app in the browser  [I] install~
+ [u] check update  [t] stop  [o] web app  [I] install service  [S] set up service  [A] self-only  [?] more

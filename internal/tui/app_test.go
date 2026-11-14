@@ -187,9 +187,14 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 	// Listed only when relevant: TestHelpListsTheVaultKeysWhenRelevant.
 	delete(all, "Unlock")
 	delete(all, "Lock")
-	delete(all, "Guide") // these three: TestHelpListsTheGuideKeysWhenRelevant
-	delete(all, "Invite")
-	delete(all, "Copy")
+	delete(all, "Copy") // listed while the invite shows: TestHelpListsTheGuideKeysWhenRelevant
+	// The moving keys share one row.
+	for _, n := range []string{"Up", "Down", "Left", "Right"} {
+		delete(all, n)
+	}
+	if !strings.Contains(fr, movingLabel+" ") || !strings.Contains(fr, movingHelp) {
+		t.Errorf("help lacks the moving keys row:\n%s", fr)
+	}
 	for name, b := range all {
 		h := b.Help()
 		if !regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(h.Key) + `\s+` + regexp.QuoteMeta(h.Desc) + `$`).MatchString(fr) {
@@ -217,7 +222,7 @@ func TestHelpASCII(t *testing.T) {
 	m, _ := tuitest.Send(a, tuitest.Key("2"), tuitest.Key("?"))
 	fr := tuitest.Frame(m)
 	requireASCII(t, fr)
-	if !strings.Contains(fr, "up/k") {
+	if !strings.Contains(fr, "arrows/hjkl") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 }
@@ -369,7 +374,7 @@ func TestDrawerLineCountsJobsThatNeedYou(t *testing.T) {
 		t.Fatalf("before any box reports jobs: %q", l)
 	}
 	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fleetWithJobs(1, 2), Has: true, State: apiclient.Live}})
-	if l := ansi.Strip(m.(*App).drawerLine(80)); !strings.Contains(l, "[! 3 needs decision]") {
+	if l := ansi.Strip(m.(*App).drawerLine(120)); !strings.Contains(l, "[! 3 needs decision]") {
 		t.Fatalf("drawer line %q", l)
 	}
 }

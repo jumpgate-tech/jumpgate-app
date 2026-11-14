@@ -172,13 +172,13 @@ func TestContainerConfigShowAndSet(t *testing.T) {
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "devnet.BlockTime: 2s") {
 		t.Fatalf("config not shown:\n%s", fr)
 	}
-	m = press(t, m, "e")
+	m = press(t, m, "E")
 	m = typed(t, m, "{nope")
 	m = press(t, m, "enter")
 	if f.Called("Do PUT") {
 		t.Fatal("bad JSON was sent")
 	}
-	m = press(t, m, "esc", "e")
+	m = press(t, m, "esc", "E")
 	m = typed(t, m, `{"BlockTime":"5s"}`)
 	m = press(t, m, "enter")
 	if b, _ := json.Marshal(f.Sent["PUT "+ctrPath+"/devnet/config"]); string(b) != `{"BlockTime":"5s"}` {
@@ -222,14 +222,14 @@ func TestToolsTab(t *testing.T) {
 	f := boxFake()
 	a := toolsHost(t, f)
 	fr := tuitest.Frame(a)
-	for _, want := range []string{"[Tools]", "D run diagnostics", "checks[0].name: rpc"} {
+	for _, want := range []string{"[Tools]", "[c] run checks", "checks[0].name: rpc"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("tools lack %q:\n%s", want, fr)
 		}
 	}
 	tuitest.Golden(t, "host_tools", fr)
 	f.Routes["GET /api/targets/box/diagnostics"] = map[string]any{"checks": []any{map[string]any{"name": "disk", "ok": false}}}
-	if fr := tuitest.Frame(press(t, a, "D")); !strings.Contains(fr, "checks[0].name: disk") {
+	if fr := tuitest.Frame(press(t, a, "c")); !strings.Contains(fr, "checks[0].name: disk") {
 		t.Fatalf("run not shown:\n%s", fr)
 	}
 }

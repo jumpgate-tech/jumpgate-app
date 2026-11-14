@@ -43,7 +43,7 @@ func (r *resultPane) take(a *App, msg callMsg) {
 	head := sanitizeLine(msg.head)
 	if msg.err != nil {
 		*r = resultPane{head: head + ": FAIL", lines: []string{a.errText(msg.err)}, bad: true, has: true}
-		a.flash = head + " failed"
+		a.setErr(head + " failed")
 		return
 	}
 	lines := []string{"ok"}

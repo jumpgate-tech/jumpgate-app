@@ -14,9 +14,9 @@ var services = []string{"exec", "beacon"}
 var svcKeys = struct{ Start, Stop, Restart, Shell, Actions key.Binding }{
 	Start:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "start (Services)")),
 	Stop:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "stop, typed confirmation (Services)")),
-	Restart: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart, typed confirmation (Services)")),
+	Restart: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "restart, typed confirmation (Services)")),
 	Shell:   key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "SSH shell on this box")),
-	Actions: key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "actions for this box")),
+	Actions: key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "actions menu for the selected item")),
 }
 
 // Replies carry the open's gen as well as the box id, so a late reply from an
@@ -80,16 +80,16 @@ func (h *hostScreen) shell(a *App) tea.Cmd {
 // wrote.
 func (h *hostScreen) runShell(a *App, msg sshCmdMsg) tea.Cmd {
 	if msg.err != nil {
-		a.flash = "ssh: " + a.errText(msg.err)
+		a.setErr("ssh: " + a.errText(msg.err))
 		return nil
 	}
 	if err := api.CheckSSHArgv(msg.c.Argv); err != nil {
-		a.flash = "refusing the server's ssh command: " + sanitizeLine(err.Error())
+		a.setErr("refusing the server's ssh command: " + sanitizeLine(err.Error()))
 		return nil
 	}
 	name := a.bins.ssh
 	if name == "" {
-		a.flash = "ssh: not found on PATH (relative PATH entries are skipped); set JUMPGATE_SSH to its absolute path"
+		a.setErr("ssh: not found on PATH (relative PATH entries are skipped); set JUMPGATE_SSH to its absolute path")
 		return nil
 	}
 	id, gen := msg.id, msg.gen
@@ -135,7 +135,7 @@ func (h *hostScreen) viewServices(a *App, w int) string {
 		}
 		mark, hint := " ", ""
 		if i == h.svcCursor {
-			mark, hint = a.gl.Sel, "   s start  t stop  r restart  C clear"
+			mark, hint = a.gl.Sel, "   [s] start  [t] stop  [e] restart  [C] clear"
 		}
 		out += a.selIf(i == h.svcCursor, " %s %-7s %s%s", mark, sanitizeLine(svc), state, hint) + "\n"
 	}

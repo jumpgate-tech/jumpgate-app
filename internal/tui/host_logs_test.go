@@ -165,7 +165,7 @@ func TestLogsShowTheServersNote(t *testing.T) {
 // explain presses e, then enter to send after the disclosure is on screen.
 func explain(t *testing.T, a *App) tea.Model {
 	t.Helper()
-	m, cmds := tuitest.Send(a, tuitest.Key("e"))
+	m, cmds := tuitest.Send(a, tuitest.Key("E"))
 	m = tuitest.Settle(m, cmds...)
 	m, cmds = tuitest.Send(m, tuitest.Key("enter"))
 	return tuitest.Settle(m, cmds...)
@@ -176,7 +176,7 @@ func TestExplainShowsTheDisclosureThenSendsTheVisibleErrors(t *testing.T) {
 	f.ExplainV = api.Explain{Text: "The node lost its peers.", SentExcerpt: []string{"peer <ip-1> disconnected"}, Redacted: true}
 	f.SettingsV = api.Settings{AIProvider: "gemini", AIDisclosure: "Explain sends the selected log lines to Gemini after removing IP addresses."}
 	a := logsHost(t, f)
-	m, cmds := tuitest.Send(a, tuitest.Key("e"))
+	m, cmds := tuitest.Send(a, tuitest.Key("E"))
 	m = tuitest.Settle(m, cmds...)
 	if f.Called("Explain") {
 		t.Fatal("explain sent before the person confirmed")
@@ -201,7 +201,7 @@ func TestExplainEscCancelsBeforeSending(t *testing.T) {
 	f := tuitest.NewFake()
 	f.SettingsV = api.Settings{AIDisclosure: "d"}
 	a := logsHost(t, f)
-	m, cmds := tuitest.Send(a, tuitest.Key("e"))
+	m, cmds := tuitest.Send(a, tuitest.Key("E"))
 	m = tuitest.Settle(m, cmds...)
 	m, _ = tuitest.Send(m, tuitest.Key("esc"))
 	if m.(*App).modal != nil || f.Called("Explain") {
@@ -336,7 +336,7 @@ func TestLogsAndExplainSurviveHostileText(t *testing.T) {
 		m, _ := tuitest.Send(a, tuitest.Key(k))
 		check("logs after "+k, m)
 	}
-	m, cmds := tuitest.Send(a, tuitest.Key("e"))
+	m, cmds := tuitest.Send(a, tuitest.Key("E"))
 	m = tuitest.Settle(m, cmds...)
 	check("explain asking", m)
 	m, cmds = tuitest.Send(m, tuitest.Key("enter"))
@@ -347,7 +347,7 @@ func TestLogsAndExplainSurviveHostileText(t *testing.T) {
 	}
 	// An error from the provider is as untrusted as its answer.
 	f.Err["Explain"] = &api.Error{Status: 502, Message: hostileLog[0], Hint: hostileLog[2]}
-	m, cmds = tuitest.Send(a, tuitest.Key("e"))
+	m, cmds = tuitest.Send(a, tuitest.Key("E"))
 	m = tuitest.Settle(m, cmds...)
 	m, cmds = tuitest.Send(m, tuitest.Key("enter"))
 	check("explain error", tuitest.Settle(m, cmds...))
@@ -460,7 +460,7 @@ func TestExplainWithNoErrorLinesSaysTheServerFetchesItsOwn(t *testing.T) {
 	f.ExplainV = api.Explain{Text: "Nothing alarming.", Redacted: true}
 	f.Logs("box") <- liveLogs(hit(1, "x-exec.service", "info", "all fine"))
 	a := tab(t, openTestHost(t, f, "unicode"), 4)
-	m, cmds := tuitest.Send(a, tuitest.Key("e"))
+	m, cmds := tuitest.Send(a, tuitest.Key("E"))
 	m = tuitest.Settle(m, cmds...)
 	fr := tuitest.Frame(m)
 	for _, w := range []string{"No error lines in view", "fetch the box's recent error lines", "Gemini", "enter"} {

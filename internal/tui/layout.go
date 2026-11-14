@@ -63,6 +63,7 @@ type layout struct {
 	Drawer        rect // activity rows; H=0 when minimized
 	Hints         rect // 1 row, last line (minimized: the status line)
 	Invite        rect // the invite's one line under the panes; H=0 when hidden
+	Flash         rect // an error's one or two lines under the invite; H=0 when none
 	DrawerOpen    bool // resolved: auto -> h >= 34
 	DrawerCompact bool // open but h < 34: up to 4 activity lines, no box
 }

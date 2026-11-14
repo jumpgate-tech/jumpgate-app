@@ -421,7 +421,7 @@ func (s *settingsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if msg.err != nil {
-			a.flash = "AI settings: " + a.errText(msg.err)
+			a.setErr("AI settings: " + a.errText(msg.err))
 			return nil
 		}
 		s.settings, s.settingsHas = msg.s, true
@@ -430,7 +430,7 @@ func (s *settingsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if msg.err != nil {
-			a.flash = "could not open the web app: " + a.errText(msg.err)
+			a.setErr("could not open the web app: " + a.errText(msg.err))
 		} else {
 			a.flash = "the web app is open in your browser"
 		}

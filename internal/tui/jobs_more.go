@@ -233,7 +233,7 @@ func (s *gatewaysScreen) gwModulesUpdate(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			a.modal = nil
 		}
 		if msg.err != nil {
-			a.flash = sanitizeLine(msg.module) + " on " + sanitizeLine(msg.gw) + ": " + a.errText(msg.err)
+			a.setErr(sanitizeLine(msg.module) + " on " + sanitizeLine(msg.gw) + ": " + a.errText(msg.err))
 			return nil, true
 		}
 		word := "off"
