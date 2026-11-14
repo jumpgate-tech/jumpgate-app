@@ -57,6 +57,7 @@ Press `:` and type one of:
 
 - The TUI needs 80x24.
 - Mouse support is on: click a tab, a row (double-click opens it) or any `[key]` button, and use the wheel to scroll. A click never confirms a change that asks you to type a name. To select text, hold Shift (or Option on macOS terminals) while dragging. Turn it off in Settings.
+- A ~ after a value means it may be out of date. In plain ASCII drawing a cut-off word ends in ... instead.
 - `NO_COLOR=1` drops colour. `JUMPGATE_ASCII=1` uses plain ASCII drawing, which is automatic on the classic Windows console and the Linux virtual console. Settings can also choose the glyphs.
 - `jumpgate home`, `JUMPGATE_PLAIN=1` or `TERM=dumb` shows the plain line-based screen instead.
 - `jumpgate tui` opens the TUI explicitly, and refuses to run without a terminal.
