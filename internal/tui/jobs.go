@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -15,7 +16,7 @@ import (
 var jobKeys = struct{ Decide, Adopt, Reload, Start key.Binding }{
 	Start:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "start a job on a box")),
 	Decide: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "answer the selected job's question")),
-	Adopt:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "adopt a job whose controller went silent")),
+	Adopt:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "take over a job whose controller went silent")),
 	Reload: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 }
 
@@ -121,8 +122,22 @@ func (s *jobsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 		s.conn, s.err = msg.u.State, msg.u.Err
 		if msg.u.Has {
+			prev, hadSel := s.selected()
 			s.in, s.has = msg.u.Value, true
+			// What needs a decision comes first; the rest keep the server's order.
+			s.in.Jobs = append([]api.JobView(nil), s.in.Jobs...)
+			sort.SliceStable(s.in.Jobs, func(i, j int) bool {
+				return s.in.Jobs[i].State == "needs-decision" && s.in.Jobs[j].State != "needs-decision"
+			})
 			s.cursor = min(s.cursor, max(len(s.in.Jobs)-1, 0))
+			// The cursor stays on the job it was on when the list reorders.
+			if hadSel {
+				for i, j := range s.in.Jobs {
+					if j.Target == prev.Target && j.ID == prev.ID {
+						s.cursor = i
+					}
+				}
+			}
 		}
 		return s.next(msg.gen, msg.ch)
 	case jobOutputMsg:
@@ -185,7 +200,7 @@ func (s *jobsScreen) decide(a *App) tea.Cmd {
 	case !j.Lease.Mine && j.Lease.Fresh:
 		a.flash = "controller " + shortAddr(sanitizeLine(j.Lease.Owner), a.gl) + " holds this job; you are watching it"
 	case !j.Lease.Mine:
-		a.flash = "nobody drives this job now; adopt it first (a)"
+		a.flash = "nobody drives this job now; take it over first (press a)"
 	default:
 		a.modal = &choiceModal{job: j, screen: s}
 	}
@@ -198,7 +213,7 @@ func (s *jobsScreen) adopt(a *App) tea.Cmd {
 	case !ok || j.Lease.Mine:
 		a.flash = "this controller already drives that job"
 	case j.Lease.Fresh:
-		a.flash = "its controller is still alive; you can adopt the job once its heartbeat goes stale"
+		a.flash = "its controller is still alive; you can take the job over once it has gone silent"
 	default:
 		a.modal = newConfirm("Adopt job "+j.ID+" on "+j.Target,
 			"This controller takes over driving the job. The controller that started it stops when it next checks in.", j.Target,
@@ -273,7 +288,7 @@ func (s *jobsScreen) view(a *App, w, h int) string {
 		return b.String()
 	}
 	if len(s.in.Jobs) == 0 {
-		b.WriteString("\n No durable jobs on any paired box. Start one with :migrate-names NAME.\n")
+		b.WriteString("\n " + a.th.Dim.Render("No jobs.") + "  [n] start one\n")
 	}
 	for i, j := range s.in.Jobs {
 		mark := "  "
@@ -310,9 +325,9 @@ func (s *jobsScreen) leaseWord(a *App, j api.JobView) string {
 	case j.Lease.Fresh:
 		return "watching " + shortAddr(sanitizeLine(j.Lease.Owner), a.gl)
 	case j.Lease.HeartbeatAt != nil:
-		return "silent " + formatAge(a.now().Sub(*j.Lease.HeartbeatAt)) + " " + a.gl.Sep + " a: adopt"
+		return "controller silent " + formatAge(a.now().Sub(*j.Lease.HeartbeatAt)) + " " + a.gl.Sep + " [a] take over"
 	}
-	return "a: adopt"
+	return "[a] take over"
 }
 
 func (s *jobsScreen) selectedBody(a *App, j api.JobView, w int) string {

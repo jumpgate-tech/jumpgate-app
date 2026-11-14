@@ -11,7 +11,7 @@
 |  VPN            [5]||      1 Check again                                                                             |
 |  Vault          [6]||      2 Stop them                                                                               |
 |  Server         [7]||      3 Stop the migration here                                                                 |
-|  Settings       [8]||    box-b    running      step 4/8 silent 10m | a: adopt                                        |
+|  Settings       [8]||    box-b    running      step 4/8 controller silent 10m | [a] take over                        |
 |--------------------||                                                                                                |
 |   fleet     3 boxes||                                                                                                |
 |>+ box-a      synced||                                                                                                |

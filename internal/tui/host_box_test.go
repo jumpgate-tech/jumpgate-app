@@ -222,14 +222,14 @@ func TestToolsTab(t *testing.T) {
 	f := boxFake()
 	a := toolsHost(t, f)
 	fr := tuitest.Frame(a)
-	for _, want := range []string{"[Tools]", "[c] run checks", "checks[0].name: rpc"} {
+	for _, want := range []string{"[Tools]", "[c] run checks", "rpc  ok"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("tools lack %q:\n%s", want, fr)
 		}
 	}
 	tuitest.Golden(t, "host_tools", fr)
 	f.Routes["GET /api/targets/box/diagnostics"] = map[string]any{"checks": []any{map[string]any{"name": "disk", "ok": false}}}
-	if fr := tuitest.Frame(press(t, a, "c")); !strings.Contains(fr, "checks[0].name: disk") {
+	if fr := tuitest.Frame(press(t, a, "c")); !strings.Contains(fr, "disk  FAIL") {
 		t.Fatalf("run not shown:\n%s", fr)
 	}
 }

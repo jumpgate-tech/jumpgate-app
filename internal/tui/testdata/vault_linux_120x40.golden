@@ -6,15 +6,15 @@
 +- Views ------------++= > Vault ======================================================================================+
 |  Fleet          [1]|| state      locked                                                                              |
 |  Jobs           [2]|| slots      passphrase, keystore                                                                |
-|  Signers        [3]|| plain      relay-token (not in the vault yet: m)                                               |
+|  Signers        [3]|| plain      relay-token (not in the vault yet: [m] move them in)                                |
 |  Gateways       [4]|| idle lock  30 min                                                                              |
 |  VPN            [5]||                                                                                                |
-|> Vault          [6]|| [u] unlock   [l] lock   [t] idle lock minutes   [p] put relay-token or admin-token             |
+|> Vault          [6]|| The vault is locked.  [u] unlock                                                               |
 |  Server         [7]||                                                                                                |
-|  Settings       [8]|| VAULT COMMANDS (take over the terminal and ask for passphrases there)                          |
-|--------------------|| [I] create the vault   [m] move plain secrets in   [b] back up   [r] restore                   |
-|   fleet     3 boxes|| [a] add a recovery code (prints once)   [K] raise the KDF cost                                 |
-|>+ box-a      synced|| [s] seal with the TPM2   [S] seal with the host key (sudo)                                     |
+|  Settings       [8]|| [x] more: idle lock, restore a backup                                                          |
+|--------------------||                                                                                                |
+|   fleet     3 boxes||                                                                                                |
+|>+ box-a      synced||                                                                                                |
 | + box-b     down 4m||                                                                                                |
 | + laptop*    local*||                                                                                                |
 |                    ||                                                                                                |
@@ -37,4 +37,4 @@
 | job  box-a      migrate-names  step 2/3     [#######.............] ! needs decision                                  |
 | job  box-b      migrate-names  step 4/8     [########............]                                                   |
 +----------------------------------------------------------------------------------------------------------------------+
- [u] unlock  [L] lock  [T] idle lock  [p] put a secret  [I] create  [m] move secrets in  [b] back up  [?] more
+ [u] unlock  [T] idle lock  [B] restore a backup  [?] more

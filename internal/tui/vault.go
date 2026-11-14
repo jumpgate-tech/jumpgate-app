@@ -31,9 +31,9 @@ var vaultKeys = struct{ Unlock, Lock, Idle, Put, Init, Migrate, Backup, Restore,
 	Backup:   key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "back up to a file")),
 	Restore:  key.NewBinding(key.WithKeys("B"), key.WithHelp("B", "restore from a file, typed confirmation")),
 	Recovery: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add a recovery code")),
-	Rekdf:    key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "raise the KDF cost")),
-	SealTPM:  key.NewBinding(key.WithKeys("Z"), key.WithHelp("Z", "seal with the TPM2 (sudo)")),
-	SealHost: key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "seal with the host key (sudo)")),
+	Rekdf:    key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "make the passphrase harder to crack (unlock gets slower)")),
+	SealTPM:  key.NewBinding(key.WithKeys("Z"), key.WithHelp("Z", "seal with the TPM2 so the service unlocks at boot (sudo)")),
+	SealHost: key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "seal with the host key so the service unlocks at boot (sudo)")),
 }
 
 // vaultSecrets are the names PUT /api/vault/secrets takes.
@@ -55,6 +55,8 @@ type (
 
 type vaultScreen struct {
 	linux   bool // synced from the App: keys() has no App
+	state   string
+	plain   bool // plain secrets wait to be moved in
 	idle    int
 	idleHas bool
 	idleErr error
@@ -64,13 +66,40 @@ type vaultScreen struct {
 
 func (s *vaultScreen) capturing() bool { return false }
 
+// keys are the keys that can act in the vault's state, the next step first;
+// the rest wait in the x menu. Every key still works in any state (the
+// commands check for themselves): this is what is offered.
 func (s *vaultScreen) keys() []key.Binding {
-	ks := []key.Binding{vaultKeys.Unlock, vaultKeys.Lock, vaultKeys.Idle, vaultKeys.Put, vaultKeys.Init, vaultKeys.Migrate,
-		vaultKeys.Backup, vaultKeys.Restore, vaultKeys.Recovery, vaultKeys.Rekdf}
-	if s.linux {
-		ks = append(ks, vaultKeys.SealTPM, vaultKeys.SealHost)
+	var ks []key.Binding
+	switch s.state {
+	case "none":
+		ks = []key.Binding{vaultKeys.Init, vaultKeys.Restore}
+	case "locked":
+		ks = []key.Binding{vaultKeys.Unlock, vaultKeys.Idle, vaultKeys.Restore}
+	case "unusable":
+		ks = []key.Binding{vaultKeys.Restore}
+	case "":
+		// Not read yet (or a state this build does not know): what is safe to try.
+		ks = []key.Binding{vaultKeys.Unlock, vaultKeys.Init, vaultKeys.Restore}
+	case "unlocked":
+		if s.plain {
+			ks = append(ks, vaultKeys.Migrate)
+		}
+		ks = append(ks, vaultKeys.Lock, vaultKeys.Put, vaultKeys.Backup, vaultKeys.Recovery, vaultKeys.Idle, vaultKeys.Rekdf, vaultKeys.Restore)
+		if s.linux {
+			ks = append(ks, vaultKeys.SealTPM, vaultKeys.SealHost)
+		}
 	}
 	return ks
+}
+
+// syncState takes the vault's state from the App: keys() has no App.
+func (s *vaultScreen) syncState(a *App) {
+	s.linux = a.o.GOOS == "linux"
+	s.state, s.plain = "", false
+	if a.vaultHas {
+		s.state, s.plain = a.vault.State, len(a.vault.Plain) > 0
+	}
 }
 
 func (s *vaultScreen) load(a *App) tea.Cmd {
@@ -83,7 +112,7 @@ func (s *vaultScreen) load(a *App) tea.Cmd {
 }
 
 func (s *vaultScreen) update(a *App, msg tea.Msg) tea.Cmd {
-	s.linux = a.o.GOOS == "linux"
+	s.syncState(a)
 	switch msg := msg.(type) {
 	case enterMsg:
 		return s.load(a)
@@ -198,7 +227,7 @@ func putSecret(a *App, name string, v []byte) tea.Cmd {
 }
 
 func (s *vaultScreen) view(a *App, w, h int) string {
-	s.linux = a.o.GOOS == "linux"
+	s.syncState(a)
 	row := func(label, v string) string { return truncate(fmt.Sprintf(" %-10s %s", label, v), w, a.gl.Ellipsis) }
 	na := a.th.Dim.Render("n/a")
 	var lines []string
@@ -234,7 +263,7 @@ func (s *vaultScreen) view(a *App, w, h int) string {
 			for _, p := range v.Plain {
 				ps = append(ps, sanitizeLine(p))
 			}
-			lines = append(lines, row("plain", a.th.Warn.Render(strings.Join(ps, ", "))+" (not in the vault yet: m)"))
+			lines = append(lines, row("plain", a.th.Warn.Render(strings.Join(ps, ", "))+" (not in the vault yet: [m] move them in)"))
 		}
 	}
 	idle := na
@@ -250,15 +279,35 @@ func (s *vaultScreen) view(a *App, w, h int) string {
 	if s.note != "" {
 		lines = append(lines, "", " "+truncate(s.note, max(w-1, 1), a.gl.Ellipsis))
 	}
-	lines = append(lines, "",
-		" [u] unlock   [l] lock   [t] idle lock minutes   [p] put relay-token or admin-token",
-		"",
-		" "+a.th.Title.Render("VAULT COMMANDS")+a.th.Dim.Render(" (take over the terminal and ask for passphrases there)"),
-		" [I] create the vault   [m] move plain secrets in   [b] back up   [r] restore",
-		" [a] add a recovery code (prints once)   [K] raise the KDF cost")
-	if s.linux {
-		lines = append(lines, " [s] seal with the TPM2   [S] seal with the host key (sudo)")
-	} else {
+	lines = append(lines, "")
+	ks := s.keys()
+	// The next step first, as buttons; everything else waits under x.
+	primary := 4
+	switch s.state {
+	case "none":
+		lines = append(lines, " "+a.th.Warn.Render("No vault yet.")+"  "+a.buttons(ks[:1])+"   "+a.buttons(ks[1:2]))
+	case "locked":
+		lines = append(lines, " "+a.th.Warn.Render("The vault is locked.")+"  "+a.buttons(ks[:1]))
+		primary = 1
+	case "unusable":
+		lines = append(lines, " "+a.th.Bad.Render("The vault file cannot be used.")+"  "+a.buttons(ks[:1]))
+		primary = 1
+	case "unlocked":
+		lines = append(lines, " "+a.buttons(ks[:min(primary, len(ks))]))
+	default:
+		lines = append(lines, " "+a.th.Dim.Render("reading the vault"+a.gl.Ellipsis))
+	}
+	if rest := ks[min(primary, len(ks)):]; len(rest) > 0 && s.state != "none" {
+		var names []string
+		for _, b := range rest {
+			names = append(names, hintLabel(b.Help()))
+		}
+		lines = append(lines, "", " [x] more: "+a.th.Dim.Render(strings.Join(names, ", ")))
+	}
+	if s.state == "none" || s.state == "unlocked" {
+		lines = append(lines, "", a.th.Dim.Render(" Creating, backing up, restoring and recovery codes run in this terminal and ask for passphrases there."))
+	}
+	if !s.linux && s.state == "unlocked" {
 		lines = append(lines, a.th.Dim.Render(" Sealing for auto-unlock is for the Linux service."))
 	}
 	return strings.Join(lines, "\n")

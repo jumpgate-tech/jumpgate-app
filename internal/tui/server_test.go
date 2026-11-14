@@ -35,7 +35,7 @@ func TestServerView(t *testing.T) {
 	m := serverApp(t, f, "linux")
 	fr := tuitest.Frame(m)
 	for _, want := range []string{"Server", "v0.7.0 is out", "your own server, pid 4242, up 2h", "127.0.0.1:7788",
-		"[x] stop the server", "[o] open in the browser", "[I] install the systemd service"} {
+		"[t] stop the server", "[o] open in the browser", "[I] install the systemd service"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("no %q:\n%s", want, fr)
 		}
@@ -167,8 +167,8 @@ func TestServerStartWhenNoneAnswers(t *testing.T) {
 	nf := tuitest.NewFake()
 	a.o.Start = func(context.Context) (Backend, error) { return nf, nil }
 	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{State: apiclient.Retrying, Err: errors.New("dial: refused")}})
-	if fr := tuitest.Frame(m); !strings.Contains(fr, "[s] start the server") {
-		t.Fatalf("no start offered:\n%s", fr)
+	if fr := tuitest.Frame(m); !strings.Contains(fr, "No server answers.  [s] start the server") || strings.Contains(fr, "[t] stop") {
+		t.Fatalf("no start offered, or a stop beside it:\n%s", fr)
 	}
 	m = press(t, m, "s")
 	if m.(*App).be != nf || m.(*App).flash != "the server started" {

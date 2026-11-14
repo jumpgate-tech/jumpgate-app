@@ -45,9 +45,9 @@ Press `:` and type one of:
 - `start exec NAME`, `stop beacon NAME`, `restart beacon NAME`
 - `remove NAME`
 - `migrate-names NAME`
-- `add`, `keys`, `help [TOPIC]`, `quit`
+- `add`, `guide`, `invite`, `unlock`, `keys`, `help [TOPIC]`, `quit`
 
-`hosts` opens the Fleet as the table of addresses and pairing. `keys` shows the same list as `?`.
+`hosts` opens the Fleet as the table of addresses and pairing. `keys` shows the same list as `?`. `guide` and `invite` are the setup checklist and the invite line (`g` and `i`), and `unlock` asks for the vault passphrase. `tab` completes a command or a box name.
 
 ## The guide
 

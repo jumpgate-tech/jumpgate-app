@@ -20,8 +20,9 @@ import (
 // (spec D21). Text typed here is matched literally against fixed command
 // words and known box names; it is never compiled as a pattern.
 type paletteModal struct {
-	in  textinput.Model
-	err string
+	in   textinput.Model
+	err  string
+	hint string // the names tab could not choose between
 }
 
 func newPalette() *paletteModal {
@@ -40,7 +41,8 @@ var paletteScreens = map[string]screenID{
 // paletteCommands is what run takes, as the palette lists it (see Commands):
 // NAME is a box, TOPIC a guide topic, a|b one of the words, [x] optional.
 var paletteCommands = []string{"fleet", "hosts", "signers", "gateways", "vpn", "jobs", "vault", "server", "settings", "host NAME", "logs NAME",
-	"measure NAME", "ssh NAME", "start|stop|restart exec|beacon NAME", "remove NAME", "migrate-names NAME", "add", "help [TOPIC]", "keys", "quit"}
+	"measure NAME", "ssh NAME", "start|stop|restart exec|beacon NAME", "remove NAME", "migrate-names NAME", "add", "guide", "invite", "unlock",
+	"help [TOPIC]", "keys", "quit"}
 
 var paletteHelp = strings.Join(paletteCommands, " | ")
 
@@ -48,6 +50,9 @@ func (m *paletteModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch k.String() {
 	case "esc":
 		return true, nil
+	case "tab":
+		m.complete(a)
+		return false, nil
 	case "enter":
 		a.modal = nil // a confirmation or the help the command opens replaces the palette
 		stay, cmd := m.run(a)
@@ -141,6 +146,14 @@ func (m *paletteModal) run(a *App) (stay bool, cmd tea.Cmd) {
 		}
 		a.modal = g
 		return false, nil
+	case f[0] == "guide" && len(f) == 1: // the setup checklist, as g
+		a.modal = newGuide(a)
+		return false, loadGuide(a)
+	case f[0] == "invite" && len(f) == 1: // the line to run on a box, as i
+		return false, a.toggleInvite()
+	case f[0] == "unlock" && len(f) == 1: // the passphrase prompt, as U
+		a.modal = newUnlock()
+		return false, nil
 	case f[0] == "quit" && len(f) == 1:
 		a.cancel()
 		return false, tea.Quit
@@ -193,7 +206,10 @@ func (m *paletteModal) run(a *App) (stay bool, cmd tea.Cmd) {
 }
 
 func (m *paletteModal) view(a *App, w, _ int) string {
-	out := " " + a.th.Title.Render("COMMAND") + a.th.Dim.Render("  (enter to run, esc to close)") + "\n\n " + m.in.View() + "\n\n" + a.th.Dim.Render(wrapIndent(paletteHelp, w, " "))
+	out := " " + a.th.Title.Render("COMMAND") + a.th.Dim.Render("  (enter to run, tab to complete, esc to close)") + "\n\n " + m.in.View() + "\n\n" + a.th.Dim.Render(wrapIndent(paletteHelp, w, " "))
+	if m.hint != "" {
+		out += "\n\n" + a.th.Dim.Render(wrapIndent("matches: "+m.hint, w, " "))
+	}
 	if m.err != "" {
 		out += "\n\n" + a.th.Warn.Render(wrapIndent(m.err, w, " "))
 	}
@@ -204,4 +220,70 @@ func (m *paletteModal) view(a *App, w, _ int) string {
 // of commands is longer than a line, and a cut one would hide the last.
 func wrapIndent(s string, w int, indent string) string {
 	return indent + strings.ReplaceAll(ansi.Wrap(s, w-lipgloss.Width(indent)-1, ""), "\n", "\n"+indent)
+}
+
+// paletteWords are the first words tab completes: every command's own word.
+var paletteWords = []string{"fleet", "hosts", "signers", "gateways", "vpn", "jobs", "vault", "server", "settings", "host", "logs", "measure",
+	"ssh", "start", "stop", "restart", "remove", "migrate-names", "add", "guide", "invite", "unlock", "help", "keys", "quit"}
+
+// complete is tab: it finishes the word being typed from the command words,
+// the services, a guide topic or a box name, whichever the line is at. One
+// match fills the word in; several fill in what they share and are listed.
+func (m *paletteModal) complete(a *App) {
+	m.err, m.hint = "", ""
+	v := m.in.Value()
+	words := strings.Fields(v)
+	trailing := strings.HasSuffix(v, " ")
+	n := len(words)
+	if trailing {
+		n++ // the word being started is empty
+	}
+	prefix := ""
+	if !trailing && len(words) > 0 {
+		prefix = words[len(words)-1]
+	}
+	var boxes []string
+	for _, r := range a.fleet.Rows {
+		boxes = append(boxes, sanitizeLine(r.ID))
+	}
+	var cands []string
+	switch {
+	case n == 1:
+		cands = paletteWords
+	case words[0] == "help" && n == 2:
+		for _, t := range manualSource.Topics() {
+			cands = append(cands, t.Name)
+		}
+	case contains([]string{"host", "logs", "measure", "ssh", "remove", "migrate-names"}, words[0]) && n == 2:
+		cands = boxes
+	case contains([]string{"start", "stop", "restart"}, words[0]) && n == 2:
+		cands = services
+	case contains([]string{"start", "stop", "restart"}, words[0]) && n == 3:
+		cands = boxes
+	default:
+		return
+	}
+	var match []string
+	for _, c := range cands {
+		if strings.HasPrefix(c, prefix) {
+			match = append(match, c)
+		}
+	}
+	if len(match) == 0 {
+		return
+	}
+	head := strings.TrimSuffix(v, prefix)
+	common := match[0]
+	for _, c := range match[1:] {
+		for !strings.HasPrefix(c, common) {
+			common = common[:len(common)-1]
+		}
+	}
+	if len(match) == 1 {
+		common += " "
+	} else {
+		m.hint = strings.Join(match, "  ")
+	}
+	m.in.SetValue(head + common)
+	m.in.CursorEnd()
 }

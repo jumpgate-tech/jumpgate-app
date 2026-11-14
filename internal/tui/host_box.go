@@ -205,7 +205,13 @@ func (h *hostScreen) boxUpdate(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			a.setErr(sanitizeLine(msg.head) + " failed")
 			return nil, true
 		}
-		h.setResult(msg.tab, boxResult{head: sanitizeLine(msg.head), lines: jsonLines(msg.v)})
+		lines := jsonLines(msg.v)
+		if strings.Contains(msg.head, "diagnostics") {
+			if d, ok := diagLines(msg.v); ok {
+				lines = d // one line per check, not a path and a value
+			}
+		}
+		h.setResult(msg.tab, boxResult{head: sanitizeLine(msg.head), lines: lines})
 		if msg.then != nil {
 			return msg.then(h, a), true
 		}

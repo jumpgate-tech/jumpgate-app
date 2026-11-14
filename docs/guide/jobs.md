@@ -27,7 +27,7 @@ jumpgate jobs output JOB                        # follow the job's output
 jumpgate migrate-names HOST --yes               # start node.migrate-names
 ```
 
-In the TUI, `2` opens the jobs inbox: `enter` shows a job's steps, `d` answers its question, `a` adopts it and `n` starts a job on a box. The `:migrate-names NAME` command starts the migration too.
+In the TUI, `2` opens the jobs inbox: `enter` shows a job's steps, `d` answers its question, `a` takes it over when its controller has gone silent and `n` starts a job on a box. The `:migrate-names NAME` command starts the migration too.
 
 ## node.migrate-names
 

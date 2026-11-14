@@ -48,8 +48,8 @@ func selfArgs(t *testing.T, r []string) string {
 func TestVaultView(t *testing.T) {
 	m := vaultApp(t, tuitest.NewFake(), "linux")
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"Vault", "state      locked", "slots      passphrase, keystore", "relay-token (not in the vault yet: m)",
-		"idle lock  30 min", "[p] put relay-token or admin-token", "[a] add a recovery code", "[s] seal with the TPM2"} {
+	for _, want := range []string{"Vault", "state      locked", "slots      passphrase, keystore", "relay-token (not in the vault yet: [m] move them in)",
+		"idle lock  30 min", "The vault is locked.  [u] unlock", "[x] more: "} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("no %q:\n%s", want, fr)
 		}
@@ -111,7 +111,7 @@ func TestVaultSealOffLinuxAndBadPaths(t *testing.T) {
 	a := vaultApp(t, tuitest.NewFake(), "darwin")
 	ran := recordSelf(a)
 	fr := tuitest.Frame(press(t, a, "Z", "S"))
-	if strings.Contains(fr, "[s] seal") || len(*ran) != 0 {
+	if strings.Contains(fr, "[Z] seal") || len(*ran) != 0 {
 		t.Fatalf("seal off Linux: ran %v\n%s", *ran, fr)
 	}
 	m := press(t, typed(t, press(t, a, "b"), "--out"), "enter")

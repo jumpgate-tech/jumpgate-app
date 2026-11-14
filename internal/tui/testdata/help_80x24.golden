@@ -18,7 +18,7 @@
   /            filter
 keys here
   d            answer the selected job's question
-  a            adopt a job whose controller went silent
+  a            take over a job whose controller went silent
   r            reload
   n            start a job on a box
  jobs n/a | [?] more
