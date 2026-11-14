@@ -1,5 +1,5 @@
  jumpgate  [Fleet] Jobs Signers Gateways VPN Vault Server Settings   connecting
- boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
+ connecting to the server… no readings yet
  Guide · Durable jobs  (6 of 9)
  A durable job is a multi-step operation that the box itself carries out. Each
  step runs as a transient systemd unit, so a running step outlives the TUI, the

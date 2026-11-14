@@ -1,13 +1,13 @@
- jumpgate  server live                                                                      ! 6 alerts | updated 5s ago
+ jumpgate  server live                                                                                   updated 5s ago
 +- Boxes -----++- Synced ----++- Head lag --++- Peers -----++- Disk ------++- Gateways --------------++- Alerts -------+
-|1 up 1 down  ||FAIL rpc_tim~||FAIL rpc_tim~||FAIL rpc_tim~||FAIL disk_pr~||n/a                      ||3 FAIL 3 warn   |
-|1 n/a of 3   ||3 n/a        ||3 n/a        ||3 n/a        ||3 n/a        ||n/a no request counts yet||box-a disk: du ~|
+|1 up 1 down  ||FAIL rpc_t...||FAIL rpc_t...||FAIL rpc_t...||FAIL disk_...||n/a                      ||3 FAIL 3 warn   |
+|1 n/a of 3   ||3 n/a        ||3 n/a        ||3 n/a        ||3 n/a        ||n/a no request counts yet||box-a disk: d...|
 +-------------++-------------++-------------++-------------++-------------++-------------------------++----------------+
 +- Views ------------++= > Fleet ======================================================================================+
-|> Fleet          [1]|| HOST         LINK       NET       SYNC      LAG    PEERS   DISK            FW                  |
-|  Jobs           [2]||>box-a        gate       PulseCha~ n/a       n/a    n/a     n/a             n/a                 |
-|  Signers        [3]|| box-b        down 9m    ?         n/a       n/a    n/a     n/a             n/a                 |
-|  Gateways       [4]|| box-c        gate       ?         ~         n/a    n/a     n/a             n/a                 |
+|> Fleet          [1]|| HOST         LINK       NET        SYNC      LAG    PEERS   DISK USED      FW                  |
+|  Jobs           [2]||>box-a        gate       PulseChain n/a       n/a    n/a     n/a            n/a                 |
+|  Signers        [3]|| box-b        down 9m    ?          n/a       n/a    n/a     n/a            n/a                 |
+|  Gateways       [4]|| box-c        gate       ?          ...       n/a    n/a     n/a            n/a                 |
 |  VPN            [5]||                                                                                                |
 |  Vault          [6]||                                                                                                |
 |  Server         [7]||                                                                                                |
@@ -37,4 +37,4 @@
 +- Activity -----------------------------------------------------------------------------------------------------------+
 | no progress to show | jobs n/a                                                                                       |
 +----------------------------------------------------------------------------------------------------------------------+
- [enter] open  [a] add  [p] pair  [/] filter  [s] sort  [r] refresh  [v] addresses  [c] columns  [L] this machine  [D] ~
+ [enter] open  [a] add  [p] pair  [/] filter  [s] sort  [r] refresh  [v] addresses  [c] columns  [?] more

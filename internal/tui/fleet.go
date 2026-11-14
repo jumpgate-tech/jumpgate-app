@@ -294,7 +294,7 @@ func (s *fleetScreen) cell(a *App, r api.FleetRow, col string) string {
 		if d := r.Disk; d != nil && d.UsedBytes()+d.FreeBytes > 0 {
 			expected = uint64(float64(d.ExpectedExecBytes+d.ExpectedBeaconBytes) / float64(d.UsedBytes()+d.FreeBytes) * 1000)
 		}
-		s := fmt.Sprintf("[%s] %.0f%%", bar(uint64(frac*1000), expected, 1000, 8, a.gl), frac*100)
+		s := fmt.Sprintf("[%s] %.0f%%", bar(uint64(frac*1000), expected, 1000, 7, a.gl), frac*100)
 		if r.Stale.Disk {
 			return a.th.Dim.Render(s)
 		}

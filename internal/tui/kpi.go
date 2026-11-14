@@ -19,8 +19,9 @@ import (
 type tile struct {
 	Title string
 	Lines [2]string
-	Short string
-	Level int // 0 plain, 1 warn, 2 bad: colour only, the text says it too
+	Short string // the compact strip's segment
+	Min   string // the segment when the strip is narrow; "" means Short
+	Level int    // 0 plain, 1 warn, 2 bad: colour only, the text says it too
 }
 
 const (
@@ -94,7 +95,7 @@ func kpis(in alertInput, al []alert, alertsKnown bool) []tile {
 		}
 		ts = append(ts, t)
 	} else {
-		t := tile{Title: "Boxes", Short: fmt.Sprintf("boxes %s%d/%d up", tilde(false), up, n),
+		t := tile{Title: "Boxes", Short: fmt.Sprintf("%s%d/%d up", tilde(false), up, n),
 			Lines: [2]string{fmt.Sprintf("%s%d up %d down", tilde(false), up, down), join(na(n-up-down), fmt.Sprintf("of %d", n))}}
 		if down > 0 {
 			t.Level = 2
@@ -125,7 +126,7 @@ func kpis(in alertInput, al []alert, alertsKnown bool) []tile {
 		if syncing > 0 {
 			sy = fmt.Sprintf("%d sync", syncing)
 		}
-		ts = append(ts, tile{Title: "Synced", Short: "synced " + v, Lines: [2]string{v + " synced", join(sy, na(n-withStatus))}})
+		ts = append(ts, tile{Title: "Synced", Short: v + " synced", Lines: [2]string{v + " synced", join(sy, na(n-withStatus))}})
 	}
 
 	// Head lag: the worst known lag.
@@ -142,7 +143,7 @@ func kpis(in alertInput, al []alert, alertsKnown bool) []tile {
 		ts = append(ts, unknown("Head lag", "lag", n, failCode(statusErr)))
 	} else {
 		v := fmt.Sprintf("%s%d", tilde(stale), lagMax)
-		ts = append(ts, tile{Title: "Head lag", Short: "lag " + v, Lines: [2]string{"max " + v + " blk", na(n - withLag)}})
+		ts = append(ts, tile{Title: "Head lag", Short: "lag " + v + " blk", Min: "lag " + v, Lines: [2]string{"max " + v + " blk", na(n - withLag)}})
 	}
 
 	// Peers: exec and beacon sums over the boxes with a reading.
@@ -157,11 +158,12 @@ func kpis(in alertInput, al []alert, alertsKnown bool) []tile {
 		ts = append(ts, unknown("Peers", "peers", n, failCode(statusErr)))
 	} else {
 		t := tilde(stale)
-		ts = append(ts, tile{Title: "Peers", Short: fmt.Sprintf("peers %s%d/%d", t, exec, beacon),
+		ts = append(ts, tile{Title: "Peers", Short: fmt.Sprintf("peers %s%d el / %d cl", t, exec, beacon), Min: fmt.Sprintf("peers %s%d/%d", t, exec, beacon),
 			Lines: [2]string{fmt.Sprintf("%s%d exec", t, exec), join(fmt.Sprintf("%s%d bcn", t, beacon), na(n-withStatus))}})
 	}
 
-	// Disk: the least free space, and the box with it.
+	// Disk: the fullest disk, and the box with it. The TUI says used
+	// everywhere (the table, the storage tab and here), never free.
 	worst, worstPct, withDisk, stale := "", -1.0, 0, false
 	for _, r := range rows {
 		if r.Status == nil || r.Status.DiskUsedPct == nil {
@@ -176,9 +178,9 @@ func kpis(in alertInput, al []alert, alertsKnown bool) []tile {
 	if withDisk == 0 {
 		ts = append(ts, unknown("Disk", "disk", n, failCode(func(r api.FleetRow) *api.ProbeError { return r.DiskError })))
 	} else {
-		free := fmt.Sprintf("%s%.0f%%", tilde(stale), 100-worstPct)
-		ts = append(ts, tile{Title: "Disk", Short: "disk " + free,
-			Lines: [2]string{"min " + free + " free", "on " + sanitizeLine(worst)}})
+		used := fmt.Sprintf("%s%.0f%%", tilde(stale), worstPct)
+		ts = append(ts, tile{Title: "Disk", Short: "disk max " + used + " used", Min: "disk " + used + " used",
+			Lines: [2]string{"max " + used + " used", "on " + sanitizeLine(worst)}})
 	}
 
 	// Gateways: live and failing; request counts have no API yet (U1).
@@ -213,10 +215,10 @@ func kpis(in alertInput, al []alert, alertsKnown bool) []tile {
 				fails++
 			}
 		}
-		t := tile{Title: "Alerts", Short: "! 0 alerts", Lines: [2]string{"0 alerts", ""}}
+		t := tile{Title: "Alerts", Short: "! no alerts", Lines: [2]string{"0 alerts", ""}}
 		if len(al) > 0 {
 			c := fmt.Sprintf("%d FAIL %d warn", fails, len(al)-fails)
-			t = tile{Title: "Alerts", Short: "! " + c, Lines: [2]string{c, al[0].Box + " " + al[0].Text}, Level: 1}
+			t = tile{Title: "Alerts", Short: fmt.Sprintf("! %d fail %d warn", fails, len(al)-fails), Lines: [2]string{c, al[0].Box + " " + al[0].Text}, Level: 1}
 			if fails > 0 {
 				t.Level = 2
 			}
@@ -268,28 +270,65 @@ func (a *App) tileStyle(t tile, s string) string {
 	return s
 }
 
+// noReadings is the strip before the fleet has been read: one phrase, not a
+// tile of n/a for every reading.
+func (a *App) noReadings() string {
+	switch a.conn {
+	case apiclient.Retrying:
+		return "the server is not answering" + a.gl.Ellipsis + " no readings yet"
+	case apiclient.Live:
+		return "waiting for the first reading" + a.gl.Ellipsis
+	}
+	return "connecting to the server" + a.gl.Ellipsis + " no readings yet"
+}
+
 // kpiView draws the strip in r: one line of cells, or (4 rows) the boxed
 // tiles side by side, the Gateways tile wide enough for its hint.
 func (a *App) kpiView(r rect) string {
 	al, known := a.currentAlerts()
 	ts := kpis(a.alertInput(), al, known)
-	if r.H < 4 {
-		var plain, styled []string
-		for _, t := range ts {
-			plain = append(plain, t.Short)
-			styled = append(styled, a.tileStyle(t, t.Short))
+	if !a.fleetHas {
+		msg := a.noReadings()
+		a.kpiHits = append(a.kpiHits[:0], tileHit{0, r.W, "Boxes"})
+		if r.H < 4 {
+			return truncate(" "+a.th.Dim.Render(msg), r.W, a.gl.Ellipsis)
 		}
-		// Narrower windows close up the separators before anything is cut.
-		for _, sep := range []string{" | ", "  ", " "} {
-			if lipgloss.Width(" "+strings.Join(plain, sep)) <= r.W || sep == " " {
-				a.kpiHits = a.kpiHits[:0]
-				x := 1
-				for i, p := range plain {
-					w := lipgloss.Width(p)
-					a.kpiHits = append(a.kpiHits, tileHit{x, x + w, ts[i].Title})
-					x += w + len(sep)
+		return a.boxed("Fleet", false, a.th.Dim.Render(msg)+"\n", r.W, r.H)
+	}
+	if r.H < 4 {
+		// Gateways with no list yet is left out rather than shown as n/a.
+		var shown []tile
+		for _, t := range ts {
+			if t.Title == "Gateways" && !a.gwsHas {
+				continue
+			}
+			shown = append(shown, t)
+		}
+		sep := " " + a.gl.Sep + " "
+		// The long segments where they fit, the short ones where they do not,
+		// the separators closing up last.
+		for _, short := range []bool{false, true} {
+			for _, sp := range []string{sep, "  ", " "} {
+				var plain, styled []string
+				for _, t := range shown {
+					text := t.Short
+					if short && t.Min != "" {
+						text = t.Min
+					}
+					plain = append(plain, text)
+					styled = append(styled, a.tileStyle(t, text))
 				}
-				return truncate(" "+strings.Join(styled, sep), r.W, a.gl.Ellipsis)
+				last := short && sp == " "
+				if lipgloss.Width(" "+strings.Join(plain, sp)) <= r.W || last {
+					a.kpiHits = a.kpiHits[:0]
+					x := 1
+					for i, p := range plain {
+						w := lipgloss.Width(p)
+						a.kpiHits = append(a.kpiHits, tileHit{x, x + w, shown[i].Title})
+						x += w + lipgloss.Width(sp)
+					}
+					return truncate(" "+strings.Join(styled, sp), r.W, a.gl.Ellipsis)
+				}
 			}
 		}
 	}

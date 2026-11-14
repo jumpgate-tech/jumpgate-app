@@ -1,4 +1,4 @@
- jumpgate  server live                                                          ! 0 alerts | setup 1/6 | updated 0s ago
+ jumpgate  server live                                                                       setup 1/6 | updated 0s ago
 +- Boxes -----++- Synced ----++- Head lag --++- Peers -----++- Disk ------++- Gateways --------------++- Alerts -------+
 |n/a          ||n/a          ||n/a          ||n/a          ||n/a          ||n/a                      ||0 alerts        |
 |             ||             ||             ||             ||             ||n/a no request counts yet||                |

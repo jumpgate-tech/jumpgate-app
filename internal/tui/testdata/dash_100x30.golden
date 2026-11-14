@@ -1,13 +1,13 @@
- jumpgate  server live                                                  ! 3 alerts | updated 5s ago
-+- Boxes --++- Synced -++- Head ~ -++- Peers --++- Disk --++- Gateways ------------++- Alerts -----+
-|1 up 1 do~||~1/3 sync~||max 2 blk ||~51 exec  ||min 39% ~||n/a                    ||1 FAIL 2 warn |
-|1 n/a of 3||1 sync 1 ~||2 n/a     ||~81 bcn 1~||on box-a ||n/a no request counts ~||box-b down 4m |
+ jumpgate  server live                                                               updated 5s ago
++- Boxes --++- Synced -++- Hea... -++- Peers --++- Disk --++- Gateways ------------++- Alerts -----+
+|1 up 1 ...||~1/3 sy...||max 2 blk ||~51 exec  ||max 61...||n/a                    ||1 FAIL 2 warn |
+|1 n/a of 3||1 sync ...||2 n/a     ||~81 bcn...||on box-a ||n/a no request count...||box-b down 4m |
 +----------++----------++----------++----------++---------++-----------------------++--------------+
 +- Views --------++= > Fleet ======================================================================+
-|> Fleet      [1]|| HOST         LINK       NET       SYNC      LAG    PEERS   DISK            FW  |
-|  Jobs       [2]||>box-a        gate       PulseCha~ synced    2      48/72   [####|...] 61%  warn|
-|  Signers    [3]|| box-b        down 4m    Ethereum  syncing~  n/a    3/9~    n/a             n/a |
-|  Gateways   [4]|| laptop*      local*     ?         n/a       n/a    n/a     n/a             n/a |
+|> Fleet      [1]|| HOST         LINK       NET        SYNC      LAG    PEERS   DISK USED      FW  |
+|  Jobs       [2]||>box-a        gate       PulseChain synced    2      48/72   [####|..] 61%  warn|
+|  Signers    [3]|| box-b        down 4m    Ethereum   syncing~  n/a    3/9~    n/a            n/a |
+|  Gateways   [4]|| laptop*      local*     ?          n/a       n/a    n/a     n/a            n/a |
 |  VPN        [5]||                                                                                |
 |  Vault      [6]||                                                                                |
 |  Server     [7]||                                                                                |
@@ -16,7 +16,7 @@
 |   fleet 3 boxes||                                                                                |
 |>+ box-a  synced||                                                                                |
 | + box-b down 4m||                                                                                |
-| + lapto~ local*||                                                                                |
+| + lap... local*||                                                                                |
 |                ||                                                                                |
 |                ||                                                                                |
 |                ||                                                                                |

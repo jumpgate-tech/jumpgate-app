@@ -114,7 +114,7 @@ func (a *App) frame() string {
 			a.keepBoxed("drawer", "Activity", l.Drawer, dv)
 		}
 		parts = append(parts, dv)
-		last = truncate(" "+a.hints(), a.w, a.gl.Ellipsis)
+		last = " " + fitHints(a.hintItems(), a.w-1)
 	}
 	a.keep("hints", "", 0, a.h-1, last)
 	return lipgloss.JoinVertical(lipgloss.Left, append(parts, last)...)
@@ -123,7 +123,8 @@ func (a *App) frame() string {
 // header is the top line: the server link and version on the left, the age
 // of the fleet data on the right. Below 100 columns the view tabs take the
 // server's place, so the body keeps the row a tab row would cost; a
-// retrying link still shows first, and "connecting" shows on the right.
+// retrying link still shows first, and "connecting" shows on the right. The
+// alert count is not here: the strip (or its Alerts tile) has it, once.
 func (a *App) header(w int) string {
 	narrow := w < leftMinWidth
 	server := "server " + a.conn.String()
@@ -131,76 +132,116 @@ func (a *App) header(w int) string {
 		server += " (" + a.errText(a.connErr) + ")"
 	}
 	left := " " + a.th.Title.Render("jumpgate") + "  "
+	right := a.headerRight(narrow, true)
 	switch {
 	case narrow:
 		if a.conn == apiclient.Retrying {
 			left += server + "  "
 		}
-		left += a.tabs(w - lipgloss.Width(left) - lipgloss.Width(a.headerRight(narrow)) - 2)
+		tabs, tier := a.tabs(w - lipgloss.Width(left) - lipgloss.Width(right) - 2)
+		if tier == tabsNumbers {
+			// The names do not fit beside the age: try the short names
+			// without it.
+			if t, tr := a.tabs(w - lipgloss.Width(left) - lipgloss.Width(a.headerRight(narrow, false)) - 2); tr != tabsNumbers {
+				tabs, right = t, a.headerRight(narrow, false)
+			}
+		}
+		left += tabs
 	default:
 		left += server
 		if a.srvVer != "" {
 			left += " " + a.gl.Sep + " " + a.srvVer
 		}
 	}
-	right := a.headerRight(narrow)
 	left = truncate(left, max(w-lipgloss.Width(right)-1, 1), a.gl.Ellipsis)
 	return left + strings.Repeat(" ", max(w-lipgloss.Width(left)-lipgloss.Width(right), 1)) + right
 }
 
-// headerRight is the header's right side: the alerts, the setup segment
-// and the reading's age.
-func (a *App) headerRight(narrow bool) string {
+// headerRight is the header's right side: LOCKED, the setup segment and the
+// reading's age. With age false the age goes (a stale reading still says
+// so), to leave the tabs room.
+func (a *App) headerRight(narrow, age bool) string {
 	right := a.th.Dim.Render("connecting")
 	if a.fleetHas {
-		age := a.now().Sub(a.fleet.At)
 		every := time.Duration(a.fleet.IntervalSeconds) * time.Second
 		if every <= 0 {
 			every = statusStaleAfter
 		}
-		text := "updated " + formatAge(age) + " ago"
+		since := a.now().Sub(a.fleet.At)
+		text := "updated " + formatAge(since) + " ago"
 		if narrow {
-			text = formatAge(age) + " ago"
+			text = formatAge(since) + " ago"
 		}
 		switch {
-		case age > 4*every || a.conn == apiclient.Retrying:
-			right = a.th.Bad.Render("stale, " + text)
-		case age > 2*every:
+		case since > 4*every || a.conn == apiclient.Retrying:
+			if !age {
+				text = "stale"
+			} else {
+				text = "stale, " + text
+			}
+			right = a.th.Bad.Render(text)
+		case !age:
+			right = ""
+		case since > 2*every:
 			right = a.th.Warn.Render(text + " ~")
 		default:
 			right = text
 		}
+	} else if !age {
+		right = ""
+	}
+	join := func(first, rest string) string {
+		if rest == "" {
+			return first
+		}
+		return first + " " + a.gl.Sep + " " + rest
 	}
 	if seg := a.setupSegment(); seg != "" {
-		right = a.th.Warn.Render(seg) + " " + a.gl.Sep + " " + right
+		right = join(a.th.Warn.Render(seg), right)
 	}
-	if a.fleetHas {
-		right = a.alertCount() + " " + a.gl.Sep + " " + right
-		if a.fleet.Locked {
-			right = a.th.Bad.Render("LOCKED: jobs wait for unlock") + " " + a.gl.Sep + " " + right
+	if a.fleetHas && a.fleet.Locked {
+		note := "LOCKED: jobs wait for unlock"
+		if narrow {
+			note = "LOCKED"
 		}
+		right = join(a.th.Bad.Render(note), right)
 	}
 	return right + " "
 }
 
+// The three ways the header writes the views: by name, by short name, by
+// number.
+const (
+	tabsNames = iota
+	tabsShort
+	tabsNumbers
+)
+
+// shortNames are the views in the middle tier, for the 80-column header once
+// the setup and locked notes crowd the names.
+var shortNames = [...]string{"Fleet", "Jobs", "Sign", "GW", "VPN", "Vault", "Srv", "Set"}
+
 // tabs is the views in one line, for the header below 100 columns; the
-// active one is bracketed, so it reads without colour too.
-// Where the names do not fit in room cells, the views other than the
-// active one show as their number keys.
-func (a *App) tabs(room int) string {
-	var full, short []string
+// active one is bracketed, so it reads without colour too. Where the names
+// do not fit in room cells the short names show, and where they do not, the
+// views' number keys. The tier it used is returned.
+func (a *App) tabs(room int) (string, int) {
+	var names, short, nums []string
 	for i, n := range screenNames {
 		k := fmt.Sprint(i + 1)
+		sn := shortNames[i]
 		if screenID(i) == a.navActive() {
-			n = a.th.Sel.Render("[" + n + "]")
-			k = n
+			n, sn, k = a.th.Sel.Render("["+n+"]"), a.th.Sel.Render("["+sn+"]"), a.th.Sel.Render("["+n+"]")
 		}
-		full, short = append(full, n), append(short, k)
+		names, short, nums = append(names, n), append(short, sn), append(nums, k)
 	}
-	if s := strings.Join(full, " "); lipgloss.Width(s) <= room {
-		return s
+	if s := strings.Join(names, " "); lipgloss.Width(s) <= room {
+		return s, tabsNames
 	}
-	return strings.Join(short, " ")
+	if s := strings.Join(short, " "); lipgloss.Width(s) <= room {
+		return s, tabsShort
+	}
+	return strings.Join(nums, " "), tabsNumbers
 }
 
 // viewsList is the left sidebar: the views with their number keys, then

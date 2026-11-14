@@ -246,7 +246,8 @@ func (a *App) clickHeader(x int) tea.Cmd {
 	line := p.lines[0]
 	w := wordAt(line, x)
 	for i, n := range screenNames {
-		if w == n || w == "["+n+"]" || w == strconv.Itoa(i+1) {
+		sn := shortNames[i]
+		if w == n || w == "["+n+"]" || w == sn || w == "["+sn+"]" || w == strconv.Itoa(i+1) {
 			return a.openScreen(screenID(i))
 		}
 	}

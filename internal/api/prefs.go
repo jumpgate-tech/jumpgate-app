@@ -24,11 +24,11 @@ type ColumnSpec struct {
 var FleetColumns = []ColumnSpec{
 	{"host", "HOST", 12, true},
 	{"link", "LINK", 10, true},
-	{"network", "NET", 9, true},
+	{"network", "NET", 10, true},
 	{"sync", "SYNC", 9, true},
 	{"lag", "LAG", 6, true},
 	{"peers", "PEERS", 7, true},
-	{"disk", "DISK", 15, true},
+	{"disk", "DISK USED", 14, true},
 	{"firewall", "FW", 4, true},
 	{"el", "EL", 9, false},
 	{"cl", "CL", 9, false},
