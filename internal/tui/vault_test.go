@@ -48,8 +48,8 @@ func selfArgs(t *testing.T, r []string) string {
 func TestVaultView(t *testing.T) {
 	m := vaultApp(t, tuitest.NewFake(), "linux")
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"Vault", "state      locked", "slots      passphrase, keystore", "relay-token (not in the vault yet: m)",
-		"idle lock  30 min", "[p] put relay-token or admin-token", "[a] add a recovery code", "[s] seal with the TPM2"} {
+	for _, want := range []string{"Vault", "state      locked", "slots      passphrase, keystore", "relay-token (not in the vault yet: [m] move them in)",
+		"idle lock  30 min", "The vault is locked.  [u] unlock", "[x] more: "} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("no %q:\n%s", want, fr)
 		}
@@ -79,15 +79,21 @@ func TestVaultCommandsRunSelf(t *testing.T) {
 	f := tuitest.NewFake()
 	a := vaultApp(t, f, "linux")
 	ran := recordSelf(a)
-	var m tea.Model = press(t, a, "I", "m", "b")
-	m = press(t, typed(t, m, "/tmp/v.bak"), "enter", "r")
+	var m tea.Model = press(t, a, "I", "m", "ctrl+w")
+	m = press(t, typed(t, m, "/tmp/v.bak"), "enter", "ctrl+r")
 	m = press(t, typed(t, m, "/tmp/v.bak"), "enter")
 	if len(*ran) != 3 {
 		t.Fatalf("restore ran before its confirmation: %v", *ran)
 	}
-	m = press(t, typed(t, m, "restore"), "enter", "a", "K", "s", "S")
+	m = press(t, typed(t, m, "restore"), "enter", "ctrl+n", "ctrl+s")
+	// The two rare ones have no key: they are in the x menu.
+	vs := m.(*App).screens[scrVault].(*vaultScreen)
+	vs.state, vs.linux = "unlocked", true
+	for _, it := range vs.menuExtras(m.(*App)) {
+		it.run(m.(*App))
+	}
 	want := []string{"vault init", "vault migrate", "vault backup /tmp/v.bak", "vault restore /tmp/v.bak",
-		"vault add-recovery", "vault rekdf", "vault seal --tpm2", "vault seal --allow-host-key"}
+		"vault add-recovery", "vault seal --tpm2", "vault rekdf", "vault seal --allow-host-key"}
 	if len(*ran) != len(want) {
 		t.Fatalf("ran %v", *ran)
 	}
@@ -110,11 +116,11 @@ func TestVaultCommandsRunSelf(t *testing.T) {
 func TestVaultSealOffLinuxAndBadPaths(t *testing.T) {
 	a := vaultApp(t, tuitest.NewFake(), "darwin")
 	ran := recordSelf(a)
-	fr := tuitest.Frame(press(t, a, "s", "S"))
-	if strings.Contains(fr, "[s] seal") || len(*ran) != 0 {
+	fr := tuitest.Frame(press(t, a, "ctrl+s", "S"))
+	if strings.Contains(fr, "[ctrl+s] seal") || len(*ran) != 0 {
 		t.Fatalf("seal off Linux: ran %v\n%s", *ran, fr)
 	}
-	m := press(t, typed(t, press(t, a, "b"), "--out"), "enter")
+	m := press(t, typed(t, press(t, a, "ctrl+w"), "--out"), "enter")
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "cannot start with -") || len(*ran) != 0 {
 		t.Fatalf("a flag went through as a path: %v\n%s", *ran, fr)
 	}
@@ -214,8 +220,40 @@ func TestVaultUnlockAndLockKeys(t *testing.T) {
 	if _, ok := m.(*App).modal.(*unlockModal); !ok {
 		t.Fatalf("u: %T", m.(*App).modal)
 	}
-	m = press(t, m, "esc", "l")
+	m = press(t, m, "esc", "ctrl+k")
+	if _, ok := m.(*App).modal.(*yesNoModal); ok {
+		m = press(t, m, "y") // jobs are running in the sample fleet: it asks first
+	}
 	if !f.Called("Lock") {
-		t.Fatalf("l did not lock: %v", f.Calls)
+		t.Fatalf("L did not lock: %v", f.Calls)
+	}
+}
+
+// Locking pauses running jobs, so it asks first; with none running it does not.
+func TestVaultLockAsksOnlyWhenJobsRun(t *testing.T) {
+	f := tuitest.NewFake()
+	a := vaultApp(t, f, "linux")
+	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: api.Fleet{Rows: []api.FleetRow{{ID: "box", Jobs: &api.JobsSummary{Running: 2}}}}, Has: true, State: apiclient.Live}})
+	m = press(t, m, "ctrl+k")
+	yn, ok := m.(*App).modal.(*yesNoModal)
+	if !ok || f.Called("Lock") {
+		t.Fatalf("no question before locking with jobs running: %T", m.(*App).modal)
+	}
+	if fr := tuitest.Frame(m); !strings.Contains(fr, "2 jobs are running") || !strings.Contains(fr, "[y] lock it") {
+		t.Fatalf("frame:\n%s", fr)
+	}
+	_ = yn
+	m = press(t, m, "n")
+	if f.Called("Lock") || m.(*App).modal != nil {
+		t.Fatalf("n locked or kept the question: %v", f.Calls)
+	}
+	m = press(t, m, "y") // not a key here: nothing locks
+	if f.Called("Lock") {
+		t.Fatal("a stray y locked")
+	}
+	m, _ = tuitest.Send(m, fleetMsg{u: apiclient.Update[api.Fleet]{Value: api.Fleet{Rows: []api.FleetRow{{ID: "box", Jobs: &api.JobsSummary{}}}}, Has: true, State: apiclient.Live}})
+	press(t, m, "ctrl+k")
+	if !f.Called("Lock") {
+		t.Fatal("L with no job running did not lock at once")
 	}
 }

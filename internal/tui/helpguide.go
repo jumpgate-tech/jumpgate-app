@@ -139,14 +139,14 @@ func (g *manualModal) view(a *App, w, h int) string {
 	if len(g.lines) > g.room {
 		where = fmt.Sprintf("%d%%", end*100/len(g.lines))
 	}
-	foot := a.th.Dim.Render(fmt.Sprintf(" %s  %s pgup/pgdn scroll  %s topic  esc topics  q close",
-		where, a.gl.UpDown, keyLabel("←/→", a.gl)))
+	foot := a.th.Dim.Render(fmt.Sprintf(" %s  %s scroll  [space] page  [h] prev  [l] next  [esc] topics  [q] close",
+		where, a.gl.UpDown))
 	return head + "\n" + strings.Join(body, "\n") + "\n" + foot
 }
 
 func (g *manualModal) listView(a *App) string {
 	lines := []string{
-		a.th.Title.Render(" Guide") + a.th.Dim.Render("  (enter to read, esc to close)"),
+		a.th.Title.Render(" Guide") + a.th.Dim.Render("  (click a topic or [enter] to read, [esc] close)"),
 		"",
 	}
 	for i, t := range g.topics {
@@ -161,3 +161,16 @@ func (g *manualModal) listView(a *App) string {
 	lines = append(lines, "", a.th.Dim.Render("  ? or :keys lists the keys for the screen you are on"))
 	return strings.Join(lines, "\n")
 }
+
+// click on a topic opens its page; on a page, the footer's buttons are keys.
+func (g *manualModal) click(a *App, row, _ int, _ bool) (done, handled bool, cmd tea.Cmd) {
+	if g.open || row < manualFirstRow || row-manualFirstRow >= len(g.topics) {
+		return false, false, nil
+	}
+	g.cur, g.open, g.offset = row-manualFirstRow, true, 0
+	return false, true, nil
+}
+
+// manualFirstRow is the topic list's first topic: the head and a blank line
+// come first.
+const manualFirstRow = 2

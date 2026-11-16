@@ -152,9 +152,18 @@ type App struct {
 	hostGen uint64 // counts openHost calls; see hostScreen.gen
 	modal   modal
 	flash   string
-	skew    string
-	srvVer  string // the server's version, when Skew reported one
-	sel     string // the box the status bar names
+	// flashErr: the flash is an error (setErr): it stays past a key press. errFlash
+	// is the text setErr set, flashSeq counts its calls, flashAt is when it began.
+	flashErr bool
+	errFlash string
+	flashSeq uint64
+	flashAt  time.Time
+	// needsX0 and needsX1 are the columns of the "needs decision" button on the
+	// bottom line as last drawn, and leftEnd where its counts end.
+	needsX0, needsX1, leftEnd int
+	skew                      string
+	srvVer                    string // the server's version, when Skew reported one
+	sel                       string // the box the status bar names
 	// focus is the region with the keyboard; treeOver and logOver are the
 	// tree and the log drawn over main where the window has no room for them.
 	focus    focusRegion
@@ -330,8 +339,9 @@ func (a *App) openScreen(id screenID) tea.Cmd {
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	before := a.modal
+	before, prevFlash, prevSeq := a.modal, a.flash, a.flashSeq
 	m, cmd := a.update(msg)
+	a.noteFlash(prevFlash, prevSeq)
 	if a.modal != nil && a.modal != before {
 		a.modalAt = a.clock() // the flush window starts
 	}
@@ -353,6 +363,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.fitFocus()
 		return a, nil
 	case tickMsg:
+		a.expireFlash()
 		return a, tick()
 	case gwTickMsg:
 		return a, tea.Batch(loadGateways(a), gwTick(), loadGuide(a))
@@ -362,7 +373,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case startedMsg:
 		a.restarting = false
 		if msg.err != nil {
-			a.flash = "could not start the server: " + a.errText(msg.err)
+			a.setErr("could not start the server: " + a.errText(msg.err))
 			return a, nil
 		}
 		a.cancel()
@@ -371,14 +382,14 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(a.watchFleet(a.be.WatchFleet(a.ctx)), a.openScreen(a.active), loadGateways(a), loadGuide(a))
 	case stoppedMsg:
 		if msg.err != nil {
-			a.flash = "stop: " + a.errText(msg.err)
+			a.setErr("stop: " + a.errText(msg.err))
 		} else {
 			a.flash, a.vaultOpen = "the server is stopping; jobs pause until it starts again", false
 		}
 		return a, nil
 	case serverWebMsg:
 		if msg.err != nil {
-			a.flash = "could not open the web app: " + a.errText(msg.err)
+			a.setErr("could not open the web app: " + a.errText(msg.err))
 		} else {
 			a.flash = "the web app is open in your browser"
 		}
@@ -435,13 +446,13 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.err != nil && msg.checked:
 			// Refused (or the re-read failed): say why, and ask the server what it
 			// really has rather than going back to a local snapshot.
-			a.flash = "could not save the display setting: " + a.errText(msg.err)
+			a.setErr("could not save the display setting: " + a.errText(msg.err))
 			if !msg.refetch {
 				return a, a.refetchPrefs()
 			}
 			return a, nil
 		case msg.err != nil:
-			a.flash = "could not read display settings: " + a.errText(msg.err)
+			a.setErr("could not read display settings: " + a.errText(msg.err))
 		default:
 			a.setPrefs(msg.p)
 		}
@@ -450,12 +461,12 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.flash = sanitizeLine(string(msg))
 		return a, nil
 	case errMsg:
-		a.flash = sanitizeLine(msg.what) + ": " + a.errText(msg.err)
+		a.setErr(sanitizeLine(msg.what) + ": " + a.errText(msg.err))
 		return a, nil
 	case restartedMsg:
 		a.restarting = false
 		if msg.err != nil {
-			a.flash = "restart failed: " + a.errText(msg.err)
+			a.setErr("restart failed: " + a.errText(msg.err))
 			return a, nil
 		}
 		a.cancel()
@@ -467,13 +478,19 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, loadGuide(a)
 	case lockDoneMsg:
 		if msg.err != nil {
-			a.flash = "lock: " + a.errText(msg.err)
+			a.setErr("lock: " + a.errText(msg.err))
 		} else {
 			a.flash, a.vaultOpen = "the vault is locked; jobs wait for unlock", false
 		}
 		return a, loadGuide(a)
 	case tea.KeyPressMsg:
-		a.flash = ""
+		if a.flashErr && msg.String() == "esc" && a.modal == nil {
+			a.flash, a.flashErr = "", false // esc dismisses an error and does nothing else
+			return a, nil
+		}
+		if !a.flashErr {
+			a.flash = ""
+		}
 		return a, a.key(msg)
 	case tea.PasteMsg:
 		return a, a.paste(msg)
@@ -535,13 +552,16 @@ func (a *App) key(k tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(k, globalKeys.Quit) && a.detail == nil:
 		a.cancel()
 		return tea.Quit
-	case key.Matches(k, globalKeys.Restart) && a.canRestart():
+	case key.Matches(k, globalKeys.Restart) && a.canRestart() && a.detail == nil: // an open box's ctrl+r restarts a service
 		return a.restart()
 	case key.Matches(k, globalKeys.Unlock):
 		a.modal = newUnlock()
 		return nil
 	case key.Matches(k, globalKeys.Lock):
-		return a.lockVault()
+		return a.requestLock()
+	case key.Matches(k, globalKeys.Menu) && a.detail == nil && a.active != scrSettings:
+		a.modal = a.screenMenu()
+		return nil
 	case key.Matches(k, globalKeys.Guide):
 		a.modal = newGuide(a)
 		return loadGuide(a)
@@ -599,7 +619,7 @@ func (a *App) restart() tea.Cmd {
 func (a *App) View() tea.View {
 	v := tea.NewView(a.render())
 	v.AltScreen = true
-	if a.prefs.Mouse {
+	if a.prefs.MouseOn() {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	return v

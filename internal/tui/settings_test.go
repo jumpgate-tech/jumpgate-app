@@ -36,7 +36,7 @@ func pick(t *testing.T, a *App, label string) *App {
 
 func TestSettingsFrame(t *testing.T) {
 	fr := tuitest.Frame(settingsApp(t, tuitest.NewFake()))
-	for _, want := range []string{"FLEET COLUMNS", "[x] HOST", "[ ] JOBS", "space toggle"} {
+	for _, want := range []string{"FLEET COLUMNS", "[x] HOST", "[ ] JOBS", "[space] toggle"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("settings lack %q:\n%s", want, fr)
 		}
@@ -111,7 +111,7 @@ func TestSettingsPrefsRefusedShowsTheHintAndReverts(t *testing.T) {
 	a := settingsApp(t, f)
 	m := press(t, pick(t, a, "JOBS"), "space")
 	fr := tuitest.Frame(m)
-	if !strings.Contains(fr, "keep at least one column") {
+	if !strings.Contains(strings.Join(strings.Fields(fr), " "), "keep at least one column") { // the error wraps
 		t.Fatalf("hint missing:\n%s", fr)
 	}
 	if slices.Contains(m.(*App).prefs.FleetColumns, "jobs") {
@@ -405,12 +405,12 @@ func TestSettingsStaleRepliesAreDropped(t *testing.T) {
 func TestMouseAndGlyphPreferencesApply(t *testing.T) {
 	f := tuitest.NewFake()
 	m := press(t, pick(t, settingsApp(t, f), "Mouse"), "space")
-	if !m.(*App).prefs.Mouse || m.(*App).View().MouseMode == 0 {
-		t.Fatal("mouse not enabled")
+	if m.(*App).prefs.MouseOn() || m.(*App).View().MouseMode != 0 {
+		t.Fatal("mouse not disabled")
 	}
 	m = press(t, pick(t, m.(*App), "Mouse"), "space")
-	if m.(*App).View().MouseMode != 0 {
-		t.Fatal("mouse not disabled")
+	if !m.(*App).prefs.MouseOn() || m.(*App).View().MouseMode == 0 {
+		t.Fatal("mouse not enabled")
 	}
 	// newTestApp starts on unicode; one press is ascii, and it applies.
 	m = press(t, pick(t, m.(*App), "Glyphs"), "space")

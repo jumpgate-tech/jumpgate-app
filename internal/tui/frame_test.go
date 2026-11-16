@@ -71,7 +71,7 @@ func TestDrawerToggleSaves(t *testing.T) {
 func TestDrawerAutoMinimizedAt80x24(t *testing.T) {
 	a := dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto")
 	last := lastLine(tuitest.Frame(a))
-	if !strings.HasPrefix(last, " jobs") || !strings.Contains(last, "[enter] open") {
+	if !strings.Contains(last, " running") || !strings.Contains(last, "[enter] open") {
 		t.Fatalf("last line %q", last)
 	}
 	if a.drawerOpen() {
@@ -93,7 +93,7 @@ func TestDrawerLineFailsClosed(t *testing.T) {
 func TestDrawerHighlightsDecisionNoOpen(t *testing.T) {
 	a := dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto")
 	fr := tuitest.Frame(a)
-	if last := lastLine(fr); !strings.Contains(last, "jobs 1 running  [! 1 needs decision] | ") {
+	if last := lastLine(fr); !strings.Contains(last, " 1 running  [! 1 to decide] | ") {
 		t.Fatalf("last line %q", last)
 	}
 	if strings.Contains(fr, "Activity") || a.drawerOpen() {
@@ -273,23 +273,25 @@ func TestDegradedGolden(t *testing.T) {
 	tuitest.Golden(t, "dash_degraded_120x40", fr)
 }
 
-func TestHeaderAlertCount(t *testing.T) {
+// The alerts are counted once, in the strip: not in the header, and not on
+// the bottom line.
+func TestAlertsAreCountedOnce(t *testing.T) {
 	for _, w := range []int{80, 120} {
-		a := dashApp(t, tuitest.NewFake(), w, 40, "ascii", "auto")
-		if h := ansi.Strip(a.header(w)); !strings.Contains(h, "! 3 alerts") || ansi.StringWidth(h) > w {
+		a := dashApp(t, tuitest.NewFake(), w, 24, "ascii", "auto")
+		fr := tuitest.Frame(a)
+		lines := strings.Split(fr, "\n")
+		if h := ansi.Strip(a.header(w)); strings.Contains(h, "alerts") || strings.Contains(h, "!") || ansi.StringWidth(h) > w {
 			t.Errorf("%d: header %q", w, h)
+		}
+		if !strings.Contains(lines[1], "! 1 fail 2 warn") {
+			t.Errorf("%d: the strip lacks the alerts: %q", w, lines[1])
+		}
+		if last := lastLine(fr); strings.Contains(last, "alerts") || strings.Contains(last, "warn") {
+			t.Errorf("%d: the bottom line repeats them: %q", w, last)
 		}
 	}
 	if h := ansi.Strip(newTestApp(t, tuitest.NewFake(), 80, 24, "ascii").header(80)); strings.Contains(h, "alerts") || !strings.Contains(h, "connecting") {
 		t.Errorf("before the fleet: %q", h)
-	}
-}
-
-// The alert count is in the header; the drawer line does not repeat it.
-func TestDrawerLineAlertCount(t *testing.T) {
-	fr := tuitest.Frame(dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto"))
-	if last := lastLine(fr); strings.Contains(last, "alerts") || !strings.Contains(strings.Split(fr, "\n")[0], "! 3 alerts") {
-		t.Fatalf("frame:\n%s", fr)
 	}
 }
 
@@ -361,7 +363,7 @@ func TestModalInsideFrame(t *testing.T) {
 	m := press(t, dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "auto"), "?")
 	fr := tuitest.Frame(m)
 	lines := strings.Split(fr, "\n")
-	if !strings.HasPrefix(lines[0], " jumpgate  server live") || !strings.Contains(fr, "+- Activity") || !strings.Contains(fr, "keys everywhere") || !strings.Contains(fr, "+- Views") {
+	if !strings.HasPrefix(lines[0], " jumpgate  server live") || !strings.Contains(fr, "+- Activity") || !strings.Contains(fr, "look (plain keys)") || !strings.Contains(fr, "+- Views") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 	if m.(*App).modal == nil {
@@ -397,7 +399,7 @@ func TestHeaderAge(t *testing.T) {
 // with the host list under it once a host is open.
 func TestViewsSidebarAndTabs(t *testing.T) {
 	fr := tuitest.Frame(dashApp(t, tuitest.NewFake(), 80, 24, "ascii", "auto"))
-	if l := strings.Split(fr, "\n")[0]; !strings.HasPrefix(l, " jumpgate  [Fleet] 2 3 4 5 6 7 ") || !strings.HasSuffix(strings.TrimRight(l, " "), "5s ago") {
+	if l := strings.Split(fr, "\n")[0]; !strings.HasPrefix(l, " jumpgate  [Fleet] Jobs Signers Gateways VPN Vault Server Settings") || !strings.HasSuffix(strings.TrimRight(l, " "), "5s ago") {
 		t.Fatalf("header with tabs %q", l)
 	}
 	m := press(t, dashApp(t, tuitest.NewFake(), 120, 40, "ascii", "auto"), "enter")

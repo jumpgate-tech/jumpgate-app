@@ -28,16 +28,27 @@ const overlayWidth = 34
 
 func (a *App) layout() layout {
 	l := layoutFor(a.w, a.h, drawerFromPref(a.prefs.Drawer), a.drawerLines())
-	if a.inviteOn && l.Main.H > 4 {
-		// The invite takes the panes' last row: one unboxed line under them.
-		l.Left.H, l.Main.H, l.Right.H = max(l.Left.H-1, 0), l.Main.H-1, max(l.Right.H-1, 0)
+	// Rows under the panes take their height: an error's lines, then the
+	// invite's one line. Below the panes they read: panes, invite, error.
+	shrink := func(n int) {
+		l.Left.H, l.Main.H, l.Right.H = max(l.Left.H-n, 0), l.Main.H-n, max(l.Right.H-n, 0)
 		if l.Left.W == 0 {
 			l.Left.H = 0
 		}
 		if l.Right.W == 0 {
 			l.Right.H = 0
 		}
+	}
+	if rows := len(a.errorRows(a.w)); rows > 0 && l.Main.H > 6+rows {
+		shrink(rows)
+		l.Flash = rect{0, 0, a.w, rows}
+	}
+	if a.inviteOn && l.Main.H > 4 {
+		shrink(1)
 		l.Invite = rect{0, l.Main.Y + l.Main.H, a.w, 1}
+	}
+	if l.Flash.H > 0 {
+		l.Flash.Y = l.Main.Y + l.Main.H + l.Invite.H
 	}
 	return l
 }

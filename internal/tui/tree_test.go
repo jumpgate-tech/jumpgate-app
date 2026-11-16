@@ -75,7 +75,7 @@ func TestTreeModulesOnlyWhenExpanded(t *testing.T) {
 		t.Fatalf("collapsed box shows modules:\n%s", got)
 	}
 	cmd := a.toggleExpand("box-a")
-	if got := nodeLines(a.treeNodes()); !strings.Contains(got, "modules loading~") {
+	if got := nodeLines(a.treeNodes()); !strings.Contains(got, "modules loading...") {
 		t.Errorf("no loading line:\n%s", got)
 	}
 	tuitest.Send(a, tuitest.Run(cmd)...)
@@ -121,7 +121,7 @@ func TestTreeViewASCII(t *testing.T) {
 			t.Errorf("line %d is %d wide: %q", i, w, l)
 		}
 	}
-	if !strings.Contains(v, "a-very-long~") || !strings.Contains(v, "- box-b") || !strings.Contains(v, "+ laptop*") {
+	if !strings.Contains(v, "a-very-lo...") || !strings.Contains(v, "- box-b") || !strings.Contains(v, "+ laptop*") {
 		t.Fatalf("tree:\n%s", v)
 	}
 	if fmt.Sprint(strings.Count(v, "\n")+1) != "12" {

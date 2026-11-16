@@ -65,7 +65,7 @@ func (m *askModal) view(a *App, _, _ int) string {
 	if m.miss != "" {
 		s += "\n\n " + a.th.Warn.Render(m.miss)
 	}
-	return s + "\n\n " + a.th.Dim.Render("enter to go on, esc to cancel")
+	return s + "\n\n " + a.th.Dim.Render("enter to go on, [esc] cancel")
 }
 
 // secretModal is a masked field for a secret: a passphrase or a token. As in
@@ -177,7 +177,7 @@ func (m *secretModal) view(a *App, _, _ int) string {
 	if m.miss != "" {
 		s += "\n\n " + a.th.Warn.Render(m.miss)
 	}
-	return s + "\n\n " + a.th.Dim.Render("enter to send, esc to cancel")
+	return s + "\n\n " + a.th.Dim.Render("enter to send, [esc] cancel")
 }
 
 // secretBody is {<pre>"field":"<base64 of v>"} in one buffer the caller

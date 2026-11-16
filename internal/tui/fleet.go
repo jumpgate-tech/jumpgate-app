@@ -52,8 +52,8 @@ func (s *fleetScreen) keys() []key.Binding {
 	if s.hostMode {
 		return append(s.hosts.keys(), fleetKeys.Mode)
 	}
-	return []key.Binding{navKeys.Up, navKeys.Down, navKeys.Enter, navKeys.Filter, fleetKeys.Sort, fleetKeys.Columns, fleetKeys.Refresh, fleetKeys.Mode,
-		hostsKeys.Add, hostsKeys.Pair, hostsKeys.Local, hostsKeys.Remove}
+	return []key.Binding{navKeys.Up, navKeys.Down, navKeys.Enter, hostsKeys.Add, hostsKeys.Pair, navKeys.Filter, fleetKeys.Sort, fleetKeys.Refresh,
+		fleetKeys.Mode, fleetKeys.Columns, hostsKeys.Local, hostsKeys.Remove}
 }
 
 // selectID moves the table's cursor to the box id, when it is listed.
@@ -294,7 +294,7 @@ func (s *fleetScreen) cell(a *App, r api.FleetRow, col string) string {
 		if d := r.Disk; d != nil && d.UsedBytes()+d.FreeBytes > 0 {
 			expected = uint64(float64(d.ExpectedExecBytes+d.ExpectedBeaconBytes) / float64(d.UsedBytes()+d.FreeBytes) * 1000)
 		}
-		s := fmt.Sprintf("[%s] %.0f%%", bar(uint64(frac*1000), expected, 1000, 8, a.gl), frac*100)
+		s := fmt.Sprintf("[%s] %.0f%%", bar(uint64(frac*1000), expected, 1000, 7, a.gl), frac*100)
 		if r.Stale.Disk {
 			return a.th.Dim.Render(s)
 		}
@@ -521,6 +521,15 @@ func (s *fleetScreen) view(a *App, w, h int) string {
 		return strings.Join(append(out, " "+a.th.Dim.Render("waiting for the fleet"+a.gl.Ellipsis)), "\n")
 	}
 	rows, hidden := s.rows(a)
+	if len(a.fleet.Rows) == 0 {
+		// First run: say what to do, and make each way a button.
+		out = append(out, "",
+			" "+a.th.Title.Render("No boxes yet."),
+			"",
+			" [a] add a box over SSH",
+			" [i] one line to run on the box",
+			" [g] setup guide")
+	}
 	room := max(h-3, 1)
 	if s.cursor < s.offset {
 		s.offset = s.cursor

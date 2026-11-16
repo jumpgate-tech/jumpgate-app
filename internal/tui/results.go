@@ -43,7 +43,7 @@ func (r *resultPane) take(a *App, msg callMsg) {
 	head := sanitizeLine(msg.head)
 	if msg.err != nil {
 		*r = resultPane{head: head + ": FAIL", lines: []string{a.errText(msg.err)}, bad: true, has: true}
-		a.flash = head + " failed"
+		a.setErr(head + " failed")
 		return
 	}
 	lines := []string{"ok"}
@@ -107,7 +107,7 @@ func (m *onceModal) view(a *App, w, _ int) string {
 	for _, l := range strings.Split(sanitize(string(m.secret)), "\n") {
 		s += " " + l + "\n"
 	}
-	return s + "\n " + a.th.Warn.Render("shown once: copy it now") + "\n " + a.th.Dim.Render("enter or esc closes and forgets it")
+	return s + "\n " + a.th.Warn.Render("shown once: copy it now") + "\n " + a.th.Dim.Render("enter or [esc] closes and forgets it")
 }
 
 // jsonStringBody is {<pre>"field":"<v as a JSON string>"} in one buffer the

@@ -1,5 +1,5 @@
  jumpgate  [Fleet] Jobs Signers Gateways VPN Vault Server Settings   connecting
- boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
+ connecting to the server… no readings yet
  Guide · Durable jobs  (6 of 9)
  A durable job is a multi-step operation that the box itself carries out. Each
  step runs as a transient systemd unit, so a running step outlives the TUI, the
@@ -20,5 +20,5 @@
     asks before it runs that step again. It never reruns one on its own.
   • The node is the job's. While a job on a box has not finished, the box
     refuses service start, stop and restart, and the controller refuses node
- 22%  ↑↓ pgup/pgdn scroll  ←/→ topic  esc topics  q close
- jobs n/a | [?] help
+ 22%  ↑↓ scroll  [space] page  [h] prev  [l] next  [esc] topics  [q] close
+ jobs n/a | [?] more

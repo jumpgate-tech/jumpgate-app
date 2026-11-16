@@ -1,5 +1,5 @@
  jumpgate  [Fleet] Jobs Signers Gateways VPN Vault Server Settings   connecting
- boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
+ connecting to the server… no readings yet
  HOSTS
 
 ▸ box-a          root@10.0.0.5:22                       gate 0x1234…5678
@@ -20,5 +20,5 @@
 
 
 
- a add  p pair  L pair this machine  d remove  u upgrade the gate  H host keys …
- jobs n/a | ↑↓ select  [enter] open  [a] add a box  [p] pair or re-pair  [L] pa…
+ [a] add  [p] pair  [L] this machine  [H] host keys  [o] leftovers  [enter] open
+ jobs n/a | [enter] open  [a] add  [p] pair  [L] this machine  [?] more

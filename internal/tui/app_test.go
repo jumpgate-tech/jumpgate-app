@@ -187,9 +187,16 @@ func TestHelpIsGeneratedFromTheKeymaps(t *testing.T) {
 	// Listed only when relevant: TestHelpListsTheVaultKeysWhenRelevant.
 	delete(all, "Unlock")
 	delete(all, "Lock")
-	delete(all, "Guide") // these three: TestHelpListsTheGuideKeysWhenRelevant
-	delete(all, "Invite")
-	delete(all, "Copy")
+	delete(all, "Copy") // listed while the invite shows: TestHelpListsTheGuideKeysWhenRelevant
+	// The moving keys share one row.
+	for _, n := range []string{"Up", "Down", "Left", "Right", "Panels", "Drawer", "Quit", "ForceQuit", "Guide", "Invite", "Help", "Palette", "Enter", "Filter"} {
+		delete(all, n)
+	}
+	for _, g := range helpGroups() {
+		if !strings.Contains(fr, g.label+" ") || !strings.Contains(fr, g.desc) {
+			t.Errorf("help lacks the row %q:\n%s", g.label, fr)
+		}
+	}
 	for name, b := range all {
 		h := b.Help()
 		if !regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(h.Key) + `\s+` + regexp.QuoteMeta(h.Desc) + `$`).MatchString(fr) {
@@ -217,7 +224,7 @@ func TestHelpASCII(t *testing.T) {
 	m, _ := tuitest.Send(a, tuitest.Key("2"), tuitest.Key("?"))
 	fr := tuitest.Frame(m)
 	requireASCII(t, fr)
-	if !strings.Contains(fr, "up/k") {
+	if !strings.Contains(fr, "arrows/hjkl") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 }
@@ -243,16 +250,21 @@ func TestGlyphDetection(t *testing.T) {
 	}
 }
 
-// Spec D9: mouse capture stays off unless the prefs turn it on, so native
-// text selection works for copying fingerprints and commands.
-func TestMouseOffByDefault(t *testing.T) {
+// The mouse is on unless a stored choice turned it off; Shift or Option
+// while dragging still selects text (the Settings label says so).
+func TestMouseOnByDefault(t *testing.T) {
 	a := newTestApp(t, tuitest.NewFake(), 80, 24, "unicode")
-	if mm := a.View().MouseMode; mm != tea.MouseModeNone {
+	if mm := a.View().MouseMode; mm != tea.MouseModeCellMotion {
 		t.Fatalf("mouse mode %v by default", mm)
 	}
-	m, _ := tuitest.Send(a, prefsMsg{p: api.UIPrefs{Mouse: true}})
+	m, _ := tuitest.Send(a, prefsMsg{p: api.UIPrefs{}.WithMouse(false)})
+	if mm := m.View().MouseMode; mm != tea.MouseModeNone {
+		t.Fatalf("mouse mode %v with the pref off", mm)
+	}
+	// A block that never mentioned the mouse leaves it on.
+	m, _ = tuitest.Send(a, prefsMsg{p: api.UIPrefs{Units: "GiB"}})
 	if mm := m.View().MouseMode; mm != tea.MouseModeCellMotion {
-		t.Fatalf("mouse mode %v with the pref on", mm)
+		t.Fatalf("mouse mode %v for a block without the field", mm)
 	}
 }
 
@@ -335,7 +347,7 @@ func TestCommandsKeepTheirContext(t *testing.T) {
 // Init fetches the display prefs without blocking, and the answer applies.
 func TestInitFetchesPrefs(t *testing.T) {
 	f := tuitest.NewFake()
-	f.PrefsV = api.UIPrefs{Mouse: true, Units: "GiB"}
+	f.PrefsV = api.UIPrefs{Units: "GiB"}.WithMouse(true)
 	a := New(Options{Backend: f, GOOS: "linux", Getenv: func(string) string { return "" }, Now: func() time.Time { return testNow }})
 	t.Cleanup(func() { a.cancel() }) // a restart replaces a.cancel: read it at cleanup time
 	var m tea.Model = a
@@ -345,7 +357,7 @@ func TestInitFetchesPrefs(t *testing.T) {
 	if !f.Called("Prefs") {
 		t.Fatal("Init did not fetch prefs")
 	}
-	if got := m.(*App).prefs; !got.Mouse || got.Units != "GiB" || got.RefreshSeconds != 15 {
+	if got := m.(*App).prefs; !got.MouseOn() || got.Units != "GiB" || got.RefreshSeconds != 15 {
 		t.Fatalf("prefs %+v", got)
 	}
 }
@@ -364,7 +376,7 @@ func TestDrawerLineCountsJobsThatNeedYou(t *testing.T) {
 		t.Fatalf("before any box reports jobs: %q", l)
 	}
 	m, _ := tuitest.Send(a, fleetMsg{u: apiclient.Update[api.Fleet]{Value: fleetWithJobs(1, 2), Has: true, State: apiclient.Live}})
-	if l := ansi.Strip(m.(*App).drawerLine(80)); !strings.Contains(l, "[! 3 needs decision]") {
+	if l := ansi.Strip(m.(*App).drawerLine(120)); !strings.Contains(l, "[! 3 needs decision]") {
 		t.Fatalf("drawer line %q", l)
 	}
 }

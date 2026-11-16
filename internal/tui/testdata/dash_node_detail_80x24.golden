@@ -1,5 +1,5 @@
- jumpgate  [Fleet] 2 3 4 5 6 7 8                            ! 3 alerts | 5s ago
- boxes 1/3 up synced ~1/3 lag 2 peers ~51/81 disk 39% gw n/a ! 1 FAIL 2 warn
+ jumpgate  [Fleet] Jobs Signers Gateways VPN Vault Server Settings       5s ago
+ 1/3 up | ~1/3 synced | lag 2 | peers ~51/81 | disk 61% used | ! 1 fail 2 warn
  Fleet > box-a > exec
  link gate | PulseChain
  node detail | was = the previous reading | esc box tabs
@@ -21,4 +21,4 @@
  Health watch   on | Running
  Checkpointz    on | unit failed
 
- jobs 1 running  [! 1 needs decision] | left/right tab  [esc] back  [m] measure~
+ 1 running  [! 1 to decide] | [r] reload  [m] modules  [S] ssh  [?] more

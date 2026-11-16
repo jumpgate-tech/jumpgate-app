@@ -14,8 +14,8 @@ var hostsKeys = struct{ Add, Pair, Local, Remove, Upgrade, HostKeys, Orphans, Re
 	Add:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add a box")),
 	Pair:     key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pair or re-pair")),
 	Local:    key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "pair this machine")),
-	Remove:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove, typed confirmation")),
-	Upgrade:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "upgrade the gate")),
+	Remove:   key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "remove, typed confirmation")),
+	Upgrade:  key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "upgrade the gate")),
 	HostKeys: key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "host keys: list, forget")),
 	Orphans:  key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "leftover containers")),
 	Reload:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
@@ -120,7 +120,7 @@ func (s *hostsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		s.cursor = min(s.cursor, max(len(s.ts)-1, 0))
 	case localPairDoneMsg:
 		if msg.err != nil {
-			a.flash = "pairing this machine did not finish: " + a.errText(msg.err)
+			a.setErr("pairing this machine did not finish: " + a.errText(msg.err))
 		} else {
 			a.flash = "back from pairing this machine"
 		}
@@ -128,7 +128,7 @@ func (s *hostsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 	case removedMsg:
 		id := sanitizeLine(msg.id)
 		if msg.err != nil {
-			a.flash = "remove " + id + ": " + a.errText(msg.err)
+			a.setErr("remove " + id + ": " + a.errText(msg.err))
 		} else {
 			a.flash = "forgot " + id + " on this controller; the box still lists this controller until it is revoked there"
 		}
@@ -166,7 +166,7 @@ func (s *hostsScreen) key(a *App, k tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(k, hostsKeys.Pair) && sel != nil:
 		if sel.Mode == "local" {
 			if !nameRE.MatchString(sel.ID) {
-				a.flash = "this name cannot be passed to the jumpgate CLI from here; run `jumpgate hosts add NAME --local`"
+				a.setErr("this name cannot be passed to the jumpgate CLI from here; run `jumpgate hosts add NAME --local`")
 				return nil
 			}
 			return s.pairThisMachine(a, sel.ID)
@@ -245,7 +245,7 @@ func (s *hostsScreen) pairThisMachine(a *App, name string) tea.Cmd {
 		return nil
 	}
 	if a.o.Self == "" {
-		a.flash = "this jumpgate cannot find its own executable to pair this machine; run `jumpgate hosts add NAME --local`"
+		a.setErr("this jumpgate cannot find its own executable to pair this machine; run `jumpgate hosts add NAME --local`")
 		return nil
 	}
 	return tea.ExecProcess(a.o.Command(a.o.Self, "hosts", "add", name, "--local"), func(err error) tea.Msg { return localPairDoneMsg{err: err} })
@@ -286,11 +286,11 @@ func (s *hostsScreen) view(a *App, w, h int) string {
 		lines = append(lines, a.selIf(i == s.cursor, "%s %-14s %-38s %s", mark, truncate(id, 14, a.gl.Ellipsis), truncate(addr, 38, a.gl.Ellipsis), pairing))
 	}
 	if len(s.ts) == 0 {
-		lines = append(lines, " "+a.th.Dim.Render("no boxes yet: press a to add one"))
+		lines = append(lines, " "+"no boxes yet: [a] add one")
 	}
 	for len(lines) < h-1 {
 		lines = append(lines, "")
 	}
-	foot := " a add  p pair  L pair this machine  d remove  u upgrade the gate  H host keys  o leftovers  enter open"
+	foot := " [a] add  [p] pair  [L] this machine  [H] host keys  [o] leftovers  [enter] open"
 	return strings.Join(append(lines, a.th.Dim.Render(foot)), "\n")
 }

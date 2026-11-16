@@ -61,15 +61,33 @@ type settingsScreen struct {
 	settingsHas    bool
 	keyInput       textinput.Model
 	editingKey     bool
+	lineItem       []int // the item on each line of the list (-1: none), for clicks
 
 	visit
 }
 
 func (s *settingsScreen) capturing() bool { return s.editingKey }
 
+// clickRow: a click on a row of settings selects it and does what space does
+// (a checkbox toggles, a choice cycles), as a click on a checkbox should.
+func (s *settingsScreen) clickRow(a *App, row int) (tea.Cmd, bool) {
+	line := s.offset + row
+	if s.editingKey || line < 0 || line >= len(s.lineItem) || s.lineItem[line] < 0 {
+		return nil, false
+	}
+	items := s.items(a)
+	i := s.lineItem[line]
+	if i >= len(items) {
+		return nil, false
+	}
+	s.cursor = i
+	return items[i].act(a, s), true
+}
+
 func (s *settingsScreen) keys() []key.Binding {
 	return []key.Binding{navKeys.Up, navKeys.Down,
-		key.NewBinding(key.WithKeys("space"), key.WithHelp("space/enter", "toggle or change"))}
+		key.NewBinding(key.WithKeys("space"), key.WithHelp("space/enter", "toggle or change")),
+		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload"))}
 }
 
 // begin starts a visit: earlier commands end and their replies are dropped.
@@ -94,6 +112,10 @@ func clonePrefs(p api.UIPrefs) api.UIPrefs {
 	p.FleetColumns = slices.Clone(p.FleetColumns)
 	p.HostTabs = slices.Clone(p.HostTabs)
 	p.Chains = slices.Clone(p.Chains)
+	if p.Mouse != nil {
+		m := *p.Mouse
+		p.Mouse = &m
+	}
 	return p
 }
 
@@ -265,7 +287,7 @@ func (s *settingsScreen) items(a *App) []settingItem {
 		flag("Compact rows", func(p api.UIPrefs) bool { return p.Compact }, func(p *api.UIPrefs, v bool) { p.Compact = v }),
 		flag("Show estimates", func(p api.UIPrefs) bool { return p.ShowEstimates }, func(p *api.UIPrefs, v bool) { p.ShowEstimates = v }),
 		flag("Bell on jobs that need you", func(p api.UIPrefs) bool { return p.Bell }, func(p *api.UIPrefs, v bool) { p.Bell = v }),
-		flag("Mouse (off keeps text selectable)", func(p api.UIPrefs) bool { return p.Mouse }, func(p *api.UIPrefs, v bool) { p.Mouse = v }),
+		flag("Mouse (Shift or Option+drag selects text)", func(p api.UIPrefs) bool { return p.MouseOn() }, func(p *api.UIPrefs, v bool) { *p = p.WithMouse(v) }),
 	)
 	items = append(items,
 		settingItem{"AI EXPLAIN", "AI provider",
@@ -417,7 +439,7 @@ func (s *settingsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if msg.err != nil {
-			a.flash = "AI settings: " + a.errText(msg.err)
+			a.setErr("AI settings: " + a.errText(msg.err))
 			return nil
 		}
 		s.settings, s.settingsHas = msg.s, true
@@ -426,7 +448,7 @@ func (s *settingsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if msg.err != nil {
-			a.flash = "could not open the web app: " + a.errText(msg.err)
+			a.setErr("could not open the web app: " + a.errText(msg.err))
 		} else {
 			a.flash = "the web app is open in your browser"
 		}
@@ -469,6 +491,8 @@ func (s *settingsScreen) update(a *App, msg tea.Msg) tea.Cmd {
 			s.cursor = min(s.cursor+1, len(items)-1)
 		case msg.String() == "space" || msg.String() == "enter":
 			return items[s.cursor].act(a, s)
+		case msg.String() == "r":
+			return tea.Batch(a.fetchPrefs(), s.update(a, enterMsg{}))
 		}
 	}
 	return nil
@@ -478,15 +502,20 @@ func (s *settingsScreen) view(a *App, w, h int) string {
 	items := s.items(a)
 	s.cursor = min(s.cursor, len(items)-1)
 	var lines []string
+	s.lineItem = s.lineItem[:0]
+	add := func(l string, item int) {
+		lines = append(lines, l)
+		s.lineItem = append(s.lineItem, item)
+	}
 	cursorLine := 0
 	section := ""
 	for i, it := range items {
 		if it.section != section {
 			section = it.section
 			if len(lines) > 0 {
-				lines = append(lines, "")
+				add("", -1)
 			}
-			lines = append(lines, " "+a.th.Title.Render(section))
+			add(" "+a.th.Title.Render(section), -1)
 		}
 		mark := " "
 		if i == s.cursor {
@@ -494,20 +523,21 @@ func (s *settingsScreen) view(a *App, w, h int) string {
 		}
 		v := it.value(a)
 		if strings.HasPrefix(v, "[") {
-			lines = append(lines, a.selIf(i == s.cursor, "%s %s %s", mark, v, it.label))
+			add(a.selIf(i == s.cursor, "%s %s %s", mark, v, it.label), i)
 		} else {
-			lines = append(lines, a.selIf(i == s.cursor, "%s %-48s %s", mark, it.label, v))
+			add(a.selIf(i == s.cursor, "%s %-48s %s", mark, it.label, v), i)
 		}
 		if i == s.cursor && it.label == "AI provider" {
 			if d := s.disclosure(); d != "" {
-				lines = append(lines, "    "+a.th.Dim.Render(d))
+				add("    "+a.th.Dim.Render(d), -1)
 				cursorLine = len(lines) - 1 // keep the disclosure in view with its item
 			}
 		}
 		if i == s.cursor && it.label == "Idle lock" {
 			// Two lines, so it fits an 80-column terminal.
 			first, rest, _ := strings.Cut(idleLockHelp, " Plans")
-			lines = append(lines, "    "+a.th.Dim.Render(first), "    "+a.th.Dim.Render("Plans"+rest))
+			add("    "+a.th.Dim.Render(first), -1)
+			add("    "+a.th.Dim.Render("Plans"+rest), -1)
 			cursorLine = len(lines) - 1
 		}
 	}
@@ -520,7 +550,7 @@ func (s *settingsScreen) view(a *App, w, h int) string {
 	}
 	end := min(s.offset+room, len(lines))
 	out := strings.Join(lines[s.offset:end], "\n")
-	foot := " " + a.gl.UpDown + " move  space toggle  enter change  (saved at once)"
+	foot := " " + a.gl.UpDown + " move  [space] toggle  [enter] change  (saved at once; or click a row)"
 	if s.editingKey {
 		foot = " " + s.keyInput.View() + "   enter save, esc cancel"
 	}

@@ -108,7 +108,7 @@ func adminMsg(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		id := sanitizeLine(msg.id)
 		switch {
 		case msg.err != nil:
-			a.flash = "upgrade the gate on " + id + ": " + a.errText(msg.err)
+			a.setErr("upgrade the gate on " + id + ": " + a.errText(msg.err))
 		case msg.v.Upgraded:
 			a.flash = "gate on " + id + ": " + sanitizeLine(msg.v.From) + " -> " + sanitizeLine(msg.v.To)
 		default:
@@ -117,7 +117,7 @@ func adminMsg(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return loadTargets(a), true
 	case hostKeysMsg:
 		if msg.err != nil {
-			a.flash = "host keys for " + sanitizeLine(msg.id) + ": " + a.errText(msg.err)
+			a.setErr("host keys for " + sanitizeLine(msg.id) + ": " + a.errText(msg.err))
 			return nil, true
 		}
 		if a.modal == nil {
@@ -126,14 +126,14 @@ func adminMsg(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	case forgotMsg:
 		if msg.err != nil {
-			a.flash = "forget " + sanitizeLine(msg.fp) + ": " + a.errText(msg.err)
+			a.setErr("forget " + sanitizeLine(msg.fp) + ": " + a.errText(msg.err))
 		} else {
 			a.flash = "forgot " + sanitizeLine(msg.fp) + " for " + sanitizeLine(msg.hostPort) + "; the next connection asks to confirm the key again"
 		}
 		return nil, true
 	case orphansMsg:
 		if msg.err != nil {
-			a.flash = "leftover containers: " + a.errText(msg.err)
+			a.setErr("leftover containers: " + a.errText(msg.err))
 			return nil, true
 		}
 		if a.modal == nil {
@@ -142,7 +142,7 @@ func adminMsg(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	case dismissedMsg:
 		if msg.err != nil {
-			a.flash = "dismiss " + sanitizeLine(msg.name) + ": " + a.errText(msg.err)
+			a.setErr("dismiss " + sanitizeLine(msg.name) + ": " + a.errText(msg.err))
 		} else {
 			a.flash = "dismissed " + sanitizeLine(msg.name) + "; the container itself was not touched"
 		}
@@ -181,6 +181,15 @@ func (m *listModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
+// click on a row selects it; the action itself asks for a typed name.
+func (m *listModal) click(a *App, row, _ int, _ bool) (done, handled bool, cmd tea.Cmd) {
+	if row < 2 || row-2 >= len(m.rows) {
+		return false, false, nil
+	}
+	m.cur = row - 2
+	return false, true, nil
+}
+
 func (m *listModal) view(a *App, w, _ int) string {
 	lines := []string{a.th.Title.Render(" " + sanitizeLine(m.title)), ""} // the sink: rows quote server names
 	if len(m.rows) == 0 {
@@ -211,7 +220,7 @@ func newHostKeysModal(id string, recs []api.RecordedHostKeys) *listModal {
 	}
 	var rs []row
 	m := &listModal{title: "Host keys recorded for " + sanitizeLine(id), empty: "no host key recorded for this box",
-		act: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "forget, typed confirmation"))}
+		act: key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "forget, typed confirmation"))}
 	for _, r := range recs {
 		for _, k := range r.Keys {
 			rs = append(rs, row{r.HostPort, k})
@@ -239,7 +248,7 @@ func newHostKeysModal(id string, recs []api.RecordedHostKeys) *listModal {
 
 func newOrphansModal(os []orphan) *listModal {
 	m := &listModal{title: "Leftover containers", empty: "none: no gateway merge left a container behind",
-		act: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "dismiss, typed confirmation")),
+		act: key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "dismiss, typed confirmation")),
 		why: func(int) string { return "" }}
 	for _, o := range os {
 		m.rows = append(m.rows, sanitizeLine(o.ContainerName)+" on "+sanitizeLine(o.TargetID)+", merged into "+sanitizeLine(o.MergedInto))

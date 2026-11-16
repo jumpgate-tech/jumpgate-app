@@ -21,10 +21,11 @@ import (
 // re-run this jumpgate in the foreground (runSelf), so sudo and the vault
 // passphrase are asked on the real terminal and never pass through the TUI.
 
-var serverKeys = struct{ Check, Start, Stop, Open, Install, Setup, SelfOnly key.Binding }{
+var serverKeys = struct{ Check, Start, Stop, Open, Install, Setup, SelfOnly, Reload key.Binding }{
+	Reload:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 	Check:    key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "check for an update now")),
-	Start:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "start the server")),
-	Stop:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop the server, typed confirmation")),
+	Start:    key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "start the server")),
+	Stop:     key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "stop the server, typed confirmation")),
 	Open:     key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open the web app in the browser")),
 	Install:  key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "install the systemd service (sudo)")),
 	Setup:    key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "set up the service: vault key, unlock, pair this machine (sudo)")),
@@ -64,6 +65,7 @@ type serverScreen struct {
 	// What acts, synced from the App on every update and view: keys()
 	// has no App.
 	canStart, canOpen, linux bool
+	live, system             bool // a server answers; it is the jumpgate service
 
 	upd     updateView
 	updHas  bool
@@ -74,19 +76,26 @@ type serverScreen struct {
 
 func (s *serverScreen) capturing() bool { return false }
 
-// keys are the keys that act now: start only while no server answers, open
-// only when cmd/jumpgate can, the installs on Linux.
+// keys are the keys that act now, the next step first: start only while no
+// server answers, stop only while one does, open only when cmd/jumpgate can,
+// the install only until the service is the one running, the setup on Linux.
 func (s *serverScreen) keys() []key.Binding {
-	ks := []key.Binding{serverKeys.Check}
+	var ks []key.Binding
 	if s.canStart {
 		ks = append(ks, serverKeys.Start)
 	}
-	ks = append(ks, serverKeys.Stop)
+	ks = append(ks, serverKeys.Reload, serverKeys.Check)
 	if s.canOpen {
 		ks = append(ks, serverKeys.Open)
 	}
+	if s.live {
+		ks = append(ks, serverKeys.Stop)
+	}
 	if s.linux {
-		ks = append(ks, serverKeys.Install, serverKeys.Setup, serverKeys.SelfOnly)
+		if !s.system {
+			ks = append(ks, serverKeys.Install)
+		}
+		ks = append(ks, serverKeys.Setup, serverKeys.SelfOnly)
 	}
 	return ks
 }
@@ -95,6 +104,11 @@ func (s *serverScreen) sync(a *App) {
 	s.canStart = a.o.Start != nil && a.conn != apiclient.Live
 	s.canOpen = a.o.OpenWeb != nil
 	s.linux = a.o.GOOS == "linux"
+	s.live = a.conn == apiclient.Live
+	s.system = false
+	if a.o.Server != nil {
+		s.system = a.o.Server().System
+	}
 }
 
 func (s *serverScreen) loadUpdate(a *App, refresh bool) tea.Cmd {
@@ -139,6 +153,8 @@ func (s *serverScreen) update(a *App, msg tea.Msg) tea.Cmd {
 func (s *serverScreen) key(a *App, k tea.KeyPressMsg) tea.Cmd {
 	linux := a.o.GOOS == "linux"
 	switch {
+	case key.Matches(k, serverKeys.Reload):
+		return s.loadUpdate(a, false)
 	case key.Matches(k, serverKeys.Check):
 		return s.loadUpdate(a, true)
 	case key.Matches(k, serverKeys.Start):
@@ -181,7 +197,7 @@ func (a *App) selfDone(m selfDoneMsg) tea.Cmd {
 	case errors.As(m.err, &ee):
 		a.flash = fmt.Sprintf("%s: exit %d", what, ee.ExitCode())
 	default:
-		a.flash = what + ": " + a.errText(m.err)
+		a.setErr(what + ": " + a.errText(m.err))
 	}
 	return loadGuide(a)
 }
@@ -272,20 +288,31 @@ func (s *serverScreen) view(a *App, w, h int) string {
 	}
 
 	lines = append(lines, "")
-	var acts []string
-	if a.o.Start != nil && a.conn != apiclient.Live {
-		acts = append(acts, "[s] start the server")
+	// What can be done now, the next step first; the rest is under x.
+	var prim, svc []key.Binding
+	for _, b := range s.keys() {
+		switch b.Help() {
+		case serverKeys.Install.Help(), serverKeys.Setup.Help(), serverKeys.SelfOnly.Help():
+			svc = append(svc, b)
+		default:
+			prim = append(prim, b)
+		}
 	}
-	acts = append(acts, "[x] stop the server", "[u] check for an update")
-	if a.o.OpenWeb != nil {
-		acts = append(acts, "[o] open in the browser")
+	if s.canStart {
+		// Nothing answers: starting it is the only next step.
+		lines = append(lines, " "+a.th.Warn.Render("No server answers.")+"  "+a.buttons(prim[:1]))
+	} else {
+		lines = append(lines, " "+a.buttons(prim))
 	}
-	lines = append(lines, " "+strings.Join(acts, "   "))
 	if a.o.GOOS == "linux" {
-		lines = append(lines, "", " "+a.th.Title.Render("JUMPGATE SERVICE")+a.th.Dim.Render(" (asks for sudo on the terminal)"),
-			" [I] install the systemd service",
-			" [S] set it up: its vault key, unlock, pair this machine",
-			" [A] the same, self-only (this machine is the only box)")
+		if s.system {
+			lines = append(lines, "", " "+a.th.Dim.Render("The jumpgate service is the server running now. [x] more: set up the service."))
+		} else {
+			lines = append(lines, "", " "+a.th.Title.Render("JUMPGATE SERVICE")+a.th.Dim.Render(" (asks for sudo on the terminal)"))
+			for _, b := range svc {
+				lines = append(lines, " ["+keyLabel(b.Help().Key, a.gl)+"] "+menuWords(b.Help().Desc))
+			}
+		}
 	} else {
 		lines = append(lines, "", a.th.Dim.Render(" The systemd service and its setup are Linux only."))
 	}

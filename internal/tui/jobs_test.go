@@ -38,7 +38,7 @@ func jobsApp(t *testing.T, f *tuitest.Fake, glyphs string) *App {
 
 func TestInboxShowsWhatNeedsYouFirst(t *testing.T) {
 	fr := tuitest.Frame(jobsApp(t, tuitest.NewFake(), "unicode"))
-	for _, want := range []string{" inbox", "1 needs you", "box-a", "⚑", "step 2/3", "1 process(es) still run", "1 Check again", "2 Stop them", "box-b", "running", "silent 10m", "a: adopt"} {
+	for _, want := range []string{" inbox", "1 needs you", "box-a", "⚑", "step 2/3", "1 process(es) still run", "1 Check again", "2 Stop them", "box-b", "running", "controller silent 10m", "[a] take over"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("inbox lacks %q:\n%s", want, fr)
 		}
@@ -97,11 +97,11 @@ func TestAJobHeldElsewhereIsWatchedOnly(t *testing.T) {
 
 func TestAdoptOnlyAStaleJob(t *testing.T) {
 	f := tuitest.NewFake()
-	m := press(t, jobsApp(t, f, "unicode"), "a").(*App) // box-a is ours: nothing to adopt
+	m := press(t, jobsApp(t, f, "unicode"), "ctrl+t").(*App) // box-a is ours: nothing to adopt
 	if f.Called("Adopt") {
 		t.Fatal("adopted a job we hold")
 	}
-	m = press(t, m, "down", "a").(*App)
+	m = press(t, m, "down", "ctrl+t").(*App)
 	m = typed(t, m, "box-b").(*App)
 	press(t, m, "enter")
 	if !f.Called("Adopt box-b fedcba9876543210") {
@@ -252,7 +252,7 @@ func TestTheChoiceListShowsTheQuestionAndEscSendsNothing(t *testing.T) {
 	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: in, Has: true, State: apiclient.Live}
 	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "2", "d").(*App)
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"box-a asks", "1 process still runs", "as valve-node-app", "1 Check again", "2 Stop them", "SIGTERM first", "3 Stop the migration here", "press a number, or esc"} {
+	for _, want := range []string{"box-a asks", "1 process still runs", "as valve-node-app", "[1] Check again", "[2] Stop them", "SIGTERM first", "[3] Stop the migration here", "press a number or click an answer"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("the choice list lacks %q:\n%s", want, fr)
 		}
@@ -287,7 +287,7 @@ func TestDecideSaysWhyItCannotAsk(t *testing.T) {
 		t.Fatalf("frame:\n%s", fr)
 	}
 	m = press(t, m, "d").(*App)
-	if !strings.Contains(m.flash, "adopt it first") || m.modal != nil || f.Called("Decide") {
+	if !strings.Contains(m.flash, "take it over first") || m.modal != nil || f.Called("Decide") {
 		t.Fatalf("flash %q modal %T calls %v", m.flash, m.modal, f.Calls)
 	}
 }
@@ -303,7 +303,7 @@ func TestAdoptRefusesALiveController(t *testing.T) {
 	if fr := tuitest.Frame(m); !strings.Contains(fr, "watching 0xbbbb") {
 		t.Fatalf("frame:\n%s", fr)
 	}
-	m = press(t, m, "a").(*App)
+	m = press(t, m, "ctrl+t").(*App)
 	if !strings.Contains(m.flash, "still alive") || m.modal != nil || f.Called("Adopt") {
 		t.Fatalf("flash %q modal %T calls %v", m.flash, m.modal, f.Calls)
 	}
@@ -339,9 +339,9 @@ func TestALogThatCannotBeReadSaysWhy(t *testing.T) {
 func TestAnEmptyInboxSaysHowToStartAndNamesSilentBoxes(t *testing.T) {
 	f := tuitest.NewFake()
 	f.JobsCh <- apiclient.Update[api.JobsInbox]{Value: api.JobsInbox{Errors: []api.JobsError{{Target: "box-c", Error: api.Error{Message: "could not reach the agent"}}}}, Has: true, State: apiclient.Live}
-	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "2", "d", "a").(*App)
+	m := press(t, newTestApp(t, f, 80, 24, "unicode"), "2", "d", "ctrl+t").(*App)
 	fr := tuitest.Frame(m)
-	if !strings.Contains(fr, "No durable jobs on any paired box") || !strings.Contains(fr, "box-c: could not reach the agent") {
+	if !strings.Contains(fr, "No jobs.  [ctrl+n] start one") || !strings.Contains(fr, "box-c: could not reach the agent") {
 		t.Fatalf("frame:\n%s", fr)
 	}
 	if f.Called("Decide") || f.Called("Adopt") {

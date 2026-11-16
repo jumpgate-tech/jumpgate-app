@@ -35,7 +35,7 @@ func hostsApp(t *testing.T, f *tuitest.Fake, goos string) *App {
 
 func TestHostsList(t *testing.T) {
 	fr := tuitest.Frame(hostsApp(t, tuitest.NewFake(), "linux"))
-	for _, want := range []string{"box-a", "root@10.0.0.5:22", "gate 0x1234…5678", "ops@10.0.0.6:2222 via ops@bastion:22", "not paired", "this machine", "a add", "L pair this machine"} {
+	for _, want := range []string{"box-a", "root@10.0.0.5:22", "gate 0x1234…5678", "ops@10.0.0.6:2222 via ops@bastion:22", "not paired", "this machine", "[a] add", "[L] this machine"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("hosts lack %q:\n%s", want, fr)
 		}
@@ -136,13 +136,13 @@ func TestPairThisMachineRunsTheCLIInTheForeground(t *testing.T) {
 
 func TestRemoveNeedsTheHostName(t *testing.T) {
 	f := tuitest.NewFake()
-	m := press(t, hostsApp(t, f, "linux"), "j", "d")
+	m := press(t, hostsApp(t, f, "linux"), "j", "ctrl+d")
 	m = typed(t, m, "box-a")
 	m = press(t, m, "enter")
 	if f.Called("RemoveTarget") {
 		t.Fatal("the wrong name removed a box")
 	}
-	m = press(t, m, "esc", "d")
+	m = press(t, m, "esc", "ctrl+d")
 	m = typed(t, m, "box-b")
 	press(t, m, "enter")
 	if !f.Called("RemoveTarget box-b") {
@@ -317,7 +317,7 @@ func TestRemoveRefusesAnUnshowableName(t *testing.T) {
 	f := tuitest.NewFake()
 	f.TargetsV = []api.TargetView{{ID: "bad\x1b[2Jname", Mode: "ssh", SSH: &api.SSHView{User: "r", Host: "h"}}}
 	a := newTestApp(t, f, 80, 24, "unicode")
-	m := press(t, a, "v", "d")
+	m := press(t, a, "v", "ctrl+d")
 	m = press(t, m, "enter")
 	m = typed(t, m, "badname")
 	press(t, m, "enter")
@@ -466,7 +466,7 @@ func TestConfirmReadsAsTheBriefAndNamesTheJump(t *testing.T) {
 	m = typed(t, m, "ops@bastion")
 	m = press(t, m, "enter", "enter")
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"ADD A BOX", "bastion:22 is the jump host for box-c", "Type yes to trust it, esc to stop:", "Compare it with the box's console:"} {
+	for _, want := range []string{"ADD A BOX", "bastion:22 is the jump host for box-c", "Type yes to trust it, or [esc] to stop:", "Compare it with the box's console:"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("first hop lacks %q:\n%s", want, fr)
 		}
@@ -583,7 +583,7 @@ func TestFleetHostModeV(t *testing.T) {
 func TestFleetRemoveActsOnSelection(t *testing.T) {
 	f := tuitest.NewFake()
 	f.TargetsV = sampleTargets()
-	m := press(t, fleetApp(t, f, "ascii", apiclient.Live), "j", "d")
+	m := press(t, fleetApp(t, f, "ascii", apiclient.Live), "j", "ctrl+d")
 	_, ok := m.(*App).modal.(*confirmModal)
 	if !ok || !strings.Contains(tuitest.Frame(m), "remove box-b") {
 		t.Fatalf("modal %T:\n%s", m.(*App).modal, tuitest.Frame(m))

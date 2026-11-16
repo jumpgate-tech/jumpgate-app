@@ -6,7 +6,7 @@ Run `jumpgate` with no arguments in a terminal, or open the terminal launcher fo
 
 Keys `1` to `8` switch screens. At 100 columns or more a list of screens and boxes sits on the left; narrower, the screens are tabs in the header.
 
-- **1 Fleet:** every box at once: link, network, sync, lag, peers, disk and firewall. `a` adds a box, `p` pairs or re-pairs it and `d` removes it. `v` switches to a table of addresses and pairing, where `u` upgrades a box's gate. Settings chooses the columns. `enter` opens a box, with the tabs Overview, Storage, Endpoints, Security, Logs, Services, Docker and Tools; Settings can hide any of them.
+- **1 Fleet:** every box at once: link, network, sync, lag, peers, disk and firewall. `a` adds a box, `p` pairs or re-pairs it and `ctrl+d` removes it. `v` switches to a table of addresses and pairing, where `ctrl+u` upgrades a box's gate. Settings chooses the columns. `enter` opens a box, with the tabs Overview, Storage, Endpoints, Security, Logs, Services, Docker and Tools; Settings can hide any of them.
 - **2 Jobs:** the jobs inbox, with each job's steps, lease and question. The "needs decision" count in the status line at the bottom is the number of jobs waiting for you across the fleet.
 - **3 Signers:** this controller's key and the boxes it signs for. Test signing, create or export the key.
 - **4 Gateways:** your RPC gateways: create, start, stop, provision and delete them, read their analytics and traffic, manage customer keys, and turn their modules on and off.
@@ -17,20 +17,22 @@ Keys `1` to `8` switch screens. At 100 columns or more a list of screens and box
 
 ## Keys
 
+Plain keys only look and move: they never change a box. `r` reloads whatever you are looking at, on every screen, like a browser's reload. Anything that changes a box, the server or the vault is a Ctrl chord, so a stray key cannot restart or stop a node: `ctrl+r` restarts, `ctrl+s` starts, `ctrl+t` stops, `ctrl+n` makes a new one, `ctrl+d` deletes or removes, `ctrl+e` edits or runs checks, `ctrl+p` provisions or measures, and `ctrl+w` wipes or writes a backup. The footer and `?` show each chord, such as `[ctrl+r] restart`, and each one is a button you can click. Stopping, restarting, wiping and removing still ask you to type the name. `x` lists everything you can do with the selected item, each with its key.
+
 - `1` to `8`: switch screens.
 - Arrows or `h` `j` `k` `l`: move, and switch tabs.
 - `enter`: open.
 - `esc`: go back.
 - `/`: filter.
 - `tab`: move between the list, the main area and the activity log. `[` and `]` show or hide the tree and the activity log, and `.` opens or closes the activity drawer.
-- `x`: the actions for an open box.
-- `m`: on an open box, its modules. See [Modules](modules.md). On the Storage tab `m` measures the disk, so use another tab.
+- `x`: the actions menu for the selected item: a filterable list of what you can do now, each with its key. Press `/` to filter, `enter` or a click to run one. A few rare actions are in this menu only.
+- `m`: on an open box, its modules. See [Modules](modules.md). On the Storage tab `ctrl+p` measures the disk now and `r` reads the last measurement again.
 - `:`: take a command.
 - `?`: show every key for the screen you are on. Press `F` there for this guide.
 - `g`: the setup checklist. `i` shows the one line that sets up a box for this controller.
-- `U`: unlock the vault, offered while it is locked.
+- `U`: unlock the vault, offered while it is locked. `ctrl+k` locks it, from any screen, and asks first when jobs are running.
 - `q`: quit.
-- `R`: restart the server, offered when its version differs from this jumpgate.
+- `ctrl+r`: restart the server, offered when its version differs from this jumpgate. On an open box it restarts the selected service instead.
 
 Stopping or restarting a service asks you to type its name. Every other change that cannot be undone asks the same.
 
@@ -43,9 +45,9 @@ Press `:` and type one of:
 - `start exec NAME`, `stop beacon NAME`, `restart beacon NAME`
 - `remove NAME`
 - `migrate-names NAME`
-- `add`, `keys`, `help [TOPIC]`, `quit`
+- `add`, `guide`, `invite`, `unlock`, `keys`, `help [TOPIC]`, `quit`
 
-`hosts` opens the Fleet as the table of addresses and pairing. `keys` shows the same list as `?`.
+`hosts` opens the Fleet as the table of addresses and pairing. `keys` shows the same list as `?`. `guide` and `invite` are the setup checklist and the invite line (`g` and `i`), and `unlock` asks for the vault passphrase. `tab` completes a command or a box name.
 
 ## The guide
 
@@ -54,7 +56,8 @@ Press `:` and type one of:
 ## Terminals
 
 - The TUI needs 80x24.
-- Mouse support is off by default so you can select text. Turn it on in Settings.
+- Mouse support is on: click a tab, a row (double-click opens it) or any `[key]` button, and use the wheel to scroll. A click never confirms a change that asks you to type a name. To select text, hold Shift (or Option on macOS terminals) while dragging. Turn it off in Settings.
+- A ~ after a value means it may be out of date. In plain ASCII drawing a cut-off word ends in ... instead.
 - `NO_COLOR=1` drops colour. `JUMPGATE_ASCII=1` uses plain ASCII drawing, which is automatic on the classic Windows console and the Linux virtual console. Settings can also choose the glyphs.
 - `jumpgate home`, `JUMPGATE_PLAIN=1` or `TERM=dumb` shows the plain line-based screen instead.
 - `jumpgate tui` opens the TUI explicitly, and refuses to run without a terminal.

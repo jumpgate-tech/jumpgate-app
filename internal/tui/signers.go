@@ -16,9 +16,9 @@ import (
 
 var signerKeys = struct{ Test, Create, Export, Restart, Reload key.Binding }{
 	Test:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "test signing on the selected box")),
-	Create:  key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "create this controller's key")),
+	Create:  key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "create this controller's key")),
 	Export:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export a keystore v3 file")),
-	Restart: key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restart the server (loads a new key)")),
+	Restart: key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "restart the server (loads a new key)")),
 	Reload:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 }
 
@@ -128,7 +128,7 @@ func (s *signersScreen) update(a *App, msg tea.Msg) tea.Cmd {
 		}
 	case keysInitDoneMsg:
 		if msg.err != nil {
-			a.flash = "keys init did not finish: " + a.errText(msg.err)
+			a.setErr("keys init did not finish: " + a.errText(msg.err))
 		} else {
 			a.flash = "key created; press R to restart the server so it loads the key"
 			if a.o.Restart == nil {
@@ -221,7 +221,7 @@ func (s *signersScreen) view(a *App, w, h int) string {
 	case !s.ctlHas:
 		lines = append(lines, " "+a.th.Dim.Render("loading"+a.gl.Ellipsis))
 	case s.ctl.State == "missing":
-		lines = append(lines, " "+a.th.Warn.Render("no key yet")+": press K to create one (jumpgate keys init)")
+		lines = append(lines, " "+a.th.Warn.Render("no key yet")+": [ctrl+n] create one (jumpgate keys init)")
 	default:
 		addr := sanitizeLine(s.ctl.Address)
 		if addr == "" {
@@ -259,7 +259,7 @@ func (s *signersScreen) view(a *App, w, h int) string {
 	lines = append(lines, "", " "+a.th.Title.Render("BOXES THIS KEY SIGNS FOR"))
 	boxes := s.paired()
 	if len(boxes) == 0 {
-		lines = append(lines, " "+a.th.Dim.Render("none paired yet (Hosts, p)"))
+		lines = append(lines, " "+a.th.Dim.Render("none paired yet: on Fleet, select a box and press [p]"))
 	}
 	for i, t := range boxes {
 		mark := " "
@@ -276,9 +276,9 @@ func (s *signersScreen) view(a *App, w, h int) string {
 	for len(lines) < h-1 {
 		lines = append(lines, "")
 	}
-	bar := " t test signing  K create a key  e export  "
+	bar := " [t] test signing  [ctrl+n] create a key  [e] export  "
 	if a.o.Restart != nil {
-		bar += "R restart the server  "
+		bar += "[ctrl+r] restart the server  "
 	}
-	return strings.Join(append(lines, a.th.Dim.Render(bar+"r reload")), "\n")
+	return strings.Join(append(lines, bar+"[r] reload"), "\n")
 }

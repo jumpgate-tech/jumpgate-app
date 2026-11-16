@@ -1,8 +1,8 @@
  jumpgate  Fleet [Jobs] Signers Gateways VPN Vault Server Settings   connecting
- boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
+ connecting to the server... no readings yet
  inbox
  server connecting; what follows may be out of date
- loading~
+ loading...
 
 
 
@@ -21,4 +21,4 @@
 
 
 
- jobs n/a | up/dn select  [enter] open  [d] answer the selected job's question ~
+ jobs n/a | [enter] open  [d] decide  [ctrl+t] take over  [r] reload  [?] more

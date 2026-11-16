@@ -53,7 +53,7 @@ type Glyphs struct {
 
 var (
 	unicodeGlyphs = Glyphs{Flag: "⚑", Full: "█", Empty: "░", Tick: "│", Ellipsis: "…", Sel: "▸", Sep: "·", Dash: "–", Bullet: "•", UpDown: "↑↓", Info: "·", OK: "✓", Warn: "▲", Fail: "✗", Open: "▾", Closed: "▹", Mask: "•", Spark: strings.Split("▁▂▃▄▅▆▇█", "")}
-	asciiGlyphs   = Glyphs{Flag: "!", Full: "#", Empty: ".", Tick: "|", Ellipsis: "~", Sel: ">", Sep: "|", Dash: "-", Bullet: "*", UpDown: "up/dn", Info: "-", OK: "+", Warn: "!", Fail: "x", Open: "-", Closed: "+", Mask: "*", Spark: []string{"_", ".", "-", "=", "#"}, ASCII: true}
+	asciiGlyphs   = Glyphs{Flag: "!", Full: "#", Empty: ".", Tick: "|", Ellipsis: "...", Sel: ">", Sep: "|", Dash: "-", Bullet: "*", UpDown: "up/dn", Info: "-", OK: "+", Warn: "!", Fail: "x", Open: "-", Closed: "+", Mask: "*", Spark: []string{"_", ".", "-", "=", "#"}, ASCII: true}
 )
 
 // DetectGlyphs picks the glyph set: the preference when it names one, else

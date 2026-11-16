@@ -24,11 +24,11 @@ type ColumnSpec struct {
 var FleetColumns = []ColumnSpec{
 	{"host", "HOST", 12, true},
 	{"link", "LINK", 10, true},
-	{"network", "NET", 9, true},
+	{"network", "NET", 10, true},
 	{"sync", "SYNC", 9, true},
 	{"lag", "LAG", 6, true},
 	{"peers", "PEERS", 7, true},
-	{"disk", "DISK", 15, true},
+	{"disk", "DISK USED", 14, true},
 	{"firewall", "FW", 4, true},
 	{"el", "EL", 9, false},
 	{"cl", "CL", 9, false},
@@ -64,10 +64,20 @@ type UIPrefs struct {
 	Compact        bool     `json:"compact"`
 	ShowEstimates  bool     `json:"showEstimates"`
 	Bell           bool     `json:"bell"`
-	Mouse          bool     `json:"mouse"`
-	Glyphs         string   `json:"glyphs"` // "auto" | "unicode" | "ascii"
-	Drawer         string   `json:"drawer"` // "auto" | "open" | "min"; auto minimizes a short window
+	// Mouse is a pointer so "never chosen" (nil, which means on) is told from
+	// "turned off" (false): a stored false stays off, a missing one is on.
+	// It lives under a new key: the old "mouse" was a plain bool that every
+	// save wrote as false, so it says nothing about a choice and is ignored.
+	Mouse  *bool  `json:"mouse_on,omitempty"`
+	Glyphs string `json:"glyphs"` // "auto" | "unicode" | "ascii"
+	Drawer string `json:"drawer"` // "auto" | "open" | "min"; auto minimizes a short window
 }
+
+// MouseOn reports whether mouse input is on: it is, unless it was turned off.
+func (p UIPrefs) MouseOn() bool { return p.Mouse == nil || *p.Mouse }
+
+// WithMouse is p with the mouse choice set explicitly.
+func (p UIPrefs) WithMouse(on bool) UIPrefs { p.Mouse = &on; return p }
 
 // DefaultPrefs is what a new controller shows.
 func DefaultPrefs() UIPrefs {
@@ -80,7 +90,7 @@ func DefaultPrefs() UIPrefs {
 	return UIPrefs{
 		FleetColumns: cols, HostTabs: slices.Clone(HostTabs), Chains: []int{},
 		RefreshSeconds: 15, Units: "GB", ShowEstimates: true, Glyphs: "auto", Drawer: "auto",
-	}
+	}.WithMouse(true)
 }
 
 // WithDefaults fills every zero-valued field from DefaultPrefs, so a stored
@@ -101,6 +111,9 @@ func (p UIPrefs) WithDefaults() UIPrefs {
 	}
 	if p.Units == "" {
 		p.Units = d.Units
+	}
+	if p.Mouse == nil {
+		p = p.WithMouse(true)
 	}
 	if p.Glyphs == "" {
 		p.Glyphs = d.Glyphs

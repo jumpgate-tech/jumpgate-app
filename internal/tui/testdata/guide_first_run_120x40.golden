@@ -1,8 +1,8 @@
- jumpgate  server live                                                          ! 0 alerts | setup 1/6 | updated 0s ago
-+- Boxes -----++- Synced ----++- Head lag --++- Peers -----++- Disk ------++- Gateways --------------++- Alerts -------+
-|n/a          ||n/a          ||n/a          ||n/a          ||n/a          ||n/a                      ||0 alerts        |
-|             ||             ||             ||             ||             ||n/a no request counts yet||                |
-+-------------++-------------++-------------++-------------++-------------++-------------------------++----------------+
+ jumpgate  server live                                                                       setup 1/6 | updated 0s ago
++- Fleet --------------------------------------------------------------------------------------------------------------+
+|no boxes yet: nothing to read                                                                                         |
+|                                                                                                                      |
++----------------------------------------------------------------------------------------------------------------------+
 +- Views ------------++= > Fleet ======================================================================================+
 |> Fleet          [1]||  done 1. Server running                                                                        |
 |  Jobs           [2]||> todo 2. Vault created and unlocked   | next                                                   |
@@ -20,7 +20,7 @@
 |                    ||  why: It holds the controller key and the tokens, encrypted with your passphrase.              |
 |                    ||  do:  Vault: press I to create it.                                                             |
 |                    ||                                                                                                |
-|                    ||  [enter] go there  [esc] close                                                                 |
+|                    ||  [enter] go there  [esc] close   (click a step to go there)                                    |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
 |                    ||                                                                                                |
@@ -37,4 +37,4 @@
 +- Activity -----------------------------------------------------------------------------------------------------------+
 | no progress to show | jobs n/a                                                                                       |
 +----------------------------------------------------------------------------------------------------------------------+
- [?] help
+ [?] more

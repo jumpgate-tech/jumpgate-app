@@ -1,5 +1,5 @@
  jumpgate  [Fleet] Jobs Signers Gateways VPN Vault Server Settings   connecting
- boxes n/a | synced n/a | lag n/a | peers n/a | disk n/a | gw n/a | ! alerts n/a
+ connecting to the server… no readings yet
  ADD A BOX
 
  unconfirmed host key
@@ -11,7 +11,7 @@
  Compare it with the box's console:
    ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 
- Type yes to trust it, esc to stop:
+ Type yes to trust it, or [esc] to stop:
  >
 
 
@@ -21,4 +21,4 @@
 
 
 
- jobs n/a | ↑↓ select  [enter] open  [a] add a box  [p] pair or re-pair  [L] pa…
+ jobs n/a | [enter] open  [a] add  [p] pair  [L] this machine  [?] more

@@ -10,21 +10,22 @@ import (
 // help screen lists every field here (help.go), so a key added here is
 // documented by adding it.
 var globalKeys = struct {
-	Screens, Focus, Panels, Help, Palette, Drawer, Back, Quit, ForceQuit, Restart, Unlock, Lock, Guide, Invite, Copy key.Binding
+	Screens, Focus, Panels, Help, Palette, Menu, Drawer, Back, Quit, ForceQuit, Restart, Unlock, Lock, Guide, Invite, Copy key.Binding
 }{
 	Screens:   key.NewBinding(key.WithKeys("1", "2", "3", "4", "5", "6", "7", "8"), key.WithHelp("1-8", "views")),
 	Focus:     key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "focus: nav, main, log (esc: back to the nav)")),
 	Panels:    key.NewBinding(key.WithKeys("[", "]"), key.WithHelp("[ ]", "tree / activity log")),
 	Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	Palette:   key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "command")),
+	Menu:      key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "actions menu for the selected item")),
 	Drawer:    key.NewBinding(key.WithKeys("."), key.WithHelp(".", "activity drawer")),
 	Back:      key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 	Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 	ForceQuit: key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit now")),
-	Restart:   key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restart the server")),
+	Restart:   key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "restart the server")),
 	Unlock:    key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "unlock the vault")),
 	// ctrl+l, not L: L pairs this machine on the hosts view.
-	Lock:   key.NewBinding(key.WithKeys("ctrl+l"), key.WithHelp("ctrl+l", "lock the vault")),
+	Lock:   key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "lock the vault")),
 	Guide:  key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "setup guide")),
 	Invite: key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "invite a box: one line to run on it")),
 	// c copies only while the invite shows; elsewhere it is the view's.

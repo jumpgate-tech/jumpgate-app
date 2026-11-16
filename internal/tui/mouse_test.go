@@ -24,7 +24,7 @@ func mouseApp(t *testing.T, f *tuitest.Fake, w, h int) (*App, *time.Time) {
 	t.Helper()
 	a := dashApp(t, f, w, h, "ascii", "auto")
 	p := a.prefs
-	p.Mouse = true
+	p = p.WithMouse(true)
 	a.setPrefs(p)
 	now := time.Unix(1_000_000, 0)
 	a.clock = func() time.Time { return now }
@@ -149,7 +149,7 @@ func TestClickDrawerTogglesIt(t *testing.T) {
 		t.Fatalf("click on the minimized drawer saved %q:\n%s", g.LastPrefs.Drawer, tuitest.Frame(b))
 	}
 	c, _ := mouseApp(t, tuitest.NewFake(), 80, 24)
-	x, y := at(t, c, "needs decision]")
+	x, y := at(t, c, "to decide]")
 	if m := click(t, c, x, y); m.(*App).active != scrJobs {
 		t.Fatalf("click on the decision count: active %v", m.(*App).active)
 	}
@@ -167,8 +167,8 @@ func TestClickStripOpensItsView(t *testing.T) {
 		t.Fatalf("Boxes tile: active %v", m.(*App).active)
 	}
 	b, _ := mouseApp(t, tuitest.NewFake(), 80, 24)
-	x, y := at(t, b, "] 2 ")
-	if m := click(t, b, x+2, y); m.(*App).active != scrJobs {
+	x, y := at(t, b, "] Jobs")
+	if m := click(t, b, x+3, y); m.(*App).active != scrJobs {
 		t.Fatalf("header tab: active %v", m.(*App).active)
 	}
 }
@@ -187,8 +187,27 @@ func TestClickNeverConfirms(t *testing.T) {
 			*now = now.Add(time.Second)
 		}
 	}
-	if ran || m.(*App).modal == nil {
+	// Only the [esc] button does anything, and it only cancels.
+	if ran {
 		t.Fatalf("a click answered the confirmation (ran %v)", ran)
+	}
+	_ = m
+}
+
+// A click on a typed confirmation's [esc] cancels it; a click elsewhere in it
+// does nothing.
+func TestClickEscCancelsATypedConfirmationOnly(t *testing.T) {
+	a, now := mouseApp(t, tuitest.NewFake(), 120, 40)
+	ran := false
+	a.modal = newConfirm("Remove box-a", "this removes box-a", "box-a", func() tea.Cmd { ran = true; return nil })
+	*now = now.Add(time.Second)
+	x, y := at(t, a, "this removes")
+	if m := click(t, a, x, y); m.(*App).modal == nil || ran {
+		t.Fatal("a click on the text closed or confirmed it")
+	}
+	x, y = at(t, a, "[esc]")
+	if m := click(t, a, x+1, y); m.(*App).modal != nil || ran {
+		t.Fatalf("clicking [esc]: modal %T ran %v", m.(*App).modal, ran)
 	}
 }
 

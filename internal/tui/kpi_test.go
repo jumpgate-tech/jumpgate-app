@@ -31,13 +31,13 @@ func TestKPIsSampleFleet(t *testing.T) {
 		t.Fatalf("%d tiles", len(ts))
 	}
 	for _, c := range []struct{ title, short, l0, l1 string }{
-		{"Boxes", "boxes 1/3 up", "1 up 1 down", "1 n/a of 3"},
-		{"Synced", "synced ~1/3", "~1/3 synced", "1 sync 1 n/a"},
-		{"Head lag", "lag 2", "max 2 blk", "2 n/a"},
-		{"Peers", "peers ~51/81", "~51 exec", "~81 bcn 1 n/a"},
-		{"Disk", "disk 39%", "min 39% free", "on box-a"},
+		{"Boxes", "1/3 up", "1 up 1 down", "1 n/a of 3"},
+		{"Synced", "~1/3 synced", "~1/3 synced", "1 sync 1 n/a"},
+		{"Head lag", "lag 2 blk", "max 2 blk", "2 n/a"},
+		{"Peers", "peers ~51 el / 81 cl", "~51 exec", "~81 bcn 1 n/a"},
+		{"Disk", "disk max 61% used", "max 61% used", "on box-a"},
 		{"Gateways", "gw 1/1 live", "1 live 0 failing", "n/a no request counts yet"},
-		{"Alerts", "! 1 FAIL 2 warn", "1 FAIL 2 warn", "box-b down 4m"},
+		{"Alerts", "! 1 fail 2 warn", "1 FAIL 2 warn", "box-b down 4m"},
 	} {
 		x := tileByTitle(t, ts, c.title)
 		if x.Short != c.short || x.Lines[0] != c.l0 || x.Lines[1] != c.l1 {

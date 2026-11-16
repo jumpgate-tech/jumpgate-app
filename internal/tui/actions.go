@@ -1,67 +1,43 @@
 package tui
 
 import (
-	"fmt"
-	"strings"
-
-	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 )
 
-// actionsModal is `x`: every action for the open box in one list, each the
-// same command its own key runs (and so the same typed confirmations).
-type actionsModal struct {
-	h      *hostScreen
-	items  []string
-	cursor int
-}
-
-func newActions(_ *App, h *hostScreen) *actionsModal {
-	return &actionsModal{h: h, items: []string{
-		"restart exec", "stop exec", "start exec",
-		"restart beacon", "stop beacon", "start beacon",
-		"measure disk", "open an SSH shell", "modules",
-	}}
-}
-
-func (m *actionsModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
-	switch {
-	case k.String() == "esc":
-		return true, nil
-	case key.Matches(k, navKeys.Up):
-		m.cursor = max(m.cursor-1, 0)
-	case key.Matches(k, navKeys.Down):
-		m.cursor = min(m.cursor+1, len(m.items)-1)
-	case key.Matches(k, navKeys.Enter):
-		item := m.items[m.cursor]
-		a.modal = nil // a confirmation opened by the action replaces this menu
-		switch item {
-		case "measure disk":
-			m.h.tab = indexOf(a.prefs.HostTabs, "storage")
-			return true, tea.Batch(m.h.load(a, "storage"), m.h.measure(a))
-		case "modules":
-			a.modal = newModulesModal(a, m.h)
-			return false, nil // the modules list replaces this menu
-		case "open an SSH shell":
-			return true, m.h.shell(a)
-		}
-		f := strings.Fields(item) // action, service
-		cmd := m.h.serviceAction(a, f[1], f[0])
-		return a.modal == nil, cmd // done unless a confirmation took over
+// newActions is `x` on an open box: every action for it in one list, each the
+// same command its own key runs (and so the same typed confirmations). The
+// service actions have no single key: their keys act on the service selected
+// on the Services tab.
+func newActions(_ *App, h *hostScreen) *menuModal {
+	m := &menuModal{h: h, title: "ACTIONS"}
+	if h != nil {
+		m.title = "ACTIONS for " + sanitizeLine(h.id)
 	}
-	return false, nil
-}
-
-func (m *actionsModal) view(a *App, w, _ int) string {
-	out := fmt.Sprintf(" %s %s\n\n", a.th.Title.Render("ACTIONS"), a.th.Dim.Render("for "+sanitizeLine(m.h.id)+" (enter to run, esc to close)"))
-	for i, it := range m.items {
-		mark := " "
-		if i == m.cursor {
-			mark = a.gl.Sel
+	keyOf := map[string]string{"restart": "ctrl+r", "stop": "ctrl+t", "start": "ctrl+s"}
+	for _, svc := range services {
+		for _, act := range []string{"restart", "stop", "start"} {
+			svc, act := svc, act
+			m.all = append(m.all, menuItem{label: act + " " + svc, hint: "Services tab: " + keyOf[act],
+				run: func(a *App) tea.Cmd { return h.serviceAction(a, svc, act) }})
 		}
-		out += fmt.Sprintf(" %s %s\n", mark, it)
 	}
-	return out
+	if h != nil && h.shownTab == "containers" && h.ctrCursor < len(h.ctr.Services) {
+		c := h.ctr.Services[h.ctrCursor]
+		m.all = append(m.all, menuItem{label: "reset the devnet " + sanitizeLine(c.ID), hint: "asks for its name; menu only",
+			run: func(a *App) tea.Cmd { h.askReset(a, c); return nil }})
+	}
+	m.all = append(m.all,
+		menuItem{label: "measure disk", hint: "Storage tab: " + hostKeys.Measure.Help().Key, run: func(a *App) tea.Cmd {
+			h.tab = indexOf(a.prefs.HostTabs, "storage")
+			return tea.Batch(h.load(a, "storage"), h.measure(a))
+		}},
+		menuItem{label: "open an SSH shell", key: svcKeys.Shell.Help().Key, run: func(a *App) tea.Cmd { return h.shell(a) }},
+		menuItem{label: "modules", key: hostKeys.Modules.Help().Key, run: func(a *App) tea.Cmd {
+			a.modal = newModulesModal(a, h)
+			return nil
+		}},
+	)
+	return m
 }
 
 func indexOf(xs []string, x string) int {

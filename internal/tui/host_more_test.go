@@ -72,7 +72,7 @@ func TestGatewaysScreen(t *testing.T) {
 	m, cmds := tuitest.Send(a, tuitest.Key("4"))
 	m = tuitest.Settle(m, cmds...)
 	fr := tuitest.Frame(m)
-	for _, want := range []string{"m modules", "rpc-main", "on box", "running", "https://rpc.example.org/369", "certificate expires"} {
+	for _, want := range []string{"modules", "rpc-main", "on box", "running", "https://rpc.example.org/369", "certificate expires"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("gateways lacks %q:\n%s", want, fr)
 		}

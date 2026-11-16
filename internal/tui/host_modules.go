@@ -319,9 +319,10 @@ func (h *hostScreen) moduleLine(a *App, c modCard, sep string) string {
 // node module restarts the exec client, so it takes the typed word restart;
 // a box module asks for its fields. Either then follows the setup run.
 type modulesModal struct {
-	h      *hostScreen
-	cursor int
-	pub    map[string]string // Public values sent this session, ahead of the reload
+	h        *hostScreen
+	cursor   int
+	pub      map[string]string // Public values sent this session, ahead of the reload
+	cardRows map[int]int       // the module on each drawn row, for clicks
 
 	askPost string // the module whose move to public posting awaits enter
 
@@ -349,8 +350,9 @@ func newModulesModal(a *App, h *hostScreen) *modulesModal {
 	return &modulesModal{h: h, pub: map[string]string{}}
 }
 
-var modKeys = struct{ Public, Copy key.Binding }{
-	Public: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "change who can reach a node module")),
+var modKeys = struct{ Public, Copy, Toggle key.Binding }{
+	Toggle: key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "turn the selected module on or off")),
+	Public: key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "change who can reach a node module")),
 	Copy:   key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy a bootnode's enode or ENR")),
 }
 
@@ -424,7 +426,7 @@ func (m *modulesModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.cursor = max(m.cursor-1, 0)
 	case key.Matches(k, navKeys.Down):
 		m.cursor = min(m.cursor+1, max(len(cards)-1, 0))
-	case key.Matches(k, navKeys.Enter):
+	case key.Matches(k, modKeys.Toggle):
 		if m.cursor < len(cards) && !m.busy {
 			return false, m.toggle(a, cards[m.cursor])
 		}
@@ -472,7 +474,7 @@ func (m *modulesModal) toggle(a *App, c modCard) tea.Cmd {
 			verb = "Turn off "
 		}
 		cf := newConfirm(verb+c.m.Name, m.restartLine(), "restart", func() tea.Cmd { return m.submit(a, c.m.ID, req, true) })
-		cf.prompt = "Type %s to go ahead, esc to cancel:"
+		cf.prompt = "Type %s to go ahead, or [esc] to cancel:"
 		m.confirm = cf
 		return nil
 	case c.state == "on":
@@ -583,6 +585,22 @@ func (m *modulesModal) fieldsKey(a *App, k tea.KeyPressMsg) tea.Cmd {
 	var cmd tea.Cmd
 	m.fields[m.focus], cmd = m.fields[m.focus].Update(k)
 	return cmd
+}
+
+// typing: a text field or a confirmation has the keyboard, so the modal takes
+// no click but esc.
+func (m *modulesModal) typing() bool {
+	return m.confirm != nil || m.fieldsFor != nil || m.askPost != ""
+}
+
+// click on a module's row selects it; ctrl+t (or its button) turns it on or off.
+func (m *modulesModal) click(a *App, row, _ int, _ bool) (done, handled bool, cmd tea.Cmd) {
+	i, ok := m.cardRows[row]
+	if !ok {
+		return false, false, nil
+	}
+	m.cursor = i
+	return false, true, nil
 }
 
 func (m *modulesModal) paste(a *App, p tea.PasteMsg) tea.Cmd {
@@ -703,9 +721,10 @@ func (m *modulesModal) view(a *App, w, _ int) string {
 		if m.errText != "" {
 			out += "\n " + a.th.Warn.Render(m.errText) + "\n"
 		}
-		return out + "\n " + a.th.Dim.Render("tab to move, enter to turn on, esc to go back")
+		return out + "\n " + a.th.Dim.Render("tab to move, enter to turn on, [esc] go back")
 	}
-	out := fmt.Sprintf(" %s %s\n\n", a.th.Title.Render("MODULES"), a.th.Dim.Render("for "+sanitizeLine(m.h.id)+" (enter to turn on or off, esc to close)"))
+	out := fmt.Sprintf(" %s %s\n\n", a.th.Title.Render("MODULES"), a.th.Dim.Render("for "+sanitizeLine(m.h.id)+" ([ctrl+t] turn on or off  [esc] close)"))
+	m.cardRows = map[int]int{}
 	cards := m.cards(a)
 	if len(cards) == 0 {
 		out += " " + a.th.Dim.Render("No modules apply to this box yet.") + "\n"
@@ -722,21 +741,22 @@ func (m *modulesModal) view(a *App, w, _ int) string {
 		}
 		name := sanitizeLine(c.m.Name)
 		name += strings.Repeat(" ", pad-len([]rune(name))+2)
+		m.cardRows[strings.Count(out, "\n")] = i
 		out += truncate(fmt.Sprintf(" %s %s%s", mark, name, m.h.moduleLine(a, c, sep)), w, a.gl.Ellipsis) + "\n"
 		if id, note := m.h.boxIdentity(c); i == m.cursor && id != "" {
 			// The full record, unwrapped so a terminal selection copies it
 			// whole; c copies it through the terminal (OSC 52).
 			out += "     " + id + "\n"
-			out += "     " + a.th.Dim.Render("c to copy the "+identityKind(id)) + "\n"
+			out += "     " + a.th.Dim.Render("[c] copy the "+identityKind(id)) + "\n"
 			if note != "" {
 				out += "     " + a.th.Warn.Render(note) + "\n"
 			}
 		}
 		if i == m.cursor && len(m.h.publicOptions(c)) > 0 {
 			asking := m.askPost == c.m.ID
-			line := "reachable: " + publicLabel(c.public) + " (p to change)"
+			line := "reachable: " + publicLabel(c.public) + " ([p] change)"
 			if asking {
-				line = "make it reachable: " + publicLabel("post") + "? enter to go ahead, esc to keep " + publicLabel(c.public)
+				line = "make it reachable: " + publicLabel("post") + "? [enter] go ahead, [esc] keep " + publicLabel(c.public)
 			}
 			out += "     " + a.th.Dim.Render(line) + "\n"
 			if c.public == "post" || asking {

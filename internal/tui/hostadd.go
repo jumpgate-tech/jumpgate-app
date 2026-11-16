@@ -186,7 +186,7 @@ func (f *addFlow) askHop(a *App, hop *api.HostKeyHop) {
 			return hostKeyConfirmedMsg{gen: gen, err: be.ConfirmHostKey(ctx, h.ProbeID, h.Fingerprint)}
 		})
 	})
-	f.cm.prompt = "Type %s to trust it, esc to stop:"
+	f.cm.prompt = "Type %s to trust it, or [esc] to stop:"
 }
 
 // whose says which machine a host key is for: the jump host on the way to
@@ -460,7 +460,7 @@ func (f *addFlow) view(a *App, w, h int) string {
 		}
 		b.WriteString("\n " + style.Render(f.errLine) + "\n")
 		if f.step == stepFailed {
-			b.WriteString("\n " + a.th.Dim.Render("enter or esc to close") + "\n")
+			b.WriteString("\n " + a.th.Dim.Render("enter or [esc] to close") + "\n")
 		}
 	}
 	return b.String()

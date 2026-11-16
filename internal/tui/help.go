@@ -15,27 +15,87 @@ type helpModal struct {
 	offset int
 }
 
-func newHelp(a *App) *helpModal {
-	row := func(b key.Binding) string {
-		return fmt.Sprintf("  %-12s %s", keyLabel(b.Help().Key, a.gl), b.Help().Desc)
+// The help row for the keys that move: ${arrows} and h j k l.
+const (
+	movingLabel = "arrows/hjkl"
+	movingHelp  = "move; left and right switch tabs"
+)
+
+// isChange: a key that changes something on a box, the server or the vault
+// is a Ctrl chord; a plain key only looks and moves. ctrl+c quits and is
+// not a change.
+func isChange(b key.Binding) bool {
+	ks := b.Keys()
+	return len(ks) > 0 && strings.HasPrefix(ks[0], "ctrl+") && b.Help() != globalKeys.ForceQuit.Help()
+}
+
+// helpGroups are rows that stand for several keys, so the list fits 80x24.
+func helpGroups() []struct {
+	label, desc string
+	members     []key.Binding
+} {
+	return []struct {
+		label, desc string
+		members     []key.Binding
+	}{
+		{movingLabel, movingHelp, []key.Binding{navKeys.Up, navKeys.Down, navKeys.Left, navKeys.Right}},
+		{"[ ] .", "tree, activity log, activity drawer", []key.Binding{globalKeys.Panels, globalKeys.Drawer}},
+		{"q ctrl+c", "quit; ctrl+c quits at once", []key.Binding{globalKeys.Quit, globalKeys.ForceQuit}},
+		{"g i", "setup guide; invite a box (one line to run on it)", []key.Binding{globalKeys.Guide, globalKeys.Invite}},
+		{"? :", "help; take a command", []key.Binding{globalKeys.Help, globalKeys.Palette}},
+		{"enter /", "open; filter", []key.Binding{navKeys.Enter, navKeys.Filter}},
 	}
-	lines := []string{"keys everywhere"}
+}
+
+// newHelp lists the keys in two groups: "look" (plain keys, which only look
+// and move) and "change" (Ctrl chords, which change a box, the server or the
+// vault). It is generated from the bindings the screens match on.
+func newHelp(a *App) *helpModal {
+	row := func(label, desc string) string { return fmt.Sprintf("  %-12s %s", keyLabel(label, a.gl), desc) }
+	var look, change []string
 	listed := map[key.Help]bool{}
+	emitted := map[int]bool{}
 	for _, b := range append(keyList(globalKeys), keyList(navKeys)...) {
-		if a.offers(b) {
-			lines = append(lines, row(b))
-			listed[b.Help()] = true
+		if !a.offers(b) {
+			continue
+		}
+		listed[b.Help()] = true
+		grouped := false
+		for i, g := range helpGroups() {
+			for _, m := range g.members {
+				if m.Help() == b.Help() {
+					grouped = true
+					if !emitted[i] {
+						emitted[i] = true
+						look = append(look, row(g.label, g.desc))
+					}
+				}
+			}
+		}
+		switch {
+		case grouped:
+		case isChange(b):
+			change = append(change, row(b.Help().Key, b.Help().Desc))
+		default:
+			look = append(look, row(b.Help().Key, b.Help().Desc))
 		}
 	}
 	// A screen's own keys, less the ones already listed above.
-	var here []string
 	for _, b := range a.current().keys() {
-		if !listed[b.Help()] {
-			here = append(here, row(b))
+		if listed[b.Help()] {
+			continue
+		}
+		listed[b.Help()] = true
+		if isChange(b) {
+			change = append(change, row(b.Help().Key, b.Help().Desc))
+		} else {
+			look = append(look, row(b.Help().Key, b.Help().Desc))
 		}
 	}
-	if len(here) > 0 {
-		lines = append(append(lines, "", "keys here"), here...)
+	lines := append([]string{"look (plain keys)"}, look...)
+	if len(change) > 0 {
+		lines = append(lines, "change (Ctrl chords)")
+		lines = append(lines, change...)
 	}
 	return &helpModal{lines: lines}
 }
@@ -51,12 +111,10 @@ func (a *App) offers(b key.Binding) bool {
 		// The vault keys are listed when they are the news, so the help
 		// still fits 80x24; both keys work at any time.
 		return a.fleetHas && a.fleet.Locked
-	// The guide and invite keys, like the vault's, are listed while they
-	// are the news (the help must fit 80x24); they work at any time.
-	case globalKeys.Guide.Help():
-		return a.setupSegment() != ""
-	case globalKeys.Invite.Help():
-		return a.inviteOn || a.setupSegment() != ""
+	// The guide and invite keys are always listed: they are how a new person
+	// finds the way in, and they work at any time.
+	case globalKeys.Guide.Help(), globalKeys.Invite.Help():
+		return true
 	case globalKeys.Copy.Help():
 		return a.inviteOn && a.invite != ""
 	case globalKeys.Lock.Help():
@@ -87,7 +145,7 @@ func (h *helpModal) key(a *App, k tea.KeyPressMsg) (bool, tea.Cmd) {
 // worse than a cramped one. When even that is too tall the keys scroll, and
 // a last line says there is more.
 func (h *helpModal) view(a *App, w, height int) string {
-	const close = "  (F for the full guide, esc to close)"
+	const close = "  ([F] the full guide  [esc] close)  ~ means stale"
 	head := a.th.Title.Render(" Help") + a.th.Dim.Render(close)
 	lines := h.lines
 	if len(lines)+2 > height {
@@ -98,8 +156,8 @@ func (h *helpModal) view(a *App, w, height int) string {
 			}
 		}
 		// Still too tall: the first heading shares the title's line.
-		if len(lines)+1 > height && len(lines) > 0 && lines[0] == "keys everywhere" {
-			head = a.th.Title.Render(" Help") + ": keys everywhere" + a.th.Dim.Render(close)
+		if len(lines)+1 > height && len(lines) > 0 && strings.HasPrefix(lines[0], "look") {
+			head = a.th.Title.Render(" Help") + ": " + lines[0] + a.th.Dim.Render(close)
 			lines = lines[1:]
 		}
 	} else {

@@ -63,14 +63,14 @@ var vpnKeys = struct {
 }{
 	Switch:     key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "clients / servers")),
 	Reload:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
-	New:        key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
-	Up:         key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "up")),
-	Down:       key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "down")),
+	New:        key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "new")),
+	Up:         key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "bring the tunnel up")),
+	Down:       key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "take the tunnel down, asks first")),
 	Status:     key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status")),
-	Delete:     key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete, typed confirmation")),
-	Endpoint:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "server: endpoint")),
-	AddPeer:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "server: add a peer (config shown once)")),
-	RemovePeer: key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "server: remove a peer")),
+	Delete:     key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "delete, typed confirmation")),
+	Endpoint:   key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "server: endpoint")),
+	AddPeer:    key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "server: add a peer (config shown once)")),
+	RemovePeer: key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o", "server: remove a peer")),
 }
 
 type vpnScreen struct {
@@ -142,7 +142,7 @@ func (s *vpnScreen) update(a *App, msg tea.Msg) tea.Cmd {
 	case vpnPeerMsg:
 		if msg.err != nil {
 			s.res = resultPane{head: "add peer " + sanitizeLine(msg.name) + ": FAIL", lines: []string{a.errText(msg.err)}, bad: true, has: true}
-			a.flash = "add peer " + sanitizeLine(msg.name) + " failed"
+			a.setErr("add peer " + sanitizeLine(msg.name) + " failed")
 			return nil
 		}
 		s.res = resultPane{head: "peer " + sanitizeLine(msg.name) + " on " + sanitizeLine(msg.server), lines: []string{"address " + sanitizeLine(msg.ip) + "; its config was shown once"}, has: true}
@@ -196,7 +196,9 @@ func (s *vpnScreen) key(a *App, k tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(k, vk.Up):
 		return s.run(a, "up "+id, http.MethodPost, vpnPath(srv, id, "/up"), nil, true)
 	case key.Matches(k, vk.Down):
-		return s.run(a, "down "+id, http.MethodPost, vpnPath(srv, id, "/down"), nil, true)
+		a.modal = newYesNo("Take "+id+" down?", "If jumpgate reaches boxes through this tunnel, it loses its path to them until the tunnel is up again.", "take it down", func() tea.Cmd {
+			return s.run(a, "down "+id, http.MethodPost, vpnPath(srv, id, "/down"), nil, true)
+		})
 	case key.Matches(k, vk.Status):
 		return s.run(a, "status "+id, http.MethodGet, vpnPath(srv, id, "/status"), nil, false)
 	case key.Matches(k, vk.Delete):
@@ -327,7 +329,7 @@ func (s *vpnScreen) view(a *App, w, h int) string {
 	if s.servers {
 		other = "clients"
 	}
-	head := truncate(a.th.Dim.Render(" v "+other+"  n new  u/d up/down  s status  D delete  ? every key"), w, a.gl.Ellipsis)
+	head := truncate(" [v] "+other+"  [ctrl+n] new  [ctrl+s] up  [ctrl+t] down  [s] status  [ctrl+d] delete  [x] more", w, a.gl.Ellipsis)
 	if !s.has {
 		return head + "\n\n " + a.th.Dim.Render("loading"+a.gl.Ellipsis)
 	}

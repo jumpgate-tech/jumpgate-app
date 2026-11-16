@@ -100,6 +100,11 @@ func (a *App) frame() string {
 		a.keep("invite", "", 0, l.Invite.Y, inv)
 		parts = append(parts, inv)
 	}
+	if l.Flash.H > 0 {
+		fl := strings.Join(a.errorRows(a.w), "\n")
+		a.keep("flash", "", 0, l.Flash.Y, fl)
+		parts = append(parts, fl)
+	}
 	last := a.drawerLine(a.w)
 	if l.DrawerOpen {
 		dv := a.drawerView(l.Drawer, l.DrawerCompact)
@@ -109,7 +114,7 @@ func (a *App) frame() string {
 			a.keepBoxed("drawer", "Activity", l.Drawer, dv)
 		}
 		parts = append(parts, dv)
-		last = truncate(" "+a.hints(), a.w, a.gl.Ellipsis)
+		last = " " + fitHints(a.hintItems(), a.w-1)
 	}
 	a.keep("hints", "", 0, a.h-1, last)
 	return lipgloss.JoinVertical(lipgloss.Left, append(parts, last)...)
@@ -118,7 +123,8 @@ func (a *App) frame() string {
 // header is the top line: the server link and version on the left, the age
 // of the fleet data on the right. Below 100 columns the view tabs take the
 // server's place, so the body keeps the row a tab row would cost; a
-// retrying link still shows first, and "connecting" shows on the right.
+// retrying link still shows first, and "connecting" shows on the right. The
+// alert count is not here: the strip (or its Alerts tile) has it, once.
 func (a *App) header(w int) string {
 	narrow := w < leftMinWidth
 	server := "server " + a.conn.String()
@@ -126,76 +132,117 @@ func (a *App) header(w int) string {
 		server += " (" + a.errText(a.connErr) + ")"
 	}
 	left := " " + a.th.Title.Render("jumpgate") + "  "
+	right := a.headerRight(narrow, true)
 	switch {
 	case narrow:
 		if a.conn == apiclient.Retrying {
-			left += server + "  "
+			// The error is cut short: the tabs matter more here.
+			left += truncate(server, 30, a.gl.Ellipsis) + "  "
 		}
-		left += a.tabs(w - lipgloss.Width(left) - lipgloss.Width(a.headerRight(narrow)) - 2)
+		tabs, tier := a.tabs(w - lipgloss.Width(left) - lipgloss.Width(right) - 2)
+		if tier == tabsNumbers {
+			// The names do not fit beside the age: try the short names
+			// without it.
+			if t, tr := a.tabs(w - lipgloss.Width(left) - lipgloss.Width(a.headerRight(narrow, false)) - 2); tr != tabsNumbers {
+				tabs, right = t, a.headerRight(narrow, false)
+			}
+		}
+		left += tabs
 	default:
 		left += server
 		if a.srvVer != "" {
 			left += " " + a.gl.Sep + " " + a.srvVer
 		}
 	}
-	right := a.headerRight(narrow)
 	left = truncate(left, max(w-lipgloss.Width(right)-1, 1), a.gl.Ellipsis)
 	return left + strings.Repeat(" ", max(w-lipgloss.Width(left)-lipgloss.Width(right), 1)) + right
 }
 
-// headerRight is the header's right side: the alerts, the setup segment
-// and the reading's age.
-func (a *App) headerRight(narrow bool) string {
+// headerRight is the header's right side: LOCKED, the setup segment and the
+// reading's age. With age false the age goes (a stale reading still says
+// so), to leave the tabs room.
+func (a *App) headerRight(narrow, age bool) string {
 	right := a.th.Dim.Render("connecting")
 	if a.fleetHas {
-		age := a.now().Sub(a.fleet.At)
 		every := time.Duration(a.fleet.IntervalSeconds) * time.Second
 		if every <= 0 {
 			every = statusStaleAfter
 		}
-		text := "updated " + formatAge(age) + " ago"
+		since := a.now().Sub(a.fleet.At)
+		text := "updated " + formatAge(since) + " ago"
 		if narrow {
-			text = formatAge(age) + " ago"
+			text = formatAge(since) + " ago"
 		}
 		switch {
-		case age > 4*every || a.conn == apiclient.Retrying:
-			right = a.th.Bad.Render("stale, " + text)
-		case age > 2*every:
+		case since > 4*every || a.conn == apiclient.Retrying:
+			if !age {
+				text = "stale"
+			} else {
+				text = "stale, " + text
+			}
+			right = a.th.Bad.Render(text)
+		case !age:
+			right = ""
+		case since > 2*every:
 			right = a.th.Warn.Render(text + " ~")
 		default:
 			right = text
 		}
+	} else if !age {
+		right = ""
+	}
+	join := func(first, rest string) string {
+		if rest == "" {
+			return first
+		}
+		return first + " " + a.gl.Sep + " " + rest
 	}
 	if seg := a.setupSegment(); seg != "" {
-		right = a.th.Warn.Render(seg) + " " + a.gl.Sep + " " + right
+		right = join(a.th.Warn.Render(seg), right)
 	}
-	if a.fleetHas {
-		right = a.alertCount() + " " + a.gl.Sep + " " + right
-		if a.fleet.Locked {
-			right = a.th.Bad.Render("LOCKED: jobs wait for unlock") + " " + a.gl.Sep + " " + right
+	if a.fleetHas && a.fleet.Locked {
+		note := "LOCKED: jobs wait for unlock"
+		if narrow {
+			note = "LOCKED"
 		}
+		right = join(a.th.Bad.Render(note), right)
 	}
 	return right + " "
 }
 
+// The three ways the header writes the views: by name, by short name, by
+// number.
+const (
+	tabsNames = iota
+	tabsShort
+	tabsNumbers
+)
+
+// shortNames are the views in the middle tier, for the 80-column header once
+// the setup and locked notes crowd the names.
+var shortNames = [...]string{"Fleet", "Jobs", "Sign", "GW", "VPN", "Vault", "Srv", "Set"}
+
 // tabs is the views in one line, for the header below 100 columns; the
-// active one is bracketed, so it reads without colour too.
-// Where the names do not fit in room cells, the views other than the
-// active one show as their number keys.
-func (a *App) tabs(room int) string {
-	var full, short []string
+// active one is bracketed, so it reads without colour too. Where the names
+// do not fit in room cells the short names show, and where they do not, the
+// views' number keys. The tier it used is returned.
+func (a *App) tabs(room int) (string, int) {
+	var names, short, nums []string
 	for i, n := range screenNames {
 		k := fmt.Sprint(i + 1)
+		sn := shortNames[i]
 		if screenID(i) == a.navActive() {
-			n = a.th.Sel.Render("[" + n + "]")
-			k = n
+			n, sn, k = a.th.Sel.Render("["+n+"]"), a.th.Sel.Render("["+sn+"]"), a.th.Sel.Render("["+n+"]")
 		}
-		full, short = append(full, n), append(short, k)
+		names, short, nums = append(names, n), append(short, sn), append(nums, k)
 	}
-	if s := strings.Join(full, " "); lipgloss.Width(s) <= room {
-		return s
+	if s := strings.Join(names, " "); lipgloss.Width(s) <= room {
+		return s, tabsNames
 	}
-	return strings.Join(short, " ")
+	if s := strings.Join(short, " "); lipgloss.Width(s) <= room {
+		return s, tabsShort
+	}
+	return strings.Join(nums, " "), tabsNumbers
 }
 
 // viewsList is the left sidebar: the views with their number keys, then
@@ -320,38 +367,54 @@ func (a *App) jobsRunning() string {
 	return fmt.Sprintf("jobs %d running", n)
 }
 
-// drawerLine is the minimized drawer: counts (or the flash), then hints.
+// drawerLine is the minimized drawer: counts (or the flash), then buttons.
 // The drawer never opens itself; a pending decision is highlighted here.
+// The counts give way before the buttons do, and "[?] more" always stays.
 func (a *App) drawerLine(w int) string {
-	left := a.flash
-	if left == "" {
-		// The alert count is in the header already: every fact once.
-		parts := []string{a.jobsRunning()}
-		if n := a.needCount(); n > 0 {
-			parts = append(parts, a.th.Warn.Render(fmt.Sprintf("[! %d needs decision]", n)))
+	items := a.hintItems()
+	a.needsX0, a.needsX1, a.leftEnd = 0, 0, 0
+	if a.flash != "" && !a.flashErr {
+		// A notice takes the counts' place; it is cut, never the buttons' end.
+		left := " " + a.flash
+		room := w - lipgloss.Width(left) - 3
+		if room < lipgloss.Width("[?] more") {
+			left = truncate(left, max(w-3-lipgloss.Width("[?] more"), 1), a.gl.Ellipsis)
+			room = lipgloss.Width("[?] more")
 		}
-		left = strings.Join(parts, "  ")
+		return left + " | " + fitHints(items, room)
 	}
-	return truncate(" "+left+" | "+a.hints(), w, a.gl.Ellipsis)
+	// The alert count is in the header already: every fact once.
+	build := func(short bool) (plain, styled string, x0, x1 int) {
+		run := a.jobsRunning()
+		if short {
+			run = strings.TrimPrefix(run, "jobs ")
+			if run == "n/a" {
+				run = "jobs n/a"
+			}
+		}
+		plain, styled = " "+run, " "+run
+		if n := a.needCount(); n > 0 {
+			word := "needs decision"
+			if short {
+				word = "to decide"
+			}
+			b := fmt.Sprintf("[! %d %s]", n, word)
+			x0, x1 = lipgloss.Width(plain)+2, lipgloss.Width(plain)+2+lipgloss.Width(b)
+			plain += "  " + b
+			styled += "  " + a.th.Warn.Render(b)
+		}
+		return plain, styled, x0, x1
+	}
+	plain, styled, x0, x1 := build(false)
+	if hintsKept(items, w-lipgloss.Width(plain)-3) < min(len(items), 4) {
+		plain, styled, x0, x1 = build(true)
+	}
+	a.needsX0, a.needsX1, a.leftEnd = x0, x1, lipgloss.Width(plain)
+	return styled + " | " + fitHints(items, w-lipgloss.Width(plain)-3)
 }
 
-// hints are the focused pane's keys on one line, each key a button the
-// mouse can press; help (?) lists the rest.
-func (a *App) hints() string {
-	var hs []string
-	switch {
-	case a.modal != nil:
-	case a.focus == focusTree:
-		hs = []string{a.gl.UpDown + " select", "[space] expand", "[enter] open"}
-	case a.focus == focusLog:
-		hs = []string{a.gl.UpDown + " scroll"}
-	default:
-		hs = a.paneHints(a.current().keys())
-	}
-	return strings.Join(append(hs, "[?] help"), "  ")
-}
-
-// paneHints is a screen's keys as hints: the arrows folded into one each.
+// paneHints is a screen's keys as hints: the arrows are not listed (they
+// work everywhere), and a tab key is one hint for both directions.
 func (a *App) paneHints(bs []key.Binding) []string {
 	var hs []string
 	for _, b := range bs {
@@ -359,16 +422,13 @@ func (a *App) paneHints(bs []key.Binding) []string {
 			continue // c copies the invite while it shows
 		}
 		switch b.Help() {
-		case navKeys.Up.Help(), navKeys.Left.Help():
-			continue
-		case navKeys.Down.Help():
-			hs = append(hs, a.gl.UpDown+" select")
+		case navKeys.Up.Help(), navKeys.Left.Help(), navKeys.Down.Help():
 			continue
 		case navKeys.Right.Help():
 			hs = append(hs, "left/right tab")
 			continue
 		}
-		hs = append(hs, "["+keyLabel(b.Help().Key, a.gl)+"] "+b.Help().Desc)
+		hs = append(hs, a.button(b))
 	}
 	return hs
 }
@@ -498,7 +558,7 @@ func (a *App) drawerView(r rect, compact bool) string {
 		iw = r.W - 3
 	}
 	lines := a.activity(iw)
-	if a.flash != "" {
+	if a.flash != "" && !a.flashErr { // an error has its own rows above
 		lines = append([]string{truncate(a.flash, iw, a.gl.Ellipsis)}, lines...)
 	}
 	room := r.H
